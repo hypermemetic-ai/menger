@@ -1,15 +1,16 @@
-# menger 0.05
+# menger v2
 
 A plan is a program whose leaves are prose.
 
-0.05 moves menger onto Plexus RPC and Rust. The 0.04 rule carries over:
-**frontend and backend are online from the first commit** — every noun added
-is visible the day it is written. What's new is *how* the frontend stays
-current: 0.04 polled `/rev`; 0.05 subscribes. The same typed event streams
-that answer RPC calls push every mutation to the browser as it happens —
-over one WebSocket, for the vanilla page and for the Leptos app alike
-(MFE-9). The REST + SSE bridge stays for curl, scripts and non-Rust
-clients; the app does not use it.
+menger is a ticketing service on Plexus RPC: a store of tickets that a
+person reads in the browser and an agent reads with `synapse`, both over one
+signed-in WebSocket, every change pushed to every open page as it happens.
+v2 keeps v1's core — the tickets store, its filter language, its access
+rules — and replaces v1's browser app with a **ui service**: pages are
+components compiled from a Svelte subset, pushed as signed bundles,
+versioned by content hash and drawn by a small engine.
+
+v1 is tag `v0.0.1`; what v2 cut — the chats, comments, deployments, themes, media, notes, assignees, the owner's queue, inputs and components, the Leptos app (trunk) with the frames' SDK (sdk-codegen) and mockups, the diagrams service — lives there.
 
 ## Run
 
@@ -23,21 +24,19 @@ in `~/.local/share/menger` (`local.db`; `--data-dir`, `--db-path`), listens
 on this machine only, and prints where to open it:
 
 ```
-menger 0.6.1 — running
+menger 0.6.2 — running
   open:  http://127.0.0.1:4456/login?once=…   (one-time; `menger login` for another)
   agents: synapse -P 4455 _login menger --key menger-local --as menger-local
   data:  ~/.local/share/menger/local.db
   stop:  Ctrl-C
 ```
 
-`--open` opens that link in the browser too (`xdg-open` with a display,
-`open`, the Windows URL handler; with none it says so and keeps running).
-`menger --help` is the short list; `menger --help-all` is every option,
-grouped; `menger --version`.
+`--open` opens that link in the browser too. `menger --help` is the short
+list; `menger --help-all` is every option, grouped; `menger --version`.
 
-**Still no open mode** (ACCESS-24). With no `--auth-provider` (or
-`--identity`) and every listener on loopback, menger signs its one person
-in by itself, as Jupyter does:
+**There is no open mode** (ACCESS-24). With no `--auth-provider` (or
+`--identity`) and every listener on loopback, menger signs its one person in
+by itself:
 
 - On the first start it makes a **local admin key** in the data directory
   (`local.key`, 0600, synapse's format) and makes its `key:<hex>` the
@@ -45,111 +44,80 @@ in by itself, as Jupyter does:
   that key too.
 - Each start prints a **one-time link**, `http://127.0.0.1:<shell
   port>/login?once=<token>`: one use, ten minutes, taken only from
-  loopback. Opening it signs the browser in as the local admin; a second
-  use says so, and how to get another. `menger login` (against the server
-  running on that data directory — its `local.json`) prints a fresh one.
-  The links are files under `once/` in the data directory, each named by
-  its token's SHA-256.
+  loopback. `menger login` (against the server running on that data
+  directory — its `local.json`) prints a fresh one. The links are files
+  under `once/` in the data directory, each named by its token's SHA-256.
 - **Agents** (DIST-17): a local start makes `~/.plexus/keys/menger-local.key`
-  (under `$HOME`) a symlink to `local.key` — never a copy of the seed — and
-  prints the `agents:` line, with the WebSocket's real port; run it once
-  and synapse is signed in as the local admin. `menger login --agent`
-  prints the line again for the running server. An existing file or link
-  there is left alone (the banner says so, and prints no line); where
-  symlinks can't be made it writes nothing and prints a note with the
-  manual way. A server with a login provider, `--bind` or `--admin` of its
-  own links nothing and prints no line.
+  a symlink to `local.key` — never a copy of the seed — and prints the
+  `agents:` line with the WebSocket's real port. `menger login --agent`
+  prints it again. An existing file there is left alone (the banner says
+  so). A server with a login provider is not in local mode and links
+  nothing.
 - A port not given that is taken falls back to the next free one, and the
-  banner says which (`note: port 4455 was taken: …`); a port given is
-  bound or startup fails — prod and test name theirs.
+  banner says which; a port given is bound or startup fails.
 - The terminal shows the banner, not the log (errors only; `RUST_LOG` says
   otherwise).
 
 Reached beyond this machine (`--bind`, a `--public-url` off loopback) with
-no provider, it refuses, saying which flag to add:
-
-```
-menger: can't be reached from other machines (--bind 0.0.0.0) without a way to sign in.
-Add a login provider, for example:
-  menger --bind 0.0.0.0 --auth-provider workos=<client-id> --admin <your principal>
-or leave out --bind to run on this machine only (it then signs you in with a one-time link).
-```
-
-The default database moved from `tickets.db` to `local.db` (DIST-14), so a
-menger installed on a machine that runs prod never opens prod's file; prod,
-test and the image name theirs (`MENGER_DB_PATH`, and the ports —
-`tests/first_run.rs` holds deploy/ to it).
+no provider, it refuses, naming the flag to add.
 
 A development server from the checkout runs a provider and its own ports
-and database:
+and database — never the defaults on a machine that runs prod:
 
 ```sh
-cargo run -- --port 4460 --shell-port 4461 --db-path /tmp/menger-dev.db \
+PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --db-path /tmp/menger-dev.db \
   --auth-provider key --admin "$(synapse _key show builder)"
-                              # the app http://127.0.0.1:4461/ (behind /login),
-                              # WebSocket :4460, day-one page /vanilla
-synapse -P 4460 _login menger --key builder --as builder   # then synapse as usual
-cargo test                    # every test server runs `key`, every client is its --admin
+synapse -P 4460 _login menger --key builder --as builder   # once per server start
+synapse -P 4460 menger tickets health
 ```
 
-Login is always required — the shell's pages are behind `/login`, an
-upgrade that proves no one reaches the anonymous view and nothing else
-("The AUTH protocol") — so `--require-login` went (it is the only mode),
-and so did what could not carry an identity: the REST bridge (`--rest-port`;
-`--no-rest` / `MENGER_NO_REST` is accepted and changes nothing) and
+The ui service's file is `ui.db` beside the database unless
+`--ui-db-path` names another; two dev servers in one directory share it, so
+give each its own. A push needs `--ui-signer` (below, "The ui service").
+
+Login is always required: the shell's pages are behind `/login`, a socket
+that proves no one reaches the anonymous view and nothing else ("The AUTH
+protocol"). There is no REST bridge (it could not carry an identity;
+`--no-rest` / `MENGER_NO_REST` is accepted and changes nothing) and no
 `--stdio`. On its first start on a database this build purges the grants
-open mode planted ("Login" → The purge). `menger::local` runs behind the
-gate too ("As a library").
+open mode planted ("Login" → The purge).
 
 **Throwaway servers** (ACCESS-52). A script that starts its own menger —
-`scripts/sdk-codegen.sh`, `scripts/landing-media.sh` (and so `deploy/pipeline
-media`), the theme sweep, `perf/` — runs it under `key` with a key of its own
-as `--admin`, made in its scratch directory (never `~/.plexus`), and signs in
-with it through `scripts/throwaway-login.mjs`:
+`perf/`, the pages' browser test and probe (`tests/pages_browser.mjs`,
+`perf/pages-probe.mjs`, through `scripts/ui-throwaway.mjs`) — runs it
+under `key` with a key of its own as `--admin`, made in its scratch
+directory (never `~/.plexus`), and signs in with it through
+`scripts/throwaway-login.mjs`:
 
 ```sh
 op=$(node scripts/throwaway-login.mjs key "$work/operator.key")      # key:<hex>
-menger --port 4510 --shell-port 4511 --no-rest --db-path "$work/t.db" \
+menger --port 4510 --shell-port 4511 --db-path "$work/t.db" \
   --auth-provider key --admin "$op" &
 node scripts/throwaway-login.mjs session --url ws://127.0.0.1:4510 \
   --key "$work/operator.key" --out "$work/session" [--agent NAME]  # an mgs_ token, 0600
 synapse --token-file "$work/session" -P 4510 menger tickets health
 ```
 
-The token rides synapse's and synapse-cc's `--token-file` (the
-`access_token` cookie at the upgrade), a socket's `Authorization: Bearer`
-(`bearer()`; the perf probes read `$MENGER_SESSION_FILE`), and a browser's
-session cookie (`signInContext()`: `menger_session_<shell port>`, what
-`/login` sets). A session is its `--agent`'s name, so what it writes is
-signed with that name. `--no-rest` keeps a release from before ACCESS-24
-off prod's REST port.
+**What the shell serves** (`src/shell.rs`). `/app/` answers the entrypoint
+of the ui service's live version (`index.html` of its bundle, stamped with
+`{{WS_PORT}}`, `{{TITLE}}` and `{{UI_VERSION}}`, the version's hash;
+`Cache-Control: no-store`) — a session previewing a version gets that one —
+and, with no version live, a placeholder page naming the socket.
+`/app/<hash>/<file>` is that version's file, `immutable` for a year. `/` is
+the placeholder too (or the entrypoint of an `--app-dist` build). The
+login routes (`/login`, `/login/start`, `/login/callback`, `/logout`,
+`/auth/cli`, …) are plexus-login's. Every page goes out under a
+Content-Security-Policy (ACCESS-28, `PAGE_CSP`): no inline script but the
+page's own blocks, hashed; no script or image from another origin;
+connections only to itself, its socket and loopback.
 
-`http://127.0.0.1:4456/` is the Leptos app (MFE-4). Until you build the
-frontend it serves the day-one vanilla page instead — the binary alone
-always serves something live — and that page keeps its own URL,
-`/vanilla`, once the app is built. `/app/` is the app's asset root and
-the deep-link prefix (`/app/#/ticket/MNG-1`); it serves the app too.
-
-Open the app in two browser windows; create a ticket or flip a status in
-one and watch the other update. No polling — the server pushes.
-
-**Hosts** (ACCESS-25). Every listener — the WebSocket, the shell, and
-`diagrams` — answers only its own names, so a page that rebinds
-its own name to 127.0.0.1 (DNS rebinding) gets nothing: a request naming any
-other `Host` is refused before anything routes it,
-
-```
-HTTP/1.1 421 Misdirected Request
-
-this server does not answer to that name
-```
-
-Each port always answers `127.0.0.1:<its port>` and `localhost:<its port>`,
-and `--public-url`'s host (as it names it, and its hostname on the port);
-`--allowed-host` adds more — repeatable, `host:port` or `host` for a default
-port, every listener; `MENGER_ALLOWED_HOSTS` with `;` between. `diagrams`
-is loopback only and takes no list. The check is plexus-transport's (the
-WebSocket upgrade) and the shell's own:
+**Hosts** (ACCESS-25). Every listener — the WebSocket and the shell —
+answers only its own names, so a page that rebinds its name to 127.0.0.1
+(DNS rebinding) gets nothing: any other `Host` is refused `421 Misdirected
+Request` before anything routes it. Each port always answers
+`127.0.0.1:<port>`, `localhost:<port>` and `--public-url`'s host;
+`--allowed-host` adds more (repeatable, `host:port` or `host`;
+`MENGER_ALLOWED_HOSTS`, `;`-separated).
 
 ```sh
 PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --auth-provider key --admin "$(synapse _key show builder)" \
@@ -157,77 +125,32 @@ PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --auth-provider 
 curl -si -H 'Host: evil.example' http://127.0.0.1:4461/login   # 421
 ```
 
-**Bind** (RUN-8). Every listener — the WebSocket and the shell — listens on loopback unless `--bind ADDR` (`MENGER_BIND`) names
-another address: `0.0.0.0` or `::` for every address this machine has, or
-one of them (`192.168.8.117`, `fd00::1`, `[fd00::1]`). The startup log names
-each bound address. Binding changes where menger listens, not what it
-answers to: a specific address adds its own literal to every listener's
-names (`192.168.8.117:4460`) and the shell's origin at it
-(`http://192.168.8.117:4461`) to the origins that may open the socket; an
-unspecified address adds nothing, so each name it is reached by is an
-`--allowed-host` (and the shell's origin there an `--allowed-origin`). With
-an identity backend and the shell off loopback, `--trusted-proxy` (an edge's
-CIDR, or `none`) is required at startup (AUTH-22). `menger::local`,
-`plexus_shell::LocalServer` and menger-desktop stay on loopback; prod's
-units pass no `--bind`.
+**Bind** (RUN-8). Every listener binds loopback unless `--bind ADDR`
+(`MENGER_BIND`) names another — `0.0.0.0`, `::`, or one address. Binding
+changes where menger listens, not what it answers to: a specific address
+adds its own literal to the names (and the shell's origin at it to the
+origins that may open the socket); an unspecified one adds nothing, so each
+name it is reached by is an `--allowed-host` (and an `--allowed-origin`).
+plexus-transport's builder binds the socket (`TransportServerBuilder::bind`,
+TRANSPORT-7), with every check it keeps; `src/bind.rs` holds the flag.
 
-```sh
-PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --auth-provider key=ws://box.lan:4460 \
-  --admin "$(synapse _key show builder)" --db-path /tmp/menger-dev.db --bind 0.0.0.0 --allowed-host box.lan:4460 --allowed-host box.lan:4461 \
-  --allowed-origin http://box.lan:4461 --public-url http://box.lan:4461   # login is always on: ACCESS-30 wants the URL (http on a LAN is warned)
-synapse -H box.lan -P 4460 menger tickets health
-```
+**Trusted proxies** (TRANSPORT-7). `--trusted-proxy` (`MENGER_TRUSTED_PROXIES`;
+CIDRs, addresses, or `none`) names the edge in front. `X-Forwarded-For` /
+`X-Forwarded-Proto` are believed only from a peer in that set — by the login
+page's throttles (AUTH-22) and the WebSocket's per-IP and anonymous quotas.
+From any other peer a forwarded header is ignored. `tests/wire_hosts.rs`
+opens sockets through a fake proxy to show both cases.
 
-The WebSocket and the REST bridge take the address from plexus-transport's
-builder (`TransportServerBuilder::bind`, TRANSPORT-7), with every check it
-keeps — the hosts, the origins, the quotas, the login gate and RED-4's check
-at build — and the registry is told a specific address (loopback for
-`0.0.0.0` / `::`). The shell binds it itself. `src/bind.rs` holds the
-flag's spelling and the names a specific address adds.
-
-**Trusted proxies** (TRANSPORT-7). `--trusted-proxy` (`MENGER_TRUSTED_PROXIES`,
-`;`-separated: CIDRs, bare addresses, or `none` alone) names the edge in
-front. One flag, read twice: by the login page's throttles (AUTH-22) and by
-the WebSocket (`TransportServerBuilder::with_trusted_proxies`).
-`X-Forwarded-For` / `X-Forwarded-Proto` are believed only from a peer in
-that set, and the client is the rightmost hop that is not itself a proxy (a
-hop the client prepends moves nothing). The WebSocket's per-IP and
-anonymous-per-IP quotas (`--max-connections-per-ip`,
-`--max-anonymous-connections-per-ip`) then count that client, not the
-proxy. Every upgrade carries a `ForwardedClient { ip, peer, via_proxy,
-secure }`, and plexus-transport's `ClientIp` / `SecureTransport` read the
-same set. From any other peer, a forwarded header is ignored and logged
-once: with `none`, with nothing said, or with a proxy named elsewhere, every
-socket counts as its TCP peer. `tests/wire_hosts.rs` opens sockets through
-a fake proxy on loopback to show both cases.
-
-**Behind https** (ACCESS-30). A deploy reached beyond this machine is one
-https origin: a proxy terminates TLS for menger's own hostname and sends
-`/ws` to the WebSocket and everything else to the shell. Over https the app
-(and `/vanilla`) opens its socket at `wss://<the page's host>/ws` — never
-`wss://host:<port>` — and over http as before (`ws://<name>:<stamped port>`),
-so loopback, the test environment and a dev server are unchanged. The
-WebSocket answers the upgrade on any path, `/ws` included. With login on,
-`--public-url` follows from where the server is reached:
-
-| reached | `--public-url` |
-|---|---|
-| loopback only (`--bind` loopback, no URL or a loopback one) | anything; default `http://127.0.0.1:<shell-port>` |
-| beyond loopback, `https://<host>` | served: cookies `Secure`, the session's and the flow's `__Host-`, the login's `__Secure-`; the provider's redirect URI `<url>/login/callback` (logged at startup); every shell answer carries `Strict-Transport-Security: max-age=31536000`; key proofs may name `wss://<host>` or `wss://<host>/ws` |
-| beyond loopback, `http://` on the LAN (a private, link-local or unique-local address; `.local`, `.lan`, `.home.arpa`, `.internal`, one label) | served, with a warning at startup: sign-ins travel in clear |
-| beyond loopback, any other `http://`, or none with a `--bind` off loopback | refused at startup |
-
-The page's policy lets it connect to its own origin over TLS (`wss://<host>`
-in `connect-src`, beside the hub's `ws:`/`wss:` at its port). RUN-9: RFC
-9728's protected resource is then the public origin's socket,
-`https://<host>/ws` (§1.2's identifier is an https URL; the socket is
-`wss://` on the same origin and path), and its document
-`https://<host>/.well-known/oauth-protected-resource/ws` — answered by the
-shell, where the proxy sends it, as by the socket's port; `_info`'s
-`resource_metadata` and every 401's `WWW-Authenticate` name it. An https URL
-with no `--trusted-proxy` is warned about: every client would count as the
-proxy. The proxy recipe and the checklist are in `deploy/README.md`,
-"Behind https".
+**Behind https** (ACCESS-30). Reached beyond this machine, menger is one
+https origin: a proxy terminates TLS, sends `/ws` to the WebSocket and the
+rest to the shell, and `--public-url https://<host>` is required. Cookies are
+then `Secure` (`__Host-` for the session's), every shell answer carries
+`Strict-Transport-Security: max-age=31536000`, the provider's redirect URI
+is `<public-url>/login/callback`, and RFC 9728's metadata is
+`https://<host>/.well-known/oauth-protected-resource/ws` (RUN-9). An
+`http://` public URL on the LAN (a private address, `.lan`, `.local`, one
+label such as `localhost`) is served with a warning; any other is refused at
+startup. The proxy recipe and the checklist are `deploy/README.md`'s.
 
 ```sh
 PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --auth-provider key=wss://menger.example \
@@ -235,5727 +158,630 @@ PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --auth-provider 
   --allowed-host menger.example --public-url https://menger.example
 ```
 
+### Every flag
+
+`menger --help-all` groups them and names each one's `MENGER_*` variable,
+where it has one (a list in it is `;`-separated).
+
+| group | flags |
+|---|---|
+| run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path`, `--ui-signer`, `--ui-compiler`, `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell` |
+| sign-in | `--auth-provider`, `--admin`, `--public-url`, `--login-button`, `--login-email`, `--login-password`, `--login-forgot`, `--identity`, `--workos-api-key-file`, `--allowed-origin`, `--frame-ancestor` (an origin that may frame the shell's pages; none by default), `--live-origin` (an origin the shell's pages may frame), `--allowed-host`, `--trusted-proxy`, `--return-origin`, `--session-hours` (12), `--session-idle-minutes` (120) |
+| maintenance and testing | `--dev-login`, `--dev-password`, `--dev-idp-ws`, `--dev-user` (all `--env test` only), `--verify-derived`, `--seed-synthetic`, `--seed-value`, `--seed-shape` (`flat`, `nested`), `--seed-into-existing` |
+| limits | `--max-body-bytes` (8 MiB), `--max-calls-per-connection` (256), `--idle-timeout-secs` (900), `--max-connections` (1,024), `--max-connections-per-ip` (256), `--max-connections-per-principal` (64), `--max-anonymous-connections` (128), `--max-anonymous-connections-per-ip` (32) |
+
+`menger login [--agent]` prints a one-time link (or the agent's `_login`
+line) for the server running on `--data-dir`.
+
 ### Synthetic seeding (PERF-2)
 
-For measurement, not for real data: `--seed-synthetic N` (env
-`MENGER_SEED_SYNTHETIC`) bulk-seeds N synthetic tickets into the database
-before serving — through the store's cache layer, in a few large
-transactions rather than one fsync per row — and then serves them like
-any other tickets. The shape is realistic (several Zipf-sized epics, ids
-allocated the normal way, every kind and every status but the two worker
-states — SDLC-7 left the generator, and so every seeded store, as it was —
-a short markdown body, about a quarter of the tickets carrying valid
-acyclic `blocked_by` edges with `unlocks` mirrored), and deterministic: the same `--seed-value`
-(`MENGER_SEED_VALUE`, default 1) produces byte-identical tickets. The
-startup log carries the count and the elapsed time. A database that
-already holds tickets **refuses** the seed and the server exits; pass
-`--seed-into-existing` (`MENGER_SEED_INTO_EXISTING=1`) to add anyway,
-with ids continuing after the existing ones. No new RPC method: the wire
-surface is unchanged.
-
-CHAT-8: `--seed-synthetic-chat SPEC` (`MENGER_SEED_SYNTHETIC_CHAT`) seeds
-chats the same way, for `perf/chat-probe.mjs` — a comma list, each a chat
-of that many messages (`100000`; 1–40 lines each, some code) or one
-message of so many lines (`L50000`): a scope CHATS-1 and a ticket per chat,
-each chat between the first `--admin` (its reader, who has read it all)
-and `agent:builder`. Into a fresh database.
+For measurement, not for real data: `--seed-synthetic N` bulk-seeds N
+synthetic tickets before serving — through the store, in a few large
+transactions — then serves them like any other. The shape is realistic
+(Zipf-sized shortcodes, every kind, a short body, a quarter with acyclic
+blockers) and deterministic: the same `--seed-value` (default 1) gives the
+same tickets; `--seed-shape nested` hangs them in a tree (FILTER-13). A
+database that already holds tickets refuses the seed unless
+`--seed-into-existing`. The ladder in `perf/` (PERF-3) drives it per
+magnitude.
 
 ```sh
 cargo run --release -- --db-path /tmp/scratch.db --seed-synthetic 100000 \
     --port 4470 --shell-port 4471 --auth-provider key --admin "$(synapse _key show builder)"
 ```
 
-The magnitude ladder in `perf/` (PERF-3) drives this option per
-magnitude on temp databases and ephemeral ports.
-
 ### The stored derived state, and checking it (SCALE-28)
 
 What the store derives from the tickets — each shortcode's run of
-sequences (the next id, `extents`, `page.remaining`,
-`health.ticket_count`), the dangling forward references `create`
-resolves, the roll-ups behind `groups`, and each ticket's children
-(an index on `(parent, epic, seq)`) with its `child_count` (a column on
-its row), and (SCALE-32) each ticket's count of unsatisfied blockers (a
-column on its row), the ready set (a partial index over that count and
-the status, in store order) and each shortcode's count of each status
-and share of the ready set — is stored in the database beside them,
-written by every write in the same transaction as its tickets, and read
-at start instead of rebuilt by a pass over every ticket. A database written before SCALE-28
-— or in an older form of it: SCALE-32's is form 2, SDLC-11's (the roll-ups'
-`docs`) form 3, … MENGER-12's (a cell's `asking` and labels) form 10 —
-has it built once, on first open, durably, and the log says so
-(`SCALE-28: stored the derived state for the first time …`); every later
-start logs `read the derived state from the database … nothing rebuilt`.
-A seed stores it after its last chunk of tickets; killed before that, the
-file says its derived state is behind, and the next open builds it again.
+sequences, the dangling forward references, the roll-ups, each ticket's
+children and `child_count`, its count of unsatisfied blockers, the ready
+set, each shortcode's status counts, the filter cells and their bitmaps,
+the kept tree, the search index — is stored beside them, written by every
+write in the same transaction, and read at start instead of rebuilt. The
+form is **16** (V2-4: the cells no longer carry what the cut services kept);
+a file in an older form is built again, once, on its first open, and the
+log says so.
 
 ```sh
 menger --verify-derived --db-path /path/to/tickets.db
 ```
 
-opens the file read-only, rebuilds all of it by a scan of its tickets,
-compares them with what is stored — and (SEARCH-2) the search index
-with the tickets' titles and text — and prints each difference — the
-structure and the key, what is stored and what a scan gives
-(`child_count of ALT-2: stored 5; a scan gives 1`) — or `consistent: …`.
-Exit 0 when consistent; 1 on any difference, or when the file holds no
-derived state to compare (written before SCALE-28 and not opened since);
-2 when it cannot be read. It changes nothing, migrates nothing and serves
-nothing: run it before a deploy and after any migration.
+opens the file read-only, rebuilds all of it by a scan, compares, and prints
+each difference or `consistent: …`. Exit 0 consistent, 1 a difference (or
+nothing stored to compare), 2 unreadable. It changes nothing: run it before
+a deploy and after any migration.
 
-## Frontend (the Leptos app)
+## The services
 
-The MFE epic's browser client lives in `frontend/` — a **separate cargo
-unit** (Leptos 0.8, CSR only, built with trunk). The server never needs
-it to compile: `cargo build` / `cargo test` work with no wasm toolchain
-installed. Until you build it, `/` serves the vanilla page and
-`http://127.0.0.1:4456/app/` answers a plain "frontend not built" page
-(HTTP 200 with build instructions, never a 500).
+One process registers these on the `menger` service (`src/builder.rs`), all
+behind plexus-core's gate; menger's own are declared on the frame
+(ACCESS-13), `auth` is plexus-login's:
 
-One-time toolchain (steps that worked on this machine):
-
-```sh
-rustup target add wasm32-unknown-unknown
-# trunk, prebuilt via cargo-binstall — preferred here because
-# `cargo install trunk --locked` fails to compile on GCC 16
-# (libdeflate-sys 1.23 uses the removed `evex512` target attribute):
-curl -L --proto '=https' --tlsv1.2 -sSf \
-  https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-cargo binstall -y trunk
-```
-
-Build and run:
-
-```sh
-cd frontend && trunk build --release   # production build -> frontend/dist/
-cargo run                              # serves it at http://127.0.0.1:4456/
-```
-
-Dev loop: keep `cargo run` up and run `cd frontend && trunk watch` — it
-rebuilds `dist/` on every source change; reload the browser to pick it
-up, no restart needed. The server holds the build as a table (ACCESS-33):
-`/app/…` answers only the files of the build it read — a request path is
-a key, never a path on disk — and a new `index.html` (every trunk build
-writes one) has it read the build again.
-`--app-dist DIR` / `MENGER_APP_DIST` point the server at a `dist`
-elsewhere.
-
-Diagrams (AGS-14): a ```mermaid fence in a ticket body renders as SVG on
-the ticket page. The renderer is mermaid 11.17.2 (MIT), **vendored** at
-`frontend/vendor/mermaid/` (version, checksum, license, and upgrade steps
-in its README) and copied by trunk into `dist/vendor/`, so the shell
-serves it at `/app/vendor/mermaid-11.17.2.min.js` like any other asset —
-the app still talks to nothing but menger. It is **lazy**:
-`frontend/src/md.rs` turns each fence into an inert placeholder holding
-the escaped source, and `frontend/src/mermaid.rs` injects the `<script>`
-only the first time a rendered body holds one (once per page load, shared
-by every diagram on it), then drives `mermaid.render` under
-`securityLevel: 'strict'` — no HTML labels or click handlers from diagram
-source, and the key is in mermaid's `secure` list, so a `%%{init}%%`
-directive cannot loosen it. A diagram that fails to parse shows the error
-and its source in place; the rest of the page is unaffected.
-`RUST_LOG=menger=debug` logs one line per served asset, which is how to
-see that a diagram-free page never pulls the bundle.
-
-Code (MENGER-22) is always highlighted: every fenced or `<pre><code
-class="language-x">` block — in a plain body, a framed body and `m-code`, a
-comment, a board note, a component's docs card and its source on
-`#/components`. The highlighter is highlight.js 11.11.1 (BSD-3-Clause),
-**vendored** the same way at `frontend/vendor/highlight/` (its README: the
-bundle's makeup, checksums, upgrade steps) and served at
-`/app/vendor/highlight-11.11.1.min.js`, fetched the first time a page — or a
-frame, from `highlight.url` in its init block — holds a code block
-(`frontend/src/highlight.rs`; the frame SDK's `mountCode`). A block's
-`language-x` names its language (rust, typescript, javascript, json, toml,
-yaml, bash, sql, html, css, markdown, haskell, python, diff — and every other
-language in the bundle); `text` or `plain` stays plain; a fence with no
-language is guessed from those fourteen (`highlight::UNLABELED`, MENGER-22's
-open decision `unlabeled`; a guess scoring under 2 stays plain). The colours
-are the `--code-*` tokens (`keyword`, `string`, `comment`, `number`,
-`title`, `type`, `meta`, `builtin`, `attr`, `variable`), mapped from the
-`hljs-*` classes by index.html's rules and the SDK's base — no vendor
-stylesheet — so a THEME-8 theme, a region's scope or the light/dark toggle
-recolours code with no parse again. An unknown language, a bundle that will
-not load or a highlighter that throws leaves the block as written; an
-amended or still-streaming body is highlighted as it lands. Whole-document
-bodies (MENGER-15) are their own pages and are left as they are.
-
-Data plane (MFE-1 pins: REST for calls, SSE for `watch`; the view layer
-owns no routing):
-
-- The REST port (:4457) emits **no CORS headers**, so the app never
-  called it cross-origin: until MFE-9 the shell hosted a same-origin
-  reverse proxy, `/rest/{*}` on :4456 forwarding verbatim to :4457.
-  **ACCESS-33 removed it** — the app speaks the WebSocket (below), nothing
-  else called it, and it forwarded anything to a bridge that carries no
-  identity. The shell serves menger's pages and the app's build, nothing
-  else; the REST port itself, where it runs, is for curl and scripts:
-  `POST /rest/<activation>/<method>`, and a child's method at its whole
-  path, `POST /rest/tickets.work/ready` (ACCESS-20; the bridge has one
-  segment for the namespace, so the child's path is dotted there).
-- `tickets.watch` streams SSE **over POST**, which browser `EventSource`
-  (GET-only) cannot consume — the reason the app was written against
-  `fetch` + ReadableStream up to MFE-8. It no longer is: since **MFE-9**
-  the app's whole data plane is one `WsTransport` on :4455 speaking
-  `menger.call`, driven by the client menger's own activation
-  declarations generate (`tickets-api`, the crate the server and the
-  browser share). It opens `watch` first, asks `health`, `groups` (the
-  nav's shortcode rows, SCALE-24) and `extents` (where every ticket sits,
-  SCALE-26), then one page for the board's window
-  (`list { after, limit, summary }`, MNG-9) — and is `live`: five requests
-  whatever the store holds. It reconnects on a ~1 s loop — a server
-  restart returns the page to live on its own, with rows keeping their
-  DOM identity. A `lagged` on `watch` (SCALE-5) is answered over the same
-  socket by asking again for what is shown — the groups, the extents, the
-  board's window, the open ticket page's ticket, children and the rows it
-  names: rows keep their DOM, `watch` keeps running, and the dock stays
-  `live`. The port comes from `<meta name="menger-ws-port">`, which
-  the shell substitutes wherever it serves the app's entrypoint (`/` and
-  `/app/`), exactly as it always has for `web/index.html`.
-
-Rendering (MFE-12): the app mounts only what can be seen. The board is a
-window — the rows on screen plus 100 either side,
-between two spacer rows at the measured row pitch — so every board row is
-one line (a long title ends in an ellipsis; hover shows it whole); a store
-taller than a browser will lay out (about 888,000 rows in Chromium) is
-drawn at a fixed height with the scroll range mapped onto it. The nav
-mounts a node's children when it opens. j/k, the jump palette and the
-ticket menu work from the row store, so none of them needs a row to be
-mounted.
-
-The board holds only its window (SCALE-26). `extents` gives each
-shortcode's last sequence, and sequences are dense, so row k of the board is
-a ticket id by arithmetic and the page that starts there is
-`list { after: <row k - 1> }` — a scroll or a jump anywhere asks for one page
-(~2 ms at 10^6) and draws a pending line for each row until it lands. The
-rows held stay within 1,000 of the window (about 2,400 at most, however far
-the board is scrolled); a `created` moves the count and the scrollbar and is
-held only inside a stretch the board holds; any other event is applied to a
-row some view holds and dropped otherwise. j/k, Home/End and Enter walk
-positions, so they cross the window and fetch on the way. At 10^6 the first
-rows and `live` come together in ~0.22 s, and the page's wasm memory is
-~5.6 MB (the walk held 682 MB).
-
-The nav (SCALE-24) needs no walk: its shortcode rows are the server's
-roll-ups (`groups`, kept by `group_changed`), a shortcode is drawn as its
-root's own ticket row (AGS-23: from the group's `root_row`, with the
-shortcode's roll-up beside the root's status; a shortcode with no root keeps
-a row of its own over a flat list), each level indents two columns, and an
-opened node's children come by page (`list { parent }`) — past
-one page, as a window over them like the board's, so a root of 163,530
-children shows its first page in ~70 ms and its last child is a scroll
-away. At 10^6 the shortcodes are on screen in ~160 ms and a cold deep link
-shows its leaf selected in the nav in ~0.4 s. Every row the app shows lives
-in one row cache — a signal per ticket, held while a view shows it — that
-the board, the nav and the ticket page share. The jump palette (SCALE-25)
-asks the server: `find` once the typing pauses (80 ms), only the newest
-question's answer shown, its count the answer's rows plus `remaining` —
-`map-12` shows MAP-12 first ~0.26 s after the last keystroke at 10^6.
-Beside each `find` it asks `search` (SEARCH-3): below the jump rows, an
-"In bodies" section with the best eight hits no jump row shows, each with
-its passage, the matched words marked; when a word was corrected the
-heading says what was searched for (`In bodies · annotation mode`).
-
-The nav's header chooses `Tree | Flat` (FILTER-20), kept in local storage
-with its other state (`menger.nav.view`). Flat lists every ticket the nav's
-filter admits — every ticket with none — as the tree's leaf rows in id order,
-windowed like the board: `counts { filter }` places each row, and a page is
-`list { filter, after: <the row before it> }` scrolling on or `list { filter,
-at }` after a jump; a membership watch keeps it live. At 10^6 its first rows
-show in ~0.3 s and the last ticket is a scroll away (five pages).
-
-The nav's cursor is the open ticket (AGS-26). Every navigation selects its
-row and centres it in the nav, as near as the list's ends allow, in Tree and
-Flat. On a ticket page ↑/↓ (k/j) open the previous/next ticket in the nav —
-from the nav or from anywhere else outside a text field, a dialog or a menu —
-passing over shortcode headings; in the tree, h/l open and close (← and →
-are not the app's keys, AGS-27). `f` on a ticket page makes the nav's filter
-`under <the ticket>` (it and its descendants); ↑ on the nav's first ticket
-then widens that `under` by one parent — a shortcode's to its root's host —
-and drops it at a top root.
-
-A ticket page has a **section dock** (LOOK-3, APP-30): every labelled
-field of the body in order, then the Conversation, the one being read lit
-(the last whose top has passed a line a quarter of the way down), and each
-input (`m-decision` / `m-input` with an `id`) a row under its section —
-amber `waiting` while open, an amber ring once `answered`, green `decided`
-once closed, live on `input_changed`; the head says `● N waiting on you`.
-At ≥ 1760px (LOOK-7: 1920 less 10em) it is a column of its own; from 640 to 1760 a rail of ticks at
-the right edge that opens over the body on hover, focus or a tap; at ≤ 640
-a pill above the tray (hidden while you read down, back on the way up and
-at the end) that opens a sheet, inputs first. A row scrolls there (an input
-centred) and flashes it. `}` / `{` the next and previous section and `i`
-the next open input, wrapping (`]` / `[` stay the status keys; owner,
-2026-10-16). A body with fewer than three sections and no input has none,
-unless the ticket has a chat of yours: the dock also holds the ticket's
-chats (CHAT-10, "Chats" below).
-A framed body tells the app where its sections are (SDK 2.1:
-`menger:sections { items }`, and `menger:flash { n }` back); the dock is the
-app's, painted with the contract's `--ask` / `--ask-bg` / `--ask-line`.
-
-The nav selects like a file list (ACT-3), one selection for the whole app —
-the tree, the flat list and the board draw and take the same one. A click
-opens the ticket and selects its row; Shift+click selects from the anchor
-(the last plain or Ctrl/Cmd click) to the row, in the order drawn (a closed
-node's children are not drawn, so not selected); Ctrl/Cmd+click toggles a
-row; neither opens anything. On a focused row Shift+↑/↓ (Shift+j/k) extend
-the selection, Space toggles the row, Ctrl/Cmd+A selects every drawn row, and
-Esc clears. A shortcode's row stands for its root ticket. Selected rows wear
-`--sel` and `aria-selected` (the tree is `aria-multiselectable`; the open
-ticket is `aria-current`), and the nav's foot says `3 selected · 2 hidden ·
-clear` — hidden: selected, but outside the nav's filter. The selection is
-ids: it survives a filter change, a route change and a live reorder, not a
-reload; one range takes at most 1,000 rows.
-
-**One menu for a ticket** (ACT-4, `src/menu/`): a right-click — or Menu /
-Shift+F10 on a focused one — on a ticket anywhere it is drawn (its nav row,
-its id or status chip, a board row, a wave card, the ticket page's heading,
-a relation, a chip inside a framed body) opens the same menu: Open, Open in
-new tab, the wave boards and Copy code; every update — **Set status ▸**,
-**Set kind ▸**, **Set severity ▸**, **Labels ▸** (add or remove; Add a
-label…), **Move under…** and **Blocked by…** (a ticket picker, the palette's
-`find`), **Unblock ▸**, **Rename…**, **Link commits…**; the filter items
-(FILTER-22's — a status, kind, severity or label chip puts its own first);
-**Nav ▸** in the nav; and **Delete…**. On a selected row of a selection of
-more than one it acts on all of them: "N tickets", Copy codes, every update
-as one `update_many` (ACT-2), the shortcodes they share or `under` each,
-Delete N… (Open, Rename… and Link commits… step aside); a submenu marks one
-ticket's value, or how many of the selection hold each. One ticket's update
-is one `update` (status: `set_status`, which keeps MENGER-13's restore
-prompt; labels: `label`). A refusal lands in the error banner in the
-server's words. The updates are absent for a reader who cannot write, Delete
-for anyone but an admin. Delete… confirms in
-the app — every ticket, its children (moved to its parent, or deleted too)
-and the tickets that wait on it (unblocked) — and then offers **Undo**
-(`undelete`) in its toast. A shortcode's row is its root's menu with the
-shortcode's Wave board. A tag outside any ticket keeps FILTER-22's menu.
-
-**Held on a touch screen** (APP-57, `src/menu/hold.rs`): a touch that rests
-500 ms on a ticket (within 10 px) opens the same menu — a board row, a nav
-row, a card, a chat's or a comment's ticket chip (any link to
-`#/ticket/<ID>`), a chip in a framed body — and its lift is not followed; a
-touch that moves (a scroll) or lifts first is a tap or a scroll, as before.
-A chip shows no iOS callout or link preview, and on a touch screen selects no
-text (a conversation keeps its text). At ≤ 820 px the menu is a sheet from
-the bottom, above the bar. In a framed body the chip is marked held at
-500 ms and the menu opens on the lift: the app opens a frame's menu only on
-a live gesture with focus in that frame (MENGER-34), and a touch still down
-is neither. Android's own long press (`contextmenu`) is the same hold.
-
-**The status chooser, three ways** (ACT-10). A status, kind, severity or
-label chip — on a row, a card, a nav row, the ticket page's Status / Kind /
-Severity — puts its own chooser first, flat: the same options, marks and
-writes as its submenu, then a rule and the rest of the menu, with no
-`Set … ▸` for it (a label chip's ends with Add a label…; a reader who cannot
-write gets the menu as before). `]` and `[` step the focused ticket — or the
-selection it is in, or the ticket page's own — along the worker line, Draft →
-Pending → Ready → Coding → In Review → Complete (`Status::LINE`, `next` /
-`prev` in `tickets-api`), through the menu's write (`set_status` for one,
-one `update_many` for a selection holding one status); off the line
-(Blocked, Epic, Superseded, Canceled), at an end, on a doc or over a mixed
-selection, nothing is written and a toast says why. `s` opens the one menu
-on the focused ticket with **Set status** already expanded and its current
-status focused: ↓/↑, Enter.
-
-The wave board (WAVE-5) is `#/waves/<SHORTCODE>` — e.g.
-`http://127.0.0.1:4456/app/#/waves/PLEXUS`, the platform's work in order:
-the shortcode and every shortcode hosted under it (the nav's `host` chain
-from `groups`), placed by one `tickets.work.waves` (WAVE-4) and grouped here into
-columns — a column per non-empty wave, then `missing blocker`, then `Done`
-collapsed to its count; or, one toggle away, the stages (`Blocked`, holding
-wave 2 and later with a `w<n>` badge, then the wave-1 tickets by status and
-`Done`). The layout is remembered per shortcode in localStorage. A card
-names each ticket it waits on that the board does not show (an off-board
-blocker, a chip linking to it). WAVE-12: that tree and the kinds build,
-spike, gap are the board's default; its **filter** builds any other — a
-`Filter` button (or `f`) opens a Linear-style menu: a search over the
-categories and their values, then Shortcode (the hosting tree, the route's
-first, tri-state), Status, Wave, Kind, Severity, Readiness, Off-board
-blockers, Title contains — each value with its count on the board's answer.
-Applied clauses are pills, `[Category] [is any of | is not] [values +n]
-[×]`; `reset` returns to the default. Shortcode and Kind are what `waves` is
-asked for; the rest narrow the answer in the browser. The filter is the
-route's query, rewritten in place — `#/waves/PLEXUS?sc=is:RETURNS&
-status=not:Pending` — so a reload or a pasted link restores the board.
-WAVE-6: it moves its cards as `watch` says
-they move — each `placements_changed` takes a card to its new column
-(however far upstream the write was: a completion two blockers back moves
-it), each `status_changed` its stage and what the cards wait on — and asks
-`waves` again (coalesced, one in flight and one queued) only for a ticket
-born into its shortcodes, on a `lagged`, on a reconnect, and once more
-behind an answer in flight when a change lands while it is out; `waves` is
-asked only while a wave board is open. `#/waves`
-lists the boards; the header links to it, and a shortcode's row in the nav
-offers its board in the ticket menu.
-
-Below the board, in either layout, is its **annotation** (WAVE-11): a
-markdown document that discusses the board's waves, kept in the board's
-root shortcode at the reserved path `_MENGER/board` (WAVE-10) — `get { id:
-"PLEXUS/_MENGER/board" }` — a doc under the shortcode's scope root, hidden
-from the nav. The panel is titled with that address and folds; with none
-written yet it says "write notes for this board". `[ edit ]` opens a
-markdown textarea beside a live preview through the ticket page's renderer;
-save amends the document (`amend { id, body }`) — the first save creates it
-(`create { epic, kind: doc, path: _MENGER/board, title: "board: ROOT",
-body }`) — and cancel discards. An `amended` from elsewhere updates the
-panel, or, mid-edit, says "changed elsewhere — reload?" and leaves the
-draft alone. In any body — the annotation's or a ticket page's — a **wave
-reference** `{wave: RETURNS-6}` renders as that ticket's current ordinal:
-`wave 2` (on the board a link to the card's column), `done` or `missing
-blocker`, from the board's cards when the ticket is one, else from the
-ticket's row (its kept `placement`, fetched and held while shown); it moves
-live, and an id that is no ticket is left as written. A body without one
-renders byte for byte as before.
-
-**Filters** (FILTER-9) reach every view. There is one **global** filter
-(<kbd>F</kbd>, or the menu's ⌂ everywhere switch; a dashed chip on every
-surface and in the nav's head, and `n of N` in the header while it holds
-anything) and one per surface: the
-**board**, the **wave board**, the **nav** and the **inputs** page (each
-surface's own bar, or <kbd>f</kbd> on it). A surface shows what *both*
-admit — `global.and(own)`, which merges groups on the same field (lists
-intersect, exclusions unite) and names a contradiction under the bar. Every
-bar is the same component (WAVE-12's menu made generic, `src/lens.rs`):
-categories with counts (`facets`, Linear's: a category's counts ignore its
-own clause, never the global one), the filter menu (FILTER-49, below), a
-text drawer in FILTER-3's language (FILTER-43), and the global filter
-shown as a dashed chip on each surface. The
-board windows over `counts` (FILTER-12); the nav shows each shortcode with
-its matches and, inside, only the matches, each with the matches below it —
-a ticket the filter excludes is not drawn, and the matches under it move up
-to its nearest matching ancestor or the top of the shortcode, whose row is
-then a heading (`tree { matches_only }`, FILTER-13/14/23). The open
-ticket is always in the nav, whatever its filter (FILTER-24): it is drawn
-where a match would be, its matches under it, marked `outside` when the
-filter excludes it — and listed in the Flat view at its place — by
-`keep: <the open ticket>` on `tree`, `list` and `counts`; the
-palette searches inside the global filter with a "Search everything" row,
-and a ticket page says when its ticket is outside and filters its children
-(FILTER-16). Each level rides the route's query — `g=` global, `n=` nav,
-`f=` the surface's own — and the viewer's local storage, so global and nav
-filters survive navigation and reload.
-
-The menu builds a NOT (FILTER-19): each category's head has an `is` /
-`is not` switch (Title's `contains` / `does not contain`). Set to `is
-not`, the selected group's clauses of that category turn, and values
-ticked under it are excluded — and-ed: Kind, `is not`, doc and spike is
-`not kind doc and not kind spike`. The flags share one switch: `is not`
-ticks `not ready`.
-
-**The filter menu** (FILTER-49; `src/filter.rs`,
-`src/ors.rs`) is every bar's one builder. Over each surface sits **the
-chips line** (FILTER-41): the `Filter` button (its badge the number of
-clauses), the global filter as a dashed chip, the surface's clauses as
-chips — the field muted, the value inked, × to take one out, a click to
-open the menu on its category — with **and** between them and **or** between the groups
-(each group boxed when there are two or more), the surface's own clauses
-(the wave board's, the inputs page's) as chips beside them, the count
-(*11 of 45*), **+ or** (another group, the menu opened to tick into it)
-and `save as…`. Empty, it says what is shown (*all 41
-tickets*) and offers the saved filters the reader uses most (the recently
-used first), each counted — a click applies one, bound by its name (with
-none saved yet, three of FILTER-27's suggestions). The name field, `text`
-and `Saved ▾` are gone from it: text is the menu's foot, choosing is the
-menu's Saved category or a chip here. The button, <kbd>f</kbd>
-(<kbd>F</kbd> the global one) open **the menu**, a popover over the page
-hung under the button that opened it — the pre-FILTER-39 menu, back (the
-owner, 2026-10-22: *"compact, a popover not a panel"*): the board never
-moves under it, and Escape, × or a press outside closes it. Its head is the
-search (it narrows every value; with a category open, that one's) and the
-levels as a small switch; under it, once the filter has a group, which group
-a tick goes into (**+ or**, × on a group); then the categories as a short
-list — the saved filters first, Shortcode, Status, Kind, Severity, the flags
-together, Label, When, Deployed, Chats, People, a surface's own — with a dot
-on each the filter holds, and **one open at a time** beside it: its values,
-each counted (`facets`), `is` / `is not` in its head. Its foot: `edit as
-text`, `reset`, `save as…`, the clauses counted. With too little room for
-two panes (a column under 580 px) the open category takes the list's place
-behind a back row.
-
-**On a phone** (FILTER-44; APP-50's shape, up to 820 px): the same menu is
-the phone bar's filter sheet — the bar's filter place opens it on ⌂
-everywhere, a surface's own `Filter` on its level. Its head (the search, the
-level switch across it) stays at the sheet's top; rows are touch-sized
-(40 px); one pane — the list, or the open category behind a back row;
-`clear` (or `reset`) and **show N tickets** — N what the level shows,
-counting as you tick — are pinned at its foot, and *show* closes it and
-lowers the sheet. Closed, one row of
-chips is all that sits over the board (the line's chips clipped to it,
-nothing scrolling sideways).
-
-**The text drawer** (FILTER-43): the menu's foot's `edit as text` opens
-the level's filter as canonical text, edited in place. As you type, the
-language places each mistake ([`Mistake`], `tickets-api/src/filter.rs`: a
-refused chunk now carries where it starts and each mistake in it — where,
-how long, a few words, the nearest names, the text that fixes it) — so the
-drawer underlines it where it is and lists it once with its fix: `` `bild`
-is no kind `` **use build**, `` `kidn` is not a field `` **use kind**, *a
-group opened and never closed* **close it**, *a `)` that closes no group*
-**remove it**; a click puts the fix in. The nearest names are by edit
-distance over the vocabulary's own (statuses, kinds, severities,
-categories) and menger's fields, never the grammar's listing. Enter (or
-`apply`) applies the text once it reads; until then the level keeps the
-last filter that read and its chips line says so. Escape leaves the drawer.
-
-**One menu for every level** (FILTER-40): its head holds a switch with a level each —
-**⌂ everywhere**, **nav** (where the nav is drawn), and the route's surface
-(**this board**, **this wave board**, **the inputs**) — each with what that
-level shows counted (`global ∧ own`, `counts` asked again as it changes), so
-which filter is being edited is never a guess. It hangs from the
-surface's line, from under the header on a page with none (a ticket's), and
-is the phone bar's filter sheet at phone widths. The header's `Filter` and
-`Saved ▾`, the GLOBAL row and the nav's bar are gone: the global filter is a
-dashed, read-only chip at the head of each surface's line and of the nav's
-chips (a click opens its level), the nav shows its own filter as chips in its
-head, and the menu's foot keeps `edit as text` and `reset` / `clear`. The wire is
-unchanged (`global ∧ own`), and so is the URL's `g=` `n=` `f=`.
-
-The filter it builds is **groups joined by an explicit `or`, the clauses
-inside a group joined by `and`** (owner, 2026-10-17: *"ors should be
-explicit not any of. clauses between ors are anded"*) — no "any of", no
-"all of", no join to toggle. The chips line draws the groups, each
-its clauses with **and** between them and **or** between the groups; while
-the menu is open the selected group is lit there and in the menu's *ticks
-go into* row, and the categories tick its clauses (a value another group
-holds says `in group 2`). × takes out a clause (or, in the menu, a group);
-**+ or** starts a group. Each value is counted; hovering one says what
-ticking it would leave (`→ 13`). Typing in the menu's search narrows every
-category at once; Enter ticks the first value left.
-
-A tick goes into the selected group. A second value of a category a ticket
-holds one of — a second status, kind, severity or shortcode — is an
-alternative, so it makes **a group of its own** after the selected one, the
-group's other clauses kept in both, and the menu says so: with `kind build
-and status Ready`, ticking gap makes `(kind build and status Ready) or (kind
-gap and status Ready)`. A shortcode that hosts others is ticked as `under`
-it (it and every shortcode hosted under it), the hosted ones marked covered.
-A saved filter ticked is a group by name (`saved "Hot gaps"`), filling the
-selected group while it is empty; the line says the filter **as evaluated**,
-its names expanded.
-FILTER-42: these groups are FILTER-36's groups in a group, one level deep,
-with no join to toggle — FILTER-37's tree and `src/anyof.rs` are gone. Any
-filter the language holds is drawn so, its lists spelled out and its
-negated groups turned (De Morgan) — `kind build and status in (Ready,
-Coding)` is two groups, `not (ready and blocked)` is `not ready` or `not
-blocked` — admitting the same tickets; one that would spell out into more
-than 32 groups is shown as its text, read-only in the menu and edited as
-text in its foot, never rewritten. The
-groups last edited are kept while the filter still says them, so a new empty
-group keeps its place. With names, a line under the bar says the filter **as
-evaluated**, the names expanded; the wave board's and the inputs page's own
-categories are pills under the bar, and-ed with every group.
-
-Menger's own documents are a filter (FILTER-21): `menger doc` admits the
-tickets whose path starts with `_MENGER/` (each shortcode's board note) on
-every filtered read, and every menu offers it as the flag **Menger docs**.
-The nav's default is `not menger doc`, and `reset` returns to it; the
-header's "menger docs" toggle is gone. The flag is a cell coordinate, so
-stored form 6 gives `cells` a `menger` column: a form-5 file is built again
-once on first open, and an older build cannot open it after.
-
-The table board's default (TICKETS-13, owner 2026-10-23: "make the default
-filter exclude draft, complete") is `not status in (Draft, Complete)`: what
-is not yet promoted and what is finished are left out, and `reset` returns
-to it. A reader's own filter replaces it, as any choice does — `status
-Draft` shows the drafts, the empty filter (`f=`) every ticket. The global
-filter, the nav, the wave board and the inputs page keep their defaults.
-
-What waits on the owner is a filter too (MENGER-12): **`asking`** admits
-the tickets with an input in the state `open` (INPUT-1 — a question nobody
-has answered yet: an answer, a close or the body dropping it takes the
-ticket out; a clear, or a reopen with no answer, puts it back), and
-**`label <name>`** the tickets holding that label (`label needs-you`,
-`label in (p1, later)`; a ticket holds many, so two `label` inclusions never
-merge). Both are cell coordinates — a cell holds its tickets' `asking` and
-their set of labels — answered from the cells on every filtered read and on
-`watch { filter }`, kept by the write that moves them (a `label`; an
-`inputs answer`, `clear`, `close` or `reopen`; a `create` or
-`amend` whose body opens or drops an input), and `facets` counts `asking`
-(yes / no) and `label` (a count per label held, in name order) after
-`menger doc`, before `in`. Stored form 10 gives `cells` `asking` and
-`labels` columns: a form-9 (or older) file is built again once on first
-open, and an older build cannot open it after.
-
-One ticket alone is a filter too (ACCESS-21): **`ticket <ID>`** — any
-address of a ticket (`ticket MENGER-12`, `ticket MENGER/ORG-3`) — admits
-that ticket and nothing else, not its children (`under` is it and its
-subtree). It is a truth of one ticket's, answered as a history predicate's
-is (the cells' answer corrected for the one ticket it holds for), on every
-filtered read and on `watch { filter }`. It is what a role granted on one
-ticket reads through ("Members and roles").
-
-**Needs you** (MENGER-12, MENGER-43) is a filter on the nav: what waits
-on the owner is the saved filter named "Needs you"
-(`tickets filters get --name "Needs you"`; until one is saved, the default
-`(queued or asking or asked or label needs-you)` — MENGER-39's queue first). `g n`,
-or a click on the header's **needs you N**, puts it on the nav exactly as
-a saved filter's chip puts it on a surface (the nav's own clauses replaced;
-its chips, its text and the URL's `n=` following), focuses the nav's first row,
-and leaves the route where it is. The nav shows `global and nav`
-(FILTER-21), so the global filter reaches it: filtered to one shortcode,
-the nav shows what waits on the owner there. The same press while the nav
-holds exactly that filter puts the nav's default back. The header's count
-is the saved filter's, live (`entered` / `left` / `recount` of a membership
-watch), whatever the lens holds. The filter is changed as any saved filter
-is — apply it (the line wears its name), edit it (every edit amends it),
-or `save as…` "Needs you" (replace); the next
-`g n` applies the new text. The questions are where they are answered: the
-ticket page (its frame scrolls to the input), `#/inputs`, and the tray for
-a queued ticket. Home is the board; MENGER-12's panel, which answered to
-no filter, is gone. Labels are chips on every row (board, nav, flat, wave cards) and on
-the ticket page, where an editor adds and removes them; the menus offer
-**Asking** (yes / no) and **Label** (a value per label, with `facets`'
-counts), and the palette takes `filter <text>` — `filter label needs-you`,
-`filter asking` — as the global filter.
-
-**Saved filters** (FILTER-6, FILTER-41): the menu's Saved category lists
-them by name, each counted (ticked, one joins the selected group by name,
-`saved "Name"`); an empty chips line offers the most used, and a click there
-applies its filter to that level (a surface's own categories cleared),
-bound by its name; `save as…` — on the line, or in the menu's foot for any
-level — keeps the level's filter under a name, and the bound name, clicked,
-renames it (emptied, it is deleted). They live in the tracker, so every browser and agent reads
-the same ones: **`tickets filters`** (FILTER-46), a child activation beside
-`nav`, `inputs` and `work`, over a table of its own, `saved_filters` — a name
-(unique within its organization, matched by its slug), the filter as
-canonical text, who saved it and when. They are not tickets. The store keeps
-them in its cache like everything else and writes through; a change is a
-`Change` classified in `Store::heard`, and `watch` carries `filter_saved` and
-`filter_deleted`, so every open app follows. `list`, `get` and `check` are a
-viewer's; `save`, `rename` and `delete` an editor's, in the caller's
-organization. `save` refuses, in band and keeping nothing, a filter the
-language cannot read (naming the chunk and where it stands), one naming no
-predicate or holding `text`, and a `saved "…"` that names none or closes a
-cycle. A name already saved (compared by slug) is replaced by `save`, and the
-app offers to replace that filter or to choose another name; a rename keeps
-the filter and who saved it. The wave board's Wave, Readiness, Off-board
-blockers and Title (the inputs page's State and Removed) are not in the
-language, so a save leaves them out. The app reads `filters list` when the
-panel or an empty line first needs it — nothing at startup — and, once read,
-follows `filter_saved` / `filter_deleted`.
-
-```sh
-synapse … menger tickets filters list                                  # name, filter, count, who saved it, when
-synapse … menger tickets filters get --name "Shipped today"
-synapse … menger tickets filters save --name "Shipped today" --filter 'deployed app-prod today'   # create or replace
-synapse … menger tickets filters rename --name "Shipped today" --to "Shipped"
-synapse … menger tickets filters delete --name "Shipped"
-synapse … menger tickets filters check --filter 'deployed app-prod today'   # the count, or the error with its position; writes nothing
-```
-
-**Naming saves** (FILTER-37, `src/naming.rs`; FILTER-41: behind `save
-as…`): the name a level is given *is* its save. Given a name (Enter, or leaving the field), the level's
-filter is saved as Save as… saves it (`filters save`) — and the name is
-underlined in `--live`; from then
-on **every edit** saves it again, 400 ms after the last change, one write
-at a time, the last always written. A name another listed filter holds
-offers to replace it or to choose another; typing another name renames it
-(`filters rename`); emptying the name deletes it. A name given to an empty tree is saved with its
-first clause. A filter chosen from a chip opens with its name on the line,
-and editing it there edits it — and every filter that names it. What lets
-go of a name: a filter applied from outside the line (a link's `g=` / `n=`,
-another saved filter chosen, Make global and its undo, `reset`, `g n`, the
-palette's `filter …`); the binding is kept per viewer and level and comes
-back while the level holds the text it last wrote. An unnamed tree is the
-level's filter alone.
-
-**Nesting and names** (FILTER-36). The language (FILTER-10's, in
-`tickets-api/src/filter.rs`) is groups joined by `and`, each group one `or`
-or one `and` of items — and an item is now a predicate *or a group*, to any
-depth: `(ready or (blocked and kind build)) and has commits`, `not (blocked
-or asking)`. One join per pair of parentheses still (`(a or b and c)` is
-refused: say which binds). The canonical text settles every tree one way —
-a group joined as its parent is spliced into it (`((a or b) or c)` is `(a
-or b or c)`), a one-item group is its item (`(a or (b))` is `(a or b)`), a
-negated list is the other list (`not (status A or status B)` is `not status
-in (A, B)`) — and `format(parse(x)) == x`, `parse(format(f)) == f` hold
-over random trees. `text "…"` stays a top-level `and` group of its own, at
-any depth. **`saved "Name"`** (`saved Name` when the name holds no space,
-comma, parenthesis or quote; `not saved "Name"` too) is a predicate naming
-a saved filter: the row of `saved_filters` (FILTER-46) whose name has the
-slug (`Needs you` = `needs you` = `needs-you`); a deleted or renamed one
-no longer names it; `Needs you` means MENGER-43's default, `(queued or
-asking or label needs-you)`, until one of that name is saved. The server
-expands every name before it compiles a filter to cells — a name standing
-alone at the top brings its groups in; anywhere else all of them are one
-group under the join (and the `not`) it stood in, so `saved "Needs you" or
-saved Plexus-Ready` is the union of two `and`s of groups — from a registry
-of the saved filters kept in the cache (`store/filters.rs`: read from the
-table on open, moved by `save`, `rename` and `delete`). Every
-filtered read, count and watch resolves (`list`, `counts`, `facets`,
-`tree`, `find`, `search`, `inputs list`, `work ready`, `member`, `update_many`,
-`delete`, `watch`); a refusal is the read's one in-band `error`, naming the
-chunk: `no saved filter named "X"`, a cycle (`"A" names "B" names "A"`),
-names nested past 8, a saved text the language does not read, one naming
-no predicate, one holding `text`. A membership watch keeps the text it was
-asked: when a filter it names changes — saved again, renamed, deleted —
-it says what that did, `entered` / `left` per ticket (a `recount` per
-shortcode past 256), after the change that did it; a name that stops
-resolving ends it with the `error`. The app reads and carries any such
-text (the URL's `g=` / `n=` too); FILTER-37's tree draws every such shape —
-a group within a group is a block within a block, a name a saved node.
-
-```sh
-synapse -P 4455 menger tickets list --filter 'saved "Needs you" or saved Plexus-Ready' --summary true
-synapse -P 4455 menger tickets nav counts --filter 'saved Deployment and not saved Plexus-Coding'
-synapse -P 4455 menger tickets watch --filter '(saved Plexus-Ready or (asking and kind build))' --membership true
-```
-
-**When** (FILTER-27): every menu has a **When** category that builds the
-language's time clauses by clicks — **Created** (today · yesterday · this
-week · in the last hour · 12 hours · Custom…), **Moved into ▸** and **Moved
-out of ▸** a status (then a window, and **by**: anyone, me, the system, a
-member, or a name typed), **In status for** (over 1 day · 3 days · 1 week ·
-2 weeks · 1 month, over or under, a custom length; any status, or chosen
-categories or statuses) and **Changed** (MENGER-13's Changed recently,
-folded in). Every choice is a pill of its own, read in words — "created
-today", "Pending for over 2 weeks", "moved into Ready in the last 2 days
-by owner" — and each part of it (the status, the window, the length, who)
-is a button that reopens the menu on that part alone; a time clause typed
-in the text drawer comes back as the same clause, and the clause prints the
-canonical text. **Custom…** opens the window editor: *within* (a number
-and a unit), *since* or *before* a moment — a day on the calendar with an
-optional time, or a length ago — and *between* two moments, picked as a
-range on one calendar (the first click its start, the second its end, the
-days between tinted) with a time for each end; "now" and "start of today"
-are one click, and the zone the moments are read in is shown. The calendar
-and the time selector are the app's own (`src/calendar.rs`: a month grid
-with ‹ › and a year menu, today marked, the ARIA grid keys — arrows,
-PageUp / PageDown, Home / End, Enter; hours and minutes typed or stepped
-with ↑ ↓ in the reader's 12- or 24-hour clock), drawn from the theme's
-tokens, never the browser's date input; `#/components` shows them live
-under "The app's own" (the registry above them is the tickets'
-components). **Hasn't changed** (FILTER-30) builds `not changed <window>` (`not touched …` still reads)
-— within 1d · 3d · 1w · 2w · 1mo, or Custom… for since a day — a pill
-reading "hasn't changed in 2 weeks"; any time pill has **negate**
-(`created today` ⇄ `not created today`), wherever it sits. An empty chips line suggests three of four filters while
-no filter is saved — **New today** (`created today`), **Moved today**
-(`moved today`), **Stuck** (`category in (ready, active, review) for over
-1w`), **Untouched 2w** (`not changed within 2w and not category done and
-not kind doc`) —
-each applied by a click (the app offers them; nothing is written into the
-tracker until one is saved with `save as…`). A ticket's History says since when it has held its status — "since
-at least …" for a ticket from before the log.
-
-**A tag is a filter** (FILTER-22, `src/tags.rs`): a right-click on any tag
-the app draws — a shortcode, a ticket id, a status, a kind, a severity, on
-the ticket page, the board, the nav and the wave board — opens a menu at the
-pointer: **Filter …** makes the filter exactly that clause at once, **Add …
-to the filter** joins it to the filter as it stands, **Build a filter from
-…** makes it the clause and opens the filter menu on its category. A
-shortcode's clause is its tree (what checking it in the menu makes); a
-ticket id offers its shortcode first and `under` the ticket second. It
-builds the surface's own filter, or on the ticket page the global one. A
-tag inside a ticket (a row, a card, a heading) opens the ticket's one menu
-(ACT-4), these items first in its filter group.
-The palette takes `filter <shortcode>`: the global filter becomes it.
-
-**Any chip sets the global filter** (FILTER-25): on a surface with a filter
-of its own (the nav, the board, the wave board) the menu also offers
-**Filter everywhere: …** for each clause — the global filter becomes exactly
-it. **Alt+click** on any tag sets the global filter to its first clause at
-once (a ticket id: its shortcode), without navigating; a plain click is
-unchanged. A ticket chip in a framed body does both: its menu says **Filter
-everywhere: …**, and an Alt+click reaches the app as `menger:filter-everywhere
-{ id }` (SDK 1.17).
-
-```sh
-synapse -P 4455 menger tickets filters list                             # the list
-synapse -P 4455 menger tickets filters get --name "Open builds"        # one filter
-```
-
-### The live test app in a ticket (APP-110)
-
-A body can draw **the test app itself** at a route — the "after" beside a
-mockup's "before" (owner, chat 6): a ` ```live ` fence, or its element `<m-live>`.
-It is a mockup whose devices hold an `<iframe>` of `<test origin>/#/route`, so
-it has the mockup's bar — the widths, Light / Dark, Full screen, *Compare*
-(a mockup and a live view side by side at one device and theme), *comment* —
-and adds **Reload**, **Open in a tab ↗** and the line *test runs <release>*
-(`deployments.environments`, the project `menger`'s `test`).
-
-````markdown
-```live route="#/components" widths=390,1440 title="#/components on test"
-```
-
-<m-live route="#/components" widths="390,1440"></m-live>
-````
-
-`route` is an app hash route (`#/…`, printable ASCII). `env=` may say `test`
-and nothing else: **prod is never drawn**, and a block that asks says so.
-There is one configured test app, `--live-origin` (`MENGER_LIVE_ORIGIN`) on
-the tracker, and a server given none says *no test app is configured* in the
-box. Two policies move, each by exactly that origin (`src/shell.rs`, `Framing`):
-
-| server | flag | `PAGE_CSP` |
+| service | what it is | its code |
 |---|---|---|
-| the tracker | `--live-origin https://app-test.menger.sh` | `frame-src 'self' <origin>` |
-| test | `--frame-ancestor https://app.menger.sh` (repeatable; `MENGER_FRAME_ANCESTORS`, `;`) | `frame-ancestors <origin>` in place of `'none'`, and no `X-Frame-Options: DENY` beside it |
+| `tickets` | the store, its reads, writes and watch; children `commits`, `filters`, `nav`, `revisions`, `subtasks`, `work` | `tickets-api/src/activation/` |
+| `members` | grants and teams (child `teams`) | `tickets-api/src/members_activation.rs` |
+| `orgs` | organizations | `tickets-api/src/orgs_activation.rs` |
+| `epics` | an organization's levels of shortcodes | `tickets-api/src/epics_activation.rs` |
+| `session` | who a connection is, agents' sessions | `tickets-api/src/session_activation.rs` |
+| `auth` | the AUTH protocol's door and roles | plexus-login, over `src/login_access.rs` |
+| `ui` | the UI's versions, live pointer, previews; child `slots` | `ui-service/` |
 
-Neither flag, and a server is as it was: it frames only its own body frames
-and is framed by no one. **The sign-in pages stay unframeable** (plexus-login,
-`frame-ancestors 'none'`), and a session cookie is the origin's own
-(`__Host-`, host-only): a reader with no session on test signs in on it in a
-tab (*Open in a tab*), then *Reload*s. Light / Dark is asked of the app as
-`?theme=light|dark` (read before first paint, never stored); *Reduced motion*
-cannot cross origins and changes nothing in a live view. This machine's
-`deploy/env/{prod,test}.env` and the Linode's `app-{prod,test}.env` carry the
-two settings. `scripts/live-check.sh` is the check, on a throwaway tracker,
-test and a bare server (`scripts/live-check.mjs`; ports `--port`, never
-4450–4458).
+**Service to service.** The ui service reaches the tickets service as a
+client, never through its store: `ui-service/src/seam.rs` holds the running
+process's service and calls `tickets` through plexus-core's
+`HubTransport::as_(service, caller)` as the server's own caller — the same
+route and gate a socket reaches. A push asks it for the methods a
+component's `uses` names and for its schema hash. The ui service never
+opens the tickets file.
 
-### Screenshots (DEPLOY-7)
-
-`scripts/shot.mjs` is the one way to look at the app from a script — use it
-rather than a throwaway Playwright file. It waits on the app's own signals,
-never a timer: `#conn` reading `live`, the nav and the route drawn (no
-`loading…` left in `<main>`), every framed body's `menger:size { settled:
-true }` (diagrams drawn, calls answered), fonts and images loaded in the
-page and every frame, and the layout still for 600 ms. A page that never
-gets there fails with what was still pending. It never clicks, types or
-writes, so it is safe on prod; where the environment redirects to `/login`
-(test) it signs in once — the smoke account from `~/.config/menger/test.env`,
-or `--as USER` through the dev sign-in (IDENTITY-35).
-
-```sh
-scripts/shot.mjs '#/ticket/DESIGN-3' --env prod --theme both --width 1440,400
-scripts/shot.mjs '#/board' --env test --as viewer --screen --out /tmp/look
-scripts/shot.mjs '#/ticket/FILTER-13' --port 4550 --selector '#ticket-page'
-scripts/shot.mjs mock.html --wait-for '#drawn'      # a local file: no app checks
-scripts/shot.mjs --help
-```
-
-**Any menger, signed in by a key** (APP-76): `--origin https://app.menger.sh`
-takes the routes there, and `--key ~/.plexus/keys/builder.key` signs the
-browser in as that agent — a session minted over the socket
-(`throwaway-login.mjs`'s `mintSession`, `wss://<host>/ws` behind https) set
-as the shell's session cookie, the token kept in memory (`--session FILE`
-takes one already minted). A mockup's page counts as settled once its
-document and fonts are in and the layout is still (APP-43). A page taller
-than one paint (16,000 px) is shot in slices of 8,000, cut at its last
-drawn element, and stitched into one image (APP-78). It comes out as parts
-(`NAME.1.png`, `NAME.2.png`, …) only when one image would be over 16
-megapixels (iOS Safari's limit), 32,000 px tall or 7 MiB (`media.put`'s
-cap). `--chat N` puts each shot
-into chat N (`media.put { chat }`, as the key's agent) and prints its
-`media:<hash>`, to write as `![shot](media:<hash>)`:
-
-```sh
-scripts/shot.mjs '#/ticket/CHAT-35' --origin https://app.menger.sh \
-  --key ~/.plexus/keys/builder.key --width 390 --out /tmp/chat-35.png --chat 6
-```
-
-Files land in `$TMPDIR/menger-shots/` unless `--out` says otherwise, named
-`ENV.ROUTE.THEME.WIDTH.png` (`prod.ticket-DESIGN-3.dark.400.png`); the
-paths are printed on stdout. The whole page is the default: the app scrolls
-inside its content column, so the window grows to the tallest scroller
-(up to 16,000 px). Playwright comes from `perf/node_modules`
-(`cd perf && npm ci`).
-
-### Keys and gestures (AGS-28)
-
-Every key and click the app answers is one row of `BINDINGS` in
-`frontend/src/bindings.rs`: an id (`nav.expand-subtree`), where it applies
-(everywhere, the nav, the board, a ticket page, a menu, a dialog, a chip…),
-its chords (`*`, `Shift+Numpad*`, `g h`, `Mod+k` — ⌘ on a Mac, Ctrl
-elsewhere — `Alt+Click`), its group and what it does. Handlers ask
-`bindings::hit(&ev, Context::Nav)` (or `hit_mouse`, `is`, `key_hit`) and
-match the id; nothing else reads an event's key, button or modifiers — a
-native test lints the sources for it, another fails when two bindings share
-a chord where both are live, another when a binding is dispatched nowhere.
-The `?` sheet and Settings → Keyboard (with a search by key or by words)
-draw the same table. To add a key: a row in `BINDINGS`, a match arm in the
-handler.
-The groups are Move, Open, Status (ACT-10's `]`, `[`, `s`), Select, Nav,
-Filter, Annotate, View, Menus & dialogs, Forms and Help.
+A throwaway's `synapse -P 4460 menger` lists them; `synapse -P 4460 menger
+tickets` lists a service's methods and children; `<method> --help` prints
+its parameters; `synapse -P 4460 -s menger` is the schema.
 
 ## Surface
 
-menger is DB-first: the database is the system of record, and the service
-is CRUD over tickets plus a live subscription. Two activations: `tickets`,
-and (COMMENT-2) `comments` — below, after `tickets`. Statuses use the house ticketing vocabulary; every ticket also
-carries a **kind** — `scope | execution | build | gap | spike` (AGS-13, the
-owner's closed set: a scope decomposes into children, a build produces
-capability, an execution carries out a procedure, a gap is a defect in
-shipped behavior, a spike answers a question). A database written before
-AGS-13 (`ticket_type`) is migrated in place, durably, the first time the
-server opens it — `epic→scope`, `implementation→build`, `analysis→spike`,
-`checkpoint→execution`, `spike→spike`; any other legacy value refuses the
-open, naming the row.
-
-A sixth kind, **`doc`** (SDLC-11, owner 2026-10-02), is not work: a
-document — a finding, a manifest, a reference — that "simply exists in
-its state". It has no lifecycle. A doc is born in the status **`Doc`**,
-which only a doc ever holds, and never leaves it: `set_status` on a doc is
-an in-band `error` ("a doc has no lifecycle"), whatever the status, and
-`set_status … Doc` on any other kind is one too. A doc is never blocked
-and never a blocker — `create` refuses a doc with a `blocked_by`, a
-`blocked_by` naming a doc, and a doc born as an id some `blocked_by`
-already names — so it is never in the ready set and no ticket waits on
-one. It has no completion: a roll-up's `done/total` is the work's alone (a
-scope with every piece of work `Complete` is done, whatever docs hang
-under it), and `groups` counts docs apart, in `docs`. A doc may be a
-shortcode's first ticket — a doc collection's root — as a scope may.
-Everything else is a doc's as any ticket's: a body and `amend`, a parent
-and children (docs or work), `commits link`, `find`, `list` (`status:
-Doc` finds them), `extents`, `watch`.
-
-A kind is set at birth and changed only by **`set_kind`** (SDLC-13),
-which moves everything kept by kind — the roll-ups and their groups, the
-status counts, the ready set, the placements, the filter cells, the kept
-tree — in the one write, and `--verify-derived` holds it to a scan like
-any other. The status goes with the kind across the doc line: to a doc it
-becomes `Doc` (a `status` other than `Doc` is an in-band `error`), and a
-ticket that waits on a blocker, or that a ticket waits on, is refused,
-naming them; from a doc it becomes the `status` given (never `Doc`), else
-`Epic` for a scope and `Pending` for any other kind; between two kinds of
-work it stays unless one is given. A shortcode's root never becomes a kind
-that roots nothing (refused, naming the shortcode; doc ↔ scope it may), a
-ticket holding a path address (WAVE-10) stays a doc, and a lower-seq
-ticket made a scope or a doc becomes its shortcode's root:
-
-```sh
-synapse -P 4455 menger tickets set_kind --id IDENTITY-1 --kind scope
-synapse -P 4455 menger tickets set_kind --id MNG-40 --kind gap --status Ready
-```
-
-**`update`** (MENGER-30) changes any part of a ticket in one write — its
-title, body, kind, status, parent, severity and blockers, every field
-optional and absent meaning unchanged — and all of it lands or none does.
-Each aspect keeps its own write's rules, asked together before anything is
-written: `amend`'s (a title not blank, the body cap, the component
-registry, input markup), `set_kind`'s (the kind before the status, checked
-against the blockers the update leaves), `set_status`'s for a status alone
-(`Canceled` cascades as there), `set_parent`'s (a shortcode's root moving
-takes admin on both sides), and `create`'s for blockers — `block` adds and
-`unblock` removes; itself or a cycle is refused (the cycle named), an id
-not born yet is a forward reference, a doc never blocks and is never
-blocked, and an id in both is refused. A refusal is one in-band `error`
-naming every reason. `severity none` clears the severity. The answer is
-`updated { ticket, changed }` (`changed` empty when nothing would move:
-nothing written, nothing sent); `watch` carries each aspect's own event —
-`amended`, `kind_changed` or `status_changed` (with their transitions),
-`blockers_changed { ticket, added, removed }` with each blocker's
-`unlocks_changed` / `unlocks_removed`, `parent_changed` with the parents'
-sides, `severity_changed { ticket, previous }` — then the write's groups and
-placements. Everything kept moves in the one write (the blockers' `unlocks`,
-the forward references, the ready set, the `blocked` cells, the waves, the
-roll-ups, the kept tree), and `--verify-derived` holds it to a scan:
-
-```sh
-synapse -P 4455 menger tickets update --id THEME-4 --block THEME-7
-synapse -P 4455 menger tickets update --id THEME-4 --unblock THEME-3 --severity High
-synapse -P 4455 menger tickets update --id MENGER-40 --title "Board loses focus on reload" --kind gap --status Ready --parent MENGER-2
-synapse -P 4455 menger tickets update --id MENGER-40 --severity none
-```
-
-**`update_many`** (ACT-2) makes the same update to many tickets in one
-write, all of it or none of it: each ticket gets `update`'s change by
-`update`'s rules — `kind`, `status`, `parent`, `severity`, `block` /
-`unblock`, and `label` / `unlabel` (`label`'s rules); a title and a body are
-each ticket's own and stay `update`'s. The tickets are `ids` (each once, in
-the order given), or the tickets a `filter` admits at the write — in the
-caller's reach, at most `max` (default 500; more is refused, naming the
-count). Under login each ticket takes the write grant on its own (the gate
-asks it of every id; a filter's are asked the same way), and one missing
-refuses the write, naming it. Every ticket is checked first: any refusal —
-an id that names nothing, a rule, a parent or blocker cycle among the moved
-— writes nothing and is one in-band `error` naming each refused id with
-every reason. A ticket nothing would change for is no write and is answered
-in `unchanged`. `message` is on every transition the write makes, and the
-write's first transition is the `cause` of every other of the caller's, so
-the write reads as one in each ticket's history. The answer is
-`updated_many { ids, changed, tickets, unchanged }` — the ids it changed,
-the aspects that moved in any (`update`'s order, `labels` last), and every
-ticket selected as the write left it; `watch` carries each ticket's own
-events, then one `updated_many { ids, changed }` (its `tickets` and
-`unchanged` empty), then the filtered moves. A write over many tickets
-sends many events at once — past the broadcast's 256, a watch says
-`lagged { missed }` (SCALE-5) and the tail, `updated_many` last, still
-arrives. `label` and `commits link` take **`ids`** in place of `id`: the
-same change to each, in one write, all or none, one `labels_changed` /
-`commits_linked` per ticket in the order named:
-
-```sh
-synapse -P 4455 menger tickets update_many --ids THEME-9,THEME-10,THEME-11 --status Ready
-synapse -P 4455 menger tickets update_many --ids PANTRY-5,PANTRY-6 --parent PANTRY-2 --severity High --block PANTRY-4
-synapse -P 4455 menger tickets update_many --filter 'label stale and not category done' --status Canceled --message "swept"
-synapse -P 4455 menger tickets label --ids A-1,A-2 --add needs-you
-```
-
-**`delete`** (ACT-5; admin only) removes tickets for good — `ids`, or a
-`filter` (ACT-2's selection), all or none. It is refused, naming every
-reason of every ticket, while something points at one: its **children**,
-unless `children: reparent` (each moves to the nearest ancestor that stays;
-a hosted shortcode's root never to the top level) or `children: delete`
-(its whole subtree goes too, every id in the answer); a ticket that **waits
-on it**, unless `unblock` (the block is dropped, and that ticket's
-`history` names the delete in `deletions`); its **shortcode**, while it is
-the root and the shortcode holds a ticket that stays; a **component** or a
-**theme** it defines; an input of its that is `open` or `answered`. A
-deleted ticket leaves every read — the nav, the board, every filter,
-`find`, `search`, the ready set, the counts — and `get` on its id answers
-`deleted { ids: [id], tombstones: [{ id, title, by, at_unix, message,
-restorable_until_unix, parent, reparented, unblocked }] }`. What is kept
-(the owner's decision `keep`): the **tombstone** and the **history**
-(`history` still answers it), and the whole ticket, body and all, for **30
-days** — `undelete { ids }` (admin) brings it back within them, its moved
-children back under it and its dropped blocks back where nothing has moved
-them since. Then the body is purged: at every start and once a day inside
-the server, the tombstone kept. Its **number is never reused**: the next
-ticket of the shortcode takes the number after its highest, deleted or not,
-and `extents` names the deleted numbers as `holes`. Nothing may wait on a
-deleted id. The write rebuilds the derived state from the rows it leaves —
-what a first open does, the cell ids kept — so `--verify-derived` holds
-after it; `watch` carries each moved ticket's own event (`parent_changed`,
-`blockers_changed`, the parents' `child_removed`, the blockers'
-`unlocks_removed`), then `deleted { ids, tombstones }`, then the groups and
-placements that moved, and a filter's `left`:
-
-```sh
-synapse -P 4455 menger tickets delete --ids MENGER-40 --message "filed twice"
-synapse -P 4455 menger tickets delete --ids THEME-12 --children reparent      # its children move to its parent
-synapse -P 4455 menger tickets delete --ids DEMO-1 --children delete --unblock true
-synapse -P 4455 menger tickets undelete --ids MENGER-40
-```
-
-**`reshortcode`** (ACT-6; editor on both shortcodes) moves tickets into
-another shortcode, renumbered there, all or none (ACT-2). `to` names it by
-any short form: one there is — each ticket takes its next number in the
-order given and hangs under its root, or `parent` (inside it); with
-`new_scope TITLE` (and `parent`), one minted first, its root `TO-1` a new
-scope under `parent`, the tickets `TO-2`, …; none, and the first ticket a
-scope or a doc — that ticket becomes the new shortcode's root `TO-1`,
-hosted where it hangs (ORG-5's way out for a scope inside its parent's
-shortcode). A shortcode's root moves only alone, with `with_children` and
-every ticket of the shortcode: a **rename**, every number kept, the code
-new in its namespace. A ticket whose parent moves with it keeps it;
-`with_children` brings each one's descendants in its own shortcode,
-numbered after it; without it they stay in their shortcode under the
-nearest ancestor that stays, and a child rooting another shortcode stays
-hosted under the moved ticket, its namespace following. A ticket's id is
-its key, so the move rewrites the old id to the new wherever a row names
-it — parents, blockers and `unlocks`, the search index, inputs and
-answers, comments (and their route to the ticket's page), the transition
-log, grants, notes, themes, components, tombstones, the queue, deployments
-— in one transaction, and **pins the old id to the new key**: `get`, every
-write's id, blockers, filters, the app's `#/ticket/OLD` and a chip in a body
-naming the old id all reach the moved ticket, and `get` says
-`moved_from: [OLD]`. Bodies are not rewritten. No number is given out
-twice — a shortcode's next ticket is past the ones that left it. The cache
-is read back from the file after the commit, the derived state built from
-the rows (cell ids kept), so `--verify-derived` holds after it; `watch`
-carries `reshortcoded { moves: [{from, to}], tickets }`, each child that
-stayed and moved's `parent_changed`, the groups and placements that moved,
-and a filter's `left` for an old key and `entered` for a new one. A frozen
-target (MENGER-33) is not refused yet: freezing is not built.
-
-```sh
-synapse -P 4455 menger tickets reshortcode --ids THEME-9,THEME-10 --to LOOK      # THEME-9 → LOOK-3, THEME-10 → LOOK-4
-synapse -P 4455 menger tickets reshortcode --ids MENGER-35 --to PALETTE --new-scope "The palette" --parent MENGER-2
-synapse -P 4455 menger tickets reshortcode --ids MENGER-2 --to APP --with-children true   # MENGER-2 → APP-1, its tree after it
-synapse -P 4455 menger tickets reshortcode --ids LOOK-1 --to SKIN --with-children true    # a rename: LOOK-n → SKIN-n
-```
-
-The statuses of the lifecycle are ten (SDLC-7, SDLC-15): `Pending`, `Ready`,
-**`Coding`**, **`In Review`**, `Blocked`, `Complete`, `Draft`, `Epic`,
-`Superseded`, `Canceled` — and a doc's `Doc` (SDLC-11) beside them, outside it.
-**`Draft`** (TICKETS-13; it was `Idea`, and `Idea` still reads as it — in
-`set_status`, a filter, a stored row) is where every ticket but a doc is
-born: `Draft → Pending → Ready → …`, the owner promoting a draft or a
-pending ticket to `Ready`; it is category `open`, never ready, and
-`set_status` moves it to any work status and back. The two
-in bold are the **worker states**: a worker flips its ticket `Ready →
-Coding` with `set_status` the moment it starts (so no leaf is claimed
-twice) and `Coding → In Review` in the commit that finishes the work —
-gate green, committed, the message ending `— in review`; the merge sets
-`Complete`. `In Review` is spelled with its space on the wire and in the
-database. `set_status` and `list { status }` read any status
-case-insensitively, and the worker states leniently — `in review`,
-`in_review`, `in-review`, `inreview`, and `active` (the house
-methodology's word) for `Coding` — but write only the canonical spelling.
-No transition is gated (SDLC-4), and neither worker state is ready or
-done: the ready set is still `Ready`, a blocker is still satisfied only by
-`Complete`, `Superseded` or `Canceled`, and a roll-up's `done` still counts
-`Complete`. **`Canceled`** (SDLC-15) is work that will not be done and that
-nothing replaced — `Superseded` without the successor — and is treated as
-`Superseded` is everywhere: done with, placed `done`, category `dropped`,
-not counted in a roll-up's `done`; `cancelled` parses to it too. Stored as text, so a database written before them opens
-unchanged — nothing to migrate.
-
-A ticket's outputs are tickets (AGS-19): every ticket carries an optional
-**`parent`** — the ticket it is an output of, in any epic — and a
-server-derived **`child_count`**, how many tickets name it as their
-parent. The children themselves are read by page: `list { parent }`, in
-the store's `(epic, seq)` order (SCALE-4; until then a row carried
-`children`, every child id — under MNG-14 a shortcode root's list is its
-whole shortcode, 163,530 ids and 2 MB at 10⁶, rewritten, stored and
-broadcast on every birth). The parent must exist at creation and the
-chain is acyclic (a ticket cannot be its own ancestor); a nonexistent or
-cyclic parent is an in-band `error` naming the reason. A child's birth
-writes the child and, on the parent's row, only its count (SCALE-28; from
-SCALE-4 until then, nothing of the parent's) — never a list — and
-`watch` carries the parent's side as `children_changed { id, added,
-child_count }`: the parent's id, the child, the new count. A database
-written before AGS-19 gains `parent` on first open, durably, with typed
-parents backfilled from each body's frontmatter `parent: <id>` — one log
-line per ticket; an id that names no ticket is logged and left empty,
-never fatal.
-
-A database written between AGS-19 and SCALE-4 still has the `children`
-column. On first open the server checks every list in it against the
-`parent` column (the edge both described; `children` was the mirror),
-logs each disagreement — none the server ever wrote — with `parent`
-standing, and drops the column (`ALTER TABLE … DROP COLUMN`, which
-rewrites every row once: 7.5 s at 10⁶, 4 → 11.5 s to the first `health`
-that one time), in one transaction, before anything loads. Every ticket's
-children are then the same set as its old list, in the store's order
-rather than the order they arrived in, and `child_count` its length. A
-restart finds no column and migrates nothing; a pre-SCALE-4 binary cannot
-open the migrated file.
-
-A ticket knows the commits that finished it (SDLC-9): every row carries
-**`commits`**, in the order they were linked (`[]` when none), written by
-`tickets commits link` and `unlink` (ACCESS-15). A **commit reference** is a
-hexadecimal object name of 7 to 64 characters, optionally prefixed by a
-repository and `@` — `77df9a0`, `plexus-macros@4f7114a…` — the repository
-being letters, digits, `.`, `_` and `-`; the hash is stored lowercase, the
-repository as given, and nothing is trimmed. References are compared as
-text: the server holds no repository, so it does not know that a short and
-a long hash name one commit — link the form you want kept, and qualify with
-`repo@` when the commit is not in the ticket's own repository. At most 256
-per ticket. Linking moves `updated_unix` and nothing else — not the status:
-a ticket can be `Complete` with no commit and hold commits while `Coding`
-(whether `done` requires one is SDLC-4's). The worker links its commit in
-the step that flips the ticket to `In Review`; the merge links the merge
-commit if it differs. There is no reverse lookup (which tickets a commit
-finished). A database written before SDLC-9 gains the column on first open,
-durably, every ticket with none linked — `ADD COLUMN … DEFAULT '[]'`,
-which rewrites no row, so it is instant at any size; a binary from before
-it still opens the file.
-
-```sh
-synapse -P 4455 menger tickets commits link --id MNG-10 --commits 77df9a0
-synapse -P 4455 menger tickets commits link --id SCALE-4 --commits 0bb28b2 --commits 090cdec
-```
-
-A ticket carries **labels** (MENGER-12): free-form tags on every row and
-ticket (`labels`, `[]` when none), written by `label { id, add, remove }`
-alone. A label is letters, digits and `-`, at most 32 characters, folded to
-lower case (`Needs-You` is `needs-you`); a ticket holds at most 16, kept
-sorted, each once. A label named in both `add` and `remove` is added; a
-call that moves nothing answers `labels_changed` with `added: []` and
-`removed: []` and writes nothing; an entry that is not a label (or a result
-past 16) is one in-band `error` naming it, and nothing is written. Labelling
-moves `updated_unix` and the ticket's cell (`label <name>`), nothing else.
-**`needs-you`** is the label that puts a ticket in front of the owner: the
-Needs you filter (`g n` puts it on the nav) admits every ticket labelled
-`needs-you` beside every ticket `asking` and queued. A database written before MENGER-12 gains the `labels`
-column on first open, durably — `ADD COLUMN … DEFAULT '[]'`, instant at any
-size.
-
-```sh
-synapse -P 4455 menger tickets label --id MENGER-40 --add needs-you
-synapse -P 4455 menger tickets label --id MENGER-40 --remove needs-you
-synapse -P 4455 menger tickets list --filter 'asking or label needs-you' --summary
-```
-
-A ticket may also carry a **path address** (WAVE-10): an optional
-**`path`**, unique within its shortcode, so that `<SHORTCODE>/<path>`
-names it — `get { id: "PLEXUS/_MENGER/board" }` answers the one ticket of
-`PLEXUS` holding the path `_MENGER/board` (the shortcode in any case, the
-path exactly as written; an address that names nothing is `not_found`
-carrying the address). A path is an address, not an id: the ticket keeps
-its `EPIC-N`, and the store's order, extents, paging and readiness never
-read it. **`_MENGER/` is reserved** for the documents menger itself keeps
-inside a shortcode (WAVE-1 decision 11 — the board's annotation,
-`_MENGER/board`, is the first), and is the only prefix accepted for now:
-`create { …, path }` takes a path only when it starts with `_MENGER/` and
-names something after it, the ticket is a `doc`, and its `parent` is the
-shortcode's scope root (or is omitted, which defaults to it); a path
-another ticket of the shortcode already holds is an in-band `error` naming
-that ticket. A path is set at birth and never moves; it is on the row and
-the ticket, omitted when there is none. The nav hides tickets whose path is
-under `_MENGER/` unless its "menger docs" toggle is on (remembered in the
-browser). A database written before WAVE-10 gains the column, and the
-unique index on `(epic, path)`, on first open, durably — `ADD COLUMN` with
-no default rewrites no row, so it is instant at any size, and a binary from
-before it still opens the file.
-
-```sh
-# synapse expands any parameter named `path` as a filesystem path (`--path
-# _MENGER/board` arrives as `$PWD/_MENGER/board`, which `create` refuses):
-# pass a path address's `path` in the params object instead.
-synapse -P 4455 -p '{"epic": "PLEXUS", "kind": "doc", "path": "_MENGER/board", "title": "board: PLEXUS"}' menger tickets create
-synapse -P 4455 menger tickets get --id PLEXUS/_MENGER/board
-```
-
-Every ticket's place in the order of work is **kept** (WAVE-6): each row
-and ticket carries **`placement`** — `{"type": "wave", "n": n}`,
-`{"type": "done"}` or `{"type": "missing_blocker"}`, the rule `waves`
-answers by (below) — omitted on a doc, which has no place in it. The store
-holds it equal to that rule at every moment: it places every ticket from
-the rows when it opens the file (nothing stores a placement, so none is
-stale after a restart), and the two writes that can move one move it before
-they commit — a birth (the newborn, and every ticket a forward reference to
-its id held in the missing lane, and theirs) and a status change across
-`Complete` / `Superseded` in either direction (the ticket, and everything
-downstream of it along `unlocks` whose placement changes; the walk stops
-where nothing changes). Nothing else moves one: `blocked_by` is fixed at
-birth. A write that moved any says so last, once, in `placements_changed`
-(the newborn's own is on its `created`; a status change's own ticket is on
-its `status_changed` and in the changes). WAVE-3 measured what keeping them
-costs (`spike/WAVE-2/`).
-
-A ticket can define **components** (COMP-3, COMP-1): custom elements
-written in its body, usable as a tag in any ticket. The server keeps the
-**registry** — every component, its source, its owner and what uses it.
-
-````markdown
-```component m-wave-summary
-<template><div class="summary"><slot></slot></div></template>
-<style>.summary { font-weight: 600 }</style>
-<script>/* the element class's `this` */</script>
-```
-````
-
-- **A definition** is a fenced block whose info string is `component`
-  and then the tag (` ```component m-name `, or a `~~~` fence; what follows
-  the tag is the preview line — below); its **source** is the block's content exactly
-  as written between the fences. The tag is a custom element's name:
-  lowercase ASCII, starting with a letter, holding a hyphen (`m-x`,
-  `m-wave-summary`; not one of HTML's eight reserved names). A
-  ` ```component ` block that names no such tag, or a body defining one
-  name twice, is an in-band `error` on the `create` or `amend` that carries
-  it, and nothing is written. A block inside an indented code block or
-  inside a fence of another language (` ````markdown `) is that example's
-  text, not a definition.
-- **One owner**: the ticket whose body defines it. Another ticket's body
-  defining an owned name is refused in-band, naming the owner. The owner
-  amending the block replaces the source.
-- **A reference** is the tag, `<m-name`, as HTML in a body — an HTML block
-  or inline HTML as the markdown renderer finds them, the name folded to
-  lowercase as HTML does — outside code spans, fences, indented code,
-  HTML comments, the frontmatter, and the definition's own block. A ticket
-  references a name once however often it writes it. A component's
-  **source** is HTML through and through: each `<m-other` in it (its
-  `<script>` included, outside comments) is a reference by that component —
-  never by itself. A reference made before the name is defined counts from
-  the definition's birth.
-- **Orphans**: when the owner's body loses the block and something still
-  uses the component, it stays, ownerless (`owner: null`), read-only,
-  source kept. It is kept while a ticket references it or a live component
-  — owned, or a kept orphan — does; the write that takes its last such
-  reference removes it (and anything only it kept, and orphans that only
-  reference each other). With no reference at all, losing the block
-  removes it at once. A ticket that defines an orphan's name **adopts** it:
-  owner that ticket, source its block, references as they were.
-- Kept by the store on `create` and on an `amend` of the body, in the
-  write's transaction, from the new body and the registry's own record of
-  what the ticket defined and referenced (the old body is not read); bodies
-  are stored exactly as written. Stored in a `components` table (`name`,
-  `source`, `owner`, `references`), which a database written before COMP-3
-  gains on first open, durably, once, with the registry built from every
-  body in the store's order — a name two bodies define is the earlier
-  one's (the later is logged, and refused when it next changes its body
-  while still defining it); a malformed block is logged and skipped. The
-  table also holds the names referenced before anyone defined them (`source`
-  null), which never reach the wire.
-
-**Docs** (COMP-8, COMP-1 decision 6). A source may hold one `<docs>`
-element, at its top level (outside `<template>`, `<script>`, `<style>` and
-comments; anywhere among them) — the component's help, served on the wire
-as `docs` (`null` without one):
-
-````markdown
-```component m-wave-summary board=RETURNS label="Platform team"
-<template>…</template>
-<docs>
-  <summary>How many of a board's tickets are workable now (wave 1).</summary>
-  <attr name="board" type="shortcode" required>The shortcode to count, e.g. RETURNS.</attr>
-  <attr name="label" type="string">Shown before the count.</attr>
-  <slot name="title">Optional title markup.</slot>
-  <example><m-wave-summary board="RETURNS"></m-wave-summary></example>
-  Longer help, as markdown prose.
-</docs>
-<script>…</script>
-```
-````
-
-| in `<docs>` | on the wire, `docs.…` |
-| -- | -- |
-| `<summary>` (at most one) | `summary` — its text: tags dropped, whitespace collapsed, trimmed (`""` without one) |
-| `<attr name type? required?>` | `attrs[]` — `{ name, kind, required, description }`, in order; `name` lowercased; `kind` the `type`: `string` (the default), `number`, `boolean`, `shortcode` (an existing shortcode), `ticket` (an existing id) or `enum(a\|b\|c)`, internally tagged — `{"type": "shortcode"}`, `{"type": "enum", "values": ["a", "b", "c"]}`; `required` whether the attribute is present |
-| `<slot name?>` | `slots[]` — `{ name, description }`; `name` `null` for the default slot |
-| `<part name scripted?>` | `parts[]` — `{ name, scripted, description }`, in order (THEME-5): what a theme may skin as `m-name::part(name)`; the template must carry `part="name"` on an element, unless `scripted` (the component's script makes it) |
-| `<example>` | `examples[]` — each one's inner HTML as written (its common indentation and surrounding blank lines removed) |
-| everything else | `help` — markdown: the five elements' lines removed, the rest de-indented, runs of blank lines one |
-
-The five are the `<docs>` element's own children: one inside another
-element of the help (`<details><summary>`) or a backtick code span or fence
-is help. A malformed `<docs>` — two of them, one never closed, two
-`<summary>`s, an `<attr>` without a `name`, an unknown `type`, an `enum()`
-naming nothing, an attribute, slot or part declared twice, a part with no
-name, a documented part no element of the `<template>` carries — is an in-band `error`
-on the `create` or `amend` that carries it, naming the component and the
-problem, and nothing is written.
-
-**The preview line**: what follows the tag on the opening line is
-attributes as on a tag — `board=RETURNS label="Platform team" compact` —
-served as `preview`, `[name, value]` pairs in order (names lowercased; a
-value bare, double- or single-quoted; a bare name's value `""`); what a
-live preview of the definition renders with. Changing only it moves the
-component (`component_changed`). Stored with the component (a `components`
-table from before COMP-8 gains the column on first open, each owned
-component's read from its owner's body); the docs are parsed from the
-stored source.
-
-```sh
-synapse -P 4455 menger tickets components list
-```
-
-**HTML with blank lines** (COMP-11). In a framed body, an element opened in
-an HTML block runs to its close, blank lines included: the markup inside is
-passed through as written (CommonMark alone ends the block at the first
-blank line, and the rest becomes markdown: indented lines code blocks,
-inline tags wrapped in `<p>`). Markdown inside HTML is still written
-CommonMark's way: a blank line **right after an element's opening** — its
-open tag, or that and a `<summary>` or heading line — starts markdown (the
-house components' `<m-summary>`, `<m-field>`, `<details><summary>`), unless
-the next line is indented as code; and a fence with blank lines around it
-is a fence. A block that starts as `<pre>`, `<script>`, `<style>`,
-`<textarea>` or a comment already ran to its end and is untouched; an
-element nothing closes ends at the blank line, as before. The rule is
-`tickets-api/src/html_runs.rs`; the frame's renderer (`frontend/src/md.rs`),
-the server's readers of a body (fields, inputs, component references) and
-`diagrams` all read through it. An unframed body holds no element, and
-renders as before.
-
-**In the app** (COMP-4, COMP-5) a body holding HTML or a component tag
-renders in a sandboxed frame (no `allow-same-origin`, no `allow-forms`;
-IDENTITY-28: under a CSP, `connect-src 'none'; form-action 'none'`, so a
-body opens no connection of its own and submits no form — scripts, styles,
-images and fonts load from anywhere, and a link opens the real page in a
-new tab once the app has asked — MENGER-14, "Links" below) under menger's SDK
-(`frontend/sdk/menger-sdk.js`, whose header is the protocol's reference),
-and every component in the registry is a custom element there. ACCESS-28:
-the frame is not a `srcdoc` — a srcdoc inherits the app page's strict policy
-("Security headers" below), which would refuse a body's inline scripts and
-esm.sh imports — but `/app/frame#<channel>` (`web/frame.html`), served under
-the frame's policy alone; it posts `menger:boot`, and the host answers
-`menger:doc` with the document it built, which the frame writes over itself. A custom
-element cannot be redefined, so each name's class delegates to its current
-source: amending a definition re-renders every live instance in every open
-frame, without a reload; an orphan keeps rendering; a component that left
-the registry renders `unknown component m-x`. An instance is an open shadow
-root holding the source's `<style>`s and its `<template>`'s content
-(`<slot>`s take the element's children); the source's `<script>`s then run
-as one function with the element as `this`:
-
-| in a component script | |
-| -- | -- |
-| `this.root` | its shadow root |
-| `this.attr(name)` | the attribute, or `null` — an attribute read this way re-renders the instance when it changes |
-| `this.menger` | `window.menger` itself |
-| `return () => …` | runs before the next render and when the element leaves the document; so does the end of every `menger.on` made while the script ran |
-
-**The frame's base typography** (COMP-12) is the app's ticket-text rules
-(headings, `code`, `pre`, links, block quotes, tables, images), in the
-cascade layer `menger-base` at zero specificity: any rule the body writes
-wins, whatever its specificity. By default it reaches every element — the
-body's markdown and its own HTML alike. A body that styles itself opts out
-with
-
-```html
-<meta name="menger-base" content="markdown">
-```
-
-anywhere in it: the base then styles only what markdown produced (md.rs
-marks those elements `data-md`; an element of the body's own may carry
-`data-md` to take it), so the body's own `code` gets no border it did not
-ask for. Either way the frame keeps its ground (the theme's ink and font,
-no margin), `box-sizing: border-box` on every element, the mermaid
-placeholders and the docs cards; nothing reaches a component's shadow root.
-
-**Full screen, mockups and whole pages** (MENGER-15;
-`frontend/src/present.rs`, `frontend/sdk/menger-page.js`). Every framed
-body sits under a slim bar whose **⤢ Full screen** (or `z` — from the
-ticket page, or inside a focused body) makes the same box, the same
-`<iframe>`, fill the viewport: the Fullscreen API when a gesture allows it,
-else a fixed overlay over the app. The sandbox and CSP are unchanged — it is
-the frame resized, not a new origin or window. Esc (or the bar's exit)
-leaves it; full, the bar names the ticket's id and title.
-`#/ticket/ID?view=full` opens a ticket straight into it, and entering or
-leaving rewrites that query in place.
-
-A body **declares how it is shown** in its frontmatter:
-
-```yaml
----
-view: mockup            # inline (default) | full | mockup
-widths: 390, 768, 1440  # a mockup's devices — W, or WxH; at most 6
----
-```
-
-`full` opens the ticket page full screen, with **← Back to the ticket** one
-click away; `mockup` draws the body as a website mockup. A whole document
-that should stay a plain HTML file can say it in its head instead —
-`<meta name="menger-view" content="mockup">`,
-`<meta name="menger-widths" content="390,768x1024,1440">` (the frontmatter
-wins). A **mockup** renders the body once per device, each a frame at the
-device's own viewport (`390` → 390 × 844, `768` → 768 × 1024, `1440` →
-1440 × 900; its media queries see that width) in device chrome, scaled to
-fit — all side by side at one common scale, or one at a time — with
-**Light / Dark** and **Reduced motion** toggles the framed page itself sees,
-live; full screen scales the devices to the screen.
-
-**Any size** (APP-33; `frontend/src/mocksize.rs`) — every mockup, by
-`view: mockup`, fence or `ref`. It opens at its declared widths; the bar's
-**Size** menu holds the standard devices (Phone 375 × 667, Phone 390 × 844,
-Phone large 430 × 932, Tablet 768 × 1024, Tablet landscape 1024 × 768,
-Laptop 1280 × 800, Desktop 1440 × 900, Wide 1920 × 1080) — choosing one draws
-it alone, Shift (click or Enter) adds it beside the ones shown — and
-**Custom…** (or a device's `W × H` readout clicked) takes `W` or `W×H`
-(320–3840 by 240–2160), refused in place past that. A device's right edge or
-corner drags its viewport live, with a `W × H` readout, the width snapping
-to a standard one within 8 px (Alt: no snapping); the edge is a labelled
-handle in the tab order whose arrows move 10 px (1 with Shift; ←/→ the
-width, ↑/↓ the height). **rotate** swaps a device's width and height,
-**Reset** returns to the declared widths. A resize only restyles the box a
-frame sits in — the page reflows as in a resized window and never reloads,
-its state, scroll, scheme and motion kept. The sizes are the viewer's: kept
-in this browser's localStorage per mockup (`menger.mockup-sizes:<ticket>`,
-or `<ticket>#m<n>` for a body's n-th `<m-mockup>`), never in the body;
-Reset clears them. At the app's phone width the grips give way to the field.
-
-**A phone is drawn as an iPhone's screen** (APP-66; `screen` in
-`frontend/src/present.rs`). A phone-sized device as tall as one (2 : 1 or
-more; not 375 × 667) gets its iPhone's display: rounded corners that clip
-the page (44–62 px by its width), the notch or the Dynamic Island, the home
-indicator, and the safe-area insets iOS reports for them — portrait top 47
-(390, notch) or 59 (393/430, island), bottom 34; on its side, the top inset
-on both sides and 21 at the bottom. The page is told the insets: the page
-shim sets `--sai-top` … `--sai-left` on its root and rewrites every
-`env(safe-area-inset-*)` its rules read to `var(--sai-*)` (a frame's
-`env()` is 0), and the contract's `--safe-*` tokens read them too. So a
-page that pads by the insets shows it, and one that doesn't is clipped by
-the corners and sits under the home indicator, as on the phone. On by
-default; **Screen shape** in the bar (in ⋯ on a phone) turns it off for the
-mockup. A Playwright check gets the same insets by setting `--sai-*` on the
-app's root (APP-65: the app's edges pad by `--safe-*`).
-
-**A body that is a whole HTML document** — `<!doctype html` (then an
-element) or `<html` first, past comments — renders as itself: its own head,
-styles and scripts, inline media included, never markdown and never under
-the app's typography, theme tokens or SDK (`window.menger` is absent; it is
-a page). It is still the sandboxed frame, and IDENTITY-28's CSP is still the
-first element of its head (injected inside its `<head>`, ahead of anything
-the page holds), followed by the page shim. Inline it gets a viewport of
-its own (80vh) and scrolls inside it; its `#fragment` links scroll the page
-(the frame document's base URL is `/app/frame`, so the browser would
-navigate the frame away), any other link takes MENGER-14's path (`menger:link`: the leave dialog first; full screen steps aside for it), and its `prefers-color-scheme`
-follows the app's painted mode.
-
-**A mockup among prose** (APP-29, APP-32; `frontend/src/mockup.rs`,
-`tickets-api/src/mockups.rs`, the SDK's `<m-mockup>`). A mockup is also a
-component of an ordinary body, with prose, decisions and other components
-around it, as many as a body needs (at most 16, element, fence and ref
-mockups counted together). The standard form writes the page inside the
-element, in the ticket that discusses it — no doc of its own:
-
-```markdown
-The landing, as it stands:
-
-<m-mockup widths="390,1440">
-<!doctype html>
-<html>…the whole page…</html>
-</m-mockup>
-
-Ship it? <m-decision id="ship">…</m-decision>
-```
-
-The element's content, up to the first `</m-mockup>`, is the page's HTML as
-written — never read as markdown, never the body's own markup (blank lines,
-`<script>`, `</script>`, `<template>`, `<!doctype html>` all survive; its
-tags reference no component, its `<m-decision>`s are no inputs of the
-ticket); `widths=` is `W` or `WxH`, at most 6 (as `widths:` takes them), and
-defaults to 390, 768 and 1440. Written in a code span or a fence the element
-is text, as ever. A page that itself holds the text `</m-mockup>` would be
-cut there — put such a page in a fence, which holds it the same way:
-
-````markdown
-```mockup widths=390,1440
-<!doctype html>
-<html>…a page that says </m-mockup>…</html>
-```
-````
-
-The fence's `widths=` is quoted when it holds spaces; a fence alone frames
-its body. An element with both `ref=` and a page inside it is refused when
-the body is written, naming its line: a mockup is either inline or by
-reference. By reference — still allowed, no longer the usual path —
-`<m-mockup ref="DESIGN-49"></m-mockup>` draws another ticket whose body is a
-whole HTML document, at the widths that page declares (`widths:` in its
-frontmatter, or its `<meta name="menger-widths">`) unless the element names
-its own (`widths="390"`); an amended page redraws in place. Either way it is
-the same box a `view: mockup` body gets — one device frame per width side
-by side, All / per device, Light / Dark, Reduced motion, ⤢ Full screen.
-
-It is drawn as `<m-cite>` is: in the body's frame the element is only a
-placeholder (`menger:mockup { mock, ref, widths, source, title, description, rect, option }`, an inline
-page — the element's or a fence's — carried in its `source` attribute); the **host** lays the devices over
-it, outside the frame, and answers only the height (`menger:mocked { mock,
-height }`), so the prose below moves down. A `ref` is read over the
-viewer's own socket with the viewer's reach — a ticket outside it is "no
-ticket you can read", never named — and the body's frame never receives
-the referenced body. A ref that cannot be read, or whose body is not a
-whole page, shows its line in place.
-
-**A mockup is one view, and its description sits outside it** (APP-42;
-owner, 2026-10-16). One mockup is one screen at one state, at the device's
-viewport — not a long page of figures that scrolls through several
-screens. Its controls work, so the states one view reaches (a menu open, a
-sheet slid up, a row collapsed) are reached by using it, not drawn again
-below; another view is **its own mockup, in its own section of the body**.
-What a mockup shows and why is said **outside** it — the prose above it, or
-the mockup's own caption, never a heading or an intro inside the mocked
-page. The caption is the mockup's:
-
-```markdown
-<m-mockup widths="390,1440" title="Checkout" description="The cart, one item in it.">
-<m-description>
-What the **buyer** sees first; the total follows the quantity.
-</m-description>
-<!doctype html>
-<html>…the cart, and nothing else…</html>
-</m-mockup>
-```
-
-`title="…"` is one line; `description="…"` a line, and an
-`<m-description>` child that opens the element's content — markdown, a
-paragraph or two, up to its `</m-description>` — follows it; the page
-starts past the child. A fence takes `title=` and `description=` in its
-info string (` ```mockup widths=390 title="Checkout" description="…" `),
-quoted; a `ref` takes the attributes, or an `<m-description>` as its only
-content (`<m-mockup ref="DESIGN-49"><m-description>…</m-description></m-mockup>`
-is the reference form, described — a page after it is still refused); a ref
-with no caption of its own shows the referenced page's. A `view: mockup`
-body says it in its frontmatter (`description: The landing, dark.`; quoted
-when it holds ` #`), a whole document also as `<meta
-name="menger-description" content="…">`. The host draws the caption above
-the bar and the devices, outside every device frame, in the app's type —
-it is not in the mocked page and changes no device's viewport. md.rs moves
-it onto the placeholder (`title`, `description`: SDK 2.2's `menger:mockup`
-carries them — the body's own text); a referenced page's is read and drawn
-by the host and never reaches the citing frame, which hears only a height.
-
-**Said once** (APP-60; owner, 2026-10-18: *"the mockup renders poorly"* —
-on a phone the same sentence read twice, prose then caption). The line of
-prose above a mockup and its `description=` never repeat each other: the
-prose says why the view is here (what to look at, what it decides), the
-caption what the view shows (its state, its data) — or one of them says
-it and the other is left out (a `title=` and the prose, with no
-`description=`, is enough).
-
-**Answering on the mock** (APP-46; owner, 2026-10-16: *"I want the decision
-to contain mockups maybe, or for feedback to be left directly on the
-mockup."*). A decision between looks puts **a mockup in each option** — an
-`<m-mockup>` or a ` ```mockup ` fence inside each `<m-option>` of an
-`<m-decision id>`:
-
-```markdown
-<m-decision data-field="decision" id="look">
-<m-question data-field="question">Which board ships?</m-question>
-
-<m-option data-field="option" name="Dense" value="dense" recommended cost="more to scan">
-
-<m-mockup widths="390,1440" description="The board at 40 rows.">
-<!doctype html>…
-</m-mockup>
-
-</m-option>
-…
-</m-decision>
-```
-
-The placeholder posts the option it sits in (`option: { input, value, name
-}` on `menger:mockup`, SDK 2.4), and the box's bar carries, at its head,
-the option's name (the store's label for it), its mark and **pick this**.
-*pick this* records the option as the input's answer through the answer
-path a frame's Submit takes (`bridge::admit`, then `bridge::submit`: the
-ticket's inputs read, the value checked, `tickets.inputs.answer`, its source
-the server's from the caller), on the ticket the host stamped on the body's
-frame and never one the frame names; a cited window is display only. Its
-gesture is the host's own: the browser's own click on that button
-(`isTrusted`) inside the app's transient activation — a script's
-`dispatchEvent` records nothing and says so. The mark follows the input
-(read over the viewer's socket the first time a box asks, then
-`input_changed`): the answer's box takes the pass outline and *✓ answer*,
-*✓ decided* once closed, the others *weighed* and quieter; an option the
-store does not hold, a removed, withdrawn or closed input disable *pick
-this* with the reason. A DECIDED decision whose options hold mockups draws
-the chosen option first (the SDK's ordering in the body; the boxes follow
-it). Inside the mocked page nothing answers an input.
-
-Every mockup's bar also carries **comment**: the composer for the mockup
-as a whole, without annotation mode, anchored as APP-45 anchors inside a
-mockup — `mockup:<ticket>#<n>[=<ref>]@<width> >> body`, the page's root at
-the first device shown — labelled with the option (`Mockup of option
-“Dense” (look)`). Its pin sits on the device in annotation mode and
-`#/comments`' link back finds it. An option's look also carries **compare
-these**: APP-44's view (below) on every look of that decision, each column
-carrying the same bar — the option's name, its mark, *pick this* (the same
-answer path and gesture check) and *comment*.
-
-**Mockups side by side** (APP-44; `frontend/src/compare.rs`; owner,
-2026-10-16: *"allow me to do a side by side of various mocks … picking
-whichever I want on the page"*). Every mockup's bar on a ticket page has
-**Compare** — a toggle, or `c` while focus is in the mockup's box (its bar,
-its devices' labels; a key inside the mocked page is the page's). The
-picked mockups are the page's **compare set**, and a pill at the bottom
-left says `compare N · open · clear` (clear of the queue control at the
-bottom right and the dock at the right edge; on a phone, above both).
-**Open** lays them side by side in one full-window view: a column each, its
-description over it, at **one shared device** (390 · 768 · 1440, or a
-typed `W` / `W×H`) and one shared Light / Dark / Reduced motion, every
-column a live frame you use directly. Columns move by drag or ←/→ on a
-focused column head, go with ×, and come from **+ Add**: every mockup on
-the page (its title, `T#mN`), and **by ref** another ticket's — `DESIGN-49`
-(a whole-page body) or `DESIGN-49#m2` (its second mockup), read over your
-own socket (hidden ≡ not found). Past what fits the columns scroll
-sideways inside the view; at a phone's width it is one column and a
-switcher. Esc or Close leaves it; the set stays.
-
-A mockup is named as its box names itself: `T#mN`, the Nth `<m-mockup>` of
-T's body in the order its frame numbers them (fence, element and `ref`
-alike), or `T` for a `view: mockup` body. The set is yours: kept per page
-in this browser (`menger.compare:<T>`, the shared device under
-`menger.compare-device`), never in the body; while the view is open the
-route carries it — `#/ticket/APP-37?compare=APP-37#m1,APP-37#m3` — so the
-link opens the same comparison. A member that is not there is a named line
-in its column (`APP-37 has no mockup 9 — its body holds 6`, `NOPE-7: no
-ticket you can read`), never an error. A column redraws in place when its
-ticket is amended, and moving a column never reloads its frame (the columns
-keep one DOM order and move by CSS `order`).
-
-A soft check: the page shim reports its page's height (`menger:extent {
-height }`, a number, nothing of the page), and when the page at the
-narrowest device shown is more than **3** of that device's screens tall,
-the bar says so quietly — *one view per mockup — this page scrolls N
-screens* — after a resize too (APP-33), and only as a hint to the author,
-never a refusal.
-
-**On a phone** (APP-60; a viewport ≤ 820 px, APP-50's shape). A mockup
-opens on **one** device — the narrowest it declares (Reset returns there)
-— drawn as wide as the screen allows: its box reaches past the body's
-padding to the screen's edges less 4 px (`mockup::bleed`, the host's
-choice; only its width moves), the bezels thin, so a 390 device is drawn
-at about 96% and a wider one is scaled to the column, never off its edge.
-The other widths are one tap away on the bar; **All** stacks the devices
-one under another at the scale that fits the widest. The bar is **one
-row**: the option's *pick this* (in a decision), the device picker, **⋯**
-and Full screen; *comment*, Size, Reset, Light / Dark, Reduced motion,
-Compare and the tall note fold into the ⋯ panel (a tap outside closes
-it; the Custom field opens it). **Full screen** draws the device at 100%,
-bezel-less, and its stage scrolls to the rest (a desktop pans). Above
-820 nothing changes (`mocksize::scale_for`, `mocksize::opening`).
-
-**A preview, collapsible** (APP-99; owner, 2026-10-19: *"on taller screens
-we can just show but on iphone it's a hassle … at most 1/3 of the screen in
-the preview"*). On a phone a mockup is drawn as a **preview**: its devices
-scaled so the whole view (stacked devices, bezels and gaps counted) is at
-most **⅓ of the viewport's height** (`mocksize::preview_scale`), centred,
-unlabelled and inert — its frames take no pointer, so a scroll over it
-scrolls the page. A **tap on it**, or the bar's **⤢ Open**, opens it full
-screen as above (100%, the bar on top, off the safe-area insets); **Exit**,
-Esc, **Back** (a phone's full screen of a body's mockup is one history
-entry; not the ticket page's own `view: mockup` box, whose route says it)
-or a **swipe down** the bar or caption closes it, back at the same scroll.
-A viewport tall enough to show the devices whole at the column's width
-with 200 px to spare (an iPad's portrait) draws them as before. Every
-mockup, at any width, has a **collapse** toggle (▾ at the head of its bar):
-collapsed it is one line — its title, its views (`2 views`: the devices it
-declares) and ▸ — and the body hears the shorter height; the state is kept
-per mockup on this device (`localStorage` `menger.mockup.folded.<T#mN>`).
-`scripts/mock-preview-check.mjs` holds it at 390 (light / dark, `--sai-*`)
-and 1440, in Chromium or WebKit.
-
-**What makes `prefers-color-scheme` follow inside the frame.** An iframe's
-`prefers-color-scheme` is the *embedder's* in Chromium, whatever the
-`<iframe>` element's `color-scheme` says (checked: Chromium 153 reports the
-browser's preference in both a `color-scheme: dark` and a `color-scheme:
-light` frame); Firefox follows the element's used `color-scheme` (Firefox
-155: a `color-scheme: dark` iframe matches dark in a light browser).
-Nothing anywhere sets `prefers-reduced-motion` per frame. So the host sets
-the `<iframe>`'s `color-scheme` (Firefox's native path) **and** the page
-shim, inlined before anything the page holds, answers the page's own
-queries as emulated: every `@media` rule naming `prefers-color-scheme` or
-`prefers-reduced-motion` (nested and `@import`ed ones too) has that feature
-rewritten to an always-true / always-false condition, reversibly; so is the
-`media` of every `<source>` (a `<picture>`'s dark variant), `<link>` and
-`<style>`; `matchMedia()` of such a query returns a live list whose
-`matches` follows the emulation and which fires `change` on a toggle (a
-page that reads it once and listens, like the landing's carpet, follows);
-the root carries `data-menger-scheme` / `data-menger-motion`, and its
-`color-scheme` when the page declared `light dark`. Toggles arrive as
-`menger:emulate { scheme, reduce }` — no reload. A cross-origin style sheet
-cannot be read and is left as the browser answers it.
-
-**A ticket body's size cap** (MENGER-15). `create` and `amend` refuse a body
-past `--max-body-bytes` (`MENGER_MAX_BODY_BYTES`; default 8 MiB, room for a
-page with its media inlined) with the typed `body_too_large { id, bytes,
-max, message }`, writing nothing; the app's editor says it with the cap.
-What it means for memory: bodies are not in the cache (SCALE-14 — rows are;
-a body is read from the database for the call that answers it), so a large
-body costs the process only while one `get` or one write carries it, and
-`list`, `watch`, `--summary` and the board carry no bodies at all (summary
-rows; `watch`'s whole-ticket events — `created`, `amended`, … — do carry the
-ticket, so one amend of an 8 MB body broadcasts 8 MB to each open watch).
-The search index keeps a body's text only (its `<script>`/`<style>` and
-attribute values but a few dropped), so inlined media cost it nothing.
-Transport limits sit around it: the WebSocket takes a request up to 10 MB
-(jsonrpsee's default — JSON escaping grows a body, so a cap much above
-~9 MB is refused there first, untyped); the REST bridge refuses a request
-past 2 MB (axum's default body limit) with `413`, so a large body is
-written over the WebSocket. synapse sends one from a file,
-`--body @page.html`, or from stdin, `--body -` (synapse ≥ 3.14.8,
-SYNAPSE-10): no command-line argument carries it, so Linux's 128 KB cap on
-a single argument does not apply (`--body "$(cat page.html)"` hits it).
-
-`window.menger` (1.4, frozen): `version`; **`tickets`** (COMP-10) — the
-`tickets` activation's typed client (below); **`call(method, params)`** → a
-Promise of the call's items (the stream's data events as the wire spells
-them, an in-band `error` included), answered by the app over its own
-connection — **read-only**: `get`, `list`, `find`, `health`,
-`work.waves`, `work.blockers`, `nav.groups`, `nav.extents`,
-`components.list`, `inputs.list` (INPUT-4) — each by its path under
-`tickets` (SDK 2.0, ACCESS-20; a 1.x name such as `waves` is refused naming
-its path) — with the activation's parameter names (`menger.call('work.waves',
-{ epics: ['PLEXUS'] })`, `menger.call('inputs.list', { ticket: 'INPUT-9' })`); any other method —
-`inputs.answer` and `inputs.clear` included — rejects with `read-only: …`, which
-names the two writes and how they are made (below), and a parameter the
-method does not take rejects naming it; **`on('change', cb)`** →
-`cb(event)` for every `watch` event the app hears (`input_changed` too),
-and returns the function that stops it. IDENTITY-36: **a frame reads its
-own subtree** — every read and every change event is held to the shortcode
-of the ticket whose body the frame renders and the shortcodes hosted under
-it (`under SHORTCODE`, what an editor of that shortcode reads), whatever
-the viewer could read: `list`, `find` and `inputs` (each also taking
-`filter`) answer under `(<filter>) and under SHORTCODE`; `get` and
-`blockers` of a ticket outside are `not_found`, and a blocker outside is
-left out; `waves` of a shortcode outside rejects; `groups`, `extents` and
-`health`'s count are the subtree's. ACCESS-26: **and the registry too** —
-a frame is handed (in its init block, on ready, on every change) and
-answered (`components.list`) only the components its ticket could show:
-those defined or used inside the subtree, those its own markup names (an
-editor's draft, a `createElement('m-x')`), and what those use, each with
-only the references inside; the tooltip's checks know only what is inside
-(`frontend/src/held.rs`). It bounds enumeration: what exists elsewhere,
-and where it is used, is never handed over.
-The host stamps the scope on the frame (`data-scope`); an editor's preview
-reads as the ticket it edits, a component's help card as its owner, and a
-frame with neither reads only the components its markup names; **`navigate(route)`** (COMP-9,
-below); **`input`** (INPUT-4, frozen) — `ticket`, `submit` and (INPUT-9,
-1.4) `clear`, the two writes (below), and (1.7, COMP-14) `displayOnly`,
-true in a cited window. Its types are
-`frontend/sdk/menger.d.ts`, published at `/app/sdk/menger.d.ts`.
-
-**The typed SDK** (COMP-10, COMP-1 decision 7). `menger.tickets` is the
-client the house generator writes from the activation's schema —
-`synapse-cc` → `hub-codegen`'s TypeScript target, never a hand-written
-mirror — over the same read-only bridge:
-
-```js
-for await (const ev of this.menger.tickets.work.waves(['RETURNS'])) {
-  if (ev.type === 'wave_counts') count = ev.waves[0] ?? 0;
-}
-const all = await Array.fromAsync(menger.tickets.components.list());
-```
-
-It is hub-codegen's surface as generated: every method of the activation,
-camelCased (`setStatus`, `updateMany`), and each child its typed sub-client
-(`work`, `nav`, `inputs`, `components`, `commits` — `work.waves`,
-`commits.link`), with the activation's parameters positionally (required
-first, in the generated order — `work.waves(epics, kinds?)`; the `.d.ts`
-says each), each an `AsyncGenerator<TicketsEvent>` (`schema()` a Promise)
-whose events' keys the generated runtime camelCases (`waitingOn`,
-`blockedBy`; `type` values stay as the wire spells them). A read is
-answered as `menger.call` is — `inputs.list(epic?, filter?, state?,
-ticket?)` among them (INPUT-4); every other method, `inputs.answer`
-included, is present and throws a `PlexusError` "read-only: …" when
-iterated — the host's allow-list is the only gate. `menger.call` stays, the
-untyped escape hatch.
-
-The generated client's only seam is its `RpcClient` (Layer 1): the bridge
-transport (`frontend/sdk/bridge.ts`) implements it over the frame's
-postMessage channel — the call's items become `data` items and a `done`, a
-rejection an `error` item — so nothing generated is edited.
-**`scripts/sdk-codegen.sh`** produces it all: it builds menger, starts a
-throwaway server on its own ports (`SDK_CODEGEN_PORT`, default 4466–4468;
-never 4450–4462) over a temporary database, and in the `plexus-codegen`
-image runs `synapse-cc build` (generate, install, compile, smoke-test),
-emits the client's declarations with `tsc`, typechecks `bridge.ts` and
-`menger.d.ts` against them, and bundles the bridge transport with the
-client (`bun build`, IIFE). It writes the snapshot into
-`frontend/sdk/generated/` — the generated sources and `.d.ts`,
-`manifest.json` (each method's parameter names, from the IR) and
-`sdk-bundle.js` — and splices the bundle into `menger-sdk.js` between its
-`@generated-begin` / `@generated-end` lines, where it assigns the shell's
-own `mengerTyped` and defines no global. All of it is committed: `cargo
-build`, `trunk build` and the tests need neither Docker nor Node. A run
-takes ~4 s in the container (plus menger's build); a second run with
-nothing changed changes nothing. **Run it whenever the activation's surface
-changes** — the drift guard, `tickets-api/tests/sdk_manifest.rs`, holds the
-activation's methods and parameter names to `manifest.json` and fails
-`cargo test --workspace` with "run scripts/sdk-codegen.sh" until it is; a
-native test in `frontend/src/frame.rs` holds the spliced region to
-`sdk-bundle.js` (never edit it in place) and the bundle to the manifest.
-
-```sh
-scripts/sdk-codegen.sh        # needs Docker and the plexus-codegen image
-```
-
-**`#/components`** (COMP-6; linked from the header beside `waves`) lists
-the registry live: a row per component — its tag and (COMP-9) its summary
-or "no docs yet", its owner (a ticket link) or **orphan**, its reference
-count with each referrer as a link, its source folded. `#/components/<tag>`
-is one component — COMP-9: its **help page**: its docs card (below,
-framed, examples and preview live), then what references it, then its
-source, open.
-
-**Definitions render, instances link to them** (COMP-9, COMP-1 decisions
-5–6):
-
-- **The docs card.** A body holding a definition frames, and the
-  ` ```component m-x ` block renders inside the frame as its card
-  (`frontend/src/card.rs`, built from the block itself — a draft's docs
-  show as they are typed, a malformed one as the problem): `<m-x>` and its
-  summary · "N references ↗" (to the help page, kept live by the SDK) · a
-  **live preview** with the opening line's preview attributes · the
-  attributes (name, type, required, description) · the slots · each
-  example rendered live beside its markup · the help prose (markdown) · the
-  source, folded. The card is addressable: **`#/ticket/<OWNER>?component=m-x`**
-  scrolls the app to it and flashes it.
-- **Badges and tooltips.** Every component instance in a frame wears a
-  small corner badge, `m-x ↗`, shown on hover or keyboard focus and laid
-  over the page (absolutely placed at the instance's top-left corner — it
-  moves nothing). Hovering or focusing the badge opens a tooltip: the name,
-  its owner (or orphan), the summary, and each declared attribute with this
-  instance's value — a missing required one, or a value that does not fit
-  its `AttrKind` (a number; a boolean; a shortcode that exists; a ticket id
-  that exists; one of an enum's values), flagged with the reason (`no
-  shortcode 'NOPE'`) and the badge turned to the error colour — with
-  "definition ↗" (the owner's card; for an orphan, the help page) and
-  "docs ↗" (the help page). A component without docs: its name and "no docs
-  yet". The badge is focusable: Enter (or a click) follows "definition",
-  Esc closes the tooltip. The host fills the tooltip (`menger:inspect` →
-  `menger:inspected`, `frontend/src/inspect.rs`): the registry and the
-  board's extents say what exists, and the checks are
-  `AttrKind::check` / `AttrDoc::state` in `tickets-api` (wasm-safe).
-- **`menger.navigate(route)`** (SDK 1.2) moves the app to an app route —
-  `#/ticket/<id>` (with `?component=<tag>`), `#/components`,
-  `#/components/<tag>`, `#/waves`, `#/waves/<SHORTCODE>` (with a board's
-  query); anything else is ignored. The badge and the tooltip's links use
-  it, and so does a click on any `#/…` link in a framed body; a `{wave: ID}`
-  clicked in a framed board note reveals the card on the board, as in an
-  unframed note. COMP-14: a ticket route may name a section instead —
-  `#/ticket/<id>?field=<name>` or `?anchor=<id>` — which the frame showing
-  that ticket scrolls to and flashes.
-- **`menger.task.open(id)`** (SDK 2.8, TICKETS-23) opens the task `id`
-  of the ticket page's body in the **task sheet**: a side sheet at 1440, a
-  bottom sheet on a phone (≤ 820), over the page and outside
-  `#ticket-page`. The sheet draws the task's direction as a full ticket
-  body with the page's own renderer (`notes::TicketBody`), so markdown,
-  code, house components, mockups, `media:` images, chips and inputs all
-  work there. The host reads that source from the stored body
-  (`tickets_api::tasks::find`), never from the frame's DOM. The SDK sends
-  the call only inside a gesture, and the host takes it only from the
-  ticket page's own body frame. The route is `#/ticket/T?task=ID`; Esc, the
-  scrim or a swipe down closes it, and ‹ › step through the body's tasks.
-  An input inside a task is the ticket's. Sheets nest one level:
-  `menger.task.sheet` is the open task's id inside the sheet's frame, and
-  there `open` returns `false`, so a task inside a task folds in place.
-  `m-task`'s row calls it. `scripts/task-sheet-check.sh` checks the sheet
-  on a throwaway.
-
-**Links** (MENGER-14). Every link people write — a markdown link, a bare
-`http(s)://` URL (autolinked by md.rs, as GitHub does), an `<a href>` in an
-HTML body, a URL in a comment — is followed by the app, never by the
-browser on its own. In a framed body the SDK (1.8) takes the click (Enter on
-a focused link, a middle click) and posts `menger:link { href }` — the href
-as written — over the frame's channel; the sandbox and the CSP are
-unchanged. In the app's own page one delegated listener takes links in
-`.md` and `[data-links]`. The host classifies (`frontend/src/links.rs`, the
-`url` crate — WHATWG's parser): `#/…`, or this origin's app path, navigates
-in the app; another path of this origin (`/vanilla`) opens in a new tab;
-`http(s)` anywhere else and `mailto:` get **"This link leaves menger"** —
-the ticket it came from, the full URL with its registrable domain
-emphasised (the Public Suffix List, vendored at `frontend/vendor/psl/`), an
-IDN host decoded and as punycode, a `user@` before the host called out, and
-Open (a new tab, `noopener,noreferrer`) / Cancel; Enter opens, Esc cancels,
-Tab stays inside, focus returns. "Don't ask again for <domain>" (web links
-only) is kept in this browser per signed-in user (localStorage
-`menger.links`) and listed, revocable, in `#/settings` → Links; a trusted
-domain opens at once only inside a viewer's gesture on the frame it came
-from. `javascript:`, `data:`, `file:`, `vbscript:` and every other scheme
-are refused with a short notice. The vanilla page (`/vanilla`) links only to
-the app's own tickets, so it has nothing to ask about.
-
-**Cites** (COMP-14). A body can show a **live window into a section of
-another ticket** — cited, never copied:
-
-```html
-<m-cite ref="AUTH-10" field="findings"></m-cite>   <!-- its [data-field="findings"]: an m-field, m-cases, m-decision… -->
-<m-cite ref="AUTH-10#the-table"></m-cite>          <!-- the element with id="the-table" -->
-```
-
-The window has a header — the cited ticket's id, its **live** status, its
-title and the section's name, a link to `#/ticket/AUTH-10?field=findings` —
-over the section, drawn as it is drawn in its own ticket, at its natural
-height up to 480 px, then scrolling inside the window. An `amended` of the
-cited ticket redraws it in place (no reload, no flash); a status change
-repaints the header. The first element carrying the `data-field` is the
-section (a name several elements carry, the first of them); the `#id` form
-takes any element id the body writes. Headings are not addressed: md.rs
-gives them no ids (write `<h2 id="…">` to cite one). Failure is a named
-line, never a blank: `AUTH-10: no ticket you can read` (no such ticket —
-or, under login, one outside your reach: the server answers both
-`not_found` and never says which), `you cannot read AUTH-10` (a refusal),
-`AUTH-10 has no section `findings`` (`has no element `#x``), a malformed
-tag (`m-cite: …`), and a cite nested too deep (windows nest two deep; a
-cycle stops there).
-
-**How it is drawn — and why the citing body never holds it.** A cited
-section's HTML, and its scripts, must not run in the citing frame: that
-would give one shortcode's body the other's reach (IDENTITY-36), and the
-citer's script could read the cited text. So `<m-cite>` is built into the
-SDK (1.7) as a **placeholder** only: it reserves room and tells the host
-what it cites and where it is (`menger:cite { cite, ref, field, rect }`,
-`menger:uncite`). The **host** (`frontend/src/cite.rs`) then asks for the
-cited ticket over the viewer's own socket (`tickets.get` — the viewer's
-reach decides, never the citing frame's scope), lays the window over the
-placeholder in the app's own DOM (clamped to the citing frame's box), and
-renders the cited body in a frame of its own: the same sandbox, CSP and
-SDK as every frame (IDENTITY-28 unchanged), stamped as the **cited**
-ticket's — `data-scope` its shortcode, so its reads are what they are in
-its own ticket; no `data-ticket`, so the host answers no write from it —
-and told its section (`cite` in the init block), which its SDK alone
-shows, everything else hidden. The citing frame is answered **only the
-window's height** (`menger:cited { cite, height }`). So:
-
-- the cited content never enters the citing document — the citer's script
-  reads nothing of it, and its own reads are what they were;
-- the cited body's script runs with the cited shortcode's reach, never the
-  citer's;
-- a ticket the viewer cannot read draws its line and nothing of it — no
-  title, status or body;
-- inputs in a window are **display only**: they show their answers, and
-  `menger.input.submit` / `clear` there reject at once
-  (`menger.input.displayOnly` is `true`; the host refuses them too) — an
-  input is answered in its own ticket;
-- the citing body holds only the tag, so search, the inputs store and the
-  component registry count the section as the cited ticket's; the citer
-  references `m-cite`.
-
-The limits: the citing frame learns the window's height (it lays out
-around it), so a script there can tell roughly how tall a section the
-viewer can read is, and whether a window opened — never its text; a body
-opens at most 64 windows; the whole cited body loads in the
-window's frame (its scripts and diagrams run, hidden but for the section;
-a mermaid diagram in the section draws as in its own ticket); a window
-scrolls inside itself past 480 px.
-
-The order of work for a shortcode tree — the platform's, here — is one call
-(WAVE-4); the app's wave board (`#/waves/<SHORTCODE>`) makes the same one:
-
-```sh
-synapse -P 4455 menger tickets work waves --epics PLEXUS,MACRO,SYNAPSE,TRANSPORT,STARTER,HYPERFORGE,RETURNS,CONTEXT
-```
-
-A ticket has two boards of its own (MENGER-31), each on the ticket menu
-(right-click a ticket anywhere — a chip inside a framed body too, MENGER-34:
-the frame's SDK posts `menger:ticket-menu { id, x, y }` and the app opens the
-same menu there — or Shift+F10 on the focused one) beside
-**Open**: **Wave board for <parent>** — `waves_under`, the parent's subtree
-(any depth, hosted shortcodes included, from the kept tree), at
-`#/waves/under/<PARENT>?at=<ID>` with the ticket scrolled to and outlined;
-absent for a root — and **Waves to <ticket>** — `waves_to`, the board whose
-final state is the ticket: its blockers transitively (and a scope's or an
-execution's open descendants and what they wait on), each where the store
-keeps it, done blockers `done` and not followed past, the ticket alone in
-the last wave, and a `wave_cycle { ids }` per `blocked_by` cycle, at
-`#/waves/to/<ID>`. Both are live as the shortcode board is.
-
-```sh
-synapse -P 4455 menger tickets work waves_to --id MENGER-31
-synapse -P 4455 menger tickets work waves_under --id MENGER-2 --kinds build,gap
-```
-
-A reader can **answer a ticket in place** (INPUT-1): a body declares
-**inputs**, and the server keeps every answer, with its history, in an
-**inputs store** beside the tickets — a click never rewrites a body
-(INPUT-3).
-
-```html
-<m-decision data-field="decision" id="landing">          <!-- kind="choice" is the default -->
-  <m-question data-field="question">Expired events: archive or delete?</m-question>
-  <m-option data-field="option" name="Archive" value="archive" recommended></m-option>
-  <m-option data-field="option" name="Delete"></m-option>  <!-- its value: its name, "Delete" -->
-  <m-recommendation data-field="recommendation">Archive: holds are real.</m-recommendation>
-</m-decision>
-
-<m-input id="checks" kind="multi">
-  <m-question>Which checks ran?</m-question>
-  <m-choice value="unit">Unit tests</m-choice>
-  <m-choice value="wire">The wire test</m-choice>
-</m-input>
-
-<m-input id="notes" kind="text"><m-question>Anything else?</m-question></m-input>
-```
-
-- **An input** is an `<m-decision>` or an `<m-input>` with an `id` (not
-  blank), unique in its ticket; without one it is not an input — every
-  decision written before INPUT-3 is not. Its **kind**: an `<m-decision>` is
-  a `choice` (`kind` omitted or `"choice"`); an `<m-input>` says
-  `kind="multi"` (any of its options, a set) or `kind="text"` (a free reply).
-- **Options**, in the body's order: an `<m-decision>`'s `<m-option>`s — the
-  `value`, else the `name`, labelled by the name — and an `<m-input>`'s
-  `<m-choice>`s — the `value`, labelled by its text; `recommended` marks
-  one. A text input has none. Its **question** is its `<m-question>`'s text;
-  its **recommendation** the `<m-recommendation>`'s, else the label of the
-  option marked `recommended`. An input's parts are inside it, not inside a
-  nested `<m-decision>` / `<m-input>`.
-- **Read as the app renders the body** (`tickets-api/src/inputs.rs`, with
-  ART-5's scan): raw HTML only, so markup in a code span, a fence or
-  indented code — an example — is never an input; outside comments and the
-  frontmatter.
-- **Refused in-band**, naming the input, by the `create` or `amend` that
-  carries it — nothing written, title included: two inputs with one id; a
-  kind its element does not take (an `<m-decision kind="multi">`, an
-  `<m-input>` with no kind or `kind="choice"`); an option with no value; an
-  option value declared twice; a text input with options.
-- **Every body write re-reads them**: a new input is born `open`; one
-  declared again takes the new declaration and keeps its history; one the
-  body no longer declares is **`removed`**, history kept — declared again, it
-  is back in the state its history says. An answer stays what was recorded
-  when a later body changes the options it named; a new answer is checked
-  against the new ones.
-- **States**: `open` → `answered` (changeable) → `closed` (frozen: no
-  answer, no clear, until `reopen`) — and `removed`. The state is
-  the history's: the last `answered` / `cleared`, the last `closed` /
-  `reopened`.
-- **History**: every `inputs answer`, `clear`, `close` and `reopen` is
-  one entry — `{ action, value, rationale, source, at_unix }`, oldest
-  first; `source` is the server's, from the verified caller (ACCESS-14):
-  `app` for a person signed in through a provider, `api` for an agent's
-  key; `close` and `reopen` are always
-  `api`. Each
-  `answer` is recorded, the same value again included; a clear, close or
-  reopen that changes nothing (no answer, closed already, not closed)
-  writes nothing and answers `input`.
-- **Stored** in two tables, `inputs` (a row per input: `ticket`, `id`,
-  `position`, `kind`, `question`, `options`, `recommendation`, `state`) and
-  `answers` (a row per history entry), which a database written before
-  INPUT-3 gains on first open, durably, once, with every body's inputs read
-  in (each `open`; a malformed one logged and skipped). Held whole in the
-  cache.
-
-An answer's **value** is typed by its input's kind — internally tagged:
-`{"type": "choice", "option": "archive"}`, `{"type": "multi", "options":
-["unit", "wire"]}` (kept in the body's order, each once; `[]` is "none
-ticked"), `{"type": "text", "text": "…"}` (not blank). Through synapse its
-fields are dotted flags; a `multi`'s list goes in `-p` (synapse 3.14.3 sends
-a list field inside a tagged param as one string):
-
-```sh
-synapse -P 4455 menger tickets inputs list --state open             # what is still waiting
-synapse -P 4455 menger tickets inputs list --ticket INPUT-9
-synapse -P 4455 menger tickets inputs answer --ticket INPUT-9 --input landing \
-  --value.type choice --value.option archive --rationale "holds are real"
-synapse -P 4455 menger tickets inputs answer --ticket INPUT-9 --input notes \
-  --value.type text --value.text "Yes, ship it, today"
-synapse -P 4455 -p '{"ticket": "INPUT-9", "input": "checks", "value": {"type": "multi", "options": ["unit", "wire"]}}' \
-  menger tickets inputs answer
-synapse -P 4455 menger tickets inputs close --ticket INPUT-9 --input landing
-```
-
-**`#/inputs`** (INPUT-6; linked from the header beside `components`) is
-what is waiting on the owner across every ticket, live. Inputs are grouped
-by state — **open** first, then **answered**, then **closed**; the
-**removed** only behind the `removed` toggle, last — each group in the
-store's order. A row is one input: its ticket (a link to `#/ticket/<id>`)
-and id, its kind, its question, its options with the recommended one marked
-(★) and the chosen ones ticked (✓), the recommendation where it says more
-than that option's label, the current answer — value, rationale, source
-(`app` / `api`) and time (relative; exact on hover) — and its history,
-folded. FILTER-16: the filter bar is the app's generic one at the `inputs`
-level — the page's own categories, **State** (open · answered · closed:
-which groups show) and **Removed** (shown: the removed group, last), then
-the ticket categories (Shortcode, Status, Kind, …), which filter the inputs
-by their ticket together with the global filter: the rows are then `inputs
-{ filter }`, kept live (`member` for a ticket it does not know, the
-membership watch's `entered` / `left`). The menu counts the page's own
-categories on its rows and the ticket categories by `facets`. The filter
-rides the route's query as every level's does —
-`#/inputs?f=in%20(INPUT%2C%20MNG)&state=is:open,answered&removed=is:yes` —
-and is kept per viewer; an INPUT-6 link (`#/inputs?sc=INPUT,MNG&state=open,
-answered&removed`) still opens the filter it named and is rewritten as `f=`.
-
-The page is the app's own copy of the inputs (`frontend/src/inputs.rs`),
-held to the component registry's rule (COMP-5): **nothing at startup asks
-for it** — the five startup requests are unchanged — and the page's first
-opening asks `inputs {}` once (every state, in the store's order; not
-`--state open` alone, since every group is shown and a row moves between
-them). From then on `watch` keeps it: an `input_changed` carries the whole
-input and is applied as an upsert — in place, or after its ticket's inputs
-when it is new — so a row moves between groups as the answer lands; the
-events heard while a fetch is out are replayed onto its answer, and it is
-asked again on every reconnect and every `lagged`. The header's `inputs`
-link wears the **open count** as a small badge from the first time the page
-is opened, live from then on, after the page is left too; before that it
-shows no count rather than add a startup request.
-
-**Answering and clearing from a frame** (INPUT-4, INPUT-9; INPUT-1
-decision 3, as amended). A frame is read-only but for two writes: a
-viewer's click in a framed body records an answer to an input of **that
-body's own ticket**, through `tickets.inputs.answer`, or clears the answer
-it holds, through `tickets.inputs.clear` — each made by the host, the
-source the server's from the viewer (ACCESS-14: `app` for a person signed
-in, `api` with login off). They are the SDK's **`menger.input`** (1.3: `submit`;
-1.4: `clear`):
-
-```js
-// in a component script — `this.menger` is `window.menger`
-button.onclick = () =>
-  this.menger.input.submit('landing', { type: 'choice', option: 'archive' }, 'holds are real')
-    .then((answer) => show(answer), (e) => complain(e.message));
-// answer: { value, rationale, source: 'app', atUnix } — the generated `Answer`
-
-clear.onclick = () =>
-  this.menger.input.clear('landing').then((input) => show(input), (e) => complain(e.message));
-// input: the generated `Input`, `open`, its history ending { action: 'cleared', source: 'app', atUnix }
-
-// this ticket's inputs, typed (`ticket` is null in a frame that renders no ticket's body)
-for await (const ev of this.menger.tickets.inputs.list(undefined, undefined, undefined, this.menger.input.ticket)) { … }
-```
-
-- **`menger.input.ticket`** — the ticket whose stored body the frame
-  renders: the ticket page's, a board note's doc. `null` in a frame that
-  renders none — the editor's preview of a draft, a component's help card —
-  where `submit` always rejects. The host stamps it on the `<iframe
-  data-ticket>` and in the init block; the frame cannot name another.
-- **`menger.input.submit(id, value, rationale?)`** → a Promise of the answer
-  recorded, in the typed client's spelling (the generated runtime's own
-  transform, `atUnix`); `value` is an `InputValue`, as `answer` takes it.
-  The SDK sends it (`menger:submit`) **only inside a viewer's gesture** —
-  the frame's transient user activation (`navigator.userActivation.isActive`,
-  the getter taken before the body's scripts run), or, in a browser without
-  that API, a trusted click or key the SDK saw in the last 5 s; otherwise it
-  rejects — `only inside a viewer's click … nothing was sent` — so a
-  component that calls it on load or from a timer learns so at once.
-- **The host checks, in order** (`frontend/src/bridge.rs`), and refuses with
-  the reason, sending nothing: **a gesture on that very frame is under way**
-  (IDENTITY-36, `frontend/src/gesture.rs`), read the moment the message
-  arrives — the app window's own transient activation is on (a browser
-  without the API is refused); the app's focused element is that `<iframe>`;
-  since the app's own last click or key, the pointer came onto that frame
-  or a Tab carried focus into it; and, while that click or key of the app's
-  is younger than 5 s, focus entered the frame after it. On a touch screen
-  (APP-55) a tap in a frame gives the app no pointer at all, so where the
-  pointer the app last heard does not hover (a touch or pen; none heard
-  yet, `(hover: none)`), the pointer is not asked: while the app's own
-  touch is younger than 5 s the write is read again once that has run out
-  (APP-35's wait), and the tap's activation, with focus still on the frame,
-  is the gesture. Any click, tap or key
-  elsewhere in the app is no gesture on the frame; **the frame renders a
-  ticket** (its `data-ticket`); the params are exactly `{ input, value,
-  rationale? }` (a `ticket` among them is refused); then, against that
-  ticket's inputs as the store holds them (`inputs { ticket }`), **the input
-  is declared in its body** — one only another ticket declares is not this
-  frame's to answer — **neither closed nor removed**, and **the value answers
-  it** (`inputs::check`, what the server runs: one of a choice's options,
-  any of a multi's, a reply that is not blank). Then it calls
-  `tickets.inputs.answer { ticket, input, value, rationale }` and
-  answers the frame `menger:submitted { id, answer }`, or `{ id, error }` —
-  the host's refusal or the server's own in-band one; the promise rejects
-  with it. The answer reaches every frame, the one that made it included, as
-  `input_changed` on `menger.on('change')`.
-- **`menger.input.clear(id)`** (INPUT-9, SDK 1.4) → a Promise of the input
-  as the clear left it — the generated `Input`: `open`, no answer, the
-  clear last in its history (as it was, when it held no answer: the server
-  writes nothing). Sent (`menger:clear { id, params: { input } }`) under
-  `submit`'s gesture rule, and checked by the host as a submit is, **but for
-  the value**: a gesture under way, a frame that renders a ticket, params
-  exactly `{ input }`, the input declared in that ticket's body and neither
-  closed nor removed. Then `tickets.inputs.clear { ticket, input }`, answered `menger:cleared { id, input }` or `{ id, error }`; the
-  clear reaches every frame as `input_changed`.
-- **Every other write stays refused**, through `call` and the typed client
-  alike — `inputs.answer` and `inputs.clear` too: a frame answers only through
-  `submit` and clears only through `clear`.
-- **The house components** (ART-9's `m-decision`, `m-input`): **Submit**
-  calls `submit`; **Clear** calls `clear` when an answer is recorded (the
-  history then shows the `cleared` entry, via `app`) and only empties the
-  form when none is. On an app before SDK 1.4 (no `clear`), Clear empties
-  the form and says the recorded answer stays.
-- **The limit.** The gesture rule is the browser's: the host can know that
-  the viewer is clicking or typing in the app now, not which control a
-  click meant. A script in the frame (the body's, or a component's) can
-  post a `menger:submit` or `menger:clear` of its own while a gesture is
-  under way — for an input its ticket declares (with a value that answers
-  it, to submit), recorded as `app`. Who answers (identity, permissions)
-  waits on CONTEXT.
-
-| method | yields |
-|---|---|
-| `tickets.health` | `health { version, unix_now, ticket_count }` |
-| `tickets.create { epic, title, kind?, severity?, blocked_by?, body?, parent?, path? }` | `created { ticket }` — id is the next `EPIC-N`, status starts `Draft` (TICKETS-13; a scope too — only a doc is born otherwise); `kind` defaults to `build`, one outside the six is an in-band `error` naming them; a `parent` that does not exist (or would make the ticket its own ancestor) is an in-band `error` naming the reason; **every shortcode starts with a scope** (MNG-12) **or a doc** (SDLC-11): the first ticket of a prefix must be `kind: scope` or `kind: doc`, anything else is an in-band `error` naming the rule and nothing is allocated; a `doc` starts — and stays — in `Doc`, and a doc with a `blocked_by`, a `blocked_by` naming a doc, or a doc born as an id a `blocked_by` already names is an in-band `error` (SDLC-11); **`parent` defaults to the shortcode's scope root and must stay inside the shortcode** (MNG-14): omitted, a non-root hangs under its prefix's root; named, it must be in the same prefix, else an in-band `error` — the scope root itself is the exception, its parent (if any) is the shortcode it hangs under, a sub-shortcode; **`path`** (WAVE-10) gives the ticket a path address in its shortcode — only `_MENGER/…` with something after it, only on a `doc`, only with the shortcode's scope root as `parent` (the default); one another ticket of the shortcode holds is an in-band `error` naming it, as is each other refusal, and nothing is allocated; COMP-3: the body's ` ```component ` blocks register components — a block whose tag is not a component name, a name defined twice, or a name another ticket defines is an in-band `error` (the last naming that ticket) and nothing is allocated; COMP-8: so is a malformed `<docs>`, naming the problem; MENGER-15: a body past the cap (`--max-body-bytes`, 8 MiB by default) is the typed `body_too_large { id: null, bytes, max, message }` and nothing is allocated |
-| `tickets.get { id }` | `ticket` or `not_found` (ACT-6: a ticket an old id names carries `moved_from`, every id it had) — `id` is an `EPIC-N`, or (WAVE-10) a path address `SHORTCODE/path` (`PLEXUS/_MENGER/board`; the shortcode case-insensitive, the path exact), and `not_found` carries the id or address as given; ACT-5: a deleted ticket's id answers `deleted { ids: [id], tombstones: [tombstone] }` |
-| `tickets.list { epic?, status?, parent?, after?, limit?, summary? }` | one `ticket` per match, ordered (epic, seq), then one `page { next, remaining }`; `parent` yields exactly that ticket's children — the one way to read them (SCALE-4), from an index the store keeps, so a page of a root's 163,530 children costs the page (1.3 ms at 10⁶ over REST, first page or deep) and its `remaining` is arithmetic; `summary` swaps the rows for `summary { summary }` (every field but the body); `after` is the exclusive cursor and `limit` caps the page (ACCESS-29: 1,000 rows unless given, never more than 10,000 — page with `next`) — `after` naming no ticket is one in-band `error` |
-| `tickets.work.ready { epic?, after?, limit?, summary? }` | one row per member of the ready set (Ready, every blocker Complete, Superseded or Canceled — never a doc), ordered (epic, seq), then one `page { next, remaining }` |
-| `tickets.find { query, after?, limit? }` | one `summary` row per ticket whose id or title contains `query`, case-insensitively (ASCII folding) — the jump palette's rule (AGS-18), on the server (SCALE-6) — ordered (epic, seq), at most `limit` (default 50), then one `page { next, remaining }`: `remaining` plus the rows is the total. `query` is trimmed; empty or blank matches every ticket. `after` is `list`'s cursor (a position — it need not match); one naming no ticket is one in-band `error`. Ids and titles only, never bodies. A blank query's page costs the page; any other query's exact `remaining` scans every id and title after the cursor (~145 ms at 10⁶) |
-| `tickets.search { query, filter?, limit?, offset? }` | SEARCH-2: search inside tickets — one `hit { summary, title, snippet, corrected }` per ticket whose title or body's text holds every word of `query`, best first, then one `searched { matched, next, words }`. Each word also matches as a prefix; a misspelt one (unknown to the index, or rare in it) of four letters or more also matches the index's words one edit away (two from eight letters); `FILTER-23`, `set_status` and `"a phrase"` are phrases. Uncorrected matches first, then corrected; BM25 within, the title weighing 4 to the body's 1. `title` and `snippet` are `[{ text, hit }]` stretches, the matched words marked. `filter` as `find`'s; `limit` 20 by default, at most 100; `offset` skips matches — `next` is the next page's. A blank query is no hits and `matched: 0`. See "Search" below |
-| `tickets.set_status { id, status restore_children?, source?, message? }` | `status_changed { ticket, previous }` — any of the nine, from any status (SDLC-7: the worker states `Coding` and `In Review` included); one outside them is an in-band `error` naming the nine; SDLC-11: on a doc, an in-band `error` (a doc has no lifecycle), and `Doc` on any other kind an in-band `error` too; MENGER-13: a transition (the caller's, from `source` — `app` / `api` / `pipeline` —, with `message`), said on `watch` as `transition` right after the `status_changed`; into `Canceled` it cancels every open descendant in the same write and withdraws the open inputs, out of it restores the inputs and, with `restore_children`, what its cancel canceled — see "History and cancellation" |
-| `tickets.history { id }` | MENGER-13: one `transition { transition }` per change of the ticket's status or kind, oldest first, then one per transition those caused in other tickets, then `history_end { began_unix, restorable, status_since_unix, status_since_exact, deletions }` (FILTER-27: since when it has held its status — its latest status transition, `exact`; or, for a ticket from before the log, its last update or the log's start, whichever is earlier: "since at least"; ACT-5: `deletions`, the tombstones of the deletes that moved it or dropped its block, oldest first); a deleted ticket's history still answers; `not_found` for an id naming no ticket |
-| `tickets.set_kind { id, kind, status? }` | `kind_changed { ticket, previous }` (SDLC-13) — the one write that changes a kind; everything kept by kind moves in its write. To a `doc`: status `Doc` (a `status` other than `Doc` is an in-band `error`), refused while the ticket waits on a blocker or a ticket waits on it (each named); from a doc: `status` if given (never `Doc`), else `Epic` for a scope and `Pending` otherwise; between two kinds of work the status stays unless given (`Doc` an in-band `error`). A shortcode's root becoming a kind that roots nothing is an in-band `error` naming the shortcode (doc ↔ scope is allowed); so is a path holder (WAVE-10) becoming work, and an unknown kind or status; an id naming no ticket is `not_found`. A lower-seq ticket made a scope or a doc becomes its shortcode's root. The kind (and status) it has is no write and no broadcast, answering `previous` equal to its kind. `watch` carries `kind_changed` first, then the write's `group_changed` (a root's whenever its kind or status changed; every row a re-root moved), `placements_changed`, and — filtered — `entered` / `left` |
-| `tickets.amend { id, title?, body? }` | `amended { ticket, changed }` (MNG-16) — replaces the title and/or the body, whole values, last writer wins; `changed` names what moved (`["title"]`, `["body"]`, `["title", "body"]`); neither given, or the values already there, is no write and no broadcast and answers `changed: []`; an id naming no ticket is `not_found`; a title that is empty after trimming is an in-band `error` and nothing is written. Stored byte-exact, durable before it is acknowledged; `updated_unix` moves; nothing else about the ticket does — status, kind, edges, parent, id. COMP-3: a new body moves the component registry (definitions, references, orphans); a malformed ` ```component ` block (COMP-8: or `<docs>`), or a name another ticket defines, is an in-band `error` and nothing is written, title included; MENGER-15: a body past the cap is the typed `body_too_large { id, bytes, max, message }` and nothing is written, title included |
-| `tickets.commits.link { id \| ids, commits }` | ACT-2: `ids` instead of `id` links them to each in one write, all or none (a ticket that names nothing, or past 256, refuses all, each named), one `commits_linked` per ticket in the order named. `commits_linked { ticket, added }` (SDLC-9) — appends every commit reference in `commits` the ticket does not already carry, in the order given; `added` is what was newly linked, in order. Every entry already linked, or `commits` empty, is no write and no broadcast and answers `added: []`. An entry that is not a commit reference is one in-band `error` naming every such entry, and nothing is written — a call is all or nothing; so is a link that would put more than 256 commits on the ticket. An id naming no ticket is `not_found`. Durable before it is acknowledged; `updated_unix` moves, nothing else does |
-| `tickets.commits.unlink { id, commits }` | `commits_unlinked { ticket, removed }` (SDLC-9) — every entry the ticket carries is removed; `removed` names them in the order given; none of them linked is no write, `removed: []`. The same grammar, the same all-or-nothing `error`, `not_found` |
-| `tickets.label { id \| ids, add?, remove? }` | ACT-2: `ids` instead of `id` moves each one's in one write, all or none, one `labels_changed` per ticket in the order named. `labels_changed { ticket, added, removed }` (MENGER-12) — each entry a label (letters, digits, `-`, ≤ 32, lower-cased), `add` added and `remove` taken off (a label in both is added), the ticket's labels kept sorted, each once, ≤ 16; `added` / `removed` are what moved, in the order given — both empty is no write and no broadcast. A bad entry or too many is one in-band `error`, nothing written; `not_found`. Durable before it is acknowledged; `updated_unix` and the ticket's cell (`label <name>`) move, nothing else; `watch` carries every `labels_changed` that moved something |
-| `tickets.update { id, title?, body?, kind?, status?, parent?, severity?, block?, unblock?, source?, message? }` | `updated { ticket, changed }` (MENGER-30) — any part of a ticket in one write, all of it or none: each aspect by its own write's rules (`amend`, `set_kind` — the kind before the status —, `set_status` for a status alone, `set_parent`, `create`'s for `block`; `unblock` removes; an id in both refused), all asked first — a refusal is one in-band `error` naming every reason, nothing written; `severity: "none"` clears it; `changed` names what moved, in the order `title`, `body`, `kind`, `status`, `parent`, `severity`, `blocked_by`, empty (no write, no broadcast) when nothing would; `not_found`, or `body_too_large`. `watch` carries each aspect's own events, in that order — `amended`, `kind_changed` / `status_changed` and their `transition`s, `blockers_changed { ticket, added, removed }` then each blocker's `unlocks_changed { ticket, added }` / **`unlocks_removed { ticket, removed }`**, `parent_changed` / `children_changed` / `child_removed`, **`severity_changed { ticket, previous }`** — then the write's `group_changed`, `placements_changed`, components, inputs and (filtered) `entered` / `left` |
-| `tickets.update_many { ids \| filter, max?, tz?, kind?, status?, parent?, severity?, block?, unblock?, label?, unlabel?, source?, message? }` | `updated_many { ids, changed, tickets, unchanged }` (ACT-2) — `update`'s change to every ticket `ids` names, or that `filter` admits at the write (in the caller's reach, at most `max`, default 500 — more is an in-band `error` naming the count), in one write, all or none: each ticket by `update`'s rules (`label` / `unlabel` by `label`'s), each id's write grant asked; any refusal is one in-band `error` naming each refused id with its reasons, nothing written. `ids` the tickets it changed, `changed` the aspects that moved in any (`update`'s order, then `labels`), `tickets` every one selected as the write left it, `unchanged` those nothing changed for (no write). `message` on every transition; the write's first is the `cause` of the rest. `watch` carries each ticket's own events, then one `updated_many { ids, changed }` (`tickets`, `unchanged` empty), then (filtered) `entered` / `left` |
-| `tickets.delete { ids \| filter, max?, tz?, children?, unblock?, message? }` | `deleted { ids, tombstones }` (ACT-5; admin) — the tickets gone for good, all or none: refused, naming every reason of every ticket, while one has children (unless `children: reparent` — to the nearest ancestor that stays — or `delete` — the subtree too, every id in `ids`), a ticket waits on it (unless `unblock`), it roots a shortcode that holds a ticket that stays, it defines a component or a theme, or an input of its is `open` or `answered`. A tombstone each (`id, title, by, name?, at_unix, message?, restorable_until_unix?, parent?, reparented, unblocked`); the history kept; the body 30 days, then purged (at start, then daily); the number never reused. `watch`: each moved ticket's own event, then `deleted`, then groups, placements and a filter's `left` |
-| `tickets.reshortcode { ids, to, new_scope?, parent?, with_children?, message? }` | `reshortcoded { moves: [{from, to}], tickets }` (ACT-6; editor on the moved tickets and where they go) — the tickets moved into `to`, renumbered in the order given, all or none (the section above); every old id pinned to its new ticket (`get` answers it with `moved_from`). `watch`: `reshortcoded` first, then the stayed children's `parent_changed`, groups, placements, a filter's `left` / `entered` |
-| `tickets.undelete { ids }` | `undeleted { ids, tickets }` (ACT-5; admin) — deleted tickets back, whole, within 30 days, all or none: each child its delete moved back under it and each block it dropped back, where nothing has moved them since; refused for an id not deleted, a purged body, a parent or blocker still deleted (undelete it too), a path or a component taken since. `watch`: `undeleted` first, then the parents' and children's events, a filter's `entered` |
-| `tickets.set_parent { id, parent }` | `parent_changed { ticket, previous }` (MNG-12) — files an existing ticket under `parent`: the child's row is written, and it leaves the old parent's children and joins the new one's (SCALE-4: neither parent's row is rewritten — SCALE-28 stores each one's new `child_count` on it, in the move's transaction; `watch` carries `children_changed` and `child_removed` with each parent's new `child_count`); the same guards as `create` (`not_found`, must exist, inside the shortcode unless the ticket is its root, no self-ancestry — in-band `error` naming the reason); the parent it already has is a no-op |
-| `tickets.nav.groups {}` | one `group { group: { epic, total, done, docs, root, root_row, host } }` per shortcode row the nav draws, in shortcode order, then the stream's own `done` (MNG-10) — the nav's tree without its rows: `total`/`done` count the row's whole subtree as AGS-20's `plan()` nests it (sub-shortcodes and cross-shortcode children included; `done` is `Complete` only; SDLC-11: the work only — `docs` counts the docs, and a row of docs alone is drawn), `root` is the lowest-seq `scope` (or `doc`), `root_row` the root's `{ title, status, kind }` (AGS-23: the nav draws the shortcode as the root's row; `null` with no root), `host` the ticket a sub-shortcode's row nests under (`null` at top level). Kept by the store on every write, so the cost is the number of shortcodes, not tickets |
-| `tickets.components.list {}` | one `component { component: { name, source, owner, references, docs, preview } }` per component, in name order, then the stream's own `done` (COMP-3) — `source` the ` ```component name ` block's content, `owner` the defining ticket (`null`: an orphan), `references` the tickets whose bodies use `<name`, in the store's order, then the components whose sources do, by name; COMP-8: `docs` the source's `<docs>` parsed (`{ summary, attrs, slots, examples, help }`, `null` without one), `preview` the opening line's attributes (`[[name, value], …]`). From the cache; `watch` keeps it current with `component_changed` / `component_removed` |
-| `tickets.inputs.list { ticket?, epic?, state? }` | one `input { input: { ticket, id, kind, question, options, recommendation, state, answer, history } }` per input of `ticket` (every ticket's without one) whose ticket is in the shortcode `epic` and which is in `state` (`open` / `answered` / `closed` / `removed` / MENGER-13 `withdrawn`), then the stream's own `done` (INPUT-3) — in the store's order of tickets, each ticket's inputs in its body's order and the removed after; `kind` `choice` / `multi` / `text`; `options` `[{ value, label, recommended }]`; `question` and `recommendation` `null` without one; `answer` `{ value, rationale, source, at_unix }` or `null`; `history` every change, oldest first. A ticket that is none is `not_found`; a state outside the four an in-band `error`. From the cache; `watch` keeps it current with `input_changed` |
-| `tickets.inputs.answer { ticket, input, value, rationale? }` | `input_changed { input }` (INPUT-3) — records `value` (typed, above) against the input, checked against its kind and the options its body declares, with `rationale` (blank: none), the `source` the server says from the verified caller (ACCESS-14: `app` for a person signed in through a provider, `api` for an agent's key and with login off) and the time; every call is one history entry. One in-band `error`, nothing written: the ticket declares no such input (naming those it does), the value does not answer it (naming why), it is closed, or it was removed; `not_found` for a ticket that is none. The body and the ticket's row are untouched |
-| `tickets.inputs.clear { ticket, input }` | `input_changed { input }` — the answer cleared, `open` again, the clear in its history with its `source`, the server's as for `answer`; `input { input }` when it held none (nothing written); in-band `error` when closed, removed or not declared (INPUT-3) |
-| `tickets.inputs.close { ticket, input }` | `input_changed { input }` — frozen, with or without an answer (a decision's DECIDED); `input { input }` when closed already; in-band `error` when removed or not declared (INPUT-3) |
-| `tickets.inputs.reopen { ticket, input }` | `input_changed { input }` — `answered` again when it holds an answer, else `open`; `input { input }` when it was not closed; in-band `error` when removed or not declared (INPUT-3) |
-| `tickets.inputs.ask { ticket, question }` | `input_changed { input }` — APP-90: a question filed as a new text input, `<m-input id="ask-N" kind="text">` appended to the body (`N` the lowest no input of the ticket has had; the question one line, escaped, so it is text and never markup) through `amend`'s write — one revision, `amended` then `input_changed` on `watch`; `not_found`; in-band `error` when the body would pass `--max-body-bytes` or its markup is malformed; editor's grant (the composer's `/ask`) |
-| `tickets.nav.extents {}` | one `extent { epic, last_seq, holes? }` per shortcode that holds or held a ticket (ACT-5: `last_seq` the highest number it has given, a deleted ticket's included — numbers are never reused — and `holes` the numbers below it it does not hold, absent when none; a client's arithmetic skips them), in shortcode order (the store's), then the stream's own `done` (SCALE-16) — where each shortcode ends: ids are allocated highest-plus-one and never deleted, so a shortcode holds `last_seq` tickets, row k of it is `EPIC-k`, and a position in the store's order becomes a `list { after }` cursor without a walk; every `last_seq` together sums to `health.ticket_count` (a hand-edited database with a hole still reports the highest sequence; `after` naming the missing id is `list`'s cursor error). Not a roll-up: the shortcode's own tickets only, and every shortcode has one whether or not the nav draws it a row. Read from the sequence `create` allocates from (SCALE-3), so the cost is the number of shortcodes; no `watch` event — `created` carries the shortcode's new `last_seq` as its `seq` |
-| `tickets.work.waves { epics, kinds? }` | the order of work (WAVE-4): one `placed { summary, placement, waiting_on }` per ticket of the shortcodes `epics` (case-insensitive; one with no tickets contributes nothing) whose kind is in `kinds` (default `build`, `spike`, `gap`; a doc is never placed), then exactly one `wave_counts { waves, missing, done }` — `waves[i]` counts the placed tickets in wave `i + 1`. `placement` is computed over the **whole** `blocked_by` graph by `ready_set`'s rule (MNG-4), blockers followed into any shortcode, asked for or not: `{"type": "done"}` when the ticket is `Complete`, `Superseded` or `Canceled`; `{"type": "missing_blocker"}` when it, or anything it waits on, names a blocker that is no ticket (or, only by a hand edit, sits on or behind a `blocked_by` cycle); otherwise `{"type": "wave", "n": n}` — 1 with every blocker satisfied, else 1 + the highest wave among its unsatisfied blockers. `parent` orders nothing, and a `Blocked` status is a marker, not an edge. `waiting_on` is the ticket's unsatisfied direct blockers (missing ids included), in `blocked_by` order, distinct; `[]` when done. Order: waves ascending, inside a wave `Coding`, `In Review`, `Ready`, `Pending`, `Blocked`, `Draft`, `Epic`, then (epic, seq); then the missing lane; then the done — each in (epic, seq). `epics` empty, or a kind outside the six, is one in-band `error` and nothing else. WAVE-6: read from the placements the store keeps (below) — the cost is the placed tickets — and `waiting_on` worked out per row |
-| `tickets.watch { epic? }` | open-ended stream of `created` / `status_changed` / `kind_changed` / `amended` / `commits_linked` / `commits_unlinked` / `labels_changed` / `unlocks_changed` / `unlocks_removed` / `blockers_changed` / `severity_changed` / `children_changed` / `parent_changed` / `child_removed` / `group_changed` / `placements_changed` / `component_changed` / `component_removed` / `input_changed` — INPUT-3: an input a write moved is one **`input_changed { input }`** — the whole input, its state, answer and history, so applying it is one upsert — after every other event of the write, the component events included: an `answer`, `clear_answer`, `close_input` or `reopen_input` (its one event), or a `create` / `amend` whose body declared, re-declared or removed inputs (in the body's order, the removed after); `epic` filters it by its ticket's shortcode — COMP-3: a `create` or `amend` that moved the component registry ends — after every other event of the write, `placements_changed` included — with one **`component_changed { component }`** per component it registered or moved (source, owner, references: the whole component, so applying it is one upsert), in name order, then one **`component_removed { name }`** per component it took out; a component is in no shortcode, so both pass any `epic` filter — each carries the whole affected ticket but the parent's side of a birth or a move, `children_changed { id, added, child_count }` / `child_removed { id, removed, child_count }` (SCALE-4: under 1 KB whatever the parent's size; it was the whole parent); a write that moves a roll-up is followed, after its ticket events, by one `group_changed { group }` per row that moved, innermost first (a row no longer drawn arrives once with `total: 0`) — WAVE-6: and a write that moved any kept placement ends with one **`placements_changed { changes: [{ id, placement }] }`**, after its other events (`epic` keeps the changes in its shortcode, and the event only when one is left) — AGS-23: so is a shortcode root's status change (any, not only across `Complete`) or new title, which moves its group's `root_row`; `epic` filters a group by its own shortcode, a parent's side by the parent's; **`lagged { missed }`** (SCALE-5) where a subscriber more than the server's broadcast holds (256 changes) behind lost changes — once per gap, in place of the `missed` changes lost (`missed` ≥ 1, the channel's count), whatever the `epic` filter, then the oldest change still held, in order, none twice; not an error, the stream goes on — what the client holds may be stale, so it fetches again what it shows |
-
-Paging (MNG-9). `(epic, seq)` is a total order the schema keeps unique, so
-a ticket id is a cursor: a client that renders opens `watch` first, then
-walks `list { summary: true, limit: 200 }`, passing the previous page's
-`page.next` as the next call's `after`, until `next` is `null`. Each page
-is `≤ limit` rows and one `page { next, remaining }`; `remaining` counts
-what is left under the same filters — exactly, and, with no `status` or
-`parent` filter, without walking it: the store keeps each shortcode's
-count beside its sequence, so a page costs the page (SCALE-19; a
-`parent` page counts from its index of children, SCALE-4). A `work ready`
-page is a range of the ready set the store keeps, and its `remaining`
-counts at most the members of the one shortcode the cursor cuts into; a
-`status` page sums whole shortcodes from kept per-status counts and walks
-only the rest of the cut one — but the page itself still tests each row
-until it has `limit` matches (SCALE-32). A client that wants everything with
-bodies calls `list {}` exactly as before and ignores the trailing `page`.
-The body is ~70 % of a row, and only the ticket page shows one — it comes
-from `get`.
-
-Via synapse (once on PATH — 4455 is inside the `_self scan` range):
-
-```sh
-synapse -P 4455 menger tickets health
-synapse -P 4455 menger tickets create --epic MNG --title "..."
-synapse -P 4455 menger tickets watch
-```
-
-Raw wire: JSON-RPC 2.0 over WebSocket. Every logical call is a
-`menger.call` subscription with `{method: "tickets.watch", params: {...}}`;
-events arrive as `result` notifications carrying `PlexusStreamItem`s.
-`web/index.html` is a complete, dependency-free client.
-
-`watch` is fed from a bounded broadcast (256 changes) and the server sends
-to a socket no faster than the client reads it, so a subscriber that falls
-far enough behind loses changes. It is told: one
-`{"type": "lagged", "missed": N}` data item where they were (SCALE-5),
-then the stream continues. A client that ignores event types it does not
-know is unaffected; one that keeps a copy should treat it as "fetch again
-what you show" — the Leptos app asks `extents` and its board's window again
-(SCALE-26), as after a reconnect.
+Every method returns a stream of typed events (`#[serde(tag = "type",
+rename_all = "snake_case")]`), ending with `done`; a domain refusal is an
+in-band `error` (or `not_found`, `ambiguous`, `refused`), and a value its
+type refuses is `-32602 invalid_params` naming the parameter, before the
+method runs. Flags below are synapse's spelling (`--kebab-case`); `[--x]` is
+optional. The schema's description of each method is the reference for
+what it yields.
+
+### `tickets`
+
+| method | flags | what it does |
+|---|---|---|
+| `health` | | version, unix time, ticket count |
+| `get` | `--id` | one ticket by id or path address |
+| `list` | `[--epic] [--status] [--parent] [--filter] [--keep] [--after] [--at] [--limit] [--summary] [--tz]` | tickets in store order, paged; a `page` event last |
+| `find` | `--query [--filter] [--after] [--limit] [--tz]` | id or title contains the query (the jump) |
+| `search` | `--query [--filter] [--offset] [--limit] [--tz]` | inside titles and bodies, best first, each hit with its passage |
+| `create` | `--epic --title [--kind] [--parent] [--blocked-by] [--severity] [--body] [--org] [--path]` | the next `EPIC-N`; born `Draft` |
+| `amend` | `--id [--title] [--body]` | replace a title and/or body, whole |
+| `update` | `--id [--title] [--body] [--kind] [--status] [--parent] [--severity] [--block] [--unblock] [--hidden] [--message] [--source]` | any part of a ticket in one write, all or none |
+| `update_many` | `[--ids] [--filter] [--max] [--kind] [--status] [--parent] [--severity] [--block] [--unblock] [--label] [--unlabel] [--message] [--source] [--tz]` | `update`'s change to many, all or none |
+| `set_status` | `--id --status [--message] [--source] [--restore-children]` | a status; `Canceled` cancels open descendants |
+| `set_kind` | `--id --kind [--status] [--message] [--source]` | a kind, and everything kept by kind |
+| `set_parent` | `--id --parent` | adopt or move a ticket |
+| `label` | `[--id] [--ids] [--add] [--remove]` | labels (`needs-you`, …) |
+| `rename` | `--id --to [--message] [--dry-run]` | into a subtask id under its own parent |
+| `reshortcode` | `--ids --to [--parent] [--new-scope] [--with-children] [--message] [--dry-run]` | move tickets into another shortcode, renumbered |
+| `archive` | `[--ids] [--filter] [--max] [--message] [--dry-run] [--tz]` | out of every view with the subtree |
+| `restore` | `[--ids] [--filter] [--max] [--with-children] [--message] [--dry-run] [--tz]` | back, with archived ancestors |
+| `delete` | `[--ids] [--filter] [--max] [--children] [--unblock] [--message] [--tz]` | gone for good, a tombstone kept (admin) |
+| `undelete` | `--ids` | back within 30 days (admin) |
+| `freeze` / `unfreeze` | `--id` | a scope that takes no new children or numbers (admin) |
+| `history` | `--id` | each status and kind transition, then `history_end` |
+| `watch` | `[--epic] [--filter] [--membership] [--revisions] [--tz]` | every change, open-ended |
+| `commits link` | `--commits [--id] [--ids]` | the commits that finished a ticket |
+| `commits unlink` | `--id --commits` | take them off |
+| `filters save` · `list` · `get` · `rename` · `delete` · `check` | `--name --filter` · — · `--name` · `--name --to` · `--name` · `--filter` | saved filters (FILTER-46) |
+| `nav groups` · `extents` | — | one roll-up per shortcode · where each shortcode ends |
+| `nav tree` | `--filter [--epic] [--parent] [--matches-only] [--keep] [--after] [--limit] [--tz]` | the nav under a filter |
+| `nav counts` | `[--filter] [--keep] [--tz]` | matches per shortcode |
+| `nav facets` | `[--base] [--filter] [--tz]` | the menus' counts per field and value |
+| `nav member` | `--ids --filter [--tz]` | which of these tickets a filter admits |
+| `revisions list` · `get` · `diff` · `restore` | `--id [--before] [--limit]` · `--id --rev` · `--id [--from] [--to] [--text]` · `--id --rev [--fields] [--message] [--source]` | a ticket's revisions (TICKETS-7) |
+| `subtasks create` | `--parent --title [--kind] [--body] [--blocked-by]` | the next free `<parent>.N`, hidden from the nav |
+| `subtasks list` | `--parent [--after] [--limit]` | a ticket's subtasks |
+| `work ready` | `[--epic] [--filter] [--after] [--limit] [--summary] [--tz]` | the ready set |
+| `work waves` | `--epics [--kinds]` | the order of work, in waves |
+| `work waves_under` · `waves_to` | `--id [--kinds]` | under one ticket · up to one ticket |
+| `work blockers` | `--id` | a ticket's blockers at their statuses |
+
+### `members`, `orgs`, `epics`, `session`, `auth`
+
+| method | flags | what it does |
+|---|---|---|
+| `members mine` | | who you are, your teams, your grants |
+| `members list` | `[--scope]` | the grants on the scopes you administer |
+| `members grant` | `--scope --role [--principal] [--team] [--everyone]` | a role on a scope |
+| `members revoke` | `--scope [--principal] [--team] [--everyone]` | take it away |
+| `members requests` | | who signed in holding nothing (admin of `*`) |
+| `members pairing` | `--code` | the machines waiting on a pairing code (TETHER-12) |
+| `members teams list` · `show` · `create` · `rename` · `delete` · `add` · `remove` | `[--org]` · `--team` · `--name [--org]` · `--team --to` · `--team` · `--team --principal` · `--team --principal` | teams (ACCESS-22) |
+| `orgs list` · `create` · `rename` · `delete` | — · `--name [--admin]` · `--name --to` · `--name` | organizations (ORG-4) |
+| `epics list` · `get` · `current` · `switch` · `dismiss` · `watch` | `[--archived] [--org]` · `--name [--org]` · `[--org]` · `--name [--org]` · `[--org]` · — | an organization's epics, and yours |
+| `epics create` · `rename` · `delete` · `set_default` · `archive` · `restore` | `--name [--org]` · `--name --to [--org]` · `--name [--org]` · `--name [--org]` · `--name [--dry-run] [--org]` · `--name [--org]` | an admin's |
+| `session whoami` · `providers` · `login` · `logout` | — · — · `[--ttl-secs] [--scope]` · — | the connection's identity; an agent's session |
+| `auth providers` · `login` · `signup` · `whoami` · `logout` · `requires` | — · `--flow` · `[--via]` · — · — · `--method` | the door (AUTH-7) |
+| `auth roles` · `role_set` · `grant` · `revoke` · `waiting` | — · `--role --grants` · `--principal --role --scope` · `--principal --scope [--role]` · — | roles and grants (admin) |
+
+### `ui`
+
+| method | flags | what it does |
+|---|---|---|
+| `push` | `--bundle --manifest --signature [--commit]` | store a bundle by hash, compiled and checked, and make it live, in one transaction |
+| `rollback` | `--to` | move the live pointer to a kept version |
+| `versions` | | every kept version, newest first, one `live: true` |
+| `preview` | `[--version]` | serve a kept version to the caller's sessions alone; none clears it |
+| `watch` | | `live` on every pointer move, `slot_changed` on every section change |
+| `slots list` | `[--layout]` | every section's assignment and the default it overrides |
+| `slots set` | `--layout --slot --component [--version]` | fill a section |
+| `slots clear` | `--layout --slot` | back to the default |
+
+## Tickets
+
+**Kinds.** `scope | execution | build | gap | spike` (AGS-13, the owner's
+closed five: a scope decomposes into children, a build produces capability,
+an execution carries out a procedure, a gap is a defect in shipped
+behaviour, a spike answers a question) and **`doc`** (SDLC-11), which is
+not work: born in the status `Doc`, which only a doc holds, and never moved
+(`set_status` on a doc is refused, and `Doc` on any other kind); never
+blocked, never a blocker, never ready; a roll-up's `done/total` ignores it
+(`docs` counts it apart). The first ticket of a shortcode is a scope or a
+doc.
+
+**Statuses.** `Draft`, `Pending`, `Ready`, `Coding`, `In Review`,
+`Blocked`, `Complete`, `Epic`, `Superseded`, `Canceled`, `Doc` — canonical
+spellings; `set_status` reads `active` as `Coding` and `in review` as `In
+Review` through `-p`, and synapse's `--status` flag takes the canonical
+ones only (ACCESS-8). A ticket is born `Draft` (TICKETS-13).
+
+**A kind changes only through `set_kind`** (SDLC-13), which moves
+everything kept by kind in one write: to a doc the status becomes `Doc`
+(refused while it waits on a blocker or one waits on it); from a doc the
+status becomes `--status` when given, else `Epic` for a scope and `Pending`
+otherwise; a shortcode's root never becomes a kind that roots nothing.
+
+**`update`** (MENGER-30) changes any part of a ticket in one write — each
+aspect by its own write's rules (`amend`, `set_kind`, `set_status`,
+`set_parent`, `create`'s for blockers), all asked before anything is
+written, a refusal naming every reason. `--severity none` clears the
+severity; `--block` / `--unblock` add and remove blockers. **`update_many`**
+(ACT-2) is the same to many tickets (`--ids`, or a `--filter` at most
+`--max`, default 500), all or none; `label` and `commits link` take `--ids`
+too.
+
+**`delete`** (ACT-5, admin) is refused while children or a waiting ticket
+point at one, unless told what moves (`--children reparent|delete`,
+`--unblock true`); a tombstone and the history stay, `get` answers
+`deleted`, the body is kept 30 days for `undelete`, and a number is never
+reused. Prefer `Canceled` or `Superseded` for work that is not done.
+
+**`reshortcode`** (ACT-6) moves tickets into another shortcode, renumbered
+in the order given; the old id is pinned to the new ticket (`get` says
+`moved_from`). **`rename`** (TICKETS-26) is the same write into a subtask id,
+`<parent>.N`, under its own parent. **Subtasks** (TICKETS-28) are
+`<parent>.N` tickets, `hidden` from the nav's views (TICKETS-27), listed by
+`subtasks list` and `list --parent`. **`freeze`** (TICKETS-6, admin) stops a
+scope taking new children and its shortcode new numbers until `unfreeze`.
+
+**History** (MENGER-13). Every status and kind change is a transition — who,
+from where (`source`: `app`, `api`, `pipeline`, `cascade`), why (`message`),
+caused by what — read with `history --id X`. `set_status … Canceled`
+cancels the ticket's open descendants in the same write; leaving `Canceled`
+with `--restore-children true` puts back what that cancel canceled.
+
+**Revisions** (TICKETS-7). Every write that changes a ticket's own fields
+keeps a revision in its transaction; `revisions list | get | diff |
+restore`; a restore is an `update` and itself a revision. `watch
+--revisions true` adds `revised`. A new write path goes through the store's
+`upsert` / `update_row` / `set_body` inside a write runner, or it keeps no
+revision (`tickets-api/src/store/revisions.rs`).
+
+**The archive** (ARCHIVE-2) is a mark apart from status: `archive` takes ids
+or a filter and archives each with its whole subtree; `restore` brings a
+ticket back with its archived ancestors (`--with-children`: the subtree
+archived with it). An archived ticket is in no view unless the filter names
+`archived`; `get` still answers it. `--dry-run true` writes nothing.
+
+**Search** (SEARCH-2) is SQLite FTS5 in the same file: every word required,
+prefixes and near typos too, best first, each `hit` with its passage; a
+`"quoted phrase"` is exact. `find` stays the jump by id or title.
+`--verify-derived` holds the index to the tickets.
+
+**The commits that finished a ticket** (SDLC-9): `commits link --id X
+--commits 77df9a0` (`repo@hash` for a commit outside menger), compared as
+text — the server has no repository.
+
+### Filters
+
+One flag in the filter language (FILTER-3, `tickets-api/src/filter.rs`),
+answered from the kept cells, never by testing a ticket:
+
+- **Predicates**: `status <name>`, `category <open|ready|active|review|done|dropped|static>`,
+  `kind <name>`, `severity <…>`, `blocked`, `ready`, `has commits`,
+  `menger doc`, `label <name>`, `in <SHORTCODE>`, `under <ID or SHORTCODE>`,
+  `epic <name>` (`epic any`), `archived`, `frozen`, `hidden`, `ticket <ID>`,
+  `saved "Name"` and `text "…"` (on rows; alone, as a top-level `and`
+  group).
+- **History** (MENGER-13, FILTER-52): `entered <status> [window] [by who]`,
+  `left …`, `moved …` (any transition), `changed …` (the last write),
+  `created …`, `by …`, `archived …`, `restored …`; a time is a modifier on
+  the rule before it (`status Complete after 2026-10-01`, `kind gap within
+  7d`). Windows: `within 12h`, `today`, `yesterday`, `this week`, `after`,
+  `before`, `between`; UTC unless `--tz Europe/Berlin`.
+- **Groups**: `in (A, B)`, `not …`, `(a or (b and c))` to any depth
+  (FILTER-36); a display part after `·` (`tree`, `flat`, `columns a, b`,
+  `order code`).
+- **Saved filters** (FILTER-46): `tickets filters save --name N --filter F`,
+  read back as `saved "N"`, expanded by the server.
+
+A word of a service v2 cut — `chatting`, `unread`, `deployed`,
+`deploying`, `failed`, `behind`, `ready for`, `requested`, `waiting`,
+`assigned`, `unassigned`, `asked`, `asking` and the rest of `filter.rs`'s
+`GONE` — is refused by name, never read as another cell.
+
+## Access
 
 ### Typed parameters (ACCESS-8)
 
-Every parameter of every activation is a type (owner, 2026-10-12: *"no
-more raw string passing in"*): a ticket is a `TicketRef`, a shortcode a
-`ShortcodeRef`, a filter a `FilterText`, a status a `Status`, a title a
-`Title` — `menger_tickets_api::vocab` holds them, each with **one rule**,
-and every `#[plexus_macros::activation]` is declared `typed_params`
-(MACRO-12), so a bare `String` parameter does not compile
-(`tickets-api/tests/param_types.rs` holds the flag on). The JSON is the
-string it always was (`tests/golden_wire.rs` holds every item a script of
-calls answers to main's bytes); the schema names the type (`$defs/TicketRef
-{ type: string }` behind a `$ref`), so synapse's `--help` and the SDK say
-it (`id: TicketRef`).
+Every parameter is a type (`tickets-api/src/vocab/`) with one rule — a
+ticket is a `TicketRef`, a filter a `FilterText`, a status a `Status`, a
+title a `Title` (≤ 1 KiB), a body a `Body` — and every activation is
+declared `typed_params` (MACRO-12), so a bare `String` parameter does not
+compile (`tickets-api/tests/param_types.rs`). A bad value is `-32602
+invalid_params` naming the parameter, before the method runs; what needs the
+store (a ticket that is none, a cycle) stays an in-band `error`. A blank
+optional value is refused, not none.
 
-| type | its rule |
-|---|---|
-| `TicketRef` | a ticket's key or any short form of its address, codes upper-cased: `mng-1` is `MNG-1` |
-| `ShortcodeRef`, `Under`, `Cursor` | a shortcode's code or address; a ticket or a shortcode; a page's `next` |
-| `MengerPath`, `CommitRef`, `Label`, `InputId` | `_MENGER/…`; a hex object name, `repo@` optional; a label; an input's id |
-| `Principal`, `ScopeRef`, `Ceiling`, `OrgId` | the identity layer's grammar; `*` / `acme:` / a shortcode; `role@SCOPE`; an org's name |
-| `Title`, `Body`, `Message`, `Reason`, `Query`, `Author` | not blank, ≤ 1 KiB; ≤ 64 MiB; trimmed, blank none; a message, not blank; a query; trimmed, not blank |
-| `FilterText`, `Zone`, `Timestamp` | the filter language reads it; an IANA name, UTC or an offset; RFC 3339 or unix seconds |
-| `Project`, `EnvironmentName`, `Release`, `ThemeName`, `ThemeScope`, `TokenName`, `TokenValue` | the deployments' and themes' own rules |
-| `Status`, `Kind`, `Severity`, `SeverityChange`, `CallerSource`, `InputSource`, `Role`, … | a closed enum of the canonical spellings, read leniently (`active`, `in review`, any case) |
+### Capabilities, reads, watches and writes (ACCESS-9..12)
 
-**A bad value is refused before the method runs** — `-32602
-invalid_params`, naming the parameter (MACRO-15), where it was an in-band
-`error`:
-
-```json
-{"code": "-32602", "error_kind": "invalid_params", "message": "Invalid params: status: unknown status 'wibble' (expected Pending, Ready, …)", "type": "error"}
-```
-
-An anonymous or refused caller still gets the auth refusal first. What
-needs the store — a ticket that is none, a doc's lifecycle, a cycle, a
-blocker out of reach — stays the in-band `error` it was; `update` still
-names every such reason at once, and an unknown kind, status or severity
-is refused at dispatch, alone. A blank optional value (`--ticket ""`) is no
-value of its type and is refused where it was none (a blank `text` or
-`filter` is still no filter). synapse checks an enum flag itself: `--status
-active` is refused before it is sent (`-p '{"status": "active"}'`, the app
-and REST still send it); every invocation in this file and AGENTS.md is
-canonical.
-
-### Capabilities (ACCESS-9)
-
-What the gate does not decide, menger proves with a **capability**: a value
-only one module can make, so holding it is the proof (ACCESS-1, the
-capability-types pattern). `tickets-api/src/access/` (server-only):
+What the gate does not decide, menger proves with a **capability**, a
+value only one module can make (`tickets-api/src/access/`):
 
 | type | holding one proves | minted by |
 |---|---|---|
-| `VerifiedUser` | signed in (ACCESS-24: always), the sign-in alive and unexpired, the principal parsed by the identity layer — never its `user_id` instead —, the ceiling readable, the grants resolved | `Access::verify(&AuthContext)`, the frame's resolver (ACCESS-13: and the grant the call was admitted for); `verify_now` the same, outside a dispatch; `verify_call` for an activation not on the frame yet |
-| `Reach` (inside it) | its grants — direct ∪ its teams' (`team:<name>`; ACCESS-22 keeps the teams) ∪ the operator's — each scope compiled (`*`, `acme:`, a shortcode and those hosted under it, `under ID`, `ID`), the ceiling likewise, at the grants generation of the moment | `verify` |
-| `Permit<Viewer \| Editor \| Admin>` | a role the mark admits, on the ticket it names, by the kept tree as it stands (editor ⇒ viewer) | `VerifiedUser::permit(&TicketId, &Store)` |
-| `AdminOf` | admin on the scope it names (or one covering it), within the ceiling | `VerifiedUser::admin_of(&Scope, &Store)` |
-| `System` | the holder opened the store and acts for no user | the store, once (`Store::system`; the access layer takes it at `attach`) |
+| `VerifiedUser` | signed in, the sign-in alive, the principal parsed, the grants resolved into a `Reach` | `Access::verify`, the frame's resolver |
+| `Permit<Viewer \| Editor \| Admin>` | a role on the ticket it names, by the kept tree | `VerifiedUser::permit` |
+| `AdminOf` | admin on the scope it names | `VerifiedUser::admin_of` |
+| `System` | the holder opened the store and acts for no user | the store, once |
 
-`Hidden` is the one answer for a ticket that is not there and one that is
-not the caller's; `Refusal` every other reason (signed out, expired, no
-principal, held nowhere). A read's reach is predicates built from the
-compiled scopes — never filter text formatted and read back — and a watch
-compares a `ReachKey`, not a string. The **grants generation**
-(`Store::grants_generation`) moves on every grant, revoke and team change.
-None has a public field or constructor, a `Default` or a `Deserialize`
-(`compile_fail` doctests hold it); `for_tests` constructors exist under
-`cfg(test)` and the `test-support` feature, never in the server. ACCESS-10
-(reads take `&VerifiedUser`), ACCESS-11 (writes take a `Permit`) and
-ACCESS-12 (watches re-verify on the generation) build on these.
+None has a public field or constructor (`compile_fail` doctests hold it);
+`for_tests` constructors exist under `cfg(test)` and the `test-support`
+feature. `Hidden` is the one answer for a ticket that is not there and one
+that is not the caller's.
 
-### Reads through a reach (ACCESS-10)
-
-Every public read of the store takes its **reader**
-(`tickets-api/src/store/seen.rs`): a `VerifiedUser` (answered from where
-the call's grant is held), one reading through another of its grants
-(`user.reading(grant)`, `user.sight()` for `tickets.get`), or the `System`
-(the code that opened the store: the builder, `--verify-derived`, the access
-layer's own reads of the grants). The trait is sealed and the unscoped
-forms are the store's own, so a read that forgets its caller does not
-compile (`compile_fail` doctests). The store ANDs the reader's reach into
-whatever the read asks, and answers only what it admits:
-
-| read | a ticket out of reach is answered as |
-|---|---|
-| `get`, `history`, `blockers`, `inputs { ticket }`, `waves_under`, `waves_to`, `tombstone`, `queue_*` | none: `not_found`, exactly as a ticket that is not there |
-| `list`, `work.ready`, `find`, `search`, `nav.counts`, `nav.facets`, `nav.member`, `nav.tree`, `inputs.list`, `comments`, `count` | not there: not listed, counted or admitted |
-| an `after` cursor naming one | a cursor into nothing (`after: no ticket …`) |
-| a comment on one | no comment: `no comment N` beside the newest the reader sees; no cursor |
-| a blocker of a visible ticket | not answered by `blockers`, nor named as dangling |
-| `waves` | not placed, not named in `waiting_on`; it still holds its waiter back |
-| `components` | those owned by a ticket in reach, references cut to it |
-| `groups`, `extents` | a shortcode the reader sees nothing of is never named; a root or host out of reach is none |
-| `tree` | never a row: a hidden parent answers nothing; a shortcode whose root is hidden has at its top the tickets of it the reader sees whose parent it does not (ACCESS-1 decided 10) |
-
-**A visible row names no hidden ticket.** Its `blocked_by`, `unlocks` and
-`parent` lose the ids the reader may not see, counted instead:
-`hidden_blocked_by`, `hidden_unlocks`, `parent_hidden` — so readiness stays
-honest (the placement is still the store's). The three are omitted when
-zero/false, so for a reader who sees everything nothing on the wire changes
-(`tests/golden_wire.rs`). A reach is closed under the kept tree (every scope
-holds a ticket's descendants), so a visible ticket's children are all
-visible and `child_count` needs no redaction — ACCESS-21: unless it holds
-a ticket alone (`ticket ID`), when a visible row's `child_count` is the
-children the reach admits. A reach of one ticket reads that ticket (it was
-a reach no read could narrow to, and read nothing, until ACCESS-21).
-`store/tests_reach.rs` holds a test per ACCESS-3 read gap and a property:
-for random trees, grants and reads, nothing answered or named lies outside
-the reach, and the tree reaches everything in it.
-
-### Watches through a reach (ACCESS-12)
-
-An open watch — `tickets.watch` (plain, filtered or `membership`),
-`comments.watch`, `themes.watch`, `deployments.watch`, `await_reply` —
-holds its caller: the `VerifiedUser`, the `AuthContext` it was verified
-from and the gate's reach it was admitted with
-(`tickets-api/src/access/following.rs`). It is verified again when, and
-only when, something that could change the answer moves: the **grants
-generation** (a grant, a revoke, a team or an organization changed, a
-role's grants edited — `Store::grants_moved` wakes the watch at once, so a
-quiet watch is not waiting for the next write), a **sign-out**, or the
-sign-in's **expiry**; at each change it hears, and every 15 s of a quiet
-watch whose identity is a session, its sign-in's liveness is asked (a
-lookup, no store read — a sign-out by the shell's `/logout` or the login
-backend's own path, which do not pass through the access layer, is found
-so). Then:
-
-- **refused** — signed out, expired, its grant held nowhere, a reach that
-  reaches nothing — the stream ends with one `watch_closed { reason,
-  message }` (`reason`: `signed_out`, `expired`, `revoked`, `refused`) and
-  nothing after it;
-- **a reach that moved** — the watch hears through the new one from that
-  moment (a filtered watch's filter compiled again within it), and says what
-  entered and left what it hears, as a filtered watch says a write's moves:
-  `entered` / `left` per ticket, past 256 one `recount` per shortcode (a
-  plain watch too); the components it no longer sees as
-  `component_removed`.
-
-**Every change is cut to the reach as a read is** (`store/watching.rs`,
-`Store::heard`): one `match` over `Change` with no `_` arm classifies it —
-about one ticket, several, a shortcode (its group, by its root), a
-component (its owner), or the watch's own cell moves — so a new change does
-not compile until it is placed. A change about a hidden ticket is not
-heard; one about several is cut to those in reach; every row it carries is
-redacted with the `hidden_*` counts, and a hidden id beside it is dropped
-(a list: `blocked_by`'s `added`, a tombstone's `reparented`) or blanked (one
-name: `unlocks_changed`'s `added`, `child_removed`'s `removed`, `""`). The
-reach is compiled once a watch (and again when it moves) — not parsed per
-change; `store/tests_watching.rs` measures many watchers hearing many
-changes.
-
-### Writes through a permit (ACCESS-11)
-
-Every public write of the store takes the **proof** that its caller may
-make it, and the proof carries what it is for
-(`tickets-api/src/store/writs.rs`): a `Permit<R>` its ticket's id — the
-write changes that ticket and no other, *the ticket checked is the ticket
-written* — an `AdminOf` or an `On<R>` its scope, or the `System` (the code
-that opened the store: seeding, the purge, the access layer's own
-`auth.grant` / `auth.revoke` / `auth.role_set`, tests). An id is not a
-permit, a permit for one ticket cannot be made for another, and a viewer's
-is not an editor's (`compile_fail` doctests). The activations mint the
-proofs through the `VerifiedUser` (`activation/writes.rs`); the store checks,
-under its write-serial lock, that what the write is given names exactly
-what its proofs are for — a stale or mismatched proof writes nothing.
-
-| write | takes |
-|---|---|
-| `set_status`, `set_kind`, `amend`, `commits.link`, `commits.unlink`, `label`, `inputs.ask`, `inputs.answer`, `inputs.clear`, `inputs.close`, `inputs.reopen`, `queue`, `unqueue`, `snooze`, `request_changes` | `Permit<Editor>` for the ticket |
-| `create`, `notes.upgrade` | a `Filing`: editor's permit on the parent (else the shortcode's root); a new shortcode, `On<Editor>` `*` or its organization; a viewer's permit per `blocked_by` — or a forward reference, minted only for one who would see the ticket if it were one (it holds the whole shortcode) |
-| `set_parent` | a `Move`: editor's permits on the child, the parent it has now (checked under the lock: one that moved since refuses) and the one it goes to; a shortcode's root re-hosts it, so `AdminOf` the host it leaves (itself, hanging nowhere) and the one it joins |
-| `update` | an `Updating`: the ticket's permit, a `Move`'s proofs for a parent, a blocker proof per id it blocks or unblocks (in another shortcode, the editor's too) |
-| `update_many`, `label` / `commits.link` over `ids`, `reshortcode` | an editor's permit per ticket selected (the store checks they are exactly its selection) |
-| `delete` | `Permit<Admin>` per ticket that goes; `undelete`, `AdminOf` each one's shortcode |
-| `comments.add` / `resolve` / `reopen` | a viewer's (an editor's) permit on the comment's ticket; nothing more for a comment on the app |
-| `media.put` | `Permit<Editor>` for the ticket the image is for (`OnMedia`); with no ticket (an image on the app), nothing more than the call's grant — the image is then its putter's |
-| `members.grant` / `revoke` | `AdminOf` exactly its scope, minted for a signed-in admin (ACCESS-24: there is no other) |
-| `orgs.create` · `rename` · `delete` | `AdminOf` `*` · the organization (or `*`) |
-| `themes.define` · `themes.set` | `On<Editor>` `*` · `AdminOf` `*` for the site, `On<Editor>` the shortcode |
-| `deployments.record` | `On<Deployer>` the project's shortcode |
-
-What a caller may not see is answered as what is not there: a permit for a
-hidden ticket is `not_found`, exactly as a missing one, and a refusal names
-no ticket out of reach — a doc's place in the graph, a parent chain, a
-component's owner, a shortcode's root, a path's holder, the id a birth would
-take (ACCESS-3 #8; one who sees everything hears them whole). For a caller
-allowed to write nothing on the wire changed. `store/tests_writs.rs` holds
-the proofs' rule and ACCESS-3 #1, #2, #11; `tests/members.rs` #2 and #8 over
-the socket.
+- **Reads** (ACCESS-10, `store/seen.rs`) take their reader — a
+  `VerifiedUser` or the `System` — and answer only its reach: a hidden
+  ticket is `not_found`, never listed or counted, and a visible row names
+  no hidden ticket (`hidden_blocked_by`, `hidden_unlocks`, `parent_hidden`
+  count them). `store/tests_reach.rs` holds it.
+- **Watches** (ACCESS-12, `access/following.rs`, `store/watching.rs`) hold
+  their caller and are verified again when the grants generation moves, a
+  sign-out or the expiry comes; a moved reach says `entered` / `left`, a
+  refused one ends with `watch_closed { reason }`. Every change is cut by
+  `Store::heard`, whose `match` has no `_` arm.
+- **Writes** (ACCESS-11, `store/writs.rs`) take the proof for what they
+  write — a `Permit` carrying the ticket's id, `AdminOf` / `On<R>` for a
+  scope, `System` for what acts for no user — minted in
+  `activation/writes.rs` and checked by the store under its write lock.
+  Store tests write as `SYS.permit(id)`, `SYS.moving(a, b)`,
+  `SYS.updating(id)`.
 
 ### The frame (ACCESS-13)
 
-`tickets` is declared on **the frame** every activation takes from here
-(`tickets-api/src/activation/mod.rs`; `comments`, `members` and `session`
-since ACCESS-19, their logic beside each in `comments_activation/` and
-`members_activation/`, `session.providers` `public`):
-
-```rust
-/// Plans as data — create, query, and watch the work DAG.
-#[plexus_macros::activation(auth = "required", request = MengerRequest, typed_params, roles(…))]
-impl TicketsActivation {
-    /// Set a ticket's status (…).
-    ///
-    /// The long prose: what it yields, what it refuses.
-    #[plexus_macros::method(group = "write", target = "id", example(…))]
-    pub async fn set_status(
-        &self,
-        #[from_auth(self.access.verify)] user: VerifiedUser,
-        /// Ticket id, e.g. MNG-2.
-        id: TicketRef,
-        /// New status: …
-        status: Status,
-        …
-    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        answered!(store = self.store.clone(), user, Some(id.to_string()) => {
-            let on = permit::<Editor>(&store, &user, &id)?;
-            let act = act_of(&user, source, message)?;
-            Ok(change_event(store.set_status_by(on, status, act, restore_children.unwrap_or(false)).await?))
-        })
-    }
-}
-```
-
-- **The caller is resolved before the body runs** — and before a
-  parameter is read: `#[from_auth(self.access.verify)]` runs
-  `Access::verify` in the dispatch, which reads the gate's reach for the
-  call (`current_reach`) and answers a `VerifiedUser` holding it. No method
-  takes `auth: Option<&AuthContext>` or `reach: Reach`, and none admits by
-  hand. Its refusal is typed (MACRO-14): a sign-in that does not stand is
-  `-32001 unauthenticated`, anything else `-32003 forbidden`; a call with no
-  identity at all is refused `unauthenticated` by the dispatch itself. The
-  gate refuses an anonymous call before any of it (only the auth door is in
-  the anonymous view). ACCESS-24: there is no login off — `Access::open` and
-  the resolver's "anyone" went; menger's own `menger.call`
-  (`menger::calls`) hands a call that carries no identity the anonymous one
-  (`calls::caller`), which the gate holds to the anonymous view.
-- **Descriptions are doc comments** — the method's `///` (its first
-  sentence is what synapse's listing shows; the whole is the schema's
-  `description` until MACRO-19 splits off the long description) and each
-  parameter's — no `description =`, no `params(…)`. `values(…)`, `example(…)`,
-  `group`, `target` stay in the attribute.
-- **A body is a few lines** (at most 15, `tickets-api/tests/sizes.rs`): a
-  permit or a scoped read, then one helper — `answered!` (one event: its
-  statements end in `Ok(event)`, every `?` a `Failed`, said by
-  `events::answer`: `not_found` named as asked, `body_too_large`, an
-  ambiguity veiled, any other refusal naming nothing out of reach) or a
-  `*_stream` beside the file (`reads.rs`, `update.rs`, `delete.rs`,
-  `queue.rs`, `watch.rs`, …). A watch follows the resolved user
-  (`Following::of`).
-- **The children** — `tickets inputs`, `commits`, `nav`, `work`,
-  `components` (ACCESS-14..18) — each a file beside it
-  (`activation/<name>.rs`), mounted with `#[plexus_macros::child]`; their
-  methods left `tickets` for `tickets.<child>.<method>`, a wire break
-  taken on purpose (owner, 2026-10-09), and every client moved with them
-  (ACCESS-20): the app, the frames' SDK, the REST bridge
-  (`/rest/tickets.<child>/<method>`), the scripts and the docs. The table:
-
-  | was | is |
-  |---|---|
-  | `tickets.inputs`, `answer`, `clear_answer`, `close_input`, `reopen_input` | `tickets.inputs.{list, answer, clear, close, reopen}` |
-  | `tickets.link_commits`, `unlink_commits` | `tickets.commits.{link, unlink}` |
-  | `tickets.groups`, `extents`, `tree`, `counts`, `facets`, `member` | `tickets.nav.{groups, extents, tree, counts, facets, member}` |
-  | `tickets.ready_set`, `waves`, `waves_under`, `waves_to`, `blockers` | `tickets.work.{ready, waves, waves_under, waves_to, blockers}` |
-  | `tickets.components` | `tickets.components.list` |
-
-  synapse spells a child as a word: `menger tickets work ready`,
-  `menger tickets commits link --id X --commits 77df9a0`. plexus-macros
-  refuses an activation with no method (MACRO-18), so a child is mounted
-  in the build that moves its methods in.
-- **A mounted child** — `tickets commits` (ACCESS-15: `link`, `unlink`,
-  were `link_commits`, `unlink_commits`) — is on the wire at
-  `tickets.<child>.<method>` (`synapse … menger tickets commits link --id X
-  --commits 77df9a0`), its Rust client `client.commits()` (`CommitsClient`),
-  the SDK's `tickets/commits/` (`scripts/sdk-codegen.sh` generates a child
-  beneath its parent and skips the mount itself). Its grants: its own
-  `roles(...)` say `commits.link`; the hub (MACRO-20) gates a child's call
-  by its whole path — `tickets.commits.link`, on the method's own `target`
-  — seeds the child's roles qualified the same way in `declared_roles`,
-  and keeps the child's entry in a caller's view when the caller holds
-  something below it. The call reaches the child with the caller whole
-  (`SameService`: principal, session, ceiling); a child that must not see
-  the caller's session says `#[plexus_macros::child(forward =
-  "identity_only")]`.
-- **`tickets inputs`** (ACCESS-14) is mounted: `list` (was `tickets.inputs`),
-  `answer`, `clear` (was `clear_answer`), `close` (was `close_input`),
-  `reopen` (was `reopen_input`), at `tickets.inputs.<method>` —
-  `synapse -P 4455 menger tickets inputs list --state open` — and
-  `client.inputs()` on the Rust client (MACRO-16). An answer's and a clear's
-  `source` is no parameter any more: the server says it from the verified
-  caller (ACCESS-3 #12) — `app` for a person signed in through a provider,
-  `api` for an agent's key. Its grants and
-  what it inherits are a child's, as above.
-- **`tickets work`** (ACCESS-17) is mounted: `ready` (was `tickets
-  ready_set`), `waves`, `waves_under`, `waves_to`, `blockers`, on the wire
-  as `tickets.work.<method>` (`synapse -P 4455 menger tickets work ready`;
-  the Rust client's `client.work()`); `blockers` ends with
-  `hidden_blockers { count }` when the caller is not shown some. Its
-  grants and what it inherits are a child's, as above. In a frame,
-  `menger.tickets.work.waves` / `.blockers` and `menger.call('work.waves')`
-  (SDK 2.0, ACCESS-20).
-- **`tickets nav`** (ACCESS-16) is mounted: `groups`, `extents`, `tree`,
-  `counts`, `facets`, `member` are `tickets.nav.<method>` on the wire
-  (`synapse -P <port> menger tickets nav groups`), `client.nav()` from the
-  Rust client, `menger.tickets.nav` in a frame's SDK (its host answers
-  `menger.call('nav.groups')`); the old `tickets.groups` … are gone.
-  Its grants and what it inherits are a child's, as above.
-- **`tickets components`** (ACCESS-18) is mounted: `list` (was
-  `tickets.components`) at `tickets.components.list` (`synapse -P <port>
-  menger tickets components list`), `client.components()` from the Rust
-  client, and in a frame `menger.tickets.components.list()` (SDK 2.0;
-  `menger.call('components.list')`). It answers through the caller's
-  reach: only components whose owner the caller can view, each with only
-  the references it can view. Its grants and what it inherits are a
-  child's, as above.
-- The schema lists what the server injects (`auth`, `user`) with an
-  `x-plexus-source`; synapse shows them as server-supplied, and the SDK's
-  drift guard (`sdk_manifest.rs`, `scripts/sdk-codegen.sh`) drops them.
+Every activation of menger's is declared `auth = "required", request =
+MengerRequest, typed_params, roles(…)`; every method takes `#[from_auth(self.access.verify)]
+user: VerifiedUser`, resolved before its body runs and before a parameter is
+read; its description and each parameter's are `///` docs; and its body is
+at most 15 lines — a permit or a scoped read, then `answered!` or a
+`*_stream` beside it (`tickets-api/tests/sizes.rs`). A child (`tickets
+commits`, `nav`, `work`, …) is a file beside the activation mounted with
+`#[plexus_macros::child]`, on the wire as `tickets.<child>.<method>` and
+gated by that whole path (MACRO-20).
 
 ### Addresses and namespaces (ORG-3)
 
-A shortcode is unique only within its **namespace** — its organization and
-the shortcode it is hosted under (none for a root). Two shortcodes named
-THEME, one under MENGER and one under PLEXUS, both exist; a second THEME
-under MENGER is refused. Every ticket and every group carries:
-
-- `epic` — the shortcode's letters (`THEME`), what a reader types and a row
-  shows; never identity (in Rust it is `Code`, which keys no map);
-- `shortcode` — the store's identity of it (`ShortcodeId`): the code itself
-  for every shortcode made before ORG-3, `CODE.N` for a namesake made since;
-  a ticket's key (`id`) is `{shortcode}-{seq}`, so every id that existed
-  before ORG-3 is unchanged;
-- `address` — the full address, `org:ROOT/…/SC-N` (a group's without
-  `-N`): `hypermemetic:MENGER/ACCESS/ORG-3`.
-
-Events that name a shortcode (`extent`, `count`, `entered`, `left`,
-`recount`) carry `shortcode` beside `epic`.
-
-**A code may hold hyphens** (ORG-9; owner, 2026-10-16: *"synapse-cc-1
-should be a valid name … only the final -N is protected"*). A code is ASCII
-letters and digits, at most 32, in segments joined by single hyphens —
-`SYNAPSE-CC` is a shortcode and `SYNAPSE-CC-1` its first ticket. A ticket's
-id splits at its **last** hyphen. No leading, trailing or doubled hyphen,
-and no segment after the first all digits, so `A-1` is always ticket 1 of
-A and never a shortcode, and every name reads one way. `in SYNAPSE-CC` is
-those letters (SYNAPSE is another shortcode); `under SYNAPSE-CC-1` is the
-ticket and its descendants. The database keeps `epic` and `seq` apart, so
-no row is rewritten.
-
-**Naming a ticket.** Every method that takes a ticket or a shortcode takes
-any short form of its address — the full one, any subsequence of its hosts
-(`MENGER/ORG-3`, `ACCESS/ORG-3`), the org alone (`hypermemetic:ORG-3`), the
-bare id, a path address (`PLX/_MENGER/board`) — case-blind in the codes. An
-id that existed when the file met ORG-3 is **pinned**: it names that ticket
-forever, whatever namesake is made later. A name that fits two is refused
-in-band, nothing read or written:
-
-```json
-{"type": "ambiguous", "id": "THEME-1", "candidates": ["hypermemetic:MENGER/THEME-1", "hypermemetic:PLEXUS/THEME-1"]}
-```
-
-**Writes that make or move a shortcode** check (namespace, code) and refuse
-a clash naming the one there (`hypermemetic:MENGER/THEME is already
-there: a shortcode is unique in its namespace, and hypermemetic:MENGER holds
-a THEME — give another code, or another place (nothing was created)`): `create` of a scope or a
-doc under another shortcode's ticket (it starts a new shortcode there,
-hosted where its parent is — a namesake if the letters are taken
-elsewhere); `set_parent` / `update --parent` of a root (the shortcode's
-namespace moves with it, and so does every address under it — each moved
-group is a `group_changed`); `set_kind` (a ticket that becomes its
-shortcode's root); `notes upgrade`; `undelete`. A build or an execution
-never starts a shortcode: it files into the one its `--epic` names.
-
-**A scope roots its own shortcode** (ORG-5; owner, 2026-10-13: *a child
-scope roots its own shortcode*). A scope is born only as its shortcode's
-root: `create --kind scope --parent X` naming X's shortcode as `--epic` is
-refused (`a scope under X roots its own shortcode; pass a new --epic`), and
-with a new `--epic` it is that shortcode's `-1`, hosted under X. `set_kind`
-(and `update --kind`, `update_many --kind`) to a scope is refused for a
-ticket below its shortcode's root (`ScopeNotRoot`, naming `reshortcode
---new-scope` as the way); `notes upgrade` is a create and takes the same
-rule. A root goes between scope and doc as before. A scope that sits inside
-its parent's shortcode from before ORG-5 moves out with `reshortcode --ids X
---to NEW --with-children true` (it becomes NEW-1, its tree with it);
-`scripts/org-5-move.sh PORT` moves the tracker's.
-
-```sh
-synapse -P 4455 menger tickets create --epic THEME --kind scope --parent PLEXUS-1 --title "the platform's themes"
-synapse -P 4455 menger tickets create --epic PLEXUS/THEME --title "a build in it"
-synapse -P 4455 menger tickets get --id PLEXUS/THEME-1
-```
-
-**Filters and search.** `in THEME` matches the letters, wherever hosted
-(every THEME); `under X` binds one: a shortcode whose identity is `X` first
-(so a filter written before a namesake keeps its meaning), else the one
-shortcode or ticket the address names — a name that fits several is
-refused (`under THEME/CSS` names more than one). `find` and the palette
-also match the shortcode's letters alone, partial (`the` finds every
-THEME), and an address (`MENGER/ACCESS/ORG`); every hit shows its full
-address. `search` (SEARCH-2) still indexes titles and bodies only.
-
-**Stored.** Form 11 adds three tables beside the tickets: `orgs`
-(`hypermemetic` is 1), `shortcodes (id, org, host, code, pinned)` with a
-unique index on `(org, host, code)`, and `pins (text, ticket)`. A form-10
-file gains them at its first open, in place, with nothing built again:
-every shortcode its code, in hypermemetic, in the namespace where its root
-hangs; every id and tombstone pinned. `--verify-derived` checks the index:
-every ticket's shortcode registered, no two of one code in one namespace,
-each stored host where its root hangs, every full address distinct, every
-pin a ticket or a tombstone.
-
-### Organizations (ORG-4)
-
-Every ticket and every shortcode is in exactly one **organization**;
-today's tracker is `hypermemetic` (ORG-1). Owner, 2026-10-13: *"we need to
-be able to easily create new orgs and scope roles to them."* An
-organization is a name — lower-case letters, digits and `-`, unique
-app-wide among every name an organization has or had — and one call to
-make (the `orgs` activation; its logic is `tickets-api/src/store/orgs.rs`):
-
-| method | who | yields |
-|---|---|---|
-| `orgs.list {}` | any member (viewer, editor) | one `org { name, aliases, roots, shortcodes, tickets }` per organization the caller holds a role in — every one for a role on `*`, and with login off |
-| `orgs.create { name, admin? }` | admin on `*` | `created { org, admin }`: the organization, empty, and `admin`'s grant of admin on `name:` (in one transaction) |
-| `orgs.rename { name, to }` | admin on the org, or on `*` | `renamed { from, org }`: the old name becomes an alias — every address and grant scope written with it keeps resolving; every grant on the org and every full address moves to the new name |
-| `orgs.delete { name }` | admin on the org, or on `*` | `deleted { name, grants }` — refused while it holds a shortcode (a ticket, or a deleted ticket kept for its undo), and for the first organization; its grants go with it |
-
-An organization the caller holds no role in is `not_found` to it (never
-refused by name). Tickets go into one by their address — `--epic acme:MENGER`
-— or by `tickets.create --org acme`; with neither, a create goes to the
-caller's **only** organization, and is refused, naming them, when it holds
-roles in several and the epic names no shortcode in exactly one of them. A
-new root in an organization takes `tickets.create` on it (`acme:`), not on
-`*`.
-
-```sh
-synapse -P 4460 -t "$ADMIN" menger orgs create --name acme --admin key:9f86…
-synapse -P 4460 -t "$ACME" menger tickets create --epic MENGER --kind scope --title "acme's menger"   # acme:MENGER-1
-synapse -P 4460 -t "$ACME" menger members grant --principal key:4b… --scope acme: --role editor
-synapse -P 4460 -t "$ACME" menger members grant --principal key:4b… --scope acme:MENGER --role viewer
-synapse -P 4460 -t "$ADMIN" menger orgs rename --name acme --to acme-co
-```
-
-**A grant's scope** (ACCESS-37's grammar, stored as text in `members`):
-`*` — every ticket; `org:` — every ticket in that organization; `org:ID` —
-a shortcode in it, by its identity (`hypermemetic:IDENTITY`,
-`acme:MENGER.12` for a namesake), and every shortcode hosted under it. A
-reader writes a shortcode by any short form of its address (`IDENTITY`,
-`acme:MENGER/THEME`), and `members.grant` / `auth.grant` keep it by
-identity, so a grant follows its shortcode wherever its root moves.
-ACCESS-21 adds `under ID` and `ID` (`members::Scope`, one variant each). An
-org admin (admin on `acme:`) grants and revokes inside acme and nowhere
-else; `members.list` shows them acme's grants.
-
-**What a reader sees.** A reader holds roles in some organizations; every
-read answers from where its grant is held, as before — `under acme:` is the
-filter language's every ticket in acme (bound to its roots), so another
-organization's tickets, shortcodes, counts and groups are not in the
-answer, and `get` of one is `not_found`. A short form is read in the
-reader's organizations: `get --id MENGER-2` by a reader of acme alone is
-acme's MENGER-2 even where hypermemetic's is pinned to the same text; an
-`ambiguous` answer names only candidates in the reader's organizations
-(none left: `not_found`). The gate decides a **write** before the method
-reads anything, from the whole store, so a short form there must fit one
-ticket (`acme:MENGER-2` always does); a write on another organization's
-ticket is refused naming the ticket as written — the same words as for a
-ticket that does not exist (`needs tickets.set_status on PLEXUS-2`).
-
-**Where a target lives** (the gate's `Resolve::chain`): the ticket as
-written, its shortcode `org:ID` and bare `ID`, itself and its ancestors,
-each hosting shortcode the same way, and last its organization, `org:` —
-so a membership on `acme:` reaches every ticket in acme, and a session's
-ceiling minted before ORG-4 (`editor@IDENTITY`) still holds.
-
-**Migration.** No stored form moves (ORG-3's form 11 made `orgs`); the file
-gains `org_aliases` beside it. The first open by this build moves every
-grant from before organizations into its own — `IDENTITY` becomes
-`hypermemetic:IDENTITY`, `*` stays site-wide — durably, once (`ORG-4:
-moved N grant(s) …`). An older build reads the moved grants as scopes it
-cannot place: it holds them nowhere (fail closed); promote's rollback
-restores the backup it took first.
-
-**In the app**: the header shows an organization switcher when the reader
-holds roles in more than one; the URL carries the choice (`o=acme`, carried
-from route to route as `g=` is, and kept per viewer), and every surface the
-lens filters reads within it (`under acme:` ANDed into each level's
-effective filter: the board, the nav, the wave boards, the inputs page, the
-palette).
-
-### Epics (ORG-13, ORG-23)
-
-An **epic** is a level of the organization that holds shortcodes:
-organization → epic → shortcode → ticket. A new epic starts empty, and a
-shortcode's code is unique within (organization, epic, host), so `MENGER-1`
-can be born again in one, numbered from 1. Every organization starts with
-`genesis`, which holds everything made before epics (the store's first open
-by this build puts every shortcode there and writes nothing else); its
-addresses name no epic (`hypermemetic:MENGER/ORG-3`), every other epic's do
-(`hypermemetic:fresh:MENGER-1`). Inside the store the level is an *era*
-(`eras`, `era_choices`, `shortcodes.era`): `epic` already names a
-shortcode's letters and a scope's status.
-
-- **The `epics` activation**: `list` (`--archived true` the archived too),
-  `get --name`, `current` (with `moved`: a move an archive made for you that
-  you have not dismissed), `switch --name` (a viewer's own setting: the epic
-  it is in), `dismiss` (the move's notice, gone on every device) and
-  `watch` (`epic_changed` for a create, rename, archive, restore or default
-  move in your organizations; `moved` to the one an archive moved) — and,
-  admin on the organization, `create`, `rename` (the old name stays an
-  alias: filters, addresses and `switch` that name it still work),
-  `delete` (only empty, never the first), `set_default`, `archive` and
-  `restore`. Each takes `--org` (default: your own). `epics list` says per
-  epic `default`, `members_on` (the principals reading in it) and
-  `archived { at_unix, by }`.
-- **Which epic you are in** (ORG-23): your `switch`, else the
-  organization's **default** — `genesis` until an admin moves it
-  (`set_default`). Creating an epic moves nobody. A short form (`MENGER-1`)
-  resolves in your epic first, then as before (a pin, then every match); an
-  address with an org and no epic names the first.
-- **Archive** (ORG-23, admin): `epics archive --name spring` — one write:
-  the epic is marked archived, everyone on it (by choice, or by default)
-  moves to the **next newer** live epic, or the next older when it was the
-  newest, the default moves the same way when it was the default, and each
-  person moved is told once (`current`'s `moved`, `watch`'s `moved`; the
-  app's notice). `--dry-run true` answers the same `archived { moved, to,
-  tickets }` and writes nothing. The last live epic is refused, in band.
-  Nothing switches to, is made in or moves into an archived epic. Its
-  tickets leave every view — `epic any` is the live epics — unless the
-  filter names it (`epic spring`) or `archived`; `get` and links still
-  answer them, with `epic_archived { name, at_unix, by }`. `restore` brings
-  it back and moves nobody back.
-- **Reads**: once an organization holds two epics, every read that takes a
-  filter — and `list`, `counts`, `work ready`, `search`, `nav groups` /
-  `extents` without one — answers your epic unless the filter names one:
-  `epic fresh`, `epic hypermemetic:fresh`, `epic any`. A watch with a filter
-  likewise; an unfiltered watch hears everything. `get` answers any epic.
-- **Moving in by hand**: the address names the epic —
-  `tickets reshortcode --ids MENGER-7,MENGER-9 --to hypermemetic:fresh:MENGER`
-  (`--new-scope TITLE` mints its root at the epic's top first, no `--parent`
-  needed), `--with-children` on a root moves its whole shortcode keeping
-  its numbers, and `tickets create --epic hypermemetic:fresh:KILN`. Old ids
-  stay pinned to the moved tickets. `--dry-run true` answers the moves (old
-  id → new key) and writes nothing.
-- **The app** (ORG-23): the nav's head (and a phone's head line) always
-  shows your epic, *yours*: its list has every live epic (*· default*, each
-  with its tickets), **+ new epic…** for an admin and **manage epics →**;
-  on a phone it is a sheet. Choosing one reloads the page into it, and a
-  toast says only you moved. `#/epics` is the table — tickets, shortcodes,
-  created, people — with rename, make default and archive (asked first,
-  from the dry run: who moves where, how many tickets leave the views), the
-  archived folded under it with restore. **Move to epic…** in a ticket's
-  or a selection's menu previews the new keys (`reshortcode --dry-run`)
-  before it moves them. A move an archive made is a notice over every page
-  until *got it*; a ticket in an archived epic says so on its page. A
-  namesake's key shows as its letters and number (`MENGER-3`), and
-  `epic:CODE-N` where the epic is not yours.
-
-```sh
-synapse -P 4455 menger epics create --name fresh
-synapse -P 4455 menger tickets create --epic hypermemetic:fresh:MENGER --title "menger, again" --kind scope
-synapse -P 4455 menger tickets reshortcode --ids MENGER-40 --to hypermemetic:fresh:MENGER
-synapse -P 4455 menger epics switch --name genesis
-synapse -P 4455 menger tickets list --filter 'epic any and kind build' --summary true
-synapse -P 4455 menger epics archive --name spring --dry-run true    # who moves where; nothing written
-synapse -P 4455 menger epics archive --name spring
-synapse -P 4455 menger epics list --archived true
-synapse -P 4455 menger epics restore --name spring                   # nobody moves back
-synapse -P 4455 menger epics set_default --name fresh
-synapse -P 4455 menger tickets list --filter 'epic spring' --summary true   # an archived epic, by name
-```
-
-### Search (SEARCH-2)
-
-`find` jumps to a ticket by its id or title; **`search`** looks inside
-tickets. Its index is SQLite FTS5 in the same database file — no second
-store, nothing else to run: two tables (`search_rows`, each ticket's id and
-index row; `search`, FTS5 over `title` and `text`, `unicode61` with
-diacritics folded) and FTS5's vocabulary view over them (`search_terms`).
-A file gains them once, on its first open, every ticket indexed in one
-transaction (`SEARCH-2: the file gained the search index — N tickets' …`);
-from then on `create`, an `amend` that changes the title or the body, and a
-seed's chunks write a ticket's index row in the transaction that writes the
-ticket. `--verify-derived` holds the index to the tickets (one row each,
-each the title and text the ticket gives now, and FTS5's own integrity
-check).
-
-What is indexed is what a reader reads: the body's text without its tags,
-attributes, HTML comments, `<style>`/`<script>`, ` ```component ` blocks,
-frontmatter and a mermaid diagram's syntax — but with the text between the
-tags, a diagram's labels, the values of `ref`, `name`, `title`, `alt`, `label`, `labels`,
-`cost` and `benefit` (an `<m-ticket ref>`'s id, an option's name), and code
-as written.
-
-```sh
-synapse -P 4455 menger tickets search --query 'plcement wave'
-synapse -P 4455 menger tickets search --query 'set_status' --filter 'not category done' --limit 5
-synapse -P 4455 menger tickets search --query '"ready set"' --offset 20
-```
-
-How a query is read: every word is required, and matches itself and as a
-prefix (`plac` → placement). A word of four letters or more that the
-index does not know — or holds in at most 3 tickets, as a typo some
-ticket repeats does — also matches the index's words one edit away (two
-from eight letters; an insertion, a deletion, a substitution, a swap of
-neighbours), the first letter kept, at most 8, and a rare word only words
-five times as common; the last word's corrections may be prefixes
-(`plcem` → `placem…`). Words with a digit are never corrected. A word
-joined by `-` `_` `.` `/` is a phrase with its last part a prefix; a
-`"quoted"` one is an exact phrase. The tickets matched as typed come first,
-then those that needed a correction (`corrected: true`); `searched.words`
-says what each word was corrected to.
-
-### Comments (COMMENT-2)
-
-A **comment** is a reader's note on the app — a page, an element on it, a
-ticket's body — kept by the server as a record of its own, beside the
-tickets (COMMENT-1: not a ticket, never in a body), and reached as the
-`comments` activation; its vocabulary (`Anchor`, `Comment`, `CommentState`,
-`CommentsEvent`) and its `CommentsClient<T>` come from `tickets-api/` as the
-tickets' do. An **anchor** is where it was left: `route` (the app page,
-beginning `#/`), `path` (where on the page), `label` and `excerpt` (what was
-there, in words; the excerpt may be empty), and `ticket` when the element
-belongs to one — kept as that ticket's id with its `updated_unix` as
-`version`, set by the server. A comment keeps its anchor whatever its ticket
-goes through (an amend, a move, a status or kind change): nothing a
-ticket's write does touches a comment.
-
-| method | yields |
-|---|---|
-| `comments.add { anchor, body }` · `{ reply_to, body }` | `comment { id, state, author, at, anchor, body, reply_to? }` — the comment as kept: the next id, `open`, the time (unix seconds), signed by the caller (ACCESS-19: its name, its principal when it has none, `owner` with login off — no call names its author). A comment on the app (no ticket) is seen, listed, watched and resolved only by its author and the admins of `*`. An empty body, a malformed anchor (a `route`, `path` or `label` left out or blank, a route not beginning `#/`, a `ticket` that is none, a field past its bound) is one in-band `error` naming it, and nothing is kept. COMMENT-8: with `reply_to` (and no `anchor` — both, or neither, is refused) a **reply**: on its thread's root's anchor, carrying `reply_to` (the root's id; a reply to a reply answers the same root), and a resolved root is reopened in the same write |
-| `comments.list { ticket?, under?, route?, path?, state?, author?, text?, intent?, thread?, after?, limit? }` | one `comment` per match, newest first, then one `page { next }` — `next` the id to pass as `after`, `null` when nothing more matches. Every filter given holds: `ticket`; `intent` `comment` / `changes` (APP-23: a change request — a comment carries `intent: changes`, a plain one carries no `intent`); `under` — a ticket or a shortcode in the comment's ticket's lineage (itself, its ancestors, its shortcode, the shortcodes hosting it: the filter language's `under`, as the tree stands); `route` exactly; `path` a prefix; `state` `open` / `resolved`; `author` exactly; `text` in the body, the label or the excerpt (any ASCII case); `thread` (COMMENT-8) the comment's thread — the root and its replies, named by either. Replies are listed inline with the rest, each carrying `reply_to`. Blank is none. A page is 500 unless `limit` says, never more than 1,000 (ACCESS-29). An unknown state, or an `after` naming no comment, is one in-band `error` |
-| `comments.resolve { id }` · `comments.reopen { id }` | `comment` — the state flipped (a reply's id settles its thread's root, which is answered); already there, the comment as it is (nothing written or broadcast); an id naming no comment is an in-band `error` |
-| `comments.watch {}` | open-ended stream of `added { comment }`, `resolved { comment }`, `reopened { comment }`; `lagged { missed }` as `tickets.watch` |
-
-Kept in the `comments` table behind the service-wide cache: read whole at
-open, every read from the cache, every write through it to the database
-first. The table is stored form 7: a file in form 6 gains it, empty, once,
-on its first open — in place, nothing derived built again (`COMMENT-2: the
-file gained stored form 7 …` in the log); an older form is built again and
-gains it with the rest. A form-6 build reads a form-7 file as its own.
-
-```sh
-synapse -P 4455 menger comments list --under FILTER --state open --text title
-synapse -P 4455 menger comments add --anchor.route '#/ticket/DEMAND-2' --anchor.ticket DEMAND-2 \
-  --anchor.path '[data-tag="ticket DEMAND-1"]' --anchor.label 'Parent chip' --anchor.excerpt DEMAND-1 \
-  --body "show the parent's title too"
-synapse -P 4455 menger comments resolve --id 1
-# synapse expands a parameter named `path` as a file path: list's `path` goes in -p
-synapse -P 4455 -p '{"path": "[data-tag=\"ticket", "state": "open"}' menger comments list
-```
-
-**In the app** (COMMENT-3): `a` (or Annotate in the header) is annotation
-mode — every element outlined, ticket bodies' frames too; hovering names an
-element (and shows a component's info card, which no longer appears on plain
-hover); a click opens a comment box at it, nothing else; numbered pins mark
-what has open comments, each listing them with Resolve; `a` or Esc leaves.
-The anchor's `path` is a CSS selector, stable attributes first
-(`#t-status`, `#t-parent [data-tag="id:DEMAND-1"]`, `m-ticket[ticket="RETURNS-1"]`),
-positions last; inside a framed body it is the frame, ` >> `, then the
-element in it (`iframe[data-ticket="RETURNS-2"] >> body > table > tbody >
-tr:nth-of-type(1) > td:nth-of-type(1)`). **Inside a mockup** (APP-45) the
-first half names the mockup, not a frame — its devices are several frames
-showing one page — as `mockup:<ticket>[#<n>[=<ref>]]@<width>`: the ticket
-whose body holds it, the `<m-mockup>`'s number in that body (none: the body
-itself, `view: mockup`), the ticket a `ref` shows, and the device width the
-comment was left at:
-
-```text
-mockup:APP-45#2@1440 >> body > main > h1:nth-of-type(1)    the body's 2nd <m-mockup>, a fence
-mockup:APP-45#3=DESIGN-49@390 >> #cta                      its 3rd, showing DESIGN-49's page
-mockup:DESIGN-49@768 >> section:nth-of-type(2)              DESIGN-49's own body, view: mockup
-```
-
-The app finds the device showing that mockup now — at the same width, else
-the nearest shown — so the pin is drawn on its element at any width (a `ref`
-whose placeholder moved in the body is found by its ref), cut to what the
-device's screen shows, and following the page as it scrolls; the link back
-from `#/comments` scrolls the device into view and its page to the element.
-Every path not beginning `mockup:` is a CSS selector, as before. In the mode,
-with a mockup shown, the keys choose an element without the pointer: `]` /
-`[` the next or previous device, ↓ ↑ the next or previous element, → into the
-first child, ← out to the parent, Enter comments on it. A whole-document body
-(MENGER-15) takes annotation mode too, its page shim's. A comment whose element is gone is
-marked "moved" and pinned to its ticket's heading. `#/comments` lists every
-comment, filtered by the route's query (`?ticket=&under=&state=&author=&text=`),
-each linking back to its page and element (`…?comment=<id>`); a ticket page's
-side panel counts its open ones. All of it is live through `comments.watch`.
-
-**A ticket's Conversation** (APP-22): a ticket page ends with its comments,
-oldest first — every comment whose anchor names the ticket, whole-ticket and
-pinned alike (a pinned one says what it is on and links to its pin), each
-with its author, time, body as markdown and Resolve / Reopen — then a box,
-"Comment on <ID> — Ctrl+Enter sends" (`c` on the page focuses it; Esc
-leaves it). A comment sent there is on the ticket as a whole: its anchor is
-`{ route: "#/ticket/<ID>", path: "conversation", label: "Conversation",
-ticket: "<ID>" }`, no pin is drawn for it in annotation mode, and its link
-back (`?comment=<id>`) flashes its row. Agents read them as any comment:
-
-```sh
-synapse -P 4455 menger comments list --ticket APP-22
-synapse -P 4455 -p '{"ticket": "APP-22", "path": "conversation"}' menger comments list   # whole-ticket only
-synapse -P 4455 menger comments add --anchor.route '#/ticket/APP-22' --anchor.path conversation \
-  --anchor.label Conversation --anchor.ticket APP-22 --body "not what I meant: do X instead"
-```
-
-**A comment is never lost on its way** (COMMENT-9). Every comment box — the
-Conversation and annotation mode's — keeps its draft in the browser
-(`localStorage` `menger.comment.drafts`, by the anchor's route and path)
-from the first keystroke until the server answers `comment`, and a box
-opened at the same place again starts from it (after a reload, or a trip to
-another page). `comments.add` has 15 s to answer: a socket that is down, or
-open and dead (a phone's backgrounded tab), shows *Not kept: <why> — your
-draft is still here.* with a **Retry**; a comment that lands after all (the
-watch's `added`, same place, same text) lets the draft go, so a Retry does
-not post it twice. Each failure is reported to the server —
-`comments.report { anchor, body, reason, failed_at?, agent? }`, from an
-outbox in the browser (`menger.comment.failures`) sent on this connection
-or the next — kept in memory (the newest 200; a restart forgets them) and
-logged (`WARN … COMMENT-9: a comment the app could not keep`, without the
-body). An agent reads them, newest first — its own and those whose comment
-it would have seen:
-
-```sh
-synapse -P 4455 menger comments failures --limit 20
-```
-
-**Replies** (COMMENT-8). A comment answers another with `reply_to`: it is
-a comment of its own, on its thread's root's anchor — so on the same ticket
-and page, seen by exactly who sees the root (a reply on the app, too: the
-root's author and the admins) — and threads are one level deep (a reply to
-a reply answers the root). A thread is open or resolved by its root:
-resolving or reopening a reply settles the root, and a reply to a resolved
-root reopens it, in the same write (`watch` says `added`, then
-`reopened`). In the app a reply is drawn under its root, oldest first, with
-**Reply** under the thread — in a ticket's Conversation, on `#/comments`
-(a row is a thread, found by its root or any reply; the count is threads)
-and in the annotation popover; no reply is pinned or counted apart. The
-Reply box keeps its draft as every box does (by its thread,
-`reply|<root>`), says *Not kept* with a Retry, and Ctrl+Enter sends:
-
-```sh
-synapse -P 4455 menger comments add --reply-to 29 --body @answer.md
-synapse -P 4455 menger comments list --thread 29
-```
-
-### Images in comments (COMMENT-5)
-
-A comment can show **images**: pasted (a screenshot from the clipboard),
-dropped on the box, or picked with its **Image** button — in every box that
-writes a comment (a ticket's Conversation, the annotation box, the tray's
-Request changes). The app checks the file first by the server's own rule,
-keeps it with `media.put` for the comment's ticket, writes its markdown into
-the box at the cursor and shows it there as a thumbnail (× takes it out;
-deleting the markdown does too). A posted comment draws it inline, at most
-the column's width, wherever comments are drawn (the Conversation, the
-annotation pins, `#/comments`); a click opens it full size, a click or Esc
-closes it. The image is named in the body as markdown:
-
-```markdown
-the hold drifts here ![the curve](media:9f2c6ae2b4d1e1a8f7c3b0d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718)
-```
-
-Only `media:` images (and `data:` PNG, JPEG, GIF or WebP) are drawn; an image
-from another origin is not (the page's CSP refuses it anyway) — its alt is
-drawn as a link to it.
-
-**A HEIC** (CHAT-58) — an iPhone's photo or screenshot as a file — is made
-a JPEG in the app before it is sent, on every path that attaches one (the
-chat composer and every comment box; paste, drop, pick): known by its type
-(`image/heic`, `image/heif`) or its `ftyp` brand (`heic`, `heix`, `mif1`,
-`msf1`, `hevc`, …; an AVIF is not one), decoded by the browser
-(`createImageBitmap`, else an `<img>`; Safari reads HEIC itself), drawn on
-a canvas and encoded at 0.9 — a PNG when it has alpha — and drawn smaller
-until it is within 7 MiB (a HEIC itself may be up to 64 MiB). A browser
-that cannot decode it (Chrome and Firefox on a desktop) refuses it plainly:
-"HEIC can't be read in this browser; send it as JPEG or PNG". The server
-is unchanged. `frontend/src/heic.rs`; checked by `scripts/heic-check.mjs`
-(WebKit and Chromium, `scripts/fixtures/tiny.heic`).
-
-**Stored by menger, on the wire** — the `media` activation; no side door
-(the shell serves no upload route and no image path). The app turns
-`media.get`'s bytes into a `blob:` URL, once per image per page load.
-
-| method | yields |
-|---|---|
-| `media.put { ticket?, mime, data }` | `stored { hash, mime, bytes, width, height, duplicate }` — the image kept, named by its SHA-256 (64 hex digits); `data` is standard base64 (a `data:…;base64,` before it is read past). Its type is read from its magic bytes — PNG, JPEG, GIF or WebP, **never SVG** — and must be the `mime` given; width and height from its header. At most **7 MiB**. A refusal is `refused { reason, message, bytes?, max? }` (`too_large`, `not_an_image`, `type_mismatch`, `truncated`, `bad_data`), naming the limit, and nothing is kept; a ticket that is none, or out of the caller's reach, is `not_found { ticket }`. The same bytes again are one row (`duplicate: true`); put for a second ticket, the one image is that ticket's too. Without `ticket` (a comment on the app) the image is the putter's and the admins' of `*` |
-| `media.get { hash, ticket? }` | `media { hash, mime, bytes, width, height, data }` (data base64) — or `not_found { hash }`, alike for a hash that names nothing and for an image put only for tickets the caller cannot see (ACCESS-10). COMMENT-10: with `ticket`, held to that ticket's body — only an image put for that ticket; one kept for another ticket (even one the caller sees), a chat or the app is `not_found` there |
-
-**Reach.** An image belongs to the ticket it was put for: `get` answers it to
-a reader who sees that ticket (by its id through the resolver, so a
-reshortcoded ticket keeps its images and a deleted one hides them); `put` is
-the editor's, a `Permit` on that ticket (ACCESS-11; under login `media.get`
-is a viewer's grant, `media.put` an editor's, `target = "ticket"`).
-
-Kept in two tables of their own, `media` (a row per image, its bytes a BLOB)
-and `media_owners` (a row per ticket, or app putter, it is for); the cache
-holds what each image is, never its bytes, which `get` reads from the file on
-a read connection. A file gains the tables, empty, on its first open; no
-stored form moves (a release before COMMENT-5 opens such a file and never
-looks at them).
-
-The limit is 7 MiB, not 8 MB: an image travels as base64 (4/3 of its size)
-inside one WebSocket message, and the transport takes a message of at most
-10 MiB. A file past the cap is refused by the app before it is read; a
-call past the transport's 10 MiB closes the socket instead of answering
-(synapse waits on it — COMMENT-6). From a shell, the data is a **file** or stdin — never
-`"$(base64 …)"`, which Linux caps at 128 KB:
-
-```sh
-base64 -w0 shot.png > shot.b64
-synapse -P 4455 menger media put --ticket KILN-4 --mime image/png --data @shot.b64      # → stored { hash, … }
-base64 -w0 shot.png | synapse -P 4455 menger media put --ticket KILN-4 --mime image/png --data -
-synapse -P 4455 menger comments add --anchor.route '#/ticket/KILN-4' --anchor.path conversation \
-  --anchor.label Conversation --anchor.ticket KILN-4 --body 'the hold drifts here ![the curve](media:<hash>)'
-synapse -P 4455 -j menger media get --hash <hash> | jq -r 'select(.content.data) | .content.data' | base64 -d > back.png
-```
-
-### Images in ticket bodies (COMMENT-10)
-
-A ticket's body draws its `![alt](media:<hash>)` images too, as a comment
-does: at the column's width, a tap or click opens one full screen (a tap or
-Esc closes it). An agent files a screenshot into a body by putting it for
-that ticket first — `media put --ticket X`, then the markdown in X's body.
-
-**Held to the ticket.** A body's images are read with `media.get { hash,
-ticket }`, the body's own ticket — so a body reaches no image but its own
-ticket's: one kept for another ticket (even one the reader may see), a
-chat or the app is not found there, and is drawn as its alt with a **not
-available** mark (dashed). A reader who cannot see the ticket sees no body
-at all. The editor's preview draws the edited ticket's images (a first
-draft, of no ticket yet, marks each not available); a past revision of
-a ticket draws that ticket's.
-
-**Unframed and framed alike.** md.rs writes each as an `img.bimg
-data-media=<hash>` with no `src`; an unframed body is filled by the page
-(`media::hydrate_body`), a `blob:` URL from the bytes. A framed body's frame
-has no connection of its own (IDENTITY-28), so its SDK (2.5) asks the host
-— `menger:media { hash }` — and the host answers held to the ticket it
-stamped on the frame (`<iframe data-media>`: the stored body's ticket, or
-the ticket a draft edits; the frame cannot name one): `menger:media { hash,
-mime, data }` or `{ hash, missing: true }`. The frame draws a `blob:` URL of
-its own (no other origin, under ACCESS-28's policies) and settles once every
-image is answered. A tap asks the host (`menger:zoom { hash, alt }`, only
-inside a viewer's gesture on that frame) to show it full screen over the
-app. A touch screen gives an image no click (WebKit synthesizes none for
-an element that is not a control), so the SDK and the page both read the
-tap itself: one finger, lifted within 10 px and 500 ms of where it landed,
-its lift prevented so no click follows (a scroll or a hold is no tap). The
-page asks `media.get` once per (ticket, image) per load, however often the
-body re-renders.
-
-### History and cancellation (MENGER-13)
-
-**Every change of a ticket's status or kind is a transition**, kept by the
-store, write-through, append-only, in the `transitions` table: its ticket,
-the field (`status` / `kind`), `from` → `to` (`from` null at birth), when,
-who (`actor`: the caller's principal; `system` for the store's own;
-`anonymous` with login off — `name` the caller's display name), from where
-(`source`: `app`, `api` — synapse and agents, the default —, `pipeline`, or
-`cascade`), why (`message`) and what caused it (`cause`, a transition id,
-with `cause_ticket`). `create` records the first status, `set_status` each
-change (the same status again records nothing), `set_kind` the kind's change
-and — when the status moves with it — the status's, caused by the first.
-`set_status` and `set_kind` take `source` and `message`; the app says `app`,
-the merge should say `pipeline`. A file gains the table, empty, on its first
-open, with the moment it began: nothing before then has a history, and the
-app's History section says so. It is no derived state: the stored form is
-unchanged (10).
-
-```sh
-synapse -P 4455 menger tickets history --id MENGER-7
-synapse -P 4455 menger tickets set_status --id MENGER-7 --status Canceled --message "folded into MENGER-9"
-synapse -P 4455 menger tickets set_status --id MENGER-7 --status Pending --restore-children true
-```
-
-**Cancellation cascades.** `set_status … Canceled` cancels, in the same
-write, every descendant still open work — its whole subtree (hosted
-shortcodes too) but what is `Complete`, `Superseded` or `Canceled` already;
-a doc keeps `Doc`. Each is a transition of `system`'s, from `cascade`, its
-message naming the cause and who ("canceled because MENGER-7 was canceled by
-Ada"), its `cause` the cancel. The canceled tickets' open inputs become
-**`withdrawn`** (history kept, the reason in it): out of `inputs { state:
-open }`, out of `asking`, so out of Needs you, and refused an answer until the
-ticket is not canceled. A body written while canceled declares its new inputs
-withdrawn. **Undo**: leaving `Canceled` restores the ticket's withdrawn
-inputs; with `restore_children`, the descendants its latest cancel canceled
-and nothing has moved since go back to the statuses they had (each
-`system`'s, caused by the restore) — one canceled on its own, by another
-cancel, or moved since stays. `history`'s `history_end.restorable` names
-them; the app asks before it restores them. Only `set_status` cascades.
-
-A write that moves other tickets beside its own is **one write**: every
-step's row, derived state, transition and inputs in one transaction; each
-step's derived change is worked out against the cache the steps before it
-left, so the batch holds the cache's write lock from its first step to its
-commit (no reader sees a step the file does not hold), and a failed commit
-reads the cache back from the file. Its events are one write's: every
-ticket's `status_changed` and `transition`, then each group that moved
-(once), one `placements_changed`, the `input_changed`s.
-
-**In the app**: the ticket page's History section (when, from → to, who,
-source, message, the causing ticket as a link; what its changes caused;
-when history began). In the nav a canceled ticket is drawn closed with its
-count ("3 hidden"); its descendants are not shown under it unless the reader
-opens it there (for this view only) or the open ticket is below it. `under
-X` still finds them everywhere. The board draws done-with rows (complete,
-superseded, canceled) quieter. Needs you's count never counts a canceled
-ticket (`not status Canceled` beside its filter).
-
-**Filtering by history.** The language has four more predicates, answered
-from the log's kept indexes (each status's entries and exits, every
-transition, each actor's — sorted by time, so a window is a range, never a
-scan of tickets), composable with every other:
-
-| predicate | holds when some transition of the ticket's … |
-|---|---|
-| `entered <status> [window] [by who]` | went into the status |
-| `status left <status> [window] [by who]` (`left …` still reads) | went out of it |
-| `moved [window] [by who]` | is any change (a birth, a kind); `changed` without a window, or with `by`, still reads as this |
-| `by <who> [window]` | is anyone's (`moved … by who`) |
-
-**Time is a modifier on the rule it qualifies** (FILTER-52, FILTER-50's
-grammar): a time written after a rule's values narrows the rule, never
-changes what it says — the rule holds **now**, and the **last** time it
-became so (the start of its current stint) is in the window (the owner,
-decision `time-now`: *"the last time it became complete and still is
-now"*):
-
-| written | holds when the ticket … |
-|---|---|
-| `status Complete after 2026-10-01` | is Complete, and last entered Complete after 1 Oct |
-| `status in (Ready, Coding) within 3d [by who]` | is Ready or Coding, and its current status began in the last 3 days |
-| `not status Complete after 2026-10-01` | is not that (`not` negates the whole rule) |
-| `kind gap within 7d` | is a gap, made one in the window (its last kind change into it; born one, its birth) |
-| `status Coding for over 2w` | has been Coding for more than two weeks (as before) |
-| `created after 2026-10-01` | was born then |
-| `changed before 2w ago` | was last written then — `changed <window>` is the last write, what `touched` reads (`touched …` still reads, and prints as `changed`) |
-
-Answered from the log's kept indexes — each status's entries and each
-kind's, and the births — every mark in the window checked against its own
-ticket's latest, never a scan of tickets. A ticket the log says nothing of
-has no such moment on record and is in no window. The old pair `status S
-and entered S W`, W running up to now (`within`, `today`, `this week`,
-`since`), is the same truth and prints as `status S W`; `label L W` waits
-for a label's time to be kept (no write records when a label was added).
-
-A window is `within <n>{m,h,d,w,mo}` (a month is 30 days), `today`,
-`yesterday`, `this week` (from Monday), `after <moment>` (`since` still
-reads), `before <moment>`
-or `between <moment> and <moment>` — a moment a date `2026-10-10`, a date
-and a time `2026-10-10T08:00` (a date ends a `between` whole), or
-(FILTER-27) a length back from now, `2w ago`, `12h ago`, `1mo ago`; none is
-"ever, since the log began". Who is `me`, `system`, or a principal. Days
-are the viewer's: every filtered read takes `tz` (an IANA name, `UTC`, or
-an offset like `+02:00`), the app sends the browser's, and synapse reads
-UTC unless `--tz` is given. The filter menu's **When** builds all of it
-(see "Filters" above); the palette's `filter …` takes any of it.
-
-**Filtering by when** (FILTER-27) — two more, over time itself rather than
-the log, answered from the **times** kept beside it (each ticket's birth,
-and since when it has held its status — sorted, so a window is a range):
-
-| predicate | holds when the ticket … |
-|---|---|
-| `created <window>` | was born in the window (its `created_unix`; no `by`) |
-| `for over <length>` / `for under <length>` | has held its current status longer than the length, or not |
-| `status S for over D`, `category C for over D` | is in S (or C) and held it that long — sugar for `status S and for over D`, a list too (`category in (ready, active, review) for over 1w`); the canonical form prints the sugar |
-| `changed <window>` (FILTER-30's `touched`, FILTER-52) | was last touched in the window — any write to its own row (title, body, status, kind, severity, parent, labels, blockers — the blocker's `unlocks` too —, commits), a comment left on it, or an answer to or a clear of one of its inputs; no `by`. `not changed within 2w` is "hasn't changed in 2 weeks" |
-
-Since when a ticket holds its status is its latest status transition's
-moment (a birth's, for one born since the log began). A ticket the log says
-nothing of — from before it began — is taken to hold it since its last
-update or, updated since the log began, since the log began (a change of
-status since then would be on record), never before its birth: a lower
-bound, which `history_end` says as `status_since_exact: false`. Every
-status write moves the ticket's entry in the same critical section;
-`--verify-derived` rebuilds the times from the rows and the log and holds
-them to it.
-
-A ticket's **last touch** (FILTER-30; the owner's answer to its decision:
-"any edit, plus comments and answers") is the later of its row's
-`updated_unix` — which every write to the row moves, and nothing derived
-does: a roll-up, a child's count, a placement leave it — and its last
-**activity**, a comment anchored to it or an answer to (or a clear of) one of
-its inputs, which writes no row. Activity is kept beside the times and read
-back at open from the comments and the inputs' histories; a close, a reopen,
-a withdrawal and a resolve are not touches. `changed` means a
-transition only with no window or with `by` (FILTER-52: `moved` is the
-transition's word; `changed <window>` is the last touch). A write that touches a ticket without moving its cell (a body, a
-comment, an answer) still moves an open `watch` asking `touched`: the write
-works out that watch's `entered` / `left` for it, as it does for `under`.
-
-A `watch` whose filter moves with the clock — a relative window, an `ago`,
-a `for` — keeps one timer, set for the next moment time alone moves it (the
-first ticket to cross a length, a transition or a birth leaving a window,
-tomorrow or next Monday in the reader's zone; at most an hour), and then
-says `entered` / `left` for what crossed — no write needed.
-
-```sh
-synapse -P 4455 menger tickets list --filter 'created today' --tz Europe/Berlin --summary true
-synapse -P 4455 menger tickets list --filter 'status left Pending this week' --summary true
-synapse -P 4455 menger tickets list --filter 'status Complete after 2026-10-01' --summary true
-synapse -P 4455 menger tickets list --filter 'status Pending for over 2w' --summary true
-synapse -P 4455 menger tickets nav counts --filter 'category in (ready, active, review) for over 1w'
-synapse -P 4455 menger tickets list --filter 'created between 3w ago and 1w ago and kind build' --summary true
-synapse -P 4455 menger tickets watch --filter 'status Ready for over 3d' --membership true
-synapse -P 4455 menger tickets list --filter 'not touched within 2w and not category done' --summary true
-synapse -P 4455 menger tickets list --filter 'touched today' --summary true
-synapse -P 4455 menger tickets list --filter 'not touched since 2026-10-01 and under THEME' --summary true
-```
-
-```sh
-synapse -P 4455 menger tickets list --filter 'status "In Review" and entered "In Review" within 12h' --summary true
-synapse -P 4455 menger tickets list --filter 'entered Coding yesterday' --tz Europe/Berlin --summary true
-synapse -P 4455 menger tickets nav counts --filter 'changed within 1h and under SCAFFOLD-1'
-synapse -P 4455 menger tickets list --filter 'entered Complete this week and kind build' --summary true
-synapse -P 4455 menger tickets list --filter 'entered Canceled within 1d by system' --summary true
-```
-
-`--verify-derived` holds the log to the tickets: each ticket's latest status
-and kind transition ends where the ticket is, each starts where the one
-before ended, each `cause` is an earlier transition, a cascade has one, the
-system's has a message.
-
-### Revisions (TICKETS-7)
-
-Every write that changes a ticket's own fields — `title`, `body`, `status`,
-`kind`, `severity`, `parent`, `blocked_by`, `labels`, `commits` — keeps a
-**revision** in the same transaction: the ticket as the write left it, who
-(the transition's actor when the write made one, else the caller), when,
-from where (`app`, `api`, `pipeline`, `cascade`), why (the message) and
-which fields moved, with the body's `+/−` line counts. A write that changes
-nothing of a ticket's own (an archive's mark, a blocker's `unlocks`, a
-parent's count) keeps none; a write of several steps one per ticket; a
-cancel's cascade or a bulk write (ACT-2) one per ticket, each naming its
-`cause`. A ticket older than revisions keeps two at its first change: the
-version before (`source: baseline`, dated by its last update) and the
-write's. A delete keeps one saying `deleted` (its revisions stay with the
-tombstone); `undelete` one saying `undeleted`; a reshortcode moves them with
-the ticket. Kept forever (owner, TICKETS-7 `retention`).
-
-It is kept by the write itself: `db::upsert`, `update_row`, `set_body` and a
-delete's `DELETE` tell `store/revisions.rs` first, and both write runners
-(`Store::write`, `Store::in_one_write`) flush before they commit — a write
-cannot forget its revision, and one that rolled back keeps none.
-
-**Storage.** `revisions` (a row per revision, the fields and the body's
-SHA-256) and `revision_bodies` (a body once per content: a label change
-costs a row, never another copy of a 4 MB mockup). Not compressed yet, and
-not in the cache: reads go to storage. `--verify-derived` checks each
-ticket's revisions are numbered 1… with none missing, its latest is the
-ticket as it is, and every body named is kept under its hash. A revision's
-`source` may also be `backup` — reserved for an import of revisions from the
-prod backups (TICKETS-7 `backfill`), which nothing writes yet.
-
-**On the wire**, `tickets revisions` (a child: `tickets.restore` is
-ARCHIVE-2's):
-
-```sh
-synapse -P 4455 menger tickets revisions list --id DEPLOY-9                    # newest first: rev, at, who, source, fields, +/−; revisions_end
-synapse -P 4455 menger tickets revisions get  --id DEPLOY-9 --rev 3            # revision_at { revision, ticket } — the ticket as it was
-synapse -P 4455 menger tickets revisions diff --id DEPLOY-9 --from 3 --to 5    # fields, frontmatter keys, the body's line diff (words within)
-synapse -P 4455 menger tickets revisions diff --id DEPLOY-9 --text true        # the last change, of the text a reader sees
-synapse -P 4455 menger tickets revisions restore --id DEPLOY-9 --rev 3 --message "the planned version, for comparison"
-synapse -P 4455 menger tickets revisions restore --id DEPLOY-9 --rev 3 --fields body
-```
-
-`restore` (an editor of the ticket) is an `update` of the chosen fields
-(default all but `commits`, which are linked, never restored) to the
-revision's values, under the update's rules — a cycle, a duplicate input id
-or a component another ticket owns is refused, naming why — and is itself a
-new revision whose message says what it restored from where. A parent is
-moved, never cleared; a deleted ticket is undeleted first. `watch {
-revisions: true }` also carries `revised { ticket, rev, fields }` after each
-write's events (a channel of its own; a plain `watch` is as it was).
-
-**In the app**, a ticket's History lists its revisions beside its
-transitions: click a number to open that version read-only
-(`#/ticket/ID?rev=N` — a banner, Back to now; components and themes render
-with today's definitions), tick two to diff them (unified or side by side,
-the source or the rendered text), and **Restore…** from an open version with
-a preview of what changes, field by field.
-
-### The archive (ARCHIVE-2)
-
-**Archived** is a mark a ticket carries apart from its status (ARCHIVE-1,
-decided by the owner 2026-10-15): when, by whom, why, and the write that set
-it — `archived: { at_unix, by, message, write }` on `get`, on every summary
-and row, omitted for a live ticket. Any ticket may carry it, of any kind and
-in any status, and it moves nothing else: status, kind, place, blockers,
-labels, inputs and history stay as they were. An archived Complete ticket
-still satisfies what waits on it; an archived open one still blocks (an
-archived Pending ticket is *parked*, not done). Writes to an archived ticket
-(`amend`, `set_status`, `label`, `commits link`, a comment, an answer) are
-allowed and leave it archived. Nothing archives itself.
-
-```sh
-synapse -P 4455 menger tickets archive --ids KILN-3,KILN-4 --message "landed and deployed"
-synapse -P 4455 menger tickets archive --ids KILN-1 --dry-run true          # what would go, and what is live
-synapse -P 4455 menger tickets archive --filter 'category done and under KILN' --max 1000
-synapse -P 4455 menger tickets list --filter 'archived and under KILN' --summary true
-synapse -P 4455 menger tickets list --filter 'archived within 7d by owner' --summary true
-synapse -P 4455 menger tickets restore --ids KILN-4                         # and its archived parents
-synapse -P 4455 menger tickets restore --ids KILN-1 --with-children true
-```
-
-| method | yields |
-| -- | -- |
-| `archive { ids? \| filter?, max?, tz?, message?, dry_run? }` | `archived { ids, live, unqueued, mark, dry_run }` — every ticket named (or the filter admits, at most `max`, default 500: more is refused, naming the count) **and its whole subtree** (the kept tree: children, theirs, the shortcodes hosted under it) archived in one write, all or none. One already archived is a no-op. **Live work is never a refusal**: `live` names each archived ticket not in category done (or dropped, or a doc), with its status — the warning the app asks with first. A queued ticket leaves the queue (`unqueued`; its record's action `archived`). `dry_run`: the same answer, nothing written (`mark.write` 0) |
-| `restore { ids? \| filter?, max?, tz?, with_children?, message?, dry_run? }` | `restored { ids, ancestors, still_archived, by, dry_run }` — each archived ticket named (a filter is ANDed with `archived`) back in every view **with its archived ancestors** (`ancestors`: the chain only, never their other children). `with_children`: and the descendants archived by the same write as it; the named tickets' descendants that stay archived are named (`still_archived`) |
-
-**Every view leaves the archive out unless the filter names it.** `not
-archived` is every filter's default (`Filter::matches`): `list` (by epic,
-status, parent or filter, and a walk of whole tickets), `tree`, `counts`,
-`facets`, `groups`, `extents`, `search`, `find`, `work ready`, the waves,
-`inputs` (a ticket's own, asked by naming it, still answer), `queued`,
-`member`, and `health`'s `ticket_count` — which gains `archived`, the count
-apart. A filter naming `archived` (alone, negated, in a group, or as
-`archived <window> [by who]`) lifts the default: `status Pending and
-archived` answers the parked Pending tickets, `archived or in KILN` both.
-`get`, a URL and a body's chip still reach an archived ticket, and a
-blocker's row answers it marked — never hidden.
-
-**Kept, never walked.** The mark is a coordinate of a ticket's cell (FILTER-4),
-so an archived ticket never shares a cell with a live one and a view that
-does not name the archive admits none of its cells: no view reads an
-archived row to drop it, and a store that is mostly archive answers a view
-over the rest as cheaply as one without it. A store that holds no archived
-ticket reads every view by the path it took before. The roll-ups count the
-archive apart (`archived` beside `docs` on a group): a row's `done/total` is
-its live work, a row of archived tickets alone is not drawn — so an archived
-shortcode root takes its shortcode out of the nav, with every shortcode
-hosted under it. Stored form 12 (`cells.archived`, the roll-up tables'
-`*_archived`; a form 10 or 11 file gains the columns in place), the tickets'
-`archived` column (a JSON mark, `NULL` live); `--verify-derived` builds the
-cells and roll-ups from the rows and compares, and holds each archived ticket
-to an archive in the log.
-
-**History and cells.** An archive and a restore are transitions (`field:
-archive`, `live` ↔ `archived`; who, from where, why; the write's first the
-cause of the rest). `archived <window> [by who]` holds for a ticket whose
-standing archive (its latest archive transition) is in the window, by that
-actor; `restored [window] [by who]` for one restored there (its own restore,
-a chain's, or a create's). `watch` says `archived` / `restored` after the
-write's transitions; a `watch { filter }` hears `left` / `entered` for each
-ticket its view held or now holds. An agent's `await_reply` on an archived
-ticket ends with `replied { kind: archived }`.
-
-**Under an archived parent** (ARCHIVE-1 `child-of-archived`): `create`,
-`set_parent`, `update --parent`, `update_many --parent` and `reshortcode`
-into an archived parent restore its archived chain (the parent, every
-archived ancestor) right after their own write — the caller's permits for
-the chain minted before it — and answer the write's event, then that
-`restored`.
-
-Under login both are editor writes: the gate holds `tickets.archive` /
-`tickets.restore` on each id, and the store takes a `Permit` for every
-ticket it marks, each descendant included (ACCESS-11) — refused, counting
-the tickets outside the caller's reach, never naming them.
-
-### Chats (CHAT-3)
-
-A **chat** is a conversation among named participants, opened inside one
-ticket (CHAT-1: its own record, not a comment; no chat without a ticket),
-reached as the `chats` activation; its vocabulary (`Chat`, `Message`,
-`ChatState`, `ChatsEvent`) and `ChatsClient<T>` come from `tickets-api/`.
-Only participants read a chat — and an admin of its ticket, who reads it
-but has no mark and cannot post; to anyone else it is `not_found { chat }`,
-the same answer as a chat that is none (ACCESS-9). Every participant must
-read the ticket: one named who cannot is refused by name, and one who
-loses its reach loses the chat (`left { chat }` on its watch) until it is
-back. A message is signed by its caller (`author` its principal, `name`
-its name); `via` is kept for AGENT-3 and never set by a call.
-
-| method | yields |
-|---|---|
-| `chats.open { ticket, others?, title? }` | `opened { chat, existing? }` — the caller and `others` (CHAT-1's `with`: TypeScript takes no parameter of that name) on the ticket; `others` empty or absent is a chat of one, the caller's alone (CHAT-6); the same set's open chat there is answered with `existing: true` and nothing made. `refused { reasons }`: a ticket the caller cannot read (`no ticket X`), each participant who can't read it, past 32 |
-| `chats.post { chat, body }` | `posted { message { id, chat, author, name?, via?, at, body } }` — a participant's, in an open chat; markdown, not blank, at most the ticket body cap; the poster's mark moves to it. `refused`: `chat N is closed`, not a participant |
-| `chats.add { chat, principal }` | `added { chat }` — by a participant, to an open chat; the one added must read the ticket |
-| `chats.list { ticket?, unread?, state?, after?, limit? }` | `chat { chat }` each — by last activity, newest first — then `page { next }`. The caller's chats; with `ticket`, those on it (every one, for an admin of it). Each `chat`'s `unread` is the caller's, `waiting` who is on `await_message` for it now. 50 a page, at most 500 |
-| `chats.messages { chat, after?, before?, newest?, limit? }` | a page of `message { message }`, oldest first within it, then `page { next }`; 100 a page, at most 1,000. `after` (a message id) pages forward, `next` the page's last while newer remain; CHAT-8: `newest: true` is the newest page and `before` (an id) pages back from one, `next` the page's first while older remain — what `before` takes to go on. A `Chat` says its `count` of messages and the caller's `mark` (its read mark) |
-| `chats.read { chat, upto }` | `read { chat, upto, unread }` — the caller's mark moved forward (never back) to its latest message at or before `upto` |
-| `chats.close { chat }` · `chats.reopen { chat }` | `closed { chat }` · `reopened { chat }` — by any participant; a closed chat is read-only, kept on its ticket |
-| `chats.rename { chat, title? }` | `renamed { chat }` (CHAT-7: the composer's `/title`) — by any participant; no title, or a blank one, clears it; the same title writes nothing. On watch too |
-| `chats.watch { ticket? }` | open-ended: `opened`, `posted`, `added`, `read` (the caller's own), `closed`, `reopened`, `renamed`, `listening { chat, principal, waiting }`, `activity { activity }` (CHAT-18, to participants), `left`, `lagged`, `watch_closed`. `messages_deleted` / `messages_restored` (CHAT-44), `claim_line` is declared for AGENT-3 and not emitted |
-| `chats.await_message { chat?, ticket?, since?, after?, timeout_minutes? }` | `waiting { chat?, ticket?, since }` at once, then one `message { message }` by someone else — in the chat, or any of the caller's chats (on `ticket`) — and the end; `timed_out` after the timeout. Without `since` or `after`, only what comes after the call; `since` (seconds) is at or after it, at least once; `after` (a message id) is exact. While it waits its chats show the caller in `waiting` (`listening` on watch) |
-| `chats.activity { chat, state?, line? }` | CHAT-18: `activity { activity { seq, chat, by, name?, at, state, line? } }` — a participant's live work: `started` (it has the message), `working` (the default: a line of what it does now, or a heartbeat), `ended`; heard on every participant's `watch` (not an admin's who is not in it), **never a message** and never stored. The server keeps each chat's newest 200 in memory (lost on a restart); a line is cut at 500 characters. Anyone not in the chat: `not_found` |
-| `chats.activity_log { chat }` | CHAT-18: the chat's kept `activity { activity }` items, oldest first, then the end — what a viewer opening mid-turn has missed. Participants only (`not_found` else); empty after a restart |
-| `chats.remove { chat, principal }` | CHAT-14: `removed { chat, principal }` — a group's or a ticket's chat, by a participant (itself: it leaves) or, outside tickets, an admin of its organization; a direct message is refused. The one removed hears `left` |
-| `chats.delete { chat, ids? \| from?, to? }` · `chats.restore { … }` | CHAT-44: `messages_deleted { chat, ids, by, at, unread }` · `messages_restored { … }` — a **soft** delete: each message is kept, marked `deleted { at, by }`, and `messages` still answers it. `ids`, or `from` and `to` (every message of the chat between them, both included); at most 1,000. Its author deletes its own; an admin of the chat's ticket (outside tickets, of its organization) anyone's; `restore` the same. All or none: an id not the chat's or not the caller's to delete refuses the call, `refused { reasons }` naming each; one already as asked is left out of `ids`, and none changing writes nothing. A deleted message counts in no `unread`, is no `await_message` reply and no chat's last line; `watch` carries both events (`unread` the hearer's) |
-| `chats.candidates { ticket? }` | CHAT-4's picker: `candidate { principal, reads, name?, agent? }` each (CHAT-14: without a ticket, who may be in a direct message or a group), by principal — every principal holding a grant in the ticket's organization (on `*`, the org, a shortcode in it, a ticket or a subtree there; a team's members by name; the operator's `--admin`s) and every participant of the caller's chats there, but the caller; `reads` whether it can read the ticket now (`open` and `add` refuse one that cannot). A ticket the caller cannot read is `refused` (`no ticket X`). With login off nobody holds a grant: the list is the chats' participants |
-
-**In the app** (CHAT-4; in the section dock since CHAT-10, CHAT-9's
-answer): the dock lists your open chats on the ticket under its sections
-(who, a dot green and pulsing while one waits on `await_message`, your
-unread) and **+ chat**; a ticket with a chat shows its dock whatever its
-sections. Choosing one — or the ticket page's **chat N** field (N your
-unread there) — turns the dock into the chat in place: *← sections* and
-the lit section at its head, ×, a chip per open chat, **+ chat** (the
-picker, from `candidates`: one who can't read the ticket is shown and
-cannot be picked; the same people's open chat opens instead), the closed
-list, who is in it, the turns, a *new* line at your read mark, and the
-composer. CHAT-7: **the turns** are a traditional agent chat's — yours
-bubbles on the right, theirs full-width prose under a mono line (a mark,
-the name, an agent tag, `via`, the time); CHAT-18: **live work** — under
-the last turn, the moment a participant says `activity started`, a block
-*builder is on it* with a pulsing dot, then each step it says (the newest
-eight in view, the box scrolling to all) and its heartbeat; past a minute
-with no word it reads *no word for N min* (stale: the worker may be gone);
-on `ended`, or its answer arriving, it folds into **show work (N steps)**
-after that answer — for the session, and from the server's memory log
-(`activity_log`, fetched as a chat opens) while it runs — in the dock,
-full screen and `#/chats` alike; a fence's code gets a head (its
-language, the path the fence names after it, *copy*), a ticket code in
-the text is a chip and one alone on its line a card with the ticket's
-title and status; copy · quote · link on hover; CHAT-44: **deleted messages** — a run of consecutive ones is one muted line, *▸ 96 deleted messages · 14:02–14:20*, that opens an inline box of the run (dimmed, each its time and author, *restore* to whoever may; scrolling inside when long) and closes it again, both by height and opacity, instant under Motion none or reduced motion; a message deleted live collapses the same way; *delete* and *select* on a turn's hover (a long press on a phone) for its author or an admin, and selection mode a bar in the composer's place (*N selected · delete · cancel*, Esc leaves it); manifest's two scroll
-rules — opening lands on your read mark (or the newest) once, and a
-message arriving never moves you; more than 48 px off the bottom, **↓ N
-new · jump to latest**. **The composer** is manifest's: one card (an
-accent ring at focus), growing to 40% of the view; **Enter** sends,
-**Shift+Enter** is a newline, ⌘/Ctrl+Enter sends too, **Esc** leaves the
-box (AGENT-3's *stop the session* waits on AGENT-3), **↑** in an empty box
-recalls your last message; `@` at a word's start opens the people menu
-(the one picked is added), `/` the commands — `/add NAME`, `/ticket CODE`,
-`/title TEXT`, `/close`; APP-90, in a chat on a ticket, `/assign WHO`
-(`tickets.assign`, WHO resolved as `/add` resolves it), `/ask QUESTION`
-(`tickets.inputs.ask`: a text input on the ticket) and — offered only to
-an admin on `*`, the owner's (deployments are triggered only by the
-owner) — `/deploy ENV` (`deployments.request` for the ticket's root
-project, `hypermemetic:MENGER/APP/APP-90` is MENGER's) — a command that
-can't run refused in a strip over the card (*not sent · why*), one that ran
-saying what it did in its own strip; a command that takes an argument,
-picked or typed with its space, becomes a token in the card (`.ctok`)
-waiting for it: Enter runs it, Backspace in the empty box or its × takes it
-off; a pasted, dropped or picked image is kept for
-the chat (CHAT-14, below); ticket codes typed show
-as chips there; each chat's draft is kept per browser
-(`menger.chat.draft.<id>`); Settings → Chat sets its font size. **Full
-screen**: ⤢ on the dock's chat head, *full ↗* in its composer, `g c`, or
-`#/ticket/KILN-7?chat=41&full` makes the chat the whole app — a rail of
-the ticket's chats (and your other chats with unread), the chat in one
-780 px column, **ticket ⟩** bringing the ticket back beside it (its width
-dragged and kept, `menger.chat.split`); `c` starts a new chat, **Esc** or
-**← KILN-7** goes back to the dock. CHAT-8: **at scale** a chat
-holds a window, not the chat — a page sized to the viewport (`ceil(h / 24
-px) × 2`, 20 to 200) from the newest end (or around your read mark when
-more than a page is unread, or `?at=MSG`), older pages fetched as you near
-the top (inserted without moving what you read: the first visible turn is
-the anchor), only the turns within two viewports of the visible mounted
-(the rest spacers of their measured heights), at most six pages held (the
-far end dropped, fetched again on return); a message past 200 lines shows
-its head and **show all N lines**, rendered a chunk of blocks a task. A
-message arriving joins the window only when it reaches the newest; *jump to
-latest* fetches the newest again. `perf/chat-probe.mjs` holds it to its
-budgets.
-At ≥ 1760 the dock's column widens from 248 to 400; from 821 to 1759 the
-rail carries a chat mark per chat and an open chat pins the dock open as a
-400 px column; at ≤ 820 the phone bar's sections place counts the chats'
-unread (green) and its sheet lists Inputs, Chats and Sections, turning
-into the chat. What the dock shows is read. `#/ticket/KILN-7?chat=41`
-opens it on that chat. The filter menu's
-**Chats** and the palette's `chat…` / `unread` add the two cells below.
-
-Two filter cells read the caller's chats: `chatting` (the caller is in an
-open chat on the ticket) and `unread` (it has unread there) — answered for
-the reader (its principal, as `by me` is) from the kept chats, never by
-testing a ticket; a `watch { filter }` asking either follows every chat
-write. Kept in `chats`, `chat_participants` (each one's read mark) and
-`chat_messages` behind the cache, gained empty on open; who is listening is
-the cache's alone, never stored.
-
-#### A chat's tickets (CHAT-55)
-
-A chat is a ticket surface (owner, 2026-10-19, chat 6; CHAT-35's strip).
-**Its tickets** are every ticket a message in it names (a code as the
-chips draw it, outside a fenced block — a log names tickets it is not
-about), and every ticket **filed** from it (`tickets create --chat N`; you
-must be in the chat, else nothing is filed) or **linked** to it (`chats
-link --chat N --tickets A-1,A-2`, a participant, each ticket one you read;
-at most 100 a call; one already there is not written again). Kept by the
-server in `chat_mentions` (one row per chat, message and ticket, written in
-the post's own transaction; a file without the table is back-filled from
-its messages once), as written, and resolved when read — a ticket moved
-(ACT-6) or filed after its code was written is found. A deleted message's
-tickets drop out (CHAT-44) and come back with it.
-
-```sh
-synapse -P 4455 menger chats tickets --chat 6        # newest first: ticket { summary, stage, how, message, at, asking }
-synapse -P 4455 menger chats link --chat 6 --tickets CHAT-55,CHAT-56
-synapse -P 4455 menger tickets create --epic CHAT --title "the strip" --chat 6
-synapse -P 4455 menger tickets list --filter 'in chat 6 and not category done' --summary true
-```
-
-`chats tickets` reads through the chat (one you are not in is not found)
-and your reach (a ticket you cannot read is not there). Each row has a
-**stage** (`chat_tickets::stage_of`, the app's too): `waits_on_you`
-(Pending or a Draft, or open work with an open input), `ready` (Ready or
-Blocked), `in_progress` (Coding), `in_review`, `on_test` (In Review and
-running somewhere, or Complete and ready for, deploying to or failed on
-the environment that promotes from where it runs — DEPLOY-21), `shipped`
-(Complete), and `closed` / `other` (Canceled or Superseded; a scope or a
-doc) that the strip does not draw. `watch` says `linked { chat, tickets,
-how }`. The cell `in chat N` (FILTER-3's language) is the same set for a
-reader in chat N — none for anyone else; `in chat` alone is still the
-shortcode CHAT.
-
-**The strip** (the app): under every chat's head (the dock, the full chat,
-`#/chats`), one row of pills, a stage each, with its count — *waits on you*
-tinted as an ask; a pill opens its tickets (id, title, status, where it
-runs) as a drop over the chat (at most half the screen on a phone, pinned
-under the head as the chat scrolls, closed by a swipe up, the pill again
-or Escape). Asked when the chat opens, again on a post, link, delete or
-restore in it and on a resync; each row is a row-cache row, so a status,
-an input or a deploy moves its pill live. No tickets, no strip.
-`scripts/chat-strip-check.mjs` checks it in a browser.
-
-#### Ticket cards that act (CHAT-56)
-
-A ticket named on a line of its own in a message (the builder's "I filed"
-line; in bold, code or a list item too, never inside a fence) is a **card**
-under the message: id, title, status, where it runs per environment, and
-its open or answered questions. The card acts with the caller's own grants:
-**go** (Pending → Ready), **drop** (→ Canceled, with **undo** for 10 s,
-which puts back what the cancel canceled), **open**, and **ask again**
-(`@builder about ID: ` in the composer). A message naming two or more
-Pending tickets gets **go all N** (one `update_many`). A decision, a multi
-or a text question is answered on the card through `tickets inputs answer`;
-the card then shows the answer, and the input stays the agent's to close.
-Each card is a row-cache row, so it moves live. A code the reader cannot
-read gets no card and stays a chip; a code named only in a sentence is a
-chip. On a phone a card is the turn's width, its actions one row (⋯ for the
-rest), its questions folded to "N questions"; on a wide screen it is at
-most 560 px. `scripts/chat-card-check.mjs` checks it in a browser.
-
-#### The ticket notation (CHAT-57)
-
-How a message names tickets (menger-skills `chatting`; the chat bridge's
-prompt says it too): **bold, the id alone** — `**KILN-7**`, a run
-`**KILN-2..5**` (KILN-2 to KILN-5), a set `**KILN-11/12**`, an ask
-`**KILN-7** · fire` (the ticket and its input's id). `chat_tickets::
-mentions_in` reads all four and a plain id, a run or a set at most 20
-tickets (`EXPAND_CAP`), so each joins the chat's tickets; `bold_names`
-reads the bold ones with their input. In the message a bold name is a
-**live chip**, coloured by its ticket's stage (the strip's), a run or a set
-one chip that opens to its tickets' on a tap. Each ticket named in bold
-gets a **card** under the message, as one alone on its line does; more
-than two fold to one row, "N tickets", on a phone; `· fire` opens that
-question on the card, marked.
-
-#### Questions in a message (CHAT-20)
-
-A message asks as a ticket body does (CHAT-19, the owner's `home` decision:
-a message's question belongs to the chat): an `<m-decision id>` or
-`<m-input id kind>` in its body is an **input** whose home is the message —
-born `open` at `post` (one the reader cannot read refuses the post, naming
-why), kept in `chat_inputs` / `chat_answers`, never in a ticket's inputs.
-`posted` carries them (`inputs`), and `watch` says `input_changed { input }`
-(the input whole: `chat`, `message`, `ticket` — none in a direct message —,
-`author`, kind, question, options, state, answer, history) to every
-participant.
-
-```sh
-synapse -P 4455 menger chats inputs list --state open                 # every question in your chats
-synapse -P 4455 menger chats inputs answer --chat 6 --message 812 --input fire --value.type choice --value.option yes --rationale "dry"
-synapse -P 4455 menger chats inputs clear --chat 6 --message 812 --input fire
-synapse -P 4455 menger chats inputs close --chat 6 --message 812 --input fire     # who asked, or an admin of the ticket
-synapse -P 4455 -j menger chats await_message --chat 6 --input 812/fire --timeout-minutes 240
-synapse -P 4455 menger tickets queue --id KILN-7 --urgency blocking --input fire --message 812 --reason "idle until it is decided"
-```
-
-**Who answers**: a participant, while the chat is open and the message
-kept (a closed chat or a deleted message asks no one). Every answer —
-a ticket's too, from this release on — records **who** gave it (`by`, the
-verified caller's principal, and `name`), beside the `source` the server
-says (ACCESS-14). Only who answered clears the answer; who asked (the
-message's author) or an admin of the chat's ticket closes and reopens.
-The grants are `message_inputs.*` (a viewer's and a chatter's; the chat
-decides who may), apart from `tickets inputs`' `inputs.*`.
-
-**Waiting**: `await_message` ends on an answer, by someone else, to an
-input in the caller's own messages (`answered { chat, message, input,
-value, rationale, by, name, source, at_unix }`), as it ends on a message;
-with `--input <message>/<input>` only that input's answer ends it — at once
-when it already holds one given since `since`.
-
-**Needs you**: the cell `asked` is a ticket with an open chat on it, the
-reader in it, where a message not the reader's asks an open input — so the
-default Needs you is `queued or asking or asked or label needs-you`. A
-saved "Needs you" doc keeps its own text: add `or asked` to it. A
-question in a direct message is on no ticket, so no ticket cell holds it:
-`chats inputs list --state open` and the chat's unread do.
-
-**The queue**: `tickets queue --message M` names the inputs as message M's
-(in a chat on the ticket); the entry keeps them as `M/<input>`, and
-closing the last one unqueues the ticket, as a ticket's input's closing
-does.
-
-#### A message that carries components (CHAT-21)
-
-A message whose body would be framed as a ticket's (`md::is_framed`: HTML
-or a custom element outside code, a definition, a mockup) draws in **its
-own sandboxed frame** (CHAT-19 decision `frame`: one per message), at the
-message's width, in the reader's theme, under the same bar a body has
-(Full screen) plus *source* (the markdown, as text) and ⤢ (the pane's
-whole width). Any other message draws as ever. The frame is the body's
-(`/app/frame`, never a `srcdoc`; the frame CSP unchanged), stamped
-`data-chat` and `data-message` and **no `data-ticket`**: in a chat inside
-a ticket its reads are held to that ticket's shortcode; its components are
-what its markup names and what its reach holds (ACCESS-26), and no write
-from it can touch a ticket.
-
-**Runtime components in a chat with no ticket** (CHAT-59, owner in chat 6:
-*"you should be able to use runtime components"*): a direct message's or
-a group's frame is stamped `data-scope="*"` (`bridge::READER`) and **reads
-as the reader** — every `menger.call` (`list`, `get`, `nav`, `work.waves`,
-…) goes as asked and the server answers it from the reader's own grants,
-never the author's, and the reader's `watch` events reach it — so
-`<m-dial scope="KILN-1">`, `<m-ring id="ENV-5">` or a project's own
-component draws with its data, each reader seeing what they may. It is
-handed only the components its markup names and what they use (never the
-reader's whole registry), and writes stay as above: no ticket input is
-answered from a message.
-
-**Lazy**: a turn makes its frame within about a screen of the view (an
-IntersectionObserver on the turn, the list as root where it scrolls) and
-drops its document past that, keeping the height it had (a hatched block);
-the chat's window (CHAT-8) unmounts what is further. A frame's resize is
-the list's own move — a reader at the bottom stays there.
-
-**Answered in the frame**: inside a message's frame `menger.input.ticket`
-is `message:<id>` (SDK 2.7) — `menger.call('inputs.list', { ticket })`
-answers the message's own inputs (`chats.inputs.list`, each an `input` of
-that `ticket`), each `input_changed` of one reaches its frames with it,
-and `menger.input.submit` / `clear` — from a click in that frame, as a
-body's — are `chats.inputs.answer` / `clear` for the message. So the house
-`m-decision` / `m-input` ask and answer in a chat as in a body.
-`scripts/chat-frames-check.mjs` checks it in a browser on a throwaway
-(390 / 1440, light / dark; a 300-message chat with 40 framed).
-
-#### Direct messages and groups (CHAT-14)
-
-A chat may be **outside tickets** (owner, 2026-10-17: *"I think we should
-also support direct messages and groups outside of ticketing"*): `open`
-with no `ticket` and one other is a **direct message** — opening it again,
-by either of the two, answers the one they have (`existing: true`), the
-standing chat members (CHAT-13) beside them not making it another — and
-with several others a **group**, named by `title`. A `Chat` says its
-`kind` (`ticket`, `direct`, `group`) and names a `ticket` only when it has
-one. Such a chat lives in the caller's organization: each participant must
-hold a grant there (`refused`: `X holds no grant in hypermemetic`), and
-**only its participants read it** — no ticket's reach and no admin's read;
-to anyone else it is `not_found`. A group's members are added (`add`) and
-taken out (`chats.remove { chat, principal }` → `removed { chat, principal
-}`; the one removed hears `left`; removing yourself leaves) by its members
-and by an admin of its organization, who adds and removes without reading
-it. A direct message stays between two: `add` and `remove` are refused
-there (start a group; close it). `list` and `watch` carry them as any
-chat; the filter cells `chatting` / `unread` stay a ticket's.
-
-**Names.** `candidates` without a ticket lists who may be in one — every
-principal holding a grant in the caller's organizations, and the
-participants of its chats outside tickets — and every `candidate` now says
-`name` and `agent`. The name is the one the principal last signed in with
-(the identity's `name`: a provider's display name, or a key's — synapse's
-`--as builder` signs in as `builder`), kept by the store in
-`principal_names` when it changes ([`Store::note_name`], off the call),
-else the last name its messages carried; it is the caller's own word,
-shown, never trusted for access. `agent` is an `agent:` (AGENT-1) or
-`key:` principal — a key is how an agent signs in — or a standing chat
-member. AGENT-3's named agents will be `agent:<name>` principals and need
-nothing more here.
-
-**Images** (owner, 2026-10-17: *"allow pasting images into chat and
-comments"*): the composer takes pasted, dropped or picked images as a
-comment does (COMMENT-5) — `media.put { chat, mime, data }` (beside
-`ticket`, never with it; `put` is a viewer's now: a viewer chats, and a
-ticket's image still takes an editor's permit on it) keeps it for the
-chat, seen by **its participants alone**, never the ticket's other
-readers; `not_found` to anyone else, the same 7 MiB cap and refusals
-(SVG, a non-image, a mismatch). A turn draws `![name](media:<hash>)` as a
-comment does (asked for when its row mounts — the window mounts only what
-is near the view — and measured again when it loads), full size on a
-click. The bridge passes one to the agent as a note, `[image: name,
-size]`.
-
-**In the app**: `#/chats` (the header's **chats N**, N your unread across
-every chat) is CHAT-7's full-screen session with no ticket beside it — a
-rail of every chat you are in, unread first, then the newest (each its
-ticket's chip, or *direct* / *group*, who or its title, its last line, your
-unread), **＋ New message** (`c`, `#/chats/new`: one person picked is a
-direct message, several a group with a title; agents found by name), and
-the chat at `#/chats/ID` in one column — who is in it (agents marked; a
-group's members taken out with ×), **＋ add**, **KILN-7 ⟩** for a ticket's
-chat, **⋯** (rename, close or reopen, leave a group, copy link). **Esc**
-leaves for the board; at ≤ 760 the rail is the page until a chat is
-chosen. `#/members` names each person (an agent marked) and gives each
-**chat**: the direct message with them.
-
-#### An admin adds anyone (CHAT-16)
-
-Owner, 2026-10-17: *"I would like to be able to add anyone to any chat as
-admin. that would give them access to that ticket only. it could also
-optionally restrict ticket view. open a dialog when that user is being
-granted a scope to confirm."* An **admin of a chat's scope** — of its
-ticket (on `*`, its organization, its shortcode, `under` it or it), or
-outside tickets of its organization — adds anyone to it, in the chat or
-not (`chats.add` as before; the picker and **＋ add** list those waiting
-for a role too). One who can read it is simply added. One who can't is
-added only with a **grant the call names**, the add and the grant one
-write (both kept: the grant with who granted it, the seat with the scope
-its add granted):
-
-| `chats.add … --grant` | grants | they see |
-|---|---|---|
-| `ticket` | `viewer` on the ticket alone (ACCESS-21) | the ticket as a viewer of it alone, and the chat |
-| `chat` | `chatter` on the ticket alone (outside tickets: on the organization) | the chats they are in there; of the ticket its id and title (`Chat.ticket_title`), never its body — `tickets.get` is refused, as is every other ticket read, and another chat on it is `not_found` |
-| none | nothing: `needs_grant { chat, principal, ticket, choices }`, nothing written | — |
-
-A grant names only the chat's own scope, and only an admin of it grants (a
-participant who is not is `refused`). The answer is `added { chat,
-granted: "chatter on KILN-7" }`, and `Chat.granted` lists the seats whose
-add granted, while the grant stands. `chats.remove … --revoke true` takes
-the grant back in the same write as the seat (`removed { …, revoked:
-true }`); without it the grant stays. **In the app**: picking someone
-who can't read the chat (an admin's picker marks them *adding grants
-access*) opens a dialog — who is given what, where; **Ticket** or **Chat
-only** (chosen first: the narrower) — then Confirm or Cancel; × on a
-seat that came with a grant opens *Take X out of this chat* with **Also
-revoke that access** checked. One who holds chats only opens the app on
-`#/chats`.
-
-```sh
-synapse -P 4455 menger chats add --chat 41 --principal key:5a… --grant chat
-synapse -P 4455 menger chats remove --chat 41 --principal key:5a… --revoke true
-```
-
-#### The chat bridge (CHAT-11)
-
-A perpetual listener on the builder's chats: when the owner writes in a
-chat the builder is in, it spawns a Claude Code agent on this machine and
-posts its answer there. `scripts/chat-bridge/` holds it — `bridge.mjs`
-(Node ≥ 22, the standard library and `deploy/menger-call.mjs`'s socket),
-`live.mjs` (CHAT-18's live line), `models.mjs` (CHAT-45's archetypes and
-models), the unit `menger-chat-bridge.service`,
-`install.sh`, and its acceptance on a throwaway login-on server,
-`tests/throwaway.mjs WORKDIR [--real]` (`MENGER_BIN` a server with
-`chats.activity` until prod runs one), beside `node --test
-scripts/chat-bridge/tests/live.test.mjs` (the live line's rules) and
-`scripts/chat-bridge/tests/models.test.mjs` (the archetypes file's).
-
-- **It runs** as `systemd --user` unit `menger-chat-bridge` (`Restart=always`,
-  `RestartSec=5`; lingering is on, so it survives logout and reboot), from
-  an installed copy in `~/.local/share/menger-chat-bridge` — never a
-  checkout. `scripts/chat-bridge/install.sh --start` (from main) installs or
-  updates it and (re)starts it.
-- **Stop it:** `systemctl --user stop menger-chat-bridge`; for good,
-  `systemctl --user disable --now menger-chat-bridge`. Its log:
-  `journalctl --user -u menger-chat-bridge -f`, and a JSON line per turn in
-  `~/.local/state/menger/chat-bridge/turns.log`.
-- **Which tracker:** `MENGER_URL` in `~/.config/menger/chat-bridge.env`.
-  RUN-13 moves prod's data to app.menger.sh. On 2026-10-17 the bridge was
-  installed on `wss://app.menger.sh/ws`, because that URL answered 976
-  tickets to the builder key and the local :4455 had been stopped. The
-  coordinator confirms or switches it when RUN-13 reports. Switching
-  (`ws://127.0.0.1:4455` is the local prod) takes two steps: edit that one
-  line, then run `systemctl --user restart menger-chat-bridge`. The builder
-  key must be granted on whichever tracker it names.
-- **Who it signs in as:** the builder's key (`MENGER_KEY_FILE`,
-  `~/.plexus/keys/builder.key`), a key proof at each upgrade. It watches
-  the chats the builder is **in** — and the builder is in every chat
-  (CHAT-13): the server's `--chat-member PRINCIPAL` (repeatable;
-  `MENGER_CHAT_MEMBERS`, `;`-separated) is a participant of every chat
-  opened, a chat of one too, and is seated in every open chat at startup
-  (once, an `added` participant signed `system`). One without read on a
-  chat's ticket is added anyway, with a warning in the log. A chat names
-  them in `agents`, and the app draws them as agents. `app-prod.env` and
-  `app-test.env` set it to the builder's key.
-- **Who it answers:** the principals in `~/.config/menger/chat-bridge.allow`,
-  one a line (`#` comments), read on every message — an edit needs no
-  restart. RUN-13's admin bootstrap appends the owner's production
-  principal. Never itself, never an `agent:` principal, and never a `key:`
-  one: a bare `key:`/`agent:` line is ignored, and only a line written
-  `+key:…` admits a key — for a test, removed after.
-- **A turn:** it says `chats.activity started` at once (CHAT-18: the app
-  shows *builder is on it* before the agent is spawned), marks the chat
-  read, runs `claude -p --output-format stream-json --verbose` in
-  `CHAT_BRIDGE_CWD` (menger's main checkout) — the chat's recent turns and
-  its ticket on the first, the new messages after — resuming the chat's
-  own session (`--resume`; the session any stream event names, the mapping
-  in `state.json` beside `turns.log`), posts the final message (the
-  stream's `result`), then says `activity ended`; a failed turn posts
-  "couldn't answer: <why>" and ends the same way. Only on a server that
-  takes no `chats.activity` does a turn still running after
-  `CHAT_BRIDGE_WORKING_AFTER` (20 s) post "_working…_" once. One turn
-  per chat at a time — what arrives meanwhile is the next turn, together;
-  chats run in parallel, at most `CHAT_BRIDGE_MAX` (3).
-- **Commands** (CHAT-40): a message that is exactly `/clear`, `/stop`,
-  `/status` or `/help` (trimmed, any case) is answered by the bridge itself,
-  at once, as the builder — no agent spawned, and around the one-turn-per-chat
-  queue, so a `/stop` reaches the turn it stops. `/clear` forgets the chat's
-  session (the next message starts a new one, its context the chat after the
-  `/clear`; a turn running then finishes in the old one); `/stop` sends the
-  running `claude` SIGTERM (SIGKILL 5 s later if it lingers), keeps its
-  session, and the turn's answer says the owner stopped it; `/status` says
-  whether a turn runs, since when, its last live line, what waits, and the
-  session's age; `/help` lists them. Any other `/x` goes to the agent. Each
-  is one `{command, message}` line in `turns.log`, and is answered once
-  across a restart.
-- **Models** (CHAT-45): each archetype has a default model, kept in one
-  file that the bridge and every launcher read —
-  `~/.config/menger/archetypes.env` (`CHAT_BRIDGE_ARCHETYPES` names another),
-  env-style so a shell launcher may source it, read on every turn and
-  command (an edit needs no restart):
-
-  | line | archetype | built-in default |
-  |---|---|---|
-  | `MENGER_MODEL_ARCHITECT=claude-opus-5-5` | answers in chat — the bridge | Opus 5.5 |
-  | `MENGER_MODEL_BUILDER=claude-opus-5-5` | a detached run that builds a ticket | Opus 5.5 |
-  | `MENGER_MODEL_ANALYST=claude-sonnet-5-5` | reads and reports | Sonnet 5.5 |
-
-  A value is a model's id or its short name (`opus`, `sonnet`, `haiku`,
-  `fable`); a missing line is the built-in default, a line that cannot be
-  read is logged and keeps it. A delegate (CHAT-46) takes the default of
-  the archetype it is given. A launcher asks for one:
-  `claude -p --model "$(node scripts/chat-bridge/models.mjs builder)" …`.
-  `install.sh` writes the file from `archetypes.env.example` once and
-  never rewrites it. In a chat, `/model` lists the models (Opus 5.5,
-  Sonnet 5.5, Haiku 5.5, Fable 5.1) with this chat's and the architect's
-  default marked; `/model sonnet` (a short name, a name, or a `claude-…`
-  id) moves the chat's next turns — kept in `state.json` across a restart,
-  the session resumed on the new model, a turn running finishing on its
-  own; `/model default` goes back to the architect's. Like the other
-  commands it is answered by the bridge, no agent spawned; `/status` says
-  the chat's model, and each turn's is in `turns.log` (`model`).
-- **The live line** (CHAT-18, `live.mjs`): as the stream comes, each
-  assistant tool call is one line — `Bash: <its description, or the
-  command's first 120 characters>`, `Read <path>`, `Edit <path>`, `Grep
-  <pattern>`, `Agent: <description>`, … — and its interim text the first
-  200 characters; at least 300 ms between two sends (what comes meanwhile
-  is one line, ` · `-joined), and `working · Ns` after 15 s of quiet. Nothing
-  that looks like a secret is sent: `NAME=value` where the name says key,
-  token, secret, password, auth, cookie or seed, a bearer, `mgs_…`, a
-  provider-shaped key, a run of 32+ hex or base64 characters — each `•••`.
-  An activity call is never retried and never fails a turn; `turns.log`
-  counts the lines sent (`steps`).
-- **The agent's powers** are written in the unit's `ExecStart`, never
-  chosen at runtime: `--permission-mode bypassPermissions` — the mode the
-  owner runs builders in, every tool without asking. Its model is the
-  chat's (above); `--model` on the command line is only the architect's
-  default where the archetypes file names none. Its system prompt says who it is (the owner's builder in
-  chat N on ticket T), the house rules (AGENTS.md, no `rm -r`, prod only
-  through `deploy/pipeline`, questions as inputs), short answers, and
-  worktrees and tickets for real work.
-- **Nothing missed, nothing twice:** per chat the last message handled is
-  kept; every (re)subscription — a dropped socket, a server restart, a
-  stream that ended silently (SYNAPSE-21), a `lagged` watch — pages
-  `chats messages --after` it in every open chat. An answer goes to the
-  outbox before it is posted and the mark moves after, so a restart between
-  the two posts it once. A heartbeat call each minute catches a dead socket.
-
-### Notes (NOTE-2)
-
-A **note** is a thought written down before it is a ticket: dated, never
-titled, on no shortcode, kept by the server in one place for every client.
-`notes` is the activation beside `tickets` and `comments`; its notes are
-records of their own behind the service-wide cache, in a `notes` table a
-file gains, empty, on open.
-
-```sh
-synapse -P 4455 menger notes add --body "the palette should remember its last query"
-synapse -P 4455 menger notes list --state open            # newest first; --author, --text, --after/--limit
-synapse -P 4455 menger notes get --id 7
-synapse -P 4455 menger notes upgrade --id 7 --epic MENGER --parent MENGER-2
-```
-
-| method | yields |
-| -- | -- |
-| `notes.add { body, author? }` | the note kept: a new `id`, `at` (unix seconds), its `author` (`owner` unless given; a signed-in caller's own name, and its `principal`), the `body` as written, `ticket: null`. A blank body, or one over 64 KiB, is one `error` |
-| `notes.list { state?, author?, text?, after?, limit? }` | `note`s newest first, then `page { next }`. `state` is `open` (not yet a ticket) or `upgraded`; `text` a substring of the body, any ASCII case |
-| `notes.get { id }` | the note, or one `error` |
-| `notes.upgrade { id, epic, title?, kind?, parent? }` | the note, its `ticket` and `upgraded_at` set: in one write, a ticket born as `tickets.create` makes one — titled `title`, else the note's first line with words (markdown marks dropped, at most 80 characters, cut at a word), its body the note's text and a line saying when it was noted, `kind` (default build) and `parent` as `create` takes them — and the note marked. A note already a ticket is refused, naming it; a ticket `create` refuses leaves the note open and spends no id |
-
-Under login a note is any member's — `add`, `list` and `get` are a viewer's,
-held anywhere — and `upgrade` is an editor's that also needs
-`tickets.create` where the ticket lands (the parent, else the shortcode's
-root, else `*`).
-
-### Assignees (TICKETS-9)
-
-A ticket has **assignees**: zero or more principals, people or agents
-(owner, 2026-10-17: *"oh make tickets assignable"*). They are a set on the
-row — `assignees`, sorted, each once, at most 16 — so every read that
-carries a row carries them (the board's column, the ticket page, `watch`).
-Every principal assigned must read the ticket: one who cannot is refused in
-band, naming why, and nothing is written.
-
-```sh
-synapse -P 4455 menger tickets assign --id TICKETS-9 --add key:4b5c… --message "yours"
-synapse -P 4455 menger tickets assign --id TICKETS-9 --remove key:4b5c… --add idp:0f8f…
-synapse -P 4455 menger tickets update_many --filter 'label kiln and unassigned' --assign key:4b5c…
-synapse -P 4455 menger tickets list --filter 'assigned me and not category done' --summary true
-```
-
-| method | yields |
-| -- | -- |
-| `tickets.assign { id \| ids, add?, remove?, source?, message? }` | `assignees_changed { ticket, added, removed }` per ticket — the whole ticket, its `assignees` as the write left them; `added` / `removed` the principals that moved (both empty: nothing moved, nothing written). A principal in both is added. `ids`: every one in one write, all or none. A principal who cannot read a ticket, a result past 16, a value that is no principal (`-32602`, naming `add`): refused, nothing written |
-| `tickets.update_many { …, assign?, unassign? }` | the same, beside `update_many`'s other aspects (`changed` names `assignees`); every principal assigned reads every ticket selected |
-
-Each principal moved is a line of the ticket's history: `history { id }`
-yields `assign_record { record }` after its queue records — `principal`,
-`action` (`assigned` / `unassigned`), `at_unix`, `actor`, `name`, `source`,
-`message`. They are a log of their own (`assignment_log`, gained empty on
-open), not transitions, as the queue's are; the set itself is a column of
-`tickets` (`assignees`, `[]` for every ticket from before it), which an
-older release, naming its columns, never reads. **The cells**: `assigned
-<principal>` (quoted, as `assigned "key:4b…"`), `assigned me` (the reader),
-`assigned` (anyone) and `unassigned` — answered from a kept index, principal
-→ tickets, on every filtered read and watch (`entered` / `left` in the write
-that moves it). Under login `assign` is an editor's, on the ticket.
-
-In the app: the board's **who** column (up to three avatars, then `+n`; an
-agent's round); the ticket page's **Assignees** — each one named, × to
-unassign, **+ assign** opening the person picker (the reader first, then
-who holds a grant in the ticket's organization, people and agents, named, an agent
-marked — CHAT-14's `chats.candidates` —, those who read it first; one who cannot is drawn but
-not offered); the right-click menu's **Assign to…** (one ticket or a
-selection); the filter menu's **People** (Assigned to me · Assigned ·
-Unassigned); and on `#/members`, each principal's **assigned →** — the board
-under `assigned "<principal>"`.
-
-### Queue (MENGER-39)
-
-A ticket is **queued for the owner** with an urgency and a reason — one
-write, by anyone with the editor role, agents included — and every open app
-shows it at once in **the tray** (APP-38): one control on the bottom edge
-of the main column, at the right. With one ticket it is that ticket's tab —
-the id, the title and an urgency chip; with more, the count, `queued`, the
-loudest urgency's chip with how many share it (`3 blocking`) and `▴`. Its
-ground and border are the loudest urgency's (`today` in the Coding colours;
-`now` and `blocking` in the contract's `--urgent` red, taller, nudging every
-few seconds while one is unopened). At a phone's width it is a pill at the
-bottom right. A click slides **the sheet** in from the bottom (a phone's:
-the whole width, 88% tall, over a scrim): its head says `queue N`, a chip
-per urgency that jumps to its group, `j` / `k`, close (Esc); its list is the
-queue most urgent first, then the oldest, grouped `blocking · now · today ·
-whenever` (`whenever` folded past six). The row picked is answered beside
-the list (a phone's: under its row) — the urgency, who queued it and when,
-the reason, the named input's question answerable in place (recorded with
-source `app`; answering takes the ticket out of the queue, the input stays
-the agent's to close), **request changes** (APP-23, below), *open ↗*,
-*snooze 10m* and *done with it* — and submit, snooze or done picks the next
-row; the last one leaving takes the sheet down, and the control with it.
-With one ticket the sheet holds its answer alone. The control again, Esc,
-the scrim, or a press anywhere outside the tray — in a ticket's framed body
-too — lowers the sheet (APP-26; never while a submit is out). An arrival
-while it is down blinks the control in its colour, sweeps the edge, says
-who queued it for a moment, and leaves `N new` until the sheet is opened.
-A hidden tab's title carries the count, `(2) menger`. Motion follows the
-setting: the sheet comes in in .32 s and goes in .2 s; `calm` keeps the
-slide and the blinks and drops the nudge and the sweep, `none` moves
-nothing (an arrival waiting is outlined in its colour).
-
-**Several questions in one entry** (APP-86; owner: *"and multiple
-questions"*): `--input` repeats (`--input a --input b`, or `a,b`), each an
-input the ticket declares and has not closed, kept in the order asked;
-`--blocking` names the one the caller is idle on — one of them, and
-required at urgency `blocking` when there are several (with one input it
-is that one). The entry leaves the queue when **every** input it names is
-closed: one closed is progress — nothing is written, and no `unqueued` is
-heard — and closing the last is the one `unqueued` (`action: closed`).
-Queueing it again adds the call's inputs to the entry's, raises the
-urgency, never lowers it, and a `--blocking` given moves the blocking one.
-In the tray its row says `1 of 3 answered`; its answer shows the questions
-as steps — `2 of 3 questions`, a bar, a step each (✓ and the answer once
-answered, *blocking* marked) — and *submit · next ›* records the current one
-and moves to the next open; the last one's *submit* takes the entry out, as
-one input's does. A step clicked goes back to it: its answer, *change it*
-while the input is still open, *next open →*. On the wire `entry.inputs`
-lists them and `entry.blocking` names the one (`entry.input` is the
-blocking one, else the first, for every reader before); an entry naming
-one input is MENGER-39's entry byte for byte (`input` alone). A pin from the header's questions panel (APP-87)
-on a ticket already queued for another question adds its question to that
-entry (raising it, never lowering it): the row says so before (`its ticket
-is queued for #bin — a pin adds it`) and after (`★ in an entry of 2 · you
-pinned last`), with no unpin or undo there — either would take the other
-questions out with it. The file
-gains the `inputs` and `blocking` columns in place on its first open; an
-older release reads `input` and never them.
-
-**Views of mockups in an entry** (APP-85; owner: *"you should be able to
-queue a view of the mockup"*): `--mockup` repeats — APP-44's `T#mN` (ticket
-T's Nth mockup, numbered as the app numbers a body's: fences, elements and
-refs in document order), `T` (a body that is itself a whole page), or
-APP-45's anchor `mockup:T#N@W` (a view at a width; a `=REF` is dropped, the
-number names it) — kept canonical on the entry as `mockups: [{ticket,
-mock?, width?}]` (at most 8; a requeue adds the call's). Each is checked
-before the write: a ticket the caller reads, a mockup its body holds — else
-one `error` naming it (`mockup `KILN-7#m4`: KILN-7 holds 3 — no mockup 4`,
-`no ticket X you can read`, `X is no whole page`); a malformed one is
-`invalid_params` at dispatch. `queued`, `watch`'s `queued` and `history`'s
-`queue_record` carry them. In the tray the row says `▣ 3 views`; the
-answer shows them as thumbnails above the question — the mocked page, live
-and untouched, at its width (1440 unless named), labelled by the option it
-sits in, else its title, with *pick this* when that option is the entry's
-input's. A thumbnail opens the viewer: full size at 390 or 1440, `‹ ›`
-between them, *compare* (with more than one) side by side; at a phone's
-width it is the whole screen, the thumbnails scrolling sideways. *pick
-this* — on a thumbnail, in the viewer or in compare — picks that option
-(APP-46's look, the same pick as the option card) and closes the viewer;
-Submit records it. Esc closes the viewer before the sheet. The file gains
-the `mockups` column in place on open.
-
-```sh
-synapse -P 4455 menger tickets queue --id RETURNS-13 --urgency blocking --input landing --reason "idle until decided"
-synapse -P 4455 menger tickets queue --id KILN-7 --urgency now --input layout --mockup KILN-7#m1 --mockup KILN-7#m2 --mockup mockup:KILN-7#3@390 --reason "pick a layout"
-synapse -P 4455 menger tickets queue --id GLAZE-11 --urgency blocking --input format --input fields --input naming --blocking naming --reason "the import is idle"
-synapse -P 4455 menger tickets queue --id MENGER-41 --urgency today --reason "the promote rolled back" --source pipeline
-synapse -P 4455 menger tickets queued --snoozed false
-synapse -P 4455 menger tickets snooze --id MENGER-41 --minutes 10
-synapse -P 4455 menger tickets unqueue --id MENGER-41
-```
-
-| method | yields |
-| -- | -- |
-| `tickets.queue { id, urgency, reason, input?, blocking?, mockup?, source? }` | `queued { entry, ticket, action }` — the entry as the write leaves it (`ticket`, `urgency`, `reason`, `input`, `inputs` and `blocking` with several (APP-86), `mockups` when it carries views (APP-85), `by`, `name`, `source`, `queued_unix` — when first queued —, `asked_unix`, `snoozed_until_unix`), its ticket's row, and `action`: `queued`, `raised` (a higher urgency) or `requeued` (the urgency kept: never lowered; the reason is the new one, the inputs given are added; a snooze ends). `input` is a list (a bare string is one); `blocking` requires an input, one the ticket declares and has not closed, and with several names which (`blocking`, among them). A blank reason, an unknown urgency, an input the ticket does not hold or has closed, a `blocking` not among the inputs, more than 16 inputs is one `error`; a ticket that is none `not_found` |
-| `tickets.unqueue { id, source? }` | `unqueued { id, entry, action: unqueued, by, at_unix }`, or `not_queued { id }` (nothing written) |
-| `tickets.snooze { id, minutes, source? }` | `snoozed { entry, ticket }` — off the tray until `snoozed_until_unix` (1 minute to a week), still queued (`queued` holds). Not queued: one `error` |
-| `tickets.request_changes { id, body, source? }` | APP-23: `changes_requested { id, comment, entry, by, at_unix }` — one write: `body` kept as a comment on the ticket's conversation (APP-22's anchor, `path: conversation`) with `intent: changes`, signed as `comments.add` signs, and the entry taken out with `action: changes_requested`, its queue record naming the comment (`comment`). The named input stays open: a change request is not an answer. `watch` hears `unqueued` (that action), `comments.watch` the comment's `added`. A ticket not queued, a blank body: one `error`, nothing written |
-| `tickets.await_reply { id, since?, input?, timeout_minutes? }` | APP-24: `waiting { ticket, queued? }`, then one `replied { ticket, reply }` (`reply.kind`: `answered`, `changes_requested`, `commented`, `unqueued`, `ended`) or `timed_out { ticket }`, then the end; a ticket that is none `not_found`. Below |
-| `tickets.queued { snoozed? }` | a `queue_row { entry, ticket }` per entry in the caller's reach, most urgent first, then the oldest — without the snoozed ones when `snoozed: false` — then `queue_end { count, snoozed, now_unix }` |
-
-An `inputs close` of the input an entry names takes it out in the same write
-(APP-86: of the last open one it names): `watch` hears `input_changed`, then
-`unqueued` with `action: closed` and `by: system`. `watch` carries `queued`, `unqueued` and `snoozed` as they happen.
-`queued` and `queued <urgency>` are filter cells (FILTER-3's language),
-answered from the queue's kept entries — a snoozed ticket is still queued —
-on every filtered read and watch; the Needs you filter (`g n`, on the nav)
-is `queued or asking or asked or label needs-you`. `history { id }` yields the ticket's **queue records**
-after its transitions — `queue_record { record }`: `action` (queued,
-raised, requeued, snoozed, unqueued, closed, changes_requested), `urgency`, `reason`, `input`
-(and `inputs`, `blocking` with several; `mockups`),
-`actor`, `name`, `source`, `at_unix`, `until_unix` for a snooze, `comment`
-for a change request. They are a
-log of their own (`queue_log`), not transitions: `changed` and `by` do not
-read them, and an older release, which never looks at the queue's tables
-(`queue`, `queue_log`, gained empty on open), still opens the file. Under
-login `queue`, `unqueue`, `snooze` and `request_changes` are an editor's, on the ticket;
-`queued` a viewer's, answering only from where it is held.
-
-**Request changes** (APP-23; owner, 2026-10-15: *"the queue should give me
-the option to request changes to the underlying ticket"*): in the sheet,
-beside the input's answer (alone when none is named), *request changes*
-opens a box — Ctrl+Enter sends, Esc closes it — and the note becomes
-`tickets.request_changes`: drawn on the ticket page's Conversation with a
-"changes requested" mark, the tab gone, the ticket handed back. The agent
-that queued it hears `unqueued` (action `changes_requested`) and the
-comment, acts, and queues it again — a new arrival in the tray. A file
-gains the comments' `intent` and the queue log's `comment` columns in place
-on its first open; one way: an older release reads `changes_requested` as no
-action it knows and refuses the file (promote's rollback restores the backup
-it took first).
-
-```sh
-synapse -P 4455 menger tickets request_changes --id APP-21 --body "Not a granter: the agent's owner. Rework the options."
-synapse -P 4455 menger comments list --intent changes --state open
-```
-
-**After queueing, an agent waits** (APP-24; owner, 2026-10-15: *"when
-queued an agent should then listen to that ticket for a response"*):
-`tickets.await_reply { id, since?, input?, timeout_minutes? }` streams
-`waiting { ticket, queued? }` at once, then nothing until a response, then
-one `replied { ticket, reply }`, and ends. A response, at or after `since`
-(default: the call's own time, what was already there set aside), is the
-first of: an input on the ticket answered (`kind: answered` — `input`,
-`value`, `rationale`, `source`, `at_unix`; with `input` given, only that
-one — APP-86: without it, each answer to an entry's several questions is a
-reply, so the agent calls again with `since` for the next; one input closed
-of several is no `unqueued`, the last is), a change request (`kind: changes_requested`, the `comment`), a comment
-on the ticket by someone other than the caller (`kind: commented`), the
-ticket unqueued by someone other than the caller (`kind: unqueued` —
-`action`, `by`, `at_unix`), the ticket canceled or deleted (`kind: ended` —
-`how`, `by`, `at_unix`). A snooze, a queueing or a raise is none. "Other
-than the caller" is by principal. `timeout_minutes` ends a wait with nothing as
-`timed_out { ticket }`. It is answered from the cache, asked again at every
-change on either channel (both subscribed before the first ask), so a
-response between the lookup and the subscription is neither lost nor said
-twice; a dropped connection loses nothing when the agent calls again with
-`since`. Under login it is a viewer's: the caller must see the ticket, and
-hears only the comments it may see.
-
-```sh
-synapse -P 4455 -j menger tickets await_reply --id APP-21 --input agent-owner --timeout-minutes 240
-synapse -P 4455 -j menger tickets await_reply --id APP-21 --since 1792072000
-```
-
-### Deployments (DEPLOY-11)
-
-menger keeps every deployment any CI records, to any environment, and
-answers for any ticket where its work runs and since when. `deployments` is
-the activation beside `tickets`; it takes DEPLOY-10's record
-(`deploy/record.schema.json`) whole — its fields are `record`'s parameters,
-so `deploy/record --send` passes the record as the params object. Three
-tables a file gains, empty, on open: `deployments`, `deployment_commits` and
-`deploy_environments` (what each environment runs — derived, written
-through, checked by `--verify-derived`). menger's own pipeline records every
-remote test (app-test.menger.sh, as `test`) and remote prod (`app-prod`) as it
-runs (DEPLOY-52), and `deploy/pipeline
-backfill` replays what it logged before (DEPLOY-12; `deploy/README.md`
-"Recording deployments").
-
-```sh
-synapse -P 4455 menger deployments record --project menger --environment prod --state succeeded --revision 235ff62 --commits 824e943,235ff62
-synapse -P 4455 menger deployments environments --project menger      # each: what it runs, since, the last deploy
-synapse -P 4455 menger deployments list --environment prod --limit 20 # each deploy with the tickets it carried
-synapse -P 4455 menger deployments for_ticket --id MENGER-34          # running in prod since …, in test since …, not on staging
-synapse -P 4455 menger tickets list --filter 'not category done or not deployed prod'
-```
-
-- **A project is a shortcode** the store holds, any case (`menger` is
-  MENGER) — what a ticket lives in and a grant names. A project name that is
-  not a shortcode is refused.
-- **An environment is a project's**: (project, name), the name kept lower
-  case (`test`, `staging`, `prod`, `pr-412`, `review/pr-412`), shown per
-  project test → staging → prod (development and previews first, unknown
-  names between test and staging).
-- **A deployment's tickets** are those whose linked commits
-  (`commits link`) are among its `commits` and `revision`, plus the ids its
-  `tickets` names. menger runs no git: two references are one commit when
-  one hash is a prefix of the other (a CI's 40-character SHA matches a
-  merge's seven), the `repo@` aside. The join is kept: a commit linked after
-  it was deployed counts wherever it runs, and an unlink takes it out.
-- **What an environment runs** is its records folded in `(at, id)` order. A
-  `succeeded` deploy runs `revision` and carries its tickets from `at`; a
-  `rolled_back` record (`revision` the commit returned to, `previous` the one
-  taken out), or a later deploy to an older revision, takes out what only the
-  undone deploys carried; `started` and `failed` are recorded and shown and
-  run nothing. A ticket runs there since the earliest deploy still counting
-  that carried it.
-- **A ticket runs a version** (DEPLOY-20). A ticket's commits are grouped
-  into versions by the `commits link` call that brought them — a merge
-  commit and its branch commit linked together are one version — ordered as
-  they were linked, never by a repository's history (menger has none).
-  Running somewhere, a ticket is **behind** there when a version linked
-  after the newest one carried there is not carried: the environment runs
-  an earlier version. Every commit linked before DEPLOY-20 is its ticket's
-  first version, so an old database keeps its answers until a ticket gains a
-  commit; a record that names the ticket (`tickets`) carries every commit
-  linked by its `at`. The link record is the `commit_links` table, written
-  in the link's transaction and rekeyed by a reshortcode.
-- **Environments promote from one another** (DEPLOY-21). An environment
-  may name the one it promotes from — menger's `prod` from `test`; `edge`
-  (the landing page) from none, its own track. A record's `from` sets (or
-  moves) it, and `deployments promotes` (admin on the project) sets or, with
-  no `from`, clears it; itself and a cycle are refused. `environments`
-  answers `from`; `deploy/pipeline` sends `from: test` with every prod
-  record (`deploy/record --promotes-from`). An environment's **track** is it
-  and every environment it promotes from or to. The `deploy_sources` table
-  keeps them (set, not derived).
-- **A ticket's delivery stage** (DEPLOY-21), per environment, for a ticket
-  short of running its current version there — the first that holds of:
-  **deploying** (an open `started` record — no record has ended a deploy
-  there since — carries its current version), **failed** (the last record
-  that carried its current version there failed, or was a rollback that
-  undid it), **ready for** (its current version runs on the environment
-  this one promotes from) and **waiting** (Complete, with commits, of the
-  project or a shortcode hosted under it, its current version running
-  nowhere on the track). Running it is `deployed <env> and not behind
-  <env>`. A record "carries a version" as DEPLOY-20 says: its newest linked
-  version is among the record's commits (or the record names the ticket). A
-  new commit is a new version — back to waiting; a rollback moves it at
-  once. Deploying and failed are kept per environment beside the cells;
-  ready for and waiting are set algebra over the kept cells and the cell
-  table, read on demand — never a test of a ticket.
-- **A deployment never changes a status** — where a ticket runs is a fact
-  beside it (DEPLOY-9).
-- **A retry is one deployment**: the same project, environment, state,
-  revision and `source.run` (else `at`) answers the kept one with
-  `duplicate: true` and writes nothing.
-
-| method | yields |
-| -- | -- |
-| `deployments.record { project, environment, state, revision, previous?, commits?, tickets?, release?, at?, source?, from?, request? }` | `deployed { deployment, carried, unlinked, live, entered, left, duplicate }` — the deployment kept (`at` RFC 3339 or unix seconds, now when omitted; `recorded_by` the caller), the tickets it carried, its commits no ticket links, whether it still counts, and the tickets that began and stopped running in its environment. A bad field is one `error` naming it, nothing kept |
-| `deployments.promotes { project, environment, from? }` | DEPLOY-21 (admin): `promotes { project, environment, from }` — where the environment promotes from now (`from` omitted: none); the same answer, nothing written, when nothing moved; an `error` for itself or a cycle |
-| `deployments.list { project?, environment?, state?, ticket?, after?, limit? }` | `deployment { deployment, carried, unlinked, live }` newest first by `(at, id)`, then `page { next }` |
-| `deployments.environments { project? }` | `environment { project, name, order, revision, release, since, deployment, last, last_state, last_at, tickets, from }` per environment (`from`, DEPLOY-21, when it promotes from one) |
-| `deployments.for_ticket { id }` | `running { environment, since, deployment, revision, release, behind, version }` for each environment it runs in — `behind` the commits not carried there, in link order, and `version` the newest carried one, when it runs an earlier version (DEPLOY-20; absent when current) — `not_running` for each other environment of its projects (its shortcode's, its hosts', any it ran in); DEPLOY-25: `requested { environment, request, requested_by, at, revision, webhook }` for each pending request that would carry it |
-| `deployments.running { project?, environment?, ids? }` | DEPLOY-13: `cells { project, environment, running: [{ ticket, since, deployment, behind, version }] }` per environment (an empty one too), each ticket running there — only `ids`' (at most 1,000) when given — in the store's order: what the app's board marks are drawn from, in one read; DEPLOY-21: `staged: [{ ticket, stage }]`, each ticket deploying, ready for or failed there |
-| `deployments.request { project, environment, revision?, release?, note? }` | DEPLOY-25 (deployer or admin on the project): `request { deployment, carried }` — the request kept as a deployment in the state `requested` (below), and the tickets it would carry; an `error` naming why, nothing kept |
-| `deployments.cancel_request { id }` | DEPLOY-25 (deployer or admin): `request { deployment, carried }` — canceled; an `error` when a CI has picked it up, or it is canceled already |
-| `deployments.webhook.set { project, environment, url, secret }` · `.clear { project, environment }` · `.show { project, environment }` | DEPLOY-25 (admin): `webhook { webhook: { project, environment, url, secret_set, set_at, set_by } }` — never the secret |
-| `deployments.watch` | `deployed`, then `environment_changed`, as each is recorded; `promotes` when where an environment promotes from moves; `request` each time a request moves (asked, canceled, a delivery attempt, a CI record naming it); `lagged { missed }` |
-
-**Filter cells.** `deployed <env>` (FILTER-3's language) is a ticket running
-in an environment of that name — `prod` of any project, `menger/prod` of one —
-and `deployed prod within 24h` one running there since a moment in the
-window (every window a history predicate takes); `not deployed prod` the rest.
-Answered from the kept cells, never by testing a ticket, on every filtered
-read; `tickets.watch --filter 'deployed prod'` says `entered` / `left` when a
-deploy or a rollback moves a ticket, and a relative window is read again as
-time passes. DEPLOY-20: `deployed prod` holds a ticket running there behind
-or not; `behind prod` (`behind menger/prod`; no window, no `by`) one running
-an earlier version there — its newest linked commit is not there; `deployed
-prod and not behind prod` one running its current version. A link and a
-deploy move it; a watch says `entered` / `left`.
-
-DEPLOY-21: the stages are cells too — `waiting <env>`, `deploying <env>`,
-`ready for <env>`, `failed <env>` (`ready for menger/prod`; no window, no
-`by`). `ready for prod` is what is moving in: on test at its current
-version, not on prod at it. A deploy, a rollback, a link, a status change
-(waiting) and a `promotes` move them, and a filtered watch says `entered` /
-`left` — a deploy to test enters `ready for prod`, the promote leaves it.
-The saved filter **Moving in** is `ready for prod or deploying prod`.
-
-```sh
-synapse -P 4455 menger tickets list --filter 'ready for prod' --summary true
-synapse -P 4455 menger tickets list --filter 'ready for prod or deploying prod' --summary true
-synapse -P 4455 menger tickets watch --filter 'ready for prod'
-synapse -P 4455 menger deployments promotes --project menger --environment prod --from test
-synapse -P 4455 menger tickets list --filter 'behind prod' --summary true
-synapse -P 4455 menger deployments for_ticket --id LOOK-7     # running … behind [68e1271, 4145520], version d607756
-```
-
-**In the app** (DEPLOY-13): a ticket page's **Running** says where its work
-runs — `prod since 22:04 · test since 22:04 · not on staging`, each linked to
-its deploy; a board row and a wave card carry a small mark per environment,
-in the project's order; `#/deployments` (the header's `deployments`) shows
-each project's environments as columns — what each runs, since when, and a
-timeline of its deploys (state, when, the source's link, the tickets each
-carried) — under the project's **waiting** work: Complete, not yet on its last
-environment, or running an earlier version there (`status Complete and under
-MENGER and (not deployed menger/prod or behind menger/prod)`). DEPLOY-20: a
-ticket behind says so — Running reads `prod runs an earlier version
-(d607756); 68e1271, 4145520 not deployed`, and its board mark is drawn
-apart (dashed, `behind` in its title). DEPLOY-21: a stage is a mark of its
-own — *ready for prod* the accent's outline and an arrow in, *deploying*
-breathing (under the Motion setting: calm and none hold it still),
-*failed* the error tint; and `#/deployments` has a lane per promotion edge
-above the columns — *test → prod: N ready*, the ready work listed,
-deploying and failed counted, each count a link that filters every view.
-The filter menu's **Deployed** category builds `deployed <env> [window]` and
-`not deployed <env>` from the environments recorded (a pill like When's), and
-the palette offers them as you type `deployed` or `not deployed`. DEPLOY-21:
-under them, the delivery rows with their live counts — *Ready for prod*
-(one click), *Deploying*, *Waiting for a deploy* and *Failed* (an
-environment each, its chip counted) — and the palette offers `ready for …`,
-`deploying …`, `waiting …` and `failed …`.
-The app holds the environments and their cells (`environments`, `running`),
-kept by `deployments.watch` — a deploy asks again only for its environment —
-so every mark moves live, with no request per row.
-
-#### Queue a deploy (DEPLOY-25)
-
-A deploy can be asked for from menger: the request is kept in the
-database, and a signed **webhook** tells the environment's CI to do it.
-
-```sh
-synapse -P 4455 menger deployments request --project menger --environment prod --note "the week's work"
-synapse -P 4455 menger deployments request --project menger --environment prod --revision 235ff62
-synapse -P 4455 menger deployments cancel_request --id 41
-synapse -P 4455 menger deployments list --state requested --limit 5
-synapse -P 4455 menger tickets list --filter 'requested prod' --summary true
-synapse -P 4455 -p @webhook.json menger deployments webhook set   # {"project","environment","url","secret"}: the secret from a file, never argv
-synapse -P 4455 menger deployments webhook show --project menger --environment prod
-synapse -P 4455 menger deployments webhook clear --project menger --environment prod
-```
-
-- **A request is a deployment** in the state `requested`, its id from the
-  same sequence: who asked (`recorded_by`), when (`at`), the project and
-  environment, what to deploy — `revision`; else the latest recorded deploy
-  of `release`; else what the environment it promotes from runs (DEPLOY-21's
-  `from`, kept as `requested.from`) — `previous` (what the environment runs
-  now) and the note. With neither, an environment that promotes from none,
-  or one whose source runs nothing, is refused. `list`, `watch` and
-  `#/deployments` carry it; `list --state requested` lists them.
-- **It runs nothing and completes nothing**, as `started` does: it is folded
-  into no environment and moves no cell, stage or status.
-- **Its state** (`requested.state`) is `pending` until a CI's `record` names
-  it (`request: <id>`, to the same environment) — then that record's state
-  (`started`, `succeeded`, `failed`, `rolled_back`), the latest such record
-  its `outcome` — or `canceled` (`cancel_request`), which only a pending one
-  may be.
-- **What it would carry** while pending (`carried`, `for_ticket`'s
-  `requested`, the filter cell `requested <env>`): the tickets running
-  their current version on an environment of the project that runs its
-  revision, and those linking the revision itself, less those running their
-  current version on its environment. A request, a cancel and a record move
-  it; a filtered watch says `entered` / `left`.
-- **The webhook** is an environment's, set by an admin: `url` is https, or
-  http to this machine (`localhost`, `127.0.0.1`, `[::1]`) for a local CI;
-  `secret` 16 to 256 bytes. The secret is never said back — `webhook` says
-  `secret_set` — and is in no event and no log line. No webhook: the request
-  is kept and says `webhook: none` (*no CI configured*).
-- **A delivery** is made by the server's worker (`src/webhooks.rs`), never
-  on the write path: a `POST` of the request as JSON — `{ request, project,
-  environment, revision, release, from, requested_by, note, at }` (`at` RFC
-  3339) — with `X-Menger-Signature: sha256=<lower-case hex HMAC-SHA256 of
-  the exact body, keyed by the secret>`, `X-Menger-Delivery: <id>` (the same
-  on every attempt of one request), `X-Menger-Event: deploy.requested`,
-  `X-Menger-Attempt: <n>`; redirects not followed, 10 s per attempt. A 2xx
-  is `delivered`; anything else is `retrying`, after 1 s, 5 s, 30 s, 2 min
-  and 10 min, then `failed`. Each attempt is kept (`requested.attempts`: its
-  number, time, status, a short error). A cancel, or a CI's record naming
-  the request, stops it (`stopped`); a restart picks up a delivery where its
-  last attempt left it. deploy/README.md "A deploy request's webhook" says
-  how a receiver checks the signature.
-- **Stored** in `deploy_requests` (note, source, cancellation, the
-  delivery's id and state), `deploy_deliveries` (each attempt) and
-  `deploy_webhooks` (each environment's URL and secret); a record's
-  `request` is `deployments.request`, a column a file gains on open. A
-  release before DEPLOY-25 cannot read a `requested` row: rolling back
-  across it after a request was made needs `--restore`.
-
-**In the app**: each column of `#/deployments` has **Queue a deploy** — what
-it would deploy (what the environment it promotes from runs, or a revision
-typed in), the work that would move in (`ready for <p>/<env>`), a note,
-then Queue. The column's open requests sit at its top — *requested by … ·
-webhook delivered / retrying / failed / no CI configured*, the note, what
-the CI made of it — and follow `deployments.watch` live; a pending one has
-*cancel*. Each arrives, and each move of it is drawn, with the row's
-entrance, and a delivery under way breathes (Motion: calm holds it still,
-none stops both). A ticket page's **Running** adds *requested for prod by …*
-for each pending request that would carry it.
-
-**→ test** (DEPLOY-37): `#/deploy`'s button, for admins of every project,
-files `request --environment test --branch main` and draws, under it, the
-newest request to test — its state, each step its executor reports
-(`deployments step`: name, state, time, a failed step's last lines, its
-log) and *cancel*: a pending request is canceled, one under way asked to
-stop (`cancel_asked_at`). The button is off while a request to test is
-open. Who carries a request out is not menger's — deploy/README "The
-deploy runner" (this machine's), later hyperforge (HYPERFORGE-10).
-
-**Under login**, `record` is its own grant, held by the `deployer` role
-(`deployments.record`, DEPLOY-25's `request` and `cancel_request`, and the
-reads; `webhook.*` is admin's alone) — what a CI's key carries on the
-project's shortcode (a minted session scoped `deployer@MENGER`); `admin`
-holds it too, an editor does not. The reads are a viewer's and answer only
-of the projects where the caller holds them. DEPLOY-14: `deployer` is a
-membership too — `members grant --principal key:<hex> --scope PANTRY --role
-deployer` gives a CI's key exactly that, and nothing it could widen.
-
-**From a CI** (DEPLOY-14): a GitHub Actions job records with one step,
-`hypermemetic-ai/menger/deploy/record-action@v1`; GitLab, Buildkite or a shell
-script with one `deploy/record … --send --url wss://…` (over the WebSocket
-through `deploy/menger-call.mjs`, no synapse; a deploy key in
-`MENGER_DEPLOY_KEY` signs in), and GitHub's `deployment_status` webhook
-through `deploy/github-relay.mjs` with no workflow change. deploy/README.md
-"Deployments from any CI" has the snippets, the deploy key and the tunnel.
-
-### Themes and their scopes (THEME-8)
-
-A **theme** is a name and a map of token overrides over the token
-contract (below), one map for light and one for dark; `default` overrides
-nothing. A token that is not a colour (a face, a size, a radius) set for
-light holds in dark too; a colour set for light only leaves dark's default. `themes` is the
-activation beside `tickets`; themes and settings are kept behind the cache,
-in `themes` and `theme_settings` tables a file gains, empty, on open.
-
-**Four levels, the nearest wins.** The **site** (the shell, nav, board,
-Home — with or without a ticket open), the **shortcode** (the ticket's, or
-the nearest one hosting it that says anything), the **ticket view** (its
-header, properties and body) and the **frame** (one body, or one component;
-a component takes its frame's theme). Each may adopt a theme with a
-**reach** — `frame` (only the frames inside it), `ticket` (itself and
-everything inside; the default) or `site` (and the site, while the ticket is
-the open one) — and may say **`takeover: off`**: it and everything inside
-ignore the themes above and wear `default`, or their own adoption. The
-**reader** is outermost: `#/settings` → Themes keeps their own site theme
-(in place of the site's), "project themes off" (THEME-4: no shortcode's
-setting reaches them — the site's, a ticket's and a frame's own still do)
-and "every takeover off" (their site theme, or `default`, everywhere) in
-this browser.
-
-**A project adopts a theme** (THEME-4): a shortcode's setting is kept with
-it; a hosted shortcode without one inherits the nearest host's that says
-anything, up the kept tree, ending at `default` — the server answers it
-(`theme_for`), and the app paints the same answer at once from the
-shortcode tree it keeps, so walking from a project into a shortcode hosted
-under it never detours by the site's theme. Walking into a project's ticket
-repaints the page through THEME-7's one path, and walking out (the board,
-Home, any page without a ticket open — they span projects) puts the site
-theme back. The tracker's spelling is `themes set --scope PANTRY …` (THEME-8);
-the `tickets set_theme --epic` of THEME-4's first draft was not added beside
-it.
-
-**The worked example: PANTRY** (THEME-6). The pantry look — warm paper, one
-burnt-orange accent, Fraunces for what leads, Inter for what reads,
-JetBrains Mono for code, generous radii, code and diagram colours for both
-modes, a field's label skinned as a kicker (`m-field::part(label)`) — is
-one ` ```theme pantry ` block on a PANTRY doc, and PANTRY adopts it reaching
-the site (`themes set --scope PANTRY --theme pantry --reach site`): while a
-PANTRY ticket is open all of menger wears it. PANTRY's bodies are house
-components and load nothing from outside menger (the theme's fonts come
-from Google Fonts, THEME-1 `fonts`). Each region says its paper, ink and
-text face again where its own tokens are (`#ticket-page, .mscope-frame`),
-since a face, a size or an ink inherits as a value resolved on `body`: a
-theme worn by the ticket view or a frame's box alone sets its text too.
-A shortcode's own boards (`#/waves/PANTRY`) open no ticket and stay the
-site's (THEME-10).
-
-A ticket says it in its body's frontmatter, as MENGER-15's `view:`:
-
-```yaml
----
-theme: pantry          # the ticket view adopts it (and its frame)
-reach: ticket          # frame | ticket | site
-takeover: off          # ignore every theme from above
-frame-theme: ocean     # its frame alone adopts one (= theme: + reach: frame)
-frame-takeover: off    # its frame alone ignores the themes above
----
-```
-
-The site and a shortcode say it over the wire:
-
-```sh
-synapse -P 4455 -p '{"name":"ocean","light":{"--accent":"#00796b","--bg":"#eef7f6"},"dark":{"--accent":"#4db6ac"}}' menger themes define
-synapse -P 4455 menger themes set --scope site --theme ocean                     # everyone's site theme (admin)
-synapse -P 4455 menger themes set --scope PANTRY --theme pantry --reach site     # a project, taking over while open
-synapse -P 4455 menger themes set --scope MENGER --takeover off                  # keep MENGER default
-synapse -P 4455 menger themes set --scope MENGER                                 # say nothing again
-synapse -P 4455 menger themes theme_for --id PANTRY-4                            # who wears what, and from where
-synapse -P 4455 menger themes list
-```
-
-| method | yields |
-| -- | -- |
-| `themes.define { name, light?, dark? }` | the `theme` as kept (its maps whole, keys written `--name`). A token not in the contract, a value with `< > { } ; \` or a line break (or over 200 bytes), a name that is not lowercase letters, digits and `-`, or `default` is one `error`, naming each |
-| `themes.list` | every `theme` (`default` first), then a `setting` for the site and each shortcode that says anything |
-| `themes.get { name }` | the `theme`, or one `error` naming the ones there are |
-| `themes.set { scope, theme?, reach?, takeover? }` | the `setting` as kept — `scope` `site` or a shortcode holding a ticket; `theme` none or `default` adopts none; saying nothing clears it. The site takes neither a reach nor `takeover: off`; an undefined theme is refused |
-| `themes.theme_for { id }` | `regions { id, regions: { site, ticket, frame }, levels }` — each region's `theme` and the `level` it came from (`none`, `site`, `shortcode` with `from`, `ticket`, `frame`), and what each level said |
-| `themes.watch` | `theme` (defined) and `setting` (moved), in order; `lagged { missed }` |
-
-Under login the reads are a viewer's; `define` and `set` an editor's —
-`define` on `*` (a theme is the whole site's), `set` on the shortcode it
-names — and the site's theme takes admin on `*`.
-
-**In the app** each region is its own token scope: the site's tokens on
-`<html>`'s own style, the ticket view's on `#ticket-page`, the frame's on
-the box its body sits in (`.mscope-frame`) — a region wearing its outer
-region's theme writes nothing and inherits. A frame reads its tokens where
-it sits, so it wears its region's. One repaint path (`src/scopes.rs`'s
-`repaint`; THEME-7, below) takes every cause — a theme defined, a setting
-moved, a ticket opened, left or amended, the reader's choice, the
-light/dark toggle — and re-themes every frame and redraws the diagrams in
-place; no reload. The
-root says what each region wears (`data-theme-site`, `data-theme-ticket`,
-`data-theme-frame`: `pantry ticket`).
-
-### On the fly (THEME-7)
-
-Change the theme, or edit it, and every open menger page repaints in place:
-no reload, no blank frame, nothing left in the old colours.
-
-**One repaint path for every cause** (`src/scopes.rs`'s `repaint`): a
-reader's pick — `#/settings` → Themes, or the palette's **`theme <name>`**
-(`theme: pantry`, `theme` alone lists them; "the site's" puts the site's
-back), kept in this browser and reaching its other open tabs through
-`storage` —, an amended ` ```theme ` block or a setting moved (over
-`themes.watch`, so a theme ticket is its own live editor: every open page
-wearing it follows the amend), a project entered or left, and the
-light/dark toggle (also followed by the other tabs), which is only its
-special case. It writes each region's tokens; then, only when what is
-painted moved (the mode, a region's theme, its tokens, its rules or fonts),
-every frame takes its region's (`menger:theme`) and the diagrams redraw —
-the app's own in the colours where each diagram sits. Everything else the
-app draws paints through the tokens (THEME-2's lint), so writing them is the
-whole repaint. The sign-in page wears the site theme the app last painted
-(`menger.themes.site`) from its first paint and follows a change made in
-another tab. Whole-document bodies (MENGER-15) follow light/dark only.
-
-**In a frame, `menger.on('theme', cb)`** (SDK 1.13): `cb({ scheme, theme,
-tokens })` whenever what the frame is painted with moves — called once the
-new tokens are live on `:root`, never for a repaint that moved nothing.
-`menger.theme` is what it wears now. A component that draws with colours in
-JS (a canvas, a colour copied into an attribute) redraws there; one that
-paints through `var(--…)` needs nothing:
-
-```javascript
-return this.menger.on('theme', () => draw());   // tokens are already live on :root
-```
-
-**Motion in the app** (DESIGN-39, LOOK-8): the shell's chrome moves in
-the house's hand — ≤ 200 ms, ease-out in, faster out, from where a thing
-comes from, never delaying focus or a key. The section dock (the rail
-opening and closing, the sheet and the pill, the lit section's edge drawn
-from the side the reading came from, an input's dot popping as it turns,
-the column sliding in past 1760) and the nav tree (a caret turning and the
-children dropping in, the selection's edge growing, a row a `watch` change
-brought arriving, one leaving as a fading ghost, rows settling in after the
-filter moves) first, then the pages, overlays, dialogs and menus (the walk
-is LOOK-8's child doc). `html[data-motion="none"]` stops every animation and
-transition (one `!important` rule; before the setting is stamped, reduced
-motion does the same); `calm` keeps state changes and stops ornament —
-anything that runs forever. `frontend/src/motion_lint.rs` fails when a move
-escapes: an `!important` animation, an infinite one with no `calm` rule, or a
-`requestAnimationFrame`, `.animate(`, smooth scroll or inline transition in
-`frontend/src` outside a function that asks `motion::current()` (the
-next-frame uses that move nothing are listed there, with their reasons).
-
-**Motion in a frame** (DESIGN-40, SDK 1.18): a frame wears the app's
-Motion setting (DESIGN-39's `html[data-motion]`: `full`, `calm`, `none`;
-absent is `full`) as its own `html[data-motion]` — set from the init block
-before the body parses, and followed live (`menger:motion`, one observer on
-the app's `<html>`); `menger.motion` reads it, `none` under reduced motion.
-A re-rendered body (an amend, a preview's keystroke) also wears
-`html[data-entered]`, and a settled frame `html[data-settled]`: the house
-components play their entrance moves once, as each comes into the reader's
-view, from a shown frame — a figure drawing itself, code typing, an option
-settling in, a stat counting up — and a step's glow loops; `calm` keeps
-only the count (and code typing, which has its own setting, below),
-`none` nothing. The frame's document also declares the
-house faces (`<style id="menger-fonts">`, Geist and Geist Mono from the
-app's `/app/fonts/`, named absolutely: its own origin is opaque), which the
-shell answers with `Access-Control-Allow-Origin: *` and outside a session.
-
-**Typed text in a frame** (DESIGN-43, SDK 1.19): `#/settings` → Motion →
-Typed text (`off`, `slow`, `normal` — the default —, `fast`; kept in the
-settings record as `typing`, omitted while `normal`) is stamped on the
-app's `<html>` as `data-typing` and reaches every frame as Motion does —
-`typing` in the init block, `menger:typing { typing }` from the same
-observer, `typing` on `menger:theme` — worn as the frame's own
-`html[data-typing]` (absent is `normal`). `menger.typing` reads it, `off`
-while `menger.motion` is `none`. ART-9's `m-code` types at slow 45 ms,
-normal 22 ms, fast 8 ms a character (comments and a session's output at a
-third of that), blocks up to 600 / 1,200 / 3,600 characters; `off` shows
-the code at once. Motion `calm` no longer stops typing — this setting
-alone decides; Motion `none` and reduced motion still do.
-
-**The sweep test** (`scripts/theme-sweep.mjs`, Playwright from
-`perf/node_modules`) proves it on a throwaway server. It seeds its own
-tickets under `SWEEP` (three themes as ` ```theme ` docs — `pantry`, a
-`garish` one setting every colour and face, `ocean` —, a framed body with
-code, a diagram and house components, a mockup, and THEME-8's table as
-tickets; a `pantry` already owned elsewhere — PANTRY's own — is used as
-it is), opens every route at once — the board, a framed body, a mockup, a
-full-screen ticket, both wave boards, `#/components` and a docs card,
-`#/inputs`, `#/comments`, `#/settings`, the palette, the cheat sheet, a
-menu, MENGER-14's leave dialog and a toast — and switches default → pantry
-→ garish → garish dark → garish light → the site's → ocean → ocean's
-`--accent` amended → default, by the palette, the toggle, `themes set` and
-an amend. After each switch every element of every page, open shadow root
-and frame is scanned (colour, background, borders, outline, fill, stroke,
-font-family): none may hold a value the old theme painted that the new one
-does not (compared as the browser reads them, so `#fff` in one theme and
-`#ffffff` in the other are one value — THEME-6); no page may reload and no frame be replaced; a component's
-`on('theme')` is heard once, after the tokens; the diagrams are redrawn in
-the new `--diagram-*`; a planted element in an old value is found (the
-control). `--rows` checks THEME-8's table region by region, `--project`
-THEME-4's walk (`#/board` → a project's ticket → back: two repaints, no
-reload, the shell's and the frame's tokens the project's; a hosted
-shortcode inheriting and then saying its own; "project themes off" from
-another tab; `--project-ticket PANTRY-4` walks into that ticket's
-shortcode), `--signin-shell` the sign-in page:
-
-```sh
-cargo build && (cd frontend && trunk build --release)
-cp ~/.local/share/menger/tickets.db /tmp/sweep.db      # a copy; never prod's file
-op=$(node scripts/throwaway-login.mjs key /tmp/sweep.key)   # ACCESS-52: the sweep's own key, never ~/.plexus
-PLEXUS_NO_REGISTRY=1 target/debug/menger --port 4510 --shell-port 4511 --db-path /tmp/sweep.db \
-  --auth-provider key --admin "$op" &   # ACCESS-24: a provider, always
-node scripts/theme-sweep.mjs --ws 4510 --shell 4511 --key /tmp/sweep.key --seed --browsers chromium,firefox --rows --project
-```
-
-It signs in with `--key` (a session minted with it: synapse's
-`--token-file`, every page's session cookie — "Throwaway servers" below).
-It refuses prod's and test's ports (4450–4458): it writes. Exit 0 when every
-check held; `report.json` and a screenshot per switch land in `--out`.
-
-### A theme is a ticket (THEME-3)
-
-A theme is written in a ticket's body, as a block — usually a doc under the
-project it dresses — and the registry keeps it the way it keeps components
-(COMP-3):
-
-````markdown
-```theme pantry extends=default
-@import url("https://fonts.googleapis.com/css2?family=Fraunces:wght@400;600&display=swap");
-:root { --accent: #d4572a; --font-display: "Fraunces", serif; --radius: 6px; }
-:root[data-theme="dark"] { --accent: #f08a5d; }
-@font-face { font-family: "Plex"; src: url(https://example.org/plex.woff2) format("woff2"); }
-m-ring::part(ring) { outline: 1px solid var(--accent); }
-```
-````
-
-- **What a block may say** — looks only (THEME-1, `skins`): tokens of the
-  contract in `:root` (light; a token that is not a colour holds in dark
-  too) and `:root[data-theme="dark"]`; `@font-face` (`font-family`, `src`,
-  `font-weight`, `font-style`, `font-display`, `font-stretch`,
-  `unicode-range`); `@import url("https://…")` (a font's stylesheet); and
-  `m-name::part(part)` rules (with `:hover`, `:focus`, `:focus-visible` or
-  `:active`), never `behavior`, `-moz-binding`, `content`,
-  `pointer-events`, `expression(` or `javascript:`. **Fonts come from any
-  host** (THEME-1, `fonts`: owner, any URL) — over https only; the frame's
-  CSP (`connect-src 'none'`) leaves styles and fonts free, and the bundles
-  menger serves itself (mermaid, the highlighter) still name no CDN.
-- **Validated on write** (`tickets.create`, `amend`, `update`): anything
-  else is one in-band `error` naming the block and its line — ```` ```theme
-  pantry: line 2: `--nope` is not a token of the contract ```` — and
-  nothing is written, the title included; so is a second block of one
-  name, `default`, or an `extends` that goes round (named:
-  `pantry → deep → sea → pantry`).
-- **One owner, orphans, adoption.** The ticket whose body holds the block
-  owns the theme; another ticket's block naming it is refused, naming the
-  owner, and so is `themes.define` over it. When the block goes the theme
-  is an orphan — kept, read-only, while a ticket's frontmatter, a setting
-  or a live theme's `extends` uses it, and removed by the write that leaves
-  it unused. A block naming an orphan (or a theme `define` made) adopts it.
-- **`extends`** chains to `default`: a theme states only what differs.
-  `themes.get` / `list` answer what each says itself (with `owner`,
-  `orphan`, `extends`, `rules`, `imports`); the app paints it flattened.
-- **`watch`** says `theme_changed` (defined, a block written, orphaned or
-  adopted) and `theme_removed`.
-- **The swatch sheet.** In its owning ticket the block renders (the body
-  frames) as a sheet: the theme beside `default`, light and dark — paper
-  and ink, a title in the display face, a link, every status chip, every
-  kind glyph, a highlighted code block and a decision, the theme's
-  `::part`s scoped to its panels — and every token of the contract, both
-  themes, both modes. A block the server would refuse shows the refusal.
-- **Painted**: a region wearing a theme also names it (`--menger-theme`),
-  so a frame is handed its theme's rules with its tokens (`menger:theme`'s
-  `css`); the app's own document takes the fonts of every theme a region
-  wears (`<style id="menger-theme-fonts">`).
-
-### Parts to skin, and the house redone (THEME-5)
-
-A theme changes how a house component looks, never what it does (THEME-1,
-`skins`): through the tokens, and through the **parts** each component
-exposes. A component documents its parts in its `<docs>` —
-
-```html
-<template><section class="f" part="section"><header part="head"><span class="l" part="label"></span>…</header>…</section></template>
-<docs>
-  <part name="section">The section the field is.</part>
-  <part name="label">The field's label.</part>
-  <part name="submit" scripted>Submit (the script makes it).</part>
-</docs>
-```
-
-— and a theme skins them: `m-field::part(label) { font-family: var(--font-display); }`.
-A documented part the template does not carry is refused by the write that
-holds it, so a part in the docs is always one the component exposes. The
-docs card (a definition's card, `#/components/<name>`) lists them under
-**parts a theme may skin**, each as the selector a theme writes.
-`MENGER_HOUSE_BODIES=a.md:b.md cargo test -p menger-tickets-api house_bodies`
-files bodies on a throwaway store and fails unless every component they
-define (but one that renders nothing) documents its parts — the check the
-house's own bodies are held to before they are filed.
-
-The house components (ART-9; m-cite in COMP-15; m-ring and m-dial in
-DESIGN-26; m-sponge in DESIGN-20) live in the tracker, not here. THEME-5's
-versions — less chrome (a field is a section under a quiet label, the panel
-an option: `panel` on the tag), columns not rows (two options or cards side
-by side, more than two or under 720px stacked), the display face for what
-leads (a summary's lead, a question, a stat, an option's name), two new
-components (`m-beat`, a claim beside its figure; `m-walk`, numbered steps
-lit as they scroll in), and parts on every one — are filed by amending
-their owners when the owner approves the look. A frame's base styles and
-the app's bodies set headings in `--font-display`.
-
-### The token contract (THEME-2)
-
-Everything menger draws takes its colours, faces, sizes, radii and timings
-from one named set of tokens, and nowhere else. **The contract is one file,
-`tickets-api/src/tokens.toml`**: a table per group, a line per token — its
-light value, its dark value (only a colour says a different one) and what
-it paints:
-
-```toml
-[colour.accent]
-"--accent" = ['#0066cc', '#8ab4f8', "links, ids, the selected row's bar, focus"]
-```
-
-| group | tokens |
-| -- | -- |
-| `colour.paper`, `.ink`, `.line`, `.chip`, `.accent`, `.signal` | `--bg --panel --card --hover --row-sel --sel --scrim --shadow`, `--ink --muted`, `--line --tree-line`, `--chip-*`, `--accent --annot --annot-hi`, `--live --err-*` |
-| `colour.status` | `--st-<status>-bg` / `-fg` for every status (`.st-<status>` reads its pair) |
-| `colour.kind`, `colour.code` | `--kind-*` (AGS-13's glyphs), `--code-*` (MENGER-22's highlighting) |
-| `colour.diagram` | `--diagram-node --diagram-border --diagram-line --diagram-text` — `auto` (mermaid's own palette for the mode) unless a theme names a colour, which the app and every frame set into mermaid's `themeVariables` |
-| `type.face`, `.scale`, `.weight` | `--mono --sans --font-text` (the app's text) `--font-display` (a ticket's title); `--text-size --text-leading --text-scale` (every other size is `calc(N * var(--text-scale))`); `--weight-normal/-medium/-strong/-bold` |
-| `space`, `.safe` | `--space` — density, multiplying the page's gutters; `--safe-top --safe-right --safe-bottom --safe-left` — the screen's safe area (APP-65: `env(safe-area-inset-*)`, or `--sai-*` from a mockup's phone, APP-66) |
-| `shape.radius`, `.border` | `--radius-xs … --radius-2xl`, `--radius-bubble --radius-device --radius-phone --radius-pill`; `--border` (every hairline's width) |
-| `motion` | `--motion-fast --motion-flash --ease` |
-
-Everything else is produced from it: `themes::TOKENS` reads it (a theme
-naming anything else is refused; a frame receives exactly these), and
-index.html's `:root` blocks — light, and dark twice (the media query and
-the toggle's attribute) — are generated between `/* tokens:begin */` and
-`/* tokens:end */`. **Edit the contract, never the blocks**:
-`MENGER_BLESS=1 cargo test index_htmls_token_blocks` in `frontend/`
-rewrites them, and the gate fails while they differ.
-
-**The lint** (`frontend/src/tokens_lint.rs`, in the gate) fails on a colour
-(`#hex`, `rgb()`/`hsl()`, a named colour), a face (a family named in
-`font-family:` or `font:`) or a radius (a length in `border-radius`; `0`
-and a percentage are shapes) written anywhere but the contract: index.html's
-stylesheet, the frame SDK (`sdk/menger-sdk.js`) and `frontend/src`. Test
-modules are exempt; a line that parses a colour the browser computed says
-`tokens-lint:` at its end; an `@font-face` line declares a family and is
-not a face written. The default theme is the contract's values (THEME-2's
-look; since DESIGN-38 its faces are Geist and Geist Mono, self-hosted from
-`frontend/fonts/` at `/app/fonts/` — OFL, `fonts/OFL.txt` — with the system
-stacks as fallbacks; a frame's document falls back to those stacks). House
-components (ART-9's, DESIGN's) paint with the same tokens — no private
-palette.
-
-### Login (IDENTITY-14)
-
-**The login is a crate of its own, [`plexus-login`](plexus-login/README.md)**
+A shortcode is unique within its namespace — its organization and the
+shortcode it is hosted under — so two shortcodes named THEME may exist under different
+hosts. A ticket carries `epic` (the letters), `shortcode` (the store's
+identity: the code, or `CODE.N` for a namesake) and `address`
+(`hypermemetic:MENGER/ACCESS/ORG-3`). Every `--id`, `--parent`,
+`--blocked-by`, `--epic` and `under` takes any short form of the address;
+an id older than ORG-3 is pinned. A name that fits two is refused in band
+(`ambiguous { id, candidates }`). A code may hold hyphens (ORG-9:
+`SYNAPSE-CC-1` is ticket 1 of `SYNAPSE-CC`). A scope roots its own
+shortcode (ORG-5): `create --kind scope --epic NEW --parent X`.
+
+### Organizations (ORG-4) and epics (ORG-13, ORG-23)
+
+Every ticket and shortcode is in one organization (`hypermemetic`).
+`orgs create --name N --admin P` (admin on `*`), `rename` (the old name an
+alias), `delete` (only empty). A grant's scope is `*`, `org:`, a shortcode
+(`org:SHORTCODE`, with those hosted under it), a ticket alone (`MNG-40`) or
+a subtree (`under MNG-40`, ACCESS-21). A reader sees only the organizations
+it holds a role in.
+
+An **epic** is a level of an organization that holds shortcodes:
+organization → epic → shortcode → ticket. Each organization starts with
+`genesis`; a principal reads in its own epic (its `switch`, else the
+organization's default). `epics archive` moves everyone on it to the next
+newer live epic in one write (`--dry-run true` first); an archived epic's
+tickets are in no view unless a filter names it or `archived`. `tickets
+reshortcode --to org:epic:CODE` moves tickets between epics.
+
+## Login (IDENTITY-14)
+
+The login is a crate of its own, [`plexus-login`](plexus-login/README.md)
 (SCAFFOLD-3, SCAFFOLD-9): the provider specs, the login page and its
-routes, the sessions, the gate at the upgrade and the `auth` backend live
-there, generic over one trait, `LoginAccess`, which menger implements over
-its members and sessions (`src/login_access.rs`: `MengerAccess`). `main`
-wires it with `plexus_login::Wiring` from the flags below; any other Plexus
-app takes the same crate (its README has the dozen lines, with ready-made
-in-memory rules, `SimpleAccess`). menger's cookie and metadata names are
-`plexus_login::LoginNames::for_app("menger")` — `menger_session_<port>`,
-`menger_login_<port>`, `menger_dev_login` — the same as before the lift, so
-a signed-in browser stays signed in. What follows is menger's flags and
-behavior; the crate's README is the reference for the pieces.
-
-menger does not know identity providers; it knows **Plexus identities**.
-Each `--auth-provider` names a provider, and becomes that provider's
-**adapter** (plexus-auth-core's `adapters`, IDENTITY-13). The adapters sit
-in one chain at the WebSocket upgrade. Whichever claims a caller's
-credential verifies it and turns it into the same Plexus types: a
-principal, a name, roles and a tenant. Past the upgrade there is only the
-connection's identity: `session.whoami` reports it, and `comments.add`
-signs with it. ACCESS-24: at least one `--auth-provider` (or `--identity`)
-is required — with none, menger refuses to start, naming the flag.
+routes, the sessions, the gate at the upgrade and the `auth` backend,
+generic over `LoginAccess`, which menger implements over its members and
+sessions (`src/login_access.rs`). Each `--auth-provider` becomes an adapter
+at the WebSocket upgrade that turns its credential into a Plexus identity;
+past the upgrade there is only the connection's identity.
 
 | `--auth-provider` | the credential | principal |
 |---|---|---|
-| `idp=<issuer>,<audience>` | a plexus-idp token (its password grant, or its nostr grant) | `idp:<uuid>` |
-| `auth0=<domain>,<audience>[,<roles-claim>]` | an Auth0 access token; roles from the namespaced claim an Auth0 Action adds | `oidc:auth0/<sub>` |
-| `oidc:<name>=<issuer>,<audience>[,<roles-claim>]` | any OIDC provider's RS256 token (Logto, Keycloak, …) | `oidc:<name>/<sub>` |
-| `workos=<client-id>[,<api-base>]` | a WorkOS access token (AuthKit, social, SSO) for that client: issuer `…/user_management/<client-id>`, audience in `client_id` (IDENTITY-30) | `oidc:workos/<user id>` |
-| `nostr=<ws-url>[,<ws-url>…]` | a NIP-98 event (kind 27235) naming that URL, method GET, under a minute old, used once | `nostr:<hex>` |
-| `key` or `key=<ws-url>[,<ws-url>…]` | an agent's Ed25519 key proof naming this socket (IDENTITY-42; "Agents" below) | `key:<hex>` |
+| `idp=<issuer>,<audience>` | a plexus-idp token | `idp:<uuid>` |
+| `auth0=<domain>,<audience>[,<roles-claim>]` | an Auth0 access token | `oidc:auth0/<sub>` |
+| `oidc:<name>=<issuer>,<audience>[,<roles-claim>]` | any OIDC provider's RS256 token | `oidc:<name>/<sub>` |
+| `workos=<client-id>` | a WorkOS access token (IDENTITY-30) | `oidc:workos/<user id>` |
+| `nostr=<ws-url>[,…]` | a NIP-98 event | `nostr:<hex>` |
+| `key` or `key=<ws-url>[,…]` | an agent's Ed25519 key proof (below) | `key:<hex>` |
 
-Several providers can be configured together. An OIDC adapter claims a
-token by its `iss`, and the nostr adapter claims an event, so each
-credential reaches its own adapter. The credential rides the upgrade in the `access_token`
-cookie (a token), the `nostr` cookie (an event: a browser can only send
-cookies), or `Authorization: Bearer`. AUTH-7: no credential at all is the
-**anonymous view** — the connection is admitted and can reach only the auth
-door (`auth.providers`, `auth.login`, `auth.signup`; "The AUTH protocol"
-below); a credential presented as a bearer or the `access_token` cookie and
-refused is a 401 at the upgrade, with RFC 6750's challenge. (A bad `nostr`
-cookie, or a stale browser session cookie, presents nothing: the anonymous
-view.) The shell's pages are always behind the login page (ACCESS-24:
-`--require-login` was the flag, and is now the only mode; there is no REST
-bridge, which could not carry an identity). `MENGER_AUTH_PROVIDERS` takes
-the specs separated by `;`. A bad spec, or an issuer that is not
-`https://` off loopback, stops startup.
+No credential is the **anonymous view** — `auth.providers`, `auth.login`,
+`auth.signup` and `session.providers`, nothing else; a credential presented
+and refused is a 401 at the upgrade. `--identity` puts menger's own sign-in
+page over an identity backend (AUTH-22: `workos:…`; `plexus-idp:…` and
+`memory` with `--env test` only). `tests/login.rs` runs each provider over
+the real wire.
 
-| method | yields |
-|---|---|
-| `session.whoami {}` | `identity { principal, name, roles, tenant, provider }`. A signed-out or expired session is refused `unauthenticated` (ACCESS-19), as an anonymous connection is (AUTH-7: it asks `auth.*`) |
-| `session.providers {}` | one `provider { name, kind, issuer, audience }` per `--auth-provider` (`kind` `oidc` or `nostr`): what a sign-in needs, nothing secret |
-
-`comments.add` is signed by its caller (ACCESS-19): authored by its
-identity's name (its principal when it has none); `add` has no `author`
-parameter. `session.whoami`, `login` and `logout`
-verify their caller as every method does — a signed-out or expired sign-in
-is refused `unauthenticated` — and `session.providers` is `public`: an
-anonymous connection's view holds it beside `auth.*`.
-
-```sh
-# a dev server admitting plexus-idp, an Auth0 tenant and nostr keys
-PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --db-path /tmp/menger-dev.db \
-  --auth-provider idp=http://127.0.0.1:4481,plexus:menger \
-  --auth-provider auth0=https://acme.auth0.com/,https://menger.example,https://menger.example/roles \
-  --auth-provider nostr=ws://127.0.0.1:4460/
-synapse -P 4460 -t "$TOKEN" menger session whoami        # -t sends Cookie: access_token=<jwt>
-synapse -P 4460 --cookie nostr="$EVENT" menger session whoami
-```
-
-`tests/login.rs` runs each provider over the real wire against fixture
-issuers.
-
-**The purge** (ACCESS-24; ACCESS-4 C2, ACCESS-3 #11). While menger could
-run with login off, every caller acted for no one, and a grant one wrote
-was kept signed `granted_by = --admin` — the operator's mark (an anonymous
-REST `members.grant` once made a stranger admin on `*` that way; ACCESS-51:
-`orgs create --admin P`). Under login every write is signed by a
-principal and the operator's own `--admin` grants are never stored, so a
-stored row signed `--admin` is one written while open. The first start of
-this build on a database removes each such grant, and each team membership
-added by `--admin`, unless an `--admin` principal of that start accounts for
-it (the row's principal is one the operator names, admin on `*` by the flag
-anyway): one transaction, which also writes its mark — the `open_purge`
-table's one row, when, what was removed, what was kept. Each removal is
-logged (`ACCESS-24: removed, planted while open: …`, a warning), the total
-once; a later start finds the mark and does nothing; a purge that fails
-stops the start (`Store::purge_open_grants`,
-`tickets-api/src/store/open_purge.rs`). Grants made under login — a
-principal's, `auth.grant`'s, the dev sign-in's — are never touched.
-
-**In the app** (IDENTITY-15): `#/settings` opens on a **Sign in** group
-with one button per provider that `session.providers` lists. For an OIDC
-provider, the app reads the provider's discovery and sends the username and
-password to its token endpoint (the password grant, which plexus-idp
-offers and Auth0 offers when enabled). It keeps the token in the
-`access_token` cookie for the token's lifetime. For nostr, a NIP-07
-extension signs a fresh NIP-98 event for the WebSocket URL before every
-connect, and the event goes in the `nostr` cookie for a minute. menger
-never sees a password. Signing in or out reloads the app, so a new session
-connects with the credential. The header shows `whoami`'s name, or
-`sign in`. The cookies are this page's host's, so sign-in reaches only a
-backend on the same host, not one set from `#/settings` elsewhere.
-
-### The login page (IDENTITY-19)
-
-With providers configured, the shell serves **`/login`**, a traditional
-sign-in page: a username and password (one provider's password grant),
-**Continue with …** buttons (`--login-button Google=auth0:google-oauth2`,
-`Apple=auth0:apple`, `SSO=auth0:samlp`) that run the provider's
-authorization code flow with PKCE and a connection hint, and **Continue with
-nostr** when a NIP-07 extension is present. Each way in ends the same way:
-the provider's token is verified by its adapter **in the shell**, a session
-starts, and the browser gets an `HttpOnly; SameSite=Lax` session cookie.
-No script on any page can read a credential. The cookie is named for the
-shell (IDENTITY-38): `menger_session_<port>` over http — cookies ignore
-ports, so prod (`_4456`) and test (`_4451`) on 127.0.0.1 keep apart — and
-`__Host-menger_session` over https. Only it is read from a browser's
-cookies; a provider's token reaches the socket as `Authorization: Bearer`.
-Every shell response refuses framing (`frame-ancestors 'none'`), and the
-page shows only its own words (no `?error=` text).
-
-**Security headers** (ACCESS-28). Every answer the shell gives carries
-`X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin` (nothing
-goes to another origin; `no-referrer` would make a browser send `Origin:
-null` on the sign-in and sign-out forms' POSTs, which their Origin check
-refuses) and `X-Frame-Options: DENY` with at least `frame-ancestors 'none'`.
-The app's pages — `/`, `/app/`, `/vanilla`, "not built" — go out under
-`src/shell.rs`'s `PAGE_CSP`, filled per page by plexus-shell:
-
-```text
-default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'sha256-<each inline block>';
-style-src 'self' 'unsafe-inline' https:; font-src 'self' data: https:; img-src 'self' data: blob:;
-connect-src 'self' ws://<host>:<ws port> wss://<host>:<ws port> ws://127.0.0.1:* ws://localhost:*;
-frame-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'
-```
-
-No inline script runs but the page's own (hashed when the build is read),
-nothing executes from another origin, a remote image in a body shown in the
-app is refused (it would tell its host who reads it), styles and fonts may
-come over https (a theme's `@import`), and the app connects to itself, its
-hub and — for `#/settings`' other backend — loopback. The sign-in pages keep
-plexus-login's own policy (their blocks hashed, `default-src 'none'`). The
-frame document (`/app/frame`, public: it holds no data) goes out under
-`connect-src 'none'; form-action 'none'; frame-ancestors 'self'` and
-`X-Frame-Options: SAMEORIGIN` — IDENTITY-28's policy, and framed by the app
-alone; a body's scripts, styles, images and fonts load as before. The
-landing (menger.sh) is served by the edge under its own (`landing/menger.sh.caddy`). The page is
-self-contained (`plexus-login/web/login.html`), so an IdP can host it later.
-
-**The first paint** (APP-92). The app's page is a few KB: the build
-(`frontend/boot/split.mjs`, trunk's post_build hook) keeps in
-`index.html` only the tokens and the boot sheet — painted from the page
-itself, the carpet, the last load's ticket count and a bar — and moves the
-rest of the stylesheet to `/app/app-<hash>.css`, which the page's boot
-script loads; the sheet stays until that is in and the route's first view
-is drawn (nothing marked `data-pending`, no "Checking your access…"), then
-wipes (calm: fades; none or reduced motion: a still sheet, gone at once).
-The app's code — every file of the build under `/app/` but a page — is
-public, so it downloads **behind the sign-in page**: the page registers
-the service worker (`/sw.js`, `worker-src 'self'` in its policy), which
-keeps the build's script, wasm, stylesheet and faces (one cache per build)
-and the app's page (stale-while-revalidate: a reload draws the sheet
-without the network; a fetch that answers "signed out" drops it and
-reloads the open pages onto the sign-in page; `POST /logout` drops it).
-A file named with its build hash goes out `immutable`, `index.html` and
-`sw.js` `no-cache` (plexus-shell). Every button on the sign-in page locks
-when pressed — a spinner on the pressed one, a second press sends nothing
-— and unlocks on failure or a page brought back from history.
-`scripts/first-paint.mjs` measures it (first paint, empty frames, the
-double press) at 390, light and dark, fast and slow 3G.
-
-The whole app is behind it (ACCESS-24: always; `--require-login` was the
-flag). `/`, `/app/` and `/vanilla` redirect to `/login?next=…` (the
-app's code under `/app/` does not, APP-92). AUTH-7: with any provider, the socket admits an
-upgrade without a session or a provider token into the anonymous view (the
-auth door, nothing else), the protocol's gate decides **every call**, and
-**every method re-checks its caller's sign-in on every call**
-(`tickets-api/src/access.rs`). Signing out (`POST /logout`) or a session
-expiring stops an open socket from answering, and ends its `watch`. The socket
-admits browser pages only from the shell's own origins (IDENTITY-29, with or
-without login; synapse sends no Origin). POSTs from another origin and requests
-naming another `Host` are refused (the latter on every port, login or not —
-ACCESS-25).
-
-| flag | |
-|---|---|
-| `--login-button <Label>=<provider>[:<connection>]` | a button; the provider needs `client=<id>` in its `--auth-provider` |
-| `--login-email <provider>[:<connection>]` | an email field, handed to that IdP as `login_hint` (`workos:authkit`); beside it the password form shows only at `/login?password` |
-| `--login-password <provider>` | where the password form goes (default: the first OIDC provider that takes passwords, not WorkOS); `none`: no form |
-| `--login-forgot <url>` | a "Forgot password?" link |
-| `--public-url <url>` | where people reach the shell; the redirect URI's base (default `http://127.0.0.1:<shell-port>`) |
-| `--allowed-origin <origin>` | another origin whose pages may open the socket |
-| `--allowed-host <host>` | another `Host` every listener answers to (ACCESS-25, README "Run" → Hosts) |
-| `--bind <addr>` | the address every listener is bound to (RUN-8, README "Run" → Bind; default `127.0.0.1`) |
-| `--session-hours <n>` | how long a sign-in lasts (default 12) |
-
-`GET /login/me` answers who the session is, or 401. Sessions live in memory,
-so a restart signs everyone out (IDENTITY-18 G2). `tests/login_page.rs` runs
-each way in against fixture issuers.
-
-**WorkOS** (IDENTITY-30) is the IdP behind menger's own page: the page
-comes first, offers a curated list, and hands each choice to WorkOS. With
-`--login-email workos:authkit` the page has an email field: the address goes
-to AuthKit as `login_hint`, so an SSO domain goes straight to its company's
-IdP, and anyone else finishes on AuthKit's page (password, passkey, a code by
-email) with the address filled in. `--login-button Google=workos:GoogleOAuth`
-(also `AppleOAuth`, `MicrosoftOAuth`, `GitHubOAuth`, a `conn_…`, an `org_…`)
-goes through WorkOS straight to that provider, with no AuthKit page between.
-nostr sits on the same list. menger is a public client: the code flow runs
-with PKCE and no secret, and menger holds no API key. WorkOS's access token
-names nobody, so the person's name and email come from the authenticate
-response's `user`, which must be the token's own subject. Signing out ends
-the WorkOS session too, and comes back to `/login`. The environment lists
-`<public-url>/login/callback` as a redirect URI and `<public-url>/login` as a
-logout URI (`workos authkit redirect-uris set …`, `workos authkit logout-uris
-set …`).
-
-**Our own sign-in page** (AUTH-22): `--identity <spec>` puts menger's own
-page in front of an **identity backend** chosen by configuration — WorkOS's
-User Management API with no AuthKit screen (`workos:<client_…>,social=google+github+apple`),
-plexus-idp's password grant (`plexus-idp:<issuer>,<audience>`, local only),
-or the in-process `memory` backend (tests, development). The page offers
-exactly what the backend can do: an email field (a six-digit code by email,
-or straight to the company's IdP for an SSO domain), a password form, a
-button per social provider, a TOTP code when the account has a factor, and
-`/login/account` to add or remove an authenticator app. Every call to the
-backend is made by the shell; WorkOS's API key comes from
-`MENGER_WORKOS_API_KEY` or `key=@<file>` and never rides a flag, a page or a
-log line. A sign-in ends in menger's own session, as every way in does; the
-backend's tokens stay server side beside it, are refreshed, and are revoked
-at sign-out (`POST /logout`, which lands on `/login` or a `next` the return
-rules allow). The hosted-AuthKit buttons above stay available beside it,
-and stay the default until `--identity` is set.
-
-| flag | |
-|---|---|
-| `--identity <spec>` | the backend (`MENGER_IDENTITY`); its provider joins the gate's, so its tokens open the socket as a bearer; `memory` and `plexus-idp` only with `--env test` |
-| `--trusted-proxy <cidr>\|none` | the edge whose `X-Forwarded-For` is believed for the client's IP (repeatable) — by the login throttles and the WebSocket's per-IP and anonymous quotas (TRANSPORT-7), or `none` when people connect directly; with `--identity` off loopback one is required (AUTH-24) — behind the infra's Caddy, the edge's address on the `edge` Docker network |
-| `--return-origin <origin>` | another origin a sign-in may return to (repeatable) |
-
-**The direct buttons with the key** (IDENTITY-45). WorkOS answers a direct
-social sign-in with a pending step when it needs one — always
-`email_verification_required` for a user whose address it has not verified
-(email verification is always on), and Radar's extra code, an organization
-to pick or a second factor — and every grant that completes such a step
-needs the client secret. So when menger holds the environment's API key
-(`--workos-api-key-file <file>`, `MENGER_WORKOS_API_KEY_FILE`; or the key in
-`MENGER_WORKOS_API_KEY`), a `workos=` provider's social `--login-button`s
-(`GitHub=workos:GitHubOAuth`, …) are drawn and completed by the page above
-over the WorkOS backend: the same `provider=…` round trip with PKCE, the code
-traded with the secret beside the verifier, and each pending step on its own
-page — *Verify your email* ("We sent a code to <address>"; *Send another
-code*; a wrong or expired code said so), Radar's code, *Choose an
-organization*, two-step verification. The pending token stays in the
-sign-in's server-side flow, never in a URL, a cookie or a log. No email
-field and no SSO by domain come with it; `--login-email workos:authkit`
-stays AuthKit's. Without a key nothing changes: the buttons are the PKCE
-path. On the box the key is a secret file (`/run/secrets/workos-api-key`,
-deploy/README.md "The WorkOS key on the box").
-
-The WorkOS environment lists `<public-url>/login/callback` as a redirect URI.
-plexus-login's README ("Our own sign-in page") has the safety design, the
-capability model and how a backend is swapped.
-
-**Automation signs in with plexus-idp** at **`/login?password`**: beside an
-email field, the password form (`--auth-provider idp=…`, the default password
-provider) shows only there, so the smoke and the end-to-end scripts never
-depend on WorkOS.
-
-```sh
-menger --auth-provider 'workos=client_01…' --auth-provider idp=http://127.0.0.1:4481,plexus:menger \
-  --login-email workos:authkit \
-  --login-button Google=workos:GoogleOAuth --login-button Apple=workos:AppleOAuth
-```
-
-### Members and roles (IDENTITY-21)
-
-With login on, **menger's own members** decide what each person sees and
-changes. The IdP only proves who someone is. A grant gives a principal a
-role on a **scope**: a shortcode, which covers the shortcodes hosted under
-it (the filter language's `under`, so a grant on PLEXUS reaches IDENTITY),
-or `*`. ORG-4: or an organization (`acme:`), and a shortcode is kept in its
-organization (`hypermemetic:PLEXUS`) — "Organizations" above. ACCESS-21:
-or one ticket — `MENGER-12`, the ticket alone (not its parent, not its
-children), or `under MENGER-12`, the ticket and everything below it —
-written as any address of the ticket and kept by its key, so the grant
-follows the ticket through `set_parent` and `set_kind`.
-
-A role on a ticket alone reads it where its shortcode's tickets are read:
-`list` and the board answer it, the nav draws it at its shortcode's top
-(its parent out of reach), its inputs and comments are its; its
-`child_count` is the children in reach (none, alone). An editor on it may
-change it and answer its inputs, but files nothing under it, nor moves
-anything there: a parent takes the role on what is below it (`under` it or
-wider). Admin on a ticket's scope is admin on a scope covering it — `*`,
-its organization, its shortcode or a host's, `under` it or an ancestor;
-admin on the ticket alone grants on it alone, not on its subtree. The
-gate's chain for a ticket holds its key bare (the ticket alone) and `under`
-its key and each ancestor's (the subtrees it is in); a session's ceiling
-on a ticket (`editor@MENGER-12`) is minted `editor@under MENGER-12`, it and
-its subtree, as before.
-
-| role | may |
-|---|---|
-| `viewer` | read under the scope, and comment |
-| `editor` | also create and change tickets, and answer inputs |
-| `admin` | also grant and revoke roles on the scope |
-| `deployer` | (DEPLOY-14) read under the scope and record its deployments — a CI's key; beside the line above, not on it |
-| `chatter` | (CHAT-16) the chats it is in on the scope — read, post, mark read, close, rename, its images — and nothing of the tickets (no `tickets.*`; a viewer's permit is never minted from it). Made by an admin's `chats.add --grant chat`, on the ticket alone (or, outside tickets, the organization); beside the line, not on it |
-
-Every read is answered under the caller's filter **and** their viewer
-scopes. `list --filter 'status Ready'` from someone with IDENTITY and OUGHT
-is `status Ready and under in (IDENTITY, OUGHT)`. A ticket out of reach is
-`not_found` — and never named in a row that is (ACCESS-10: "Reads through
-a reach"). `groups`, `extents`, `waves`, `health` and `watch` hear only
-what is in reach. A write needs the role on every ticket it touches — AUTH-7:
-refused by the gate, typed (`forbidden { grant: tickets.amend, scope: OUGHT,
-roles, held_on }`). A comment is signed with the
-caller's principal (`principal` beside `author`); no call names its author.
-Someone signed in with no grant reaches nothing (but what `everyone`
-holds, ACCESS-57, below) and waits in `members.requests` for an admin. ACCESS-24: there is no login off; a grant
-planted while there was is purged ("Login" → The purge).
-
-| method | yields |
-|---|---|
-| `members.mine {}` | `me { principal, name, admin_everywhere }`, then `grant { grant }` each |
-| `members.list { scope? }` | the grants on the scopes the caller administers |
-| `members.grant { principal \| team \| everyone: true, scope, role }` | the grant as kept; needs admin on the scope (`scope`: `*`, `acme:`, a shortcode, a ticket, `under` a ticket) |
-| `members.revoke { principal \| team \| everyone: true, scope }` | `revoked { principal, scope, existed }` |
-| `members.requests {}` | `waiting { principal, name, provider, since }` per person without a grant — an admin of `*` only (ACCESS-19: the list is every sign-in) |
-| `members.pairing { code }` | TETHER-12: `waiting { … }` per machine key on that list whose pairing code (`menger_tickets_api::pairing`) is `code` — typed in any spelling (`mmg4 2klg` is `MMG4-2KLG`); an admin of any scope, and nothing else of the list. `#/pair`'s field asks it |
-| `members.teams.list { org? }` | ACCESS-22: `team { name, org, created_by, at, members }` per team in the caller's organizations |
-| `members.teams.show { team }` | the `team`, a `team_member { member }` per principal in it, then a `grant` per grant it holds on a scope the caller administers |
-| `members.teams.create { name, org? }` | the `team`, empty; needs admin somewhere |
-| `members.teams.add { team, principal }` / `remove` | `team_member { member }` / `team_left { team, principal, existed }`; needs admin on every scope the team holds |
-| `members.teams.rename { team, to }` / `delete { team }` | the `team` / `team_deleted { team, grants, members }` — its grants go with its name, and with its end |
-
-**Teams** (ACCESS-22) give a group the same base access: a team is a
-name (lower-kebab, unique app-wide) in an organization, and a set of
-principals; `members grant --team crew --scope OUGHT --role viewer` grants
-to it (`principal: team:crew`, kept in the `members` table as any grant),
-and each of its members holds what it holds beside their own grants — the
-higher role on a scope wins, whichever way round. `members.mine` says the
-caller's teams (`team`, after `me`) and the grants each holds. Who may do
-what (owner, 2026-10-09): a team is made by an admin of somewhere; who is
-in it, its name and its end are changed only by one who is admin on
-**every** scope it holds a grant on (admin of `*`, on any), checked again
-by the store under its lock against the grants as they stand; granting to
-it is admin on the scope, as for a person. Every change to who is in a team
-moves the grants generation, so its members' open sockets follow at once
-(ACCESS-12: a watch stops hearing a team's scopes the moment its watcher
-leaves it). Stored form 13 adds the `teams` and `team_members` tables: a
-file in form 10, 11 or 12 gains them, empty, in place; an older build reads
-a form-13 file as its own and knows no team's members, so a team's grants
-reach no one there. An organization holding a team is not deleted.
-
-```sh
-synapse -P 4450 -t "$ADA" menger members teams create --name release-crew
-synapse -P 4450 -t "$ADA" menger members grant --team release-crew --scope 'under MENGER-5' --role editor
-synapse -P 4450 -t "$ADA" menger members teams add --team release-crew --principal idp:c952acd3-…
-synapse -P 4450 -t "$ADA" menger members teams show --team release-crew
-```
-
-**Everyone** (ACCESS-57) is the grantee every signed-in principal is — a
-person or a key — so a shortcode can be open to all users, someone still
-waiting for access included: `members grant --everyone true --scope DOCS
---role viewer` keeps the grant to `principal: everyone` (a row of the
-`members` table like any other; no principal is one word, so none is
-`everyone`). Each signed-in caller holds it beside its own grants and its
-teams' — the higher role on a scope wins — within its session's ceiling;
-the anonymous caller holds nothing of it (the gate asks grants only of a
-principal). It is never `admin` (refused, nothing written), it takes admin
-on the scope as any grant, and a grant or revoke moves the generation, so
-open sockets follow. `members.mine` and `auth.whoami` list it (`grant {
-principal: everyone }`), so the app draws the nav for someone holding only
-it. Waiting is about one's own grants: someone holding none of their own
-stays in `members.requests` until an admin grants them something. (AUTH-7's
-`auth.waiting` asks the gate's memberships, which hold everyone's grant, so
-it lists only those who hold nothing at all.) An older build reads the row
-as no grant it knows and holds it nowhere.
-
-```sh
-synapse -P 4450 -t "$ADA" menger members grant --everyone true --scope DOCS --role viewer
-synapse -P 4450 -t "$ADA" menger members revoke --everyone true --scope DOCS
-```
-
-The first admin is the operator's: `--admin <principal>` (repeatable,
-`MENGER_ADMINS`) holds admin on `*`. Grants live in the `members` table,
-stored form 8: a file in form 6 or 7 gains it in place, and an older build
-reads a form-8 file as its own. (AUTH-7: form 9 adds the `roles` table, the
-same way.) `tests/members.rs` runs the roles over the
-real socket.
-
-```sh
-synapse -P 4450 -t "$ADA" menger members grant --principal idp:c952acd3-… --scope IDENTITY --role editor
-synapse -P 4450 -t "$ADA" menger members requests
-```
-
-**Profiles** (IDENTITY-46): what each principal's sign-in said of them is
-kept, one `principal_profiles` row each, at every connection's upgrade
-(`Access::notice`), written only when it says something new — provider,
-`method` (the provider's: `githuboauth`, `googleoauth`, `email_code`,
-`password`; else the credential's kind: `key`, `oidc`, `nip98`), the
-provider's `subject`, `email`, `email_verified`, `name`, `picture`, `org`,
-the last sign-in, first seen. An identity that says less (a minted
-session) keeps what is kept. Only these fields are kept, never the
-metadata whole. `members profiles list` (newest sign-in first) and `get
---principal P` answer an admin of `*`, each with `holds_grant` — `false`
-is waiting for access, found again after a restart has emptied the
-waiting list:
-
-```sh
-synapse -P 4450 -t "$ADA" menger members profiles list
-synapse -P 4450 -t "$ADA" menger members profiles get --principal oidc:workos/user_01…
-```
+**The purge** (ACCESS-24). The first start of this build on a database
+removes each grant planted while menger could run open (a stored row signed
+`--admin`), unless an `--admin` of that start accounts for it — one
+transaction, its mark in the `open_purge` table, each removal logged
+(`tickets-api/src/store/open_purge.rs`).
 
 ### Agents (IDENTITY-40, IDENTITY-42)
 
-An agent logs in with an **Ed25519 key** it holds, then talks as itself
-for the session without handling a token. `--auth-provider key` (in
-`MENGER_AUTH_PROVIDERS`, `key`) admits key proofs at the upgrade; it is
-not offered on the login page or by `session.providers`.
+An agent logs in with an Ed25519 key it holds (synapse's
+`~/.plexus/keys/<name>.key`). The upgrade's bearer is a key proof naming this
+socket (`ws://127.0.0.1:<port>`, `localhost`, the ws form of `--public-url`,
+or a URL given as `key=<ws-url>`), accepted within a minute, once.
+`session.login { ttl_secs?, scope? }` then mints an `mgs_` session (12 h by
+default, at most 24 h) that opens later connections as the same principal;
+`scope` is a ceiling, `role@SCOPE` each (`editor@MENGER-12`). synapse does
+all of it: `synapse -P 4460 _login menger --key builder --as builder`, then
+every call. A key is granted like anyone (`members grant --principal
+key:<hex>`); `tests/agent_login.rs` runs it over the socket.
 
-1. **The proof opens a connection.** The bearer value (or
-   `access_token` cookie) `plexus-key.<base64url JSON>` —
-   `{"v":1,"key":"<64 hex>","aud":"<ws url dialed>","agent":"<id>","nonce":"<32 bytes>","ts":<unix s>,"sig":"<Ed25519>"}`,
-   signed over `plexus-key-login/v1\n<aud>\n<agent>\n<nonce>\n<ts>`
-   (plexus-auth-core's `KeyProofAdapter`, IDENTITY-41). It is accepted
-   within −60 s / +30 s, once per `(key, nonce)`, when `aud` is this
-   socket: `ws://127.0.0.1:<port>`, `ws://localhost:<port>`, the ws form
-   of `--public-url`, and any URL given as `key=<ws-url>,…`. The
-   connection is `key:<hex>`, named by its agent id, for five minutes.
-2. **`session.login` mints a session.** On any signed-in connection,
-   `session.login { ttl_secs?, scope? }` → `login { token, principal,
-   agent, expires_at, scope }`. The token (`mgs_…`, kept hashed like a
-   browser's session) opens later connections as the same principal,
-   agent and name — `Authorization: Bearer mgs_…` or `Cookie:
-   access_token=mgs_…` — for `ttl_secs` (default 12 h, at most 24 h).
-3. **`scope` is a ceiling.** `role@SCOPE` each — a shortcode (covering
-   those hosted under it), one ticket (it and what is under it), or `*`.
-   Every check, reads and writes and members' alike, passes only if the
-   key's grants **and** the scope allow it: `editor@MENGER-12` cannot
-   write elsewhere though the key is admin on `*`, and `admin@*` on a key
-   granted editor on A is editor on A. A session minted from a scoped
-   session keeps that scope as well (`scope` in the answer says the one
-   asked, or inherited; empty is no ceiling beyond the grants).
-4. **`session.logout {}`** → `logged_out` ends the connection's session:
-   its token opens nothing (a 401 at the upgrade: it is presented and
-   refused), and connections on it answer "you have signed out".
-   AUTH-7: `auth.login {session {ttl_secs, ceiling}}` and `auth.logout` are
-   the same, in the protocol's words (`ceiling` takes `grant@SCOPE` too).
+### Members and roles (IDENTITY-21)
 
-A key is granted like anyone: `members grant --principal key:<hex>`.
-`tests/agent_login.rs` runs it over the real socket.
+A grant gives a principal (or a team, or everyone signed in) a role on a
+scope; every read answers under the caller's filter **and** its scopes.
 
-```sh
-PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --db-path /tmp/menger-dev.db \
-  --auth-provider key --admin key:<hex>
-synapse -P 4460 _login menger --key agent-7 --as worker-3 --scope editor@MENGER-12   # synapse's side: IDENTITY-43
-```
+| role | may |
+|---|---|
+| `viewer` | read under the scope: `tickets`' reads and its children's, `orgs.list`, `epics`' own settings, `ui.versions`, `ui.watch`, `ui.slots.list` |
+| `editor` | also create and change tickets: `tickets`' writes, `commits`, saved filters, `revisions restore`, `subtasks create` |
+| `admin` | every grant: `tickets.delete`, `undelete`, `freeze`, `unfreeze`, `members.*`, `orgs.create`, `auth.role_set`, `auth.grant`, `ui.rollback`, `ui.preview`, `ui.slots.set`, `ui.slots.clear`, … |
+| `deployer` | `ui.push` alone — a CI's key (V2-7: the pipeline key) |
+| `member` | `auth.whoami`, `auth.logout`, `auth.requires` |
+
+Any signed-in caller holds `session.*` and `members.mine` beside its
+roles. `synapse -P 4460 menger auth roles` lists
+each role's grants as the running server holds them; `auth role_set`
+(admin on `*`) changes one.
 
 ### The AUTH protocol (AUTH-7)
 
-With login on, menger speaks Plexus's own auth (AUTH-1): **every method is
-its own grant** (`tickets.set_status`), a **role is an explicit list of
-grants**, and plexus-core's **gate** decides every call before it runs — the
-grant, held through a role on the scope the call's **target** lives in,
-within the session's ceiling. Default deny. menger supplies the gate its
-roles, memberships and scopes (`tickets-api/src/access/`, `Book`) and an
-`AuthBackend` (`src/auth_backend.rs`). ACCESS-24: every hub carries the
-gate and the `auth` activation — there is no hub without them.
-
-| role | its grants (declared with `roles(...)` on each activation) |
-|---|---|
-| `viewer` | the reads: `tickets.{health, get, list, find, search, watch, history, queued, await_reply}`, `tickets.nav.{groups, extents, tree, counts, facets, member}`, `tickets.work.{ready, waves, waves_under, waves_to, blockers}`, `tickets.components.list`, `tickets.inputs.list`, `comments.{add, list, watch}`, `orgs.list` (ORG-4) |
-| `editor` | viewer's, and the writes: `tickets.{create, set_status, set_kind, set_parent, amend, label, update, update_many, reshortcode, archive, restore, queue, unqueue, snooze, request_changes}`, `tickets.commits.{link, unlink}`, `tickets.inputs.{answer, clear, close, reopen}`, `comments.{resolve, reopen}` |
-| `admin` | every grant (built in): `tickets.{delete, undelete}` (ACT-5), `members.{list, grant, revoke, requests}`, `orgs.{create, rename, delete}` (ORG-4), `auth.{roles, role_set, grant, revoke, waiting}` |
-| any signed-in caller | `session.*`, `members.mine`, `auth.{whoami, logout, requires}` |
-
-A **write's target** is the ticket it acts on (`id`, or `ticket` for an
-input), and resolves to the scopes the filter language's `under` covers:
-its shortcode, itself, its ancestors, and the shortcodes hosting its
-shortcode — a membership on PLEXUS reaches IDENTITY-12, a ceiling on
-MENGER-12 reaches what is under it. `members.grant` / `revoke` target their
-`scope`. A **read** has no target: the gate lets it by where its grant is
-held anywhere, and it answers only from there (the caller's filter AND
-`under` those scopes, and each ceiling layer's) — a ticket out of reach is
-still `not_found`. Moving a shortcode's root, creating a ticket and
-commenting check the rest themselves, as before.
-
-- **The anonymous view**: an anonymous socket's `_info` says `view:
-  anonymous`, names `auth.providers`, `auth.login`, `auth.signup` and the
-  RFC 9728 metadata (`GET /.well-known/oauth-protected-resource` on the
-  socket's port; behind https `https://<host>/.well-known/oauth-protected-resource/ws`,
-  RUN-9); every schema shows only those; every other call is
-  refused `unauthenticated`.
-- **A caller's view**: `_info` and every `schema` list only the methods
-  the caller holds, each with `grant`, `target` and `held_on`; `view_hash`
-  differs by holdings.
-- **A refusal** is the stream's error item: `{type: error, error_kind:
-  forbidden, grant, scope, roles, held_on, message: "needs tickets.amend on
-  OUGHT"}`.
-- **`auth.*`**: `providers`; `login {browser {redirect}}` → `login_url`
-  (`<public-url>/login?cli=1&state=…`; the person signs in on the page as
-  anyone does, and the shell's `/auth/cli` sends the browser to the
-  client's loopback `redirect?code=…&state=…` — only `http://127.0.0.1:<port>`
-  or `localhost`; a sign-in older than two minutes asks first), `login {code
-  {code, state}}` → `session` (an `mgs_` token; the code works once, for a
-  minute, for its state), `login {session {ttl_secs, ceiling}}` (agents);
-  `signup` (someone signed in holding nothing waits for an admin); `whoami`,
-  `logout`, `requires {method}`; `roles`, `role_set {role, grants}` (admin on
-  `*`; kept in the store's `roles` table, stored form 9, and it wins over the
-  declared list), `grant`, `revoke`, `waiting`.
-- `session.*` and `members.*` stay, unchanged on the wire, over the same
-  tables (the browser app speaks them).
-
-```sh
-synapse -P 4460 menger                                   # anonymous: the door
-synapse -P 4460 -t "$MGS" menger auth whoami
-synapse -P 4460 -t "$MGS" menger auth requires --method tickets.set_status
-synapse -P 4460 -t "$ADMIN" menger auth role_set --role viewer --grants tickets.get,tickets.list
-```
-
-`tests/auth_protocol.rs` runs it over the built binary (and pins the method →
-role table against IDENTITY-21's); `tests/login_page.rs` runs the loopback
-sign-in end to end.
+**Every method is its own grant** (`tickets.set_status`), a **role is an
+explicit list of grants** declared with `roles(…)` on each activation, and
+plexus-core's **gate** decides every call before it runs — the grant, held
+through a role on the scope the call's **target** lives in, within the
+session's ceiling. Default deny. A write's target is the ticket it acts on;
+a read has none and answers only from where its grant is held. A caller's
+`_info` and every `schema` list only what it holds, each with `grant`,
+`target` and `held_on`. A refusal is typed: `{type: error, error_kind:
+forbidden, grant, scope, roles, held_on, message: "needs tickets.amend on
+OUGHT"}`. `tests/auth_protocol.rs` runs it over the built binary.
 
 ### Limits and caps (ACCESS-29)
 
-Nothing a caller does — anonymous or signed in — grows menger's memory
-without bound or starves the others (ACCESS-4 M1, M2, L1, L2, L5). Each
-limit is a flag (and its `MENGER_*` variable) or a named constant:
-
 | what | limit (default) | past it |
 |---|---|---|
-| WebSocket connections, in all | `--max-connections` (1,024) | upgrade refused 429 + `Retry-After` (AUTH-12, plexus-transport) |
-| … from one IP (the peer's) | `--max-connections-per-ip` (256) | 429 |
-| … held by one signed-in principal | `--max-connections-per-principal` (64) | 429 |
-| … anonymous, in all / per IP | `--max-anonymous-connections` (128) / `--max-anonymous-connections-per-ip` (32) | 429 ("sign in") |
-| calls open on one connection (each call is a subscription while it runs; a `watch`, for its life) | `--max-calls-per-connection` (256; `menger::calls`) | one error item `{error_kind: too_many_calls, max, recoverable: true}`; a watch let go of gives its place back at once |
-| a connection with no call open | `--idle-timeout-secs` (900; 0: never) | closed by the server |
-| a browser's sign-in, unused (no socket open on it, no page loaded) | `--session-idle-minutes` (120; 0: never) | the session ends; its sockets close (AUTH-11). A minted `mgs_` token keeps only its expiry |
-| sign-ins live / login transactions waiting / loopback sign-ins and codes | `MAX_LIVE` 100,000 / `MAX_PENDING` 10,000 / 10,000 each (`plexus-login/src/sessions.rs`) | the one nearest its end makes room — found by an index, never a scan |
-| the waiting list | `WAITING_MAX` 1,000 (`tickets-api/src/access.rs`) | the one waiting longest is forgotten |
-| `/login/start`, `POST /login`, `POST /login/nostr`, from one client | a sign-in flow each — 60 per 10 min per /32 (/64), 600 per /24 (/48), 3,000 per /16 (/32) (AUTH-22's `flows_per_client`) | 429 + `Retry-After`, the page's own words ("Too many attempts…") |
-| passwords tried at `POST /login` | reserved before the IdP sees them: 5 per account per neighbourhood, 30 per client, then a backoff (AUTH-22's `try_per_user_network`, `try_per_client`) | 429; a right answer forgives the account, an IdP that is down gives the guess back |
-| a ticket's title | `TITLE_MAX` 1,024 bytes (`tickets-api/src/limits.rs`) | `invalid_params` naming `title` (ACCESS-8: a `Title`), nothing run |
-| a ticket's body | `--max-body-bytes` (8 MiB, MENGER-15) | typed `body_too_large` |
-| a comment's or a note's body | 64 KiB (`comments::BODY_MAX`, `notes::BODY_MAX`) | in-band `error` |
-| a filter's text | `FILTER_MAX` 4,096 bytes | `invalid_params` naming `filter` (ACCESS-8: a `FilterText`) |
-| `tickets.list`'s page | 1,000 unless `limit`, at most 10,000 (`LIST_PAGE_DEFAULT`, `LIST_PAGE_MAX`) | the `page` event's `next` carries on |
-| `comments.list`'s page | 500 unless `limit`, at most 1,000 | `page.next` |
+| WebSocket connections: in all / per IP / per principal / anonymous / anonymous per IP | the `--max-connections*` flags (1,024 / 256 / 64 / 128 / 32) | the upgrade refused 429 |
+| calls open on one connection (a `watch` for its life) | `--max-calls-per-connection` (256) | `error_kind: too_many_calls` |
+| a connection with no call open | `--idle-timeout-secs` (900) | closed |
+| a browser's sign-in unused | `--session-idle-minutes` (120) | the session ends |
+| sign-in flows and password guesses per client and account | AUTH-22's throttles | 429 |
+| the waiting list | `WAITING_MAX` 1,000 (`tickets-api/src/access/mod.rs`) | the oldest forgotten |
+| a title / a filter | `TITLE_MAX` 1 KiB / `FILTER_MAX` 4 KiB (`tickets-api/src/limits.rs`) | `invalid_params` |
+| a body | `--max-body-bytes` (8 MiB) | `body_too_large` |
+| `tickets.list`'s page | 1,000 unless `--limit`, at most 10,000 | page with `page.next` |
+| a ui bundle | `BUNDLE_MAX` 16 MiB (`ui-service/src/vocab.rs`) | `invalid_params` |
 
-The login page shows only its own words — never a link's `?error=` or a
-provider's `error_description` (IDENTITY-38; ACCESS-4 L1). The dev sign-in
-(`/login/dev`, test only) is not throttled. Behind a proxy, the throttles
-read the client from `X-Forwarded-For` only from a `--trusted-proxy`, and so
-do the WebSocket's per-IP and anonymous-per-IP quotas (TRANSPORT-7; "Run" →
-Trusted proxies). `perf/flood.mjs` floods a
-throwaway menger with upgrades and logins from a spread of addresses and
-checks its memory settles.
+`perf/flood.mjs` floods a throwaway with upgrades and sign-ins and checks
+its memory settles.
 
-## Diagrams — the `diagrams` service (COMPILE-4)
+## The ui service (UI-3, UI-7, UI-9)
 
-A second Plexus service beside menger, in `diagrams/` (`menger-diagrams`):
-mermaid diagrams checked by the very bundle the app draws them with
-(`frontend/vendor/mermaid/mermaid-11.17.2.min.js`), loaded into a jsdom
-window under Node — COMPILE-3 found it gives the browser's verdict on every
-live diagram. Its own binary, process and hub (`diagrams`, WebSocket
-:4458): menger does not call it, does not need it, and `cargo build` /
-`cargo test` never need Node.
+A pushed UI is a row by content hash in the ui service's own file, and
+`/app/` serves whichever row the live pointer names: **the pointer is the
+deploy**.
 
-```sh
-npm ci --prefix diagrams/node           # once: jsdom, pinned by the lockfile
-cargo run -p menger-diagrams            # WebSocket :4458
-synapse -P 4458 diagrams mermaid parse --source 'graph LR
-  A --> B'
-synapse -P 4458 diagrams mermaid check --markdown @ticket-body.md
-# the file's contents exactly, frontmatter and `$` included (synapse >= 3.14.8, SYNAPSE-10)
+- **Its file** is `ui.db` (`--ui-db-path`, `MENGER_UI_DB_PATH`; default
+  beside the tickets file, never the same file): `ui_versions`,
+  `ui_pointer`, `ui_preview`, `ui_slots`.
+- **`push`** takes the bundle (a tar, base64, at most 16 MiB), its manifest
+  and a signature: Ed25519 over the bundle's sha256 by a key named with
+  `--ui-signer` (`MENGER_UI_SIGNERS`, `;`-separated 64-hex public keys; none:
+  every push is refused `no_signer`). Then, before the store's one
+  transaction: every `src/<name>.svelte` is compiled in the compiler module
+  (when `--ui-compiler` names one) and compared with the tree the bundle
+  claims (filled in when absent);
+  every component's `uses` is looked up in the running tickets service
+  through the seam; the manifest's `contract` is compared with that
+  service's hash. The row and the live pointer move together. The same
+  bytes pushed again are the same version (`new: false`). Refusals are in
+  band, nothing written: `no_signer`, `bad_signature`, `bad_bundle`,
+  `bad_manifest`, and the compile and lint refusals naming the component and
+  line. It answers `pushed { version, uploaded, live, new, contract_matches,
+  compiled }`.
+- **The compiler module** is `--ui-compiler` (`MENGER_UI_COMPILER`,
+  `dist/ui-compiler.wasm`), run in wasmtime with nothing linked, under fuel
+  and a memory limit; a module that imports anything is refused at start.
+  Without it a push stores the trees as given and says `compiled: false`.
+- **`rollback --to <hash>`** moves the pointer to a kept version;
+  **`preview`** serves one to the caller's own sessions; **`versions`**
+  lists them; **`watch`** says `live` on each move and `slot_changed` on each
+  section change, held to its caller as `tickets.watch` is.
+- **Who may**: viewers and editors `versions`, `watch`, `slots list`; a
+  `deployer` `push` (V2-7: a deploy pushes as the pipeline key); `rollback`,
+  `preview`, `slots set`, `slots clear` are the admin's.
+- **Signing** a bundle by hand: `ui-sign <seed-file> <bundle>` (a binary of
+  `ui-service`) prints the signature; the pipeline uses `deploy/ui-sign.mjs`.
+
+### Sections (UI-9)
+
+A layout names **slots**; a slot draws as a `div` carrying `data-layout` and
+`data-slot`, filled by its assignment — `ui slots set --layout L --slot S
+--component C [--version H]` (a component of a stored version, or the live
+one) — else by the default the live manifest's `slots` names. `slots clear`
+returns it to the default; `slots list` shows each assignment beside the
+default it overrides. Every change says `slot_changed` on every `ui.watch`,
+and the engine remounts that section alone.
+
+### The component contract (UI-4)
+
+The contract is ticket **UI-4** ("The component contract, v1") on the
+tracker — read it there; this is its layout. A bundle is a tar:
+
+```
+index.html                 the entrypoint (the shell stamps it)
+engine.js  engine.wasm     the engine, abi engine/1
+manifest.json              abi, contract, commit, routes, slots, components (hashes, uses)
+components/<name>.json     each component's view tree
+components/<name>.rhai     its handlers
+src/<name>.svelte          the sources, kept
 ```
 
-| method | yields |
-|---|---|
-| `mermaid.parse { source }` | exactly one of `parsed { diagram_type }` (`flowchart-v2`, `sequence`, `pie`, …); `parse_error { message, line }` — `message` is mermaid's, verbatim, `line` the 1-based line within `source` (null when mermaid names none); `error { message }` — the service could not ask (a missing piece, the program died, the 5 s limit) |
-| `mermaid.check { markdown }` | one `diagram { index, line, result }` per mermaid block (a fence, or ART-5's `<pre class="mermaid">` in a body's HTML), in order, then the end — `index` from 1, `line` the block's first source line in the markdown, `result` what `parse` would answer — so an error at `result.line` L is markdown line `line + L - 1`. No blocks, no items. A missing piece is one `error` in place of everything |
+UI-4 pins the source subset (a `<script>` of Rhai and a Svelte-like
+template), the tree's schema, the `engine/1` host interface, sections, and
+the sanitizer's allow-list.
 
-A mermaid block is the app's: a fenced block whose info string's first word
-is exactly `mermaid`, frontmatter excluded — `diagrams/src/blocks.rs` copies
-`frontend/src/md.rs`'s rule and its tests hold the copy to the original
-(same functions word for word, same pulldown-cmark version and options,
-every case md.rs's tests name). ART-5: a body holding HTML is drawn in a
-frame (COMP-4), and there a diagram may also be written as HTML — ought's
-form, `<pre class="mermaid">…</pre>` in an HTML block, alone or inside a
-field element or a component (`<m-dag>`). The frame's renderer
-(`render_body_framed`) puts a fence's placeholder in its place, so the
-frame draws it, and `check` finds it by the same rule (`html_diagrams`,
-copied verbatim): its source is the element's content, the newline after
-the open tag dropped, character references decoded (`--&gt;` is `-->`), a
-`<br/>` in a label kept; its `line` is the line that source starts on. A
-fence inside a field element or a component is a fence when blank lines
-stand around it. A blank line inside an element does not end its HTML block
-(COMP-11, "HTML with blank lines" above), so a `<pre class="mermaid">` with
-blank lines, nested in a `<section>`, is a diagram. Not a diagram, drawn by
-neither: a `<pre class="mermaid">` in code, a comment or a script, inline in
-a paragraph, or one with no `</pre>`.
+### The compiler (UI-5)
 
-`line` within `source` can differ from the number in mermaid's message:
-mermaid numbers the text it parsed, after dropping frontmatter, directives,
-`%%` comments and leading blank lines; the Node program maps it back with
-mermaid 11.17.2's own regular expressions.
+`ui-compiler/` (`menger-ui-compiler`) is a pure function: a component's
+source → its view tree (`components/<name>.json`, keys sorted) and its
+handlers (`<name>.rhai`), folds `(state, event) → state`; the same source
+gives the same bytes natively and as a wasm module that imports nothing
+(`scripts/ui-compiler-wasm.sh` → `dist/ui-compiler.wasm`; the build fails if
+it imports anything). A refusal names the line. `ui/golden/` holds golden
+pairs (`ui-compiler/tests/golden.rs`).
 
-**What it needs.** Node.js ^22.22.2, ^24.15.0 or >=26 (jsdom 30's range)
-on `PATH`, jsdom (`npm ci --prefix diagrams/node`; `node_modules` is not
-committed), and the vendored bundle (in the checkout). Each missing piece
-degrades, never crashes: the service starts and serves, and a call answers
-one `error` naming the piece and the command that provides it. Flags (and
-env): `--port` (4458), `--bundle` (`MENGER_DIAGRAMS_BUNDLE`), `--node`
-(`MENGER_DIAGRAMS_NODE`, default `node`), `--node-dir`
-(`MENGER_DIAGRAMS_NODE_DIR`, default `diagrams/node`), `--stdio`.
+### The engine (UI-6, UI-10)
 
-**The Node program** (`diagrams/node/mermaid-parse.js`) is the service's
-child, speaking one JSON request per line on stdin and one answer per line
-on stdout (its stderr goes to the log, never into the protocol). It starts
-on the first call (~0.6 s; ~300 MB resident, the service ~10 MB) and is
-kept; one diagram is in flight at a time, each answer matched to its
-request by id. Dead between calls, it is replaced before the next is
-written; dead mid-call, or past the 5 s limit, that diagram's result is an
-`error` and a fresh one starts. It only ever calls `mermaid.parse`, under
-`securityLevel: 'strict'`, in a window that runs no scripts and fetches
-nothing. Warm, a `parse` round trip over the WebSocket is ~4 ms.
+`ui-engine/` (`menger-ui-engine`), Rust built to wasm, implements `engine/1`:
+it owns the socket, the cache, the signals and the registry; a component
+owns only its tree and its folds.
 
-Tests: `diagrams/tests/lifecycle.rs` drives the lifecycle against a shell
-stand-in (no Node needed); `wire.rs` and `binary.rs` run the real program
-and skip, printing `SKIPPED … <what is missing>`, without Node or jsdom.
-Upgrading mermaid: the app's `ASSET_URL` and `diagrams/src/node.rs`'s
-`BUNDLE` move together (a test fails until they agree), and the
-preprocessing regular expressions in `mermaid-parse.js` are re-read from
-the new bundle.
+- **Signals** — bindings re-run only when a signal they read changes.
+- **`live()`** — a collection `{ rows, status }` folded from a snapshot and
+  a changes stream, its params reactive, `debounce_ms`, folds `upsert:<field>`
+  / `remove:<field>`; shared by method and params, kept 5 s past its last
+  reader.
+- **Folds** — a component's handlers in Rhai; only `call` and `navigate`
+  registered, `call` held to the component's `uses`.
+- **Hot-swap** on `ui.watch`: an instance whose tree or handlers changed is
+  remounted in place, its state kept when its shape is unchanged.
+- **Sections** — slots and their assignments, and a section menu on right
+  click.
+- **`{@html markdown()}`** (UI-10) — through an allow-list sanitizer into a
+  tree the renderer draws.
+- **The router** — `manifest.routes`: a hash route to a component, its
+  `:name` segments the props.
+
+The bundle's `index.html` imports `/app/<version>/engine.js` and boots it
+with the stamped version.
+
+### The bundle in the repository
+
+`ui/` is the UI's source: `index.html`, `routes.json` (`#/` and `#/f/:filter`
+→ `board-layout`, `#/ticket/:id` → `ticket-page`), `slots.json` (the
+layouts' default sections), `src/*.svelte` (`board-layout`, `board-rows`,
+`filter-line`, `jump-palette`, `nav-tree`, `nav-flat`, `nav-children`,
+`ticket-page`, `ticket-chip`, `page-shell`, `hello-list`) and `golden/`.
+`scripts/ui-build.sh` builds it into `dist/ui.tar`: `--prebuild` the halves
+that need cargo (the engine for `wasm32-unknown-unknown` and wasm-bindgen,
+the components compiled), then the manifest and the tar — the same inputs,
+the same bytes. A deploy pushes it (`deploy/README.md`, "v2: a release with
+no browser toolchain").
+
+```sh
+scripts/ui-compiler-wasm.sh                      # dist/ui-compiler.wasm
+scripts/ui-build.sh                              # dist/ui.tar
+cargo run -p menger-ui-service --bin ui-sign -- operator.seed dist/ui.tar   # the signature, base64
+```
+
+`tests/wire_ui.rs`, `tests/wire_ui_compile.rs`, `tests/wire_ui_slots.rs`,
+`tests/ui_serve.rs` and `tests/seam.rs` hold the service over the socket;
+`tests/engine_browser.mjs` and `tests/pages_browser.mjs` the engine and the
+pages in Chromium.
 
 ## As a library (DIST-3)
 
-`menger::local` starts the whole server from code: the store, every
-activation, the Plexus WebSocket and the web shell on loopback; no login
-page, no REST bridge, no registry announcement. It is how a host (DIST-1's
-desktop app) runs menger without copying `main.rs`. ACCESS-24: **behind the
-gate, as every menger is** — it has one owner (`LocalConfig::owner`, a
-principal; `None`, a `key:` principal made for the start), admin on `*` as
-an `--admin` is, and the host signs its connections in with a session it
-mints for the owner, `owner_token(ttl_secs)` (≤ 24 h), sent as
-`Authorization: Bearer <token>` or the `access_token` cookie — a webview's,
-set for `127.0.0.1` before it opens the shell. Anyone else reaches the
-anonymous view:
+`menger::local` starts the server from code — the store, every service,
+the WebSocket and the shell on loopback, no registry announcement — behind
+the gate with one owner (`LocalConfig::owner`), whose sessions
+`owner_token(ttl_secs)` mints:
 
 ```rust
 use menger::local::{LocalConfig, LocalServer, TAURI_ORIGINS};
 
 let mut cfg = LocalConfig::new(data_dir.join("tickets.db")); // ports 0: free ones
 cfg.extra_origins = TAURI_ORIGINS.iter().map(|o| o.to_string()).collect();
-let server = LocalServer::start(cfg).await?;  // both listening when it returns
-let token = server.owner_token(12 * 3600)?;   // the owner's session
-set_cookie("127.0.0.1", "access_token", &token);
-open_window(&server.shell_url());             // http://127.0.0.1:<port>/
-// … server.ws_url() is the socket synapse or a client can use, with the token
-server.shutdown().await;                      // both stopped, ports released
+let server = LocalServer::start(cfg).await?;
+let token = server.owner_token(12 * 3600)?;
+server.shutdown().await;
 ```
 
-`LocalConfig { db_path, ws_port, shell_port, env, app, extra_origins, owner }`:
-a port of 0 is a free one (bound before anything serves, so the reported
-port is held); the database's directory is made if missing; `env` titles
-the tab as `--env` does; `app` is an `AppSource` — `Dir(path)` or
-`Embedded(table)` (plexus-shell's, re-exported as `menger::shell::AppSource`),
-defaulting to the embedded build when the binary carries one
-(`menger::shell::preferred_app()`);
-the socket admits the shell's own origins (127.0.0.1 and localhost at the
-shell's port) and `extra_origins` — `TAURI_ORIGINS` for a Tauri webview.
-Dropping a `LocalServer` stops it without waiting. `tests/local.rs` is the
-executable reference.
+`tests/local.rs` is the executable reference.
 
-**The app inside the binary.** The `embedded-app` feature (off by default)
-has `build.rs` compile `frontend/dist` into the binary, and the shell serves
-that table — stamped and typed exactly as a dist on disk — whenever no
-`--app-dist` names a directory. A checkout leaves it off and keeps serving a
-fresh `trunk build` from disk; the published crate carries `frontend/dist`,
-so a dependent that turns the feature on gets the Leptos app with nothing
-on disk:
-
-```toml
-menger = { version = "0.6", features = ["embedded-app"] }
-```
-
-## plexus-shell (SCAFFOLD-5)
-
-The serving half of all this is a crate of its own, `plexus-shell/` (a
-workspace member, published as `plexus-shell`), so any Plexus RPC app serves
-its frontend the way menger does. menger consumes it, and keeps no second
-copy:
-
-- **The shell.** `AppSource::{Dir(path), Embedded(table)}` is the build. The
-  table follows ACCESS-33: a request path is a key and never a path, and
-  there are size caps, a MIME table, and a reread on a new `index.html` for
-  `Dir`. `ShellConfig { app, title, mount, stamps, pages, root_fallback,
-  not_built, routes, csp }` says what to serve. `router(cfg, ws_port)` builds
-  the router and `serve_on(listener, router, shutdown)` serves it, hardened
-  (IDENTITY-38's headers). Every page it serves goes out under `csp`
-  (ACCESS-28; default `DEFAULT_CSP`), a template whose `{{SCRIPTS}}` is the
-  page's inline-script hashes and `{{HUB}}` the hub's WebSocket origins at
-  the name the page was asked for. The entrypoint and `pages` are stamped with
-  `{{WS_PORT}}`, `{{TITLE}}` and any `(placeholder, value)` in `stamps`.
-- **The embedding.** The app crate's `build.rs` calls
-  `plexus_shell::build::embed_dir_with_feature("frontend/dist",
-  "embedded-app")`, a build-dependency with `default-features = false,
-  features = ["build"]`. The table goes into the app's `OUT_DIR`. The app
-  takes it with `static APP: EmbeddedTable = plexus_shell::embedded_app!();`
-  and hands it to `AppSource::Embedded(APP)`. It has to be the app's own
-  build script, because `include_bytes!` resolves in the crate that
-  compiles it.
-- **`LocalServer`.** `plexus_shell::LocalServer::start(hub, LocalConfig {
-  ws_port, shell_port, extra_origins, shell })` serves any `DynamicHub`'s
-  WebSocket and the shell on loopback. Ports 0 are bound for real before
-  anything serves. It returns `ws_port`, `shell_port`, `shell_url`,
-  `ws_url` and `shutdown`. `TAURI_ORIGINS` lives here.
-
-menger's part stays in `src/shell.rs`: `/vanilla` and `/` falling back to
-it, the favicon, the tab title rule (MFE-23), the "not built" page's words,
-the embedded table, and the login routes, session check and host check
-layered around the crate's router. `menger::local` builds menger's hub and
-calls the crate. Its API is DIST-3's, unchanged, and menger-desktop builds
-on it as is. `plexus-shell/toy/` is the worked example: a hub with one
-activation and an embedded two-file app, started through `LocalServer`. Its
-test is in the workspace run.
-
-## Publishing (DIST-3)
-
-`plexus-shell`, `menger-tickets-api`, `plexus-login` (SCAFFOLD-9) and
-`menger` go to crates.io, in that order. The plexus 0.6 line they depend on goes first: plexus-core,
-plexus-macros, plexus-client, plexus-auth-core, plexus-transport. Every
-sibling `path` dependency also names its `version`, which is what the
-published crates take. Dev dependencies stay path-only and are dropped from
-the package.
-
-```sh
-scripts/publish.sh stage     # trunk build --release, stage the package, list it; publishes nothing
-scripts/publish.sh dry-run   # + cargo publish --dry-run of the crates not yet on crates.io, verified together
-scripts/publish.sh publish   # + cargo publish: plexus-shell, menger-tickets-api, plexus-login, then menger (clean tree only)
-```
-
-A crate whose version crates.io already holds is skipped. The script reads
-the sparse index to tell; a version already published is skipped, never re-uploaded. The
-rest go to one multi-package `cargo publish`, which orders them and, in a
-dry run, verifies `menger` against the packaged `plexus-shell` before
-either is on crates.io.
-
-The script builds the app first and refuses to go on without
-`frontend/dist/index.html`. It publishes from a stage beside the repository,
-because cargo will not package `frontend/dist` from the checkout: the
-directory sits under another package's `Cargo.toml` (`frontend/` is the
-app's crate) and is gitignored, and cargo skips both whatever `include`
-says. The stage is the files git keeps plus dist, without
-`frontend/Cargo.toml` and outside any repository, so the package is what
-`include` names — `src/`, `web/`, `build.rs`, `README.md`, `LICENSE` and
-`frontend/dist/` (66 files, ~2.3 MB compressed); never `tests/`, `deploy/`,
-`perf/`, `diagrams/` or `spike/`. `menger` is published with
-`--features embedded-app`, so cargo's verification builds the app in. The
-wave3 example of `menger-tickets-api` lives in `../spike` and is left out of
-its package (it still runs from a checkout, `spike/WAVE-2/run.sh`).
+**plexus-shell** (SCAFFOLD-5, `plexus-shell/`) is the serving half as a
+crate of its own: `AppSource`, the hardened router, the page policy and its
+stamping, and `LocalServer` for any Plexus service. `plexus-shell/toy/` is
+its worked example.
 
 ## Layout
 
 ```
-src/
-  main.rs              CLI args, transports, spawns the shell
-  builder.rs           build_rpc() → Arc<DynamicHub> ("menger")
-  shell.rs             menger's shell over plexus-shell: / (the Leptos app,
-                       degrading to the vanilla page when unbuilt), /vanilla
-                       (the embedded day-one page), the favicon, the tab
-                       title, the embedded table, and the login routes and
-                       checks around the crate's router (SCAFFOLD-5)
-  local.rs             menger::local — LocalServer::start(LocalConfig), the
-                       whole server without login or REST, as a library call
-                       (DIST-3); plexus-shell's LocalServer over menger's hub
-build.rs               `embedded-app`: frontend/dist compiled into the binary
-                       by plexus-shell's build half (DIST-3); without it, an
-                       empty table
-plexus-shell/          the shell and LocalServer as a crate (SCAFFOLD-5):
-                       AppSource, the app's table (ACCESS-33), stamping,
-                       router/serve_on, the build-script embedding,
-                       LocalServer, TAURI_ORIGINS; published as plexus-shell
-  toy/                 its worked example: a one-activation hub and an
-                       embedded two-file app, tested (never published)
-tickets-api/           the ticket vocabulary, the `tickets` activation and the
-                       typed Plexus client it emits — ONE declaration, shared by
-                       the server (default features: `server`) and the app
-                       (default-features = false, wasm32)
-  types.rs             Ticket · Status · Kind · Severity · TicketSummary · Group · Placement · TicketsEvent
-                       · Input · InputKind · InputState · InputValue · Answer · InputHistoryEntry (INPUT-3)
-  store/               the service-wide cache (SQLite system of record behind it)
-    mod.rs             the Store: the cache of rows, reads (a body from the
-                       database on read-only connections — SCALE-14), the
-                       write-through path
-    rollup.rs          the per-shortcode roll-ups it keeps (MNG-10)
-    ids.rs             each shortcode's last sequence and the ids named before
-                       birth — what create reads instead of scanning (SCALE-3);
-                       beside the sequence, how many tickets the shortcode
-                       holds — what page.remaining is computed from (SCALE-19)
-    children.rs        each parent's children, from every ticket's parent, in
-                       the store's order — what list { parent } pages from and
-                       what child_count is (SCALE-4)
-    db.rs              the schema, the writes, a row and a body read back, the
-                       in-place migrations
-    ready.rs           each ticket's count of unsatisfied blockers, the ready
-                       set it decides (store order), each shortcode's count of
-                       each status — what ready_set and list { status } page
-                       and count from (SCALE-32)
-    waves.rs           each ticket's wave in the order of work — MNG-4's rule
-                       over blocked_by, the whole graph (WAVE-4); `waves`
-                       reads the kept placements (WAVE-6)
-    placements.rs      the placements kept on the rows: the re-placement pass
-                       a birth or a status change across the satisfied line
-                       runs before it commits, and the pass at open (WAVE-6)
-    history.rs         the transition log (MENGER-13): its table, the kept
-                       indexes a history filter is a range of, the windows
-                       in a zone (Clock), `--verify-derived`'s look at it
-    times.rs           births and status-since, sorted (FILTER-27): what
-                       `created` and `for` are ranges of
-    cascade.rs         cancellation cascades and restores, as one batch write;
-                       `history`; `set_status`'s path
-    stored.rs          the derived state as stored beside the tickets — its
-                       tables, what a write's transaction writes to them, the
-                       read at start, the build on first open, and
-                       --verify-derived (SCALE-28)
-    commits.rs         what a commit reference is, as stored and compared, and
-                       how many a ticket holds (SDLC-9)
-    inputs.rs          the inputs store: each ticket's inputs as its body
-                       declares them (removed ones kept), the plan a create or
-                       amend makes of them, answer / clear / close / reopen as
-                       history, its two tables, and the read of every body on
-                       first open (INPUT-3)
-    components.rs      the component registry: what a body defines and
-                       references, the plan a create or amend makes of it
-                       (orphans, adoption, the sweep), its table, and the
-                       build from every body on first open (COMP-3)
-    synthetic.rs       the --seed-synthetic generator (PERF-2)
-    tests.rs           the store's unit tests
-    tests_paging.rs    page.remaining against a count, on every shape (SCALE-19)
-    tests_find.rs      find's rule against the palette's own tests and code
-                       (read from frontend/src/keys.rs), its pages against
-                       MNG-9's (SCALE-6)
-    tests_children.rs  the children index against a scan, child_count, pages of
-                       list { parent } against the old filter, the migration
-                       that drops `children` (SCALE-4)
-    tests_bodies.rs    whole tickets from rows and stored bodies, a walk of a
-                       page of bodies at a time, read-your-writes under a
-                       hammer of amends (SCALE-14)
-    tests_commits.rs   commits link / unlink: the grammar, every row of
-                       the table, the bound, the column added to an old file
-                       (SDLC-9)
-    tests_detached.rs  every write dropped by its caller mid-commit still
-                       reaches the cache and watch; the next id is the next
-                       one (MNG-20)
-    tests_stored.rs    the stored derived state, read back from the file,
-                       against the scan oracles after every kind of write on
-                       every kind of store; the build once, the read at
-                       start, the seed's marker, verify (SCALE-28)
-    tests_ready.rs     the counts, the ready set and the status counts against
-                       a scan after every write, in the cache and the file;
-                       every ready_set and list { status } page against the
-                       code before it (SCALE-32)
-    tests_waves.rs     waves: chains, diamonds, the missing lane, blockers in
-                       other shortcodes, docs, kinds, the yield order and the
-                       tally, a hand-edited cycle, a chain past any call stack
-                       (WAVE-4)
-    tests_placements.rs  the kept placements against the rule after random
-                       births and status changes, watch's mirror, the
-                       two-blockers-back case (WAVE-6)
-    tests_paths.rs     path addresses: create, refusals, get by address, the
-                       column added to an old file (WAVE-10)
-    tests_inputs.rs    the inputs store: each row of its table, refusals,
-                       history, removed, the query, events, durability, the
-                       tables added to an old file (INPUT-3)
-    tests_components.rs  the component registry: each row of its table, code
-                       examples and code spans, events, durability, the
-                       table built from the bodies of an old file (COMP-3)
-  component_docs.rs    a component's help: its source's <docs> parsed
-                       (summary, typed attributes, slots, examples, help)
-                       and the preview line (COMP-8) — wasm-safe, shared
-                       with the app's docs card (COMP-9)
-  inputs.rs            a body's inputs (INPUT-3): <m-decision id> / <m-input
-                       id kind>, their options, question and recommendation,
-                       read with fields.rs's scan; an answer's value checked —
-                       wasm-safe
-  fields.rs            a body's fields (ART-5): its elements marked
-                       data-field, parts nested, or a legacy body's ## headings
-                       read through ought's field set — wasm-safe; the piece
-                       COMPILE checks (fields_tests.rs: its tests)
-  nav_plan.rs          test-only: the nav's plan(), the roll-ups' oracle
-  activation.rs        #[plexus_macros::activation] on impl TicketsActivation (MACRO-21)
-  tests/sdk_manifest.rs  COMP-10's drift guard: the activation's methods and
-                       parameters against frontend/sdk/generated/manifest.json
-scripts/sdk-codegen.sh the frames' typed SDK, generated (COMP-10; Docker)
-scripts/publish.sh     the app built, the package staged, plexus-shell, menger-tickets-api and
-                       menger published to crates.io (DIST-3)
-scripts/shot.mjs       screenshots of the app once it is ready, signed in where
-                       it must be; only looks (DEPLOY-7)
-web/index.html         the day-one reactive shell
-frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/) —
-                       src/waves.rs the wave board (WAVE-5, WAVE-6),
-                       src/filter.rs the generic filter bar and its menu
-                       (WAVE-12, FILTER-11, FILTER-39); src/ors.rs the
-                       filter as groups joined by or (FILTER-39),
-                       src/naming.rs naming saves, "as evaluated" and
-                       the saved filters' counts (FILTER-37),
-                       src/lens.rs the levels — global, nav,
-                       board, waves, inputs — their URL and storage, the
-                       header's bar (FILTER-11), src/counts.rs menu counts and
-                       the header's n of N (FILTER-12), src/saved.rs saved
-                       filters — the table (tickets filters), choosing and naming (FILTER-6, 41),
-                       src/when.rs + src/when_view.rs the When category —
-                       time clauses as pills, the window editor (FILTER-27),
-                       src/calendar.rs the calendar and time selector,
-                       src/notes.rs its annotation and the body editor (WAVE-11),
-                       src/links.rs links people wrote — classified, the
-                       leave dialog, "don't ask again" (MENGER-14;
-                       vendor/psl/ the Public Suffix List),
-                       src/frame.rs framed bodies and their messages (COMP-4,
-                       COMP-5), sdk/menger-sdk.js the SDK every frame runs,
-                       sdk/menger.d.ts its types, sdk/bridge.ts the bridge
-                       transport and sdk/generated/ the typed client
-                       (COMP-10, scripts/sdk-codegen.sh),
-                       src/registry.rs the app's copy of the component
-                       registry, src/bridge.rs menger.call's read-only host
-                       side (COMP-5) and the two writes' checks,
-                       menger.input.submit (INPUT-4) and
-                       menger.input.clear (INPUT-9), src/components.rs
-                       #/components (COMP-6)
-                       and the help pages, src/card.rs a definition's docs
-                       card, src/inspect.rs the tooltip's checks and
-                       menger.navigate's routes (COMP-9), src/cite.rs
-                       <m-cite>'s windows (COMP-14), src/inputs.rs
-                       the app's copy of the inputs and src/inputs_page.rs
-                       #/inputs (INPUT-6), src/history.rs a ticket's
-                       History section (MENGER-13)
-spike/WAVE-2/          WAVE-3's measurement of the kept placements (run.sh)
-diagrams/              the `diagrams` service (COMPILE-4): its own binary and hub
-                       (WS :4458); the `mermaid` activation and the client it
-                       emits, the Node child it owns (src/node.rs), the app's
-                       mermaid-block rule (src/blocks.rs: fences, and ART-5's
-                       <pre class="mermaid"> in a body's HTML); node/ is the
-                       Node program and its lockfile
+src/                 the binary: main.rs (flags), builder.rs (the services registered),
+                     shell.rs, bind.rs, calls.rs, local.rs, first_run.rs, login_access.rs
+tickets-api/         menger-tickets-api: the tickets service — vocabulary, store, filter
+                     language, activations (activation/), access (access/)
+ui-service/          menger-ui-service: the ui service, its store, the compiler sandbox, the seam
+ui-compiler/         menger-ui-compiler: the component compiler, native and wasm
+ui-engine/           menger-ui-engine: the engine, wasm
+ui/                  the UI's source bundle
+plexus-shell/        the shell as a crate (and toy/, its example)
+plexus-login/        the login as a crate
+tether/              menger's local side, its own workspace (TETHER-7)
+tests/               wire tests over the real socket, browser tests
+deploy/              the pipeline, the image, the runner (deploy/README.md)
+perf/                the probes and the magnitude ladder
+scripts/             builds, cleanup-gate, disk-check, sweep, throwaways
 ```
-
-## Status
-
-Phase one of the backend epic (MNG) is complete; its checkpoint, the
-verified state map, is a ticket in the tracker. Tickets
-live in SQLite behind the service-wide cache (MNG-2); the DAG answers
-ready-set/blockers queries with cycle rejection at create (MNG-4); REST +
-SSE serve on :4457 via plexus-transport 0.2.3 (MNG-8 — consumed as a
-git-tag patch until it's published to crates.io). The Leptos app at
-`/app/` is the live board (MFE-3): every ticket as a row with a per-row
-status control, pushed over SSE — read-and-status only, no creation
-form by design (tickets are created by agents/CLI/API). Parked as Idea:
-MNG-5/6 (schema-derivation and framework theses). Next: the default
-page swap and the ready-set view (MFE), and the HelixDB graph-store epic
-(HLX, spike-gated).
 
 ## History
 
-`menger-hs` (0.04, Haskell) is the ancestor; its `web/` window manager —
-tabs, tear-out, desks, fuzzy find — is the eventual consumer of the
-framework this repo grows.
+`menger-hs` (0.04, Haskell) is the ancestor. v1 (0.05–0.6, tag `v0.0.1`
+above) moved menger onto Plexus RPC and Rust with a browser app of its own;
+v2 keeps its store and replaces the app with the ui service.
 
 ## License
 
