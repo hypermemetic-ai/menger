@@ -60,7 +60,7 @@ function record(wkey, s, t) {
 /** Which write an event is, if any: `[wkey, kind]`. A status change is
  *  named by its ticket and new status and told apart by how many times this
  *  socket has heard that pair (each watch hears every write once, in
- *  order); a comment or a chat post by its body, which is unique. */
+ *  order). */
 function writeOf(sock, kind, content) {
   if (kind === "tickets" && content?.type === "status_changed") {
     const key = `status:${content.ticket?.id}>${content.ticket?.status}`;
@@ -68,8 +68,6 @@ function writeOf(sock, kind, content) {
     sock.seen.set(key, n);
     return [`${key}#${n}`, "status"];
   }
-  if (kind === "comments" && content?.comment?.body?.startsWith?.("perf#")) return [`comment:${content.comment.body}#1`, "comment"];
-  if (kind === "chats" && content?.type === "posted" && content.message?.body?.startsWith?.("perf#")) return [`chat:${content.message.body}#1`, "chat"];
   return null;
 }
 
@@ -192,7 +190,7 @@ async function drain(m) {
   const live = sockets.filter((s) => s.alive).length;
   const expect = (kind) => live * (m.watchKinds.includes(kind) ? 1 : 0);
   const deadline = clock() + m.graceMs;
-  const done = () => [...sent.entries()].every(([k, s]) => (perWrite.get(k)?.n ?? 0) >= expect(s.kind === "status" ? "tickets" : s.kind === "comment" ? "comments" : "chats"))
+  const done = () => [...sent.entries()].every(([k, s]) => (perWrite.get(k)?.n ?? 0) >= expect("tickets"))
     && [...sockets].every((s) => [...s.calls.values()].every((c) => !c.read));
   while (clock() < deadline && !done()) await sleep(50);
   let sample = deliveries;

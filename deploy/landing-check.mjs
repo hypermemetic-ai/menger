@@ -4,8 +4,8 @@
 // pages are served from it on a loopback port and loaded in Chromium at 390
 // and 1440 px with motion reduced; any console error, page error, failed
 // request, answer of 400 or more, horizontal scroll or missing <title> fails
-// the gate, each named. Playwright comes from perf/node_modules, as
-// scripts/shot.mjs's does (PLAYWRIGHT_FROM points elsewhere).
+// the gate, each named. Playwright comes from perf/node_modules
+// (PLAYWRIGHT_FROM points elsewhere).
 //
 //   node deploy/landing-check.mjs DIR
 import { createRequire } from 'node:module';

@@ -16,8 +16,8 @@
 #   --prebuild   what needs cargo, on a machine with it: the engine
 #                (`cargo build --target wasm32-unknown-unknown --features dom`,
 #                then wasm-bindgen-cli `--target web` at the version Cargo.lock
-#                pins — from PATH, else trunk's cache, else installed once with
-#                cargo into ~/.cache/menger-tools) and the components compiled
+#                pins — from PATH, else installed once with cargo into
+#                ~/.cache/menger-tools) and the components compiled
 #                (`cargo build -p menger-ui-compiler`), into the staging
 #                directory beside the tar (dist/ui.d); then it stops.
 #   (default)    the bundle: whatever the staging directory lacks is built
@@ -92,8 +92,6 @@ build_engine() {
   want=$(awk '/^name = "wasm-bindgen"$/ { getline; gsub(/version = |"/, ""); print; exit }' "$root/Cargo.lock")
   if command -v wasm-bindgen >/dev/null && wasm-bindgen --version | grep -q " $want\$"; then
     bindgen=$(command -v wasm-bindgen)
-  elif [ -x "$HOME/.cache/trunk/wasm-bindgen-$want/wasm-bindgen" ]; then
-    bindgen=$HOME/.cache/trunk/wasm-bindgen-$want/wasm-bindgen
   else
     tools=$HOME/.cache/menger-tools/wasm-bindgen-$want
     [ -x "$tools/bin/wasm-bindgen" ] || cargo install wasm-bindgen-cli --version "$want" --locked --root "$tools"

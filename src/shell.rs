@@ -96,7 +96,7 @@ pub const PLACEHOLDER: &str = concat!(
 
 /// APP-64: the app build's files served at the root too, public — what
 /// Add to Home Screen and an installed app ask the origin for (iOS takes
-/// no SVG icon; frontend/icons/, scripts/icons.sh). No data in any of them,
+/// no SVG icon; v1 drew them, at tag v0.0.1). No data in any of them,
 /// and a manifest is fetched without credentials, so none is behind a
 /// session.
 ///
