@@ -18,6 +18,12 @@
 //! - FRAME-5 (wave 2): the ui service, out to `../plexus-ui` as
 //!   `plexus-ui-service`, with no menger type in it; menger registers it
 //!   beside `tickets` and mounts its routes on its own shell.
+//! - FRAME-7 (wave 3): menger on top — a tenant of the framework. Its own
+//!   packages are `menger` and `menger-tickets-api` and nothing else; the
+//!   service, the shell, the login and the compiler come from their sibling
+//!   checkouts; its shell mounts the framework's routes and has none of its
+//!   own; its docs say the framework is `../plexus-ui` and menger a tenant,
+//!   and point a new component at the framework's tool and contract.
 //!
 //! One file since FRAME-5 (it folded FRAME-4's `tests/apart_shell_login.rs`).
 
@@ -411,6 +417,161 @@ fn nothing_reads_the_moved_paths() {
     assert!(read.is_empty(), "FRAME-1: {} line(s) still read a path that moved to ../plexus-ui:\n  {}", read.len(), read.join("\n  "));
 }
 
+// ── menger, a tenant (FRAME-7) ─────────────────────────────────────────────
+
+/// menger's own packages: the workspace's members, and nothing else of the
+/// graph under its root.
+const OWN: &[&str] = &["menger", "menger-tickets-api"];
+
+/// What the graph `pkgs` (with `members`, the workspace's member names)
+/// breaks of FRAME-7's first row: the members are exactly [`OWN`], no
+/// package but those lives under `root`, and no package is named
+/// `menger-ui-…` wherever it lives.
+fn tenant_breaks(pkgs: &[(String, PathBuf)], members: &[String], root: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut have: Vec<&str> = members.iter().map(String::as_str).collect();
+    have.sort();
+    if have != OWN {
+        out.push(format!("the workspace's members are {have:?}, not {OWN:?}"));
+    }
+    for (name, dir) in pkgs {
+        if dir.starts_with(root) && !OWN.contains(&name.as_str()) {
+            out.push(format!("{name}: a package of menger's own ({})", dir.display()));
+        }
+        if name.starts_with(&format!("menger{}", "-ui")) {
+            out.push(format!("{name}: a ui crate under menger's name ({})", dir.display()));
+        }
+    }
+    out
+}
+
+/// The names of the workspace's members in `cargo metadata`'s answer.
+fn member_names(metadata: &Value) -> Vec<String> {
+    let ids: Vec<&str> = metadata["workspace_members"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+    metadata["packages"]
+        .as_array()
+        .map(|ps| ps.iter().filter(|p| p["id"].as_str().is_some_and(|id| ids.contains(&id))).filter_map(|p| p["name"].as_str().map(str::to_string)).collect())
+        .unwrap_or_default()
+}
+
+#[test]
+fn menger_links_the_framework_and_nothing_of_its_own() {
+    let root = root();
+    let parent = root.parent().expect("menger has a parent").to_path_buf();
+    let metadata = metadata();
+    let pkgs = packages(&metadata);
+    // The framework's service, the shell and the login, and the compiler
+    // (a dev-dependency: the ui tests compile natively), each from its
+    // sibling; the engine is in no graph of menger's — the tool builds it
+    // from its own checkout (`the_framework_is_a_sibling` holds the tool).
+    let mut broken = breaks(&pkgs, &parent, SIBLINGS, &old_packages());
+    broken.extend(tenant_breaks(&pkgs, &member_names(&metadata), &root));
+    assert!(broken.is_empty(), "FRAME-7: menger links the framework and holds nothing of it:\n  {}", broken.join("\n  "));
+}
+
+/// The lines of `src` that are code, not comment: (line number, text).
+fn code_lines(src: &str) -> Vec<(usize, &str)> {
+    src.lines().enumerate().filter(|(_, l)| !l.trim_start().starts_with("//")).map(|(n, l)| (n + 1, l)).collect()
+}
+
+#[test]
+fn the_shell_mounts_the_frameworks_routes() {
+    let src = std::fs::read_to_string(root().join("src/shell.rs")).expect("src/shell.rs");
+    let code = code_lines(&src);
+    let own: Vec<String> =
+        code.iter().filter(|(_, l)| l.contains("fn ui_app") || l.contains("struct UiServe")).map(|(n, l)| format!("src/shell.rs:{n}: {}", l.trim())).collect();
+    assert!(own.is_empty(), "FRAME-7: the shell serves the ui with routes of its own (the framework's UiRoutes does):\n  {}", own.join("\n  "));
+    let built = code.iter().find(|(_, l)| l.contains("UiRoutes::new("));
+    let mounted = code.iter().find(|(_, l)| l.contains("routes.mount("));
+    assert!(
+        built.is_some() && mounted.is_some(),
+        "FRAME-7: src/shell.rs does not mount the framework's routes (a code line with `UiRoutes::new(`: {built:?}; one with `routes.mount(`: {mounted:?})"
+    );
+}
+
+/// The text of `doc`'s section titled `title` (a `#`-heading of any level,
+/// its text exactly `title`): from the line after the heading to the next
+/// heading of the same or a higher level. Headings inside fenced code are
+/// not headings.
+fn section(doc: &str, title: &str) -> Option<String> {
+    let mut fenced = false;
+    let mut open: Option<usize> = None;
+    let mut out = Vec::new();
+    for line in doc.lines() {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+        }
+        let level = line.chars().take_while(|c| *c == '#').count();
+        let heading = !fenced && level > 0 && line[level..].starts_with(' ');
+        if heading {
+            if let Some(at) = open {
+                if level <= at {
+                    break;
+                }
+            } else if line[level..].trim() == title {
+                open = Some(level);
+                continue;
+            }
+        }
+        if open.is_some() {
+            out.push(line);
+        }
+    }
+    open.map(|_| out.join("\n"))
+}
+
+/// Where a `golden/` in `line` is named as menger's: not as a test
+/// directory of the framework's (`tests/golden/`). `ui/golden/` went with
+/// FRAME-8.
+fn golden_as_ours(line: &str) -> bool {
+    line.match_indices("golden/").any(|(at, _)| !line[..at].ends_with("tests/"))
+}
+
+/// What a doc's sections break of FRAME-7's last row: each of `wants` —
+/// (file, section, the words it must hold) — present and holding them.
+fn doc_breaks(docs: &[(&str, &str)], wants: &[(&str, &str, &[&str])]) -> Vec<String> {
+    let mut out = Vec::new();
+    for (file, title, words) in wants {
+        let Some((_, text)) = docs.iter().find(|(f, _)| f == file) else {
+            out.push(format!("{file}: not read"));
+            continue;
+        };
+        match section(text, title) {
+            None => out.push(format!("{file}: no section \"{title}\"")),
+            Some(body) => {
+                for w in words.iter().filter(|w| !body.contains(*w)) {
+                    out.push(format!("{file} \"{title}\": does not say `{w}`"));
+                }
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn the_docs_say_menger_is_a_tenant() {
+    let root = root();
+    let read = |f: &str| std::fs::read_to_string(root.join(f)).unwrap_or_else(|e| panic!("{f}: {e}"));
+    let (readme, agents) = (read("README.md"), read("AGENTS.md"));
+    let docs = [("README.md", readme.as_str()), ("AGENTS.md", agents.as_str())];
+    let mut broken = doc_breaks(
+        &docs,
+        &[
+            ("README.md", "What v2 is", &["../plexus-ui", "tenant"]),
+            ("README.md", "The services", &["../plexus-ui", "tenant"]),
+            ("AGENTS.md", "What v2 is", &["../plexus-ui", "tenant"]),
+            // The framework's tool and its contract, kept with its code.
+            ("AGENTS.md", "Adding a component", &["plexus-ui build", "plexus-ui push", "../plexus-ui/CONTRACT.md"]),
+        ],
+    );
+    // No path that left, named as menger's — the same walk as
+    // `nothing_reads_the_moved_paths`, over the docs, and `ui/golden/`.
+    let files = ["README.md", "AGENTS.md", "deploy/README.md"].map(|f| root.join(f));
+    broken.extend(lines_where(&root, &files, moved_paths));
+    broken.extend(lines_where(&root, &files, |l| if golden_as_ours(l) { vec!["golden/ (ui/golden went, FRAME-8)".into()] } else { vec![] }));
+    assert!(broken.is_empty(), "FRAME-7: the docs do not yet say menger is the framework's tenant:\n  {}", broken.join("\n  "));
+}
+
 // ── the checks check ──────────────────────────────────────────────────────
 
 /// The parsers and the rules, on what they must and must not see.
@@ -483,4 +644,45 @@ fn the_checks_read_what_they_are_given() {
     assert_eq!(moved_paths("#   engine.js  (ui-engine/, abi engine/1)"), ["ui-engine/"]);
     assert!(moved_paths("../plexus-ui/compiler/ and dist/ui-compiler.wasm and ui-service.db").is_empty());
     assert!(moved_paths("plexus-ui-compiler/ build-ui-compiler/ my_ui-engine/ plexus-ui-service/").is_empty());
+
+    // FRAME-7: the tenant's graph — members exactly menger's two, nothing
+    // else under its root, no ui crate under menger's name anywhere.
+    let m = Path::new("/w/menger");
+    let own = |n: &str| (n.to_string(), PathBuf::from(format!("/w/menger/{}", if n == "menger" { "" } else { "tickets-api" })));
+    let members = [String::from("menger-tickets-api"), String::from("menger")];
+    assert!(tenant_breaks(&[own("menger"), own("menger-tickets-api"), pkgs[2].clone()], &members, m).is_empty());
+    let extra = [own("menger"), ("menger-ui-kit".to_string(), PathBuf::from("/w/elsewhere/kit")), ("plexus-ui-service".to_string(), PathBuf::from("/w/menger/vendor/s"))];
+    assert_eq!(
+        tenant_breaks(&extra, &members[..1], m),
+        [
+            "the workspace's members are [\"menger-tickets-api\"], not [\"menger\", \"menger-tickets-api\"]".to_string(),
+            "menger-ui-kit: a ui crate under menger's name (/w/elsewhere/kit)".to_string(),
+            "plexus-ui-service: a package of menger's own (/w/menger/vendor/s)".to_string(),
+        ]
+    );
+    let meta = serde_json::json!({ "workspace_members": ["a 1", "b 1"], "packages": [
+        { "id": "a 1", "name": "menger" }, { "id": "b 1", "name": "menger-tickets-api" }, { "id": "c 1", "name": "plexus-shell" } ]});
+    assert_eq!(member_names(&meta), ["menger", "menger-tickets-api"]);
+
+    // The shell's code lines: a comment naming the routes is not a mount.
+    let shell = "    // UiRoutes::new(store, port) and routes.mount(app) went\nfn ui_app() {}\n  let r = UiRoutes::new(s, p);\n  app = routes.mount(app);\n";
+    assert_eq!(code_lines(shell).iter().map(|(n, _)| *n).collect::<Vec<_>>(), [2, 3, 4]);
+
+    // The sections: by exact title, to the next heading of its level or
+    // higher, a deeper one kept, a `#` inside a fence no heading.
+    let doc = "# T\nintro\n## What v2 is\nA ../plexus-ui tenant.\n```sh\n# not a heading\n```\n### deeper\nkept\n## Next\nnot\n";
+    assert_eq!(section(doc, "What v2 is").as_deref(), Some("A ../plexus-ui tenant.\n```sh\n# not a heading\n```\n### deeper\nkept"));
+    assert_eq!(section(doc, "What v2"), None);
+    assert_eq!(section("#What v2 is\nx\n", "What v2 is"), None);
+    let docs = [("R", doc)];
+    assert!(doc_breaks(&docs, &[("R", "What v2 is", &["../plexus-ui", "tenant"])]).is_empty());
+    assert_eq!(
+        doc_breaks(&docs, &[("R", "Next", &["tenant"]), ("R", "Gone", &[]), ("A", "What v2 is", &[])]),
+        ["R \"Next\": does not say `tenant`", "R: no section \"Gone\"", "A: not read"]
+    );
+
+    // golden/: menger's when not a framework's tests/golden/.
+    assert!(golden_as_ours("`src/*.svelte`, `golden/` — compiled by"));
+    assert!(golden_as_ours("ui/golden/ and compiler/tests/golden/"));
+    assert!(!golden_as_ours("`../plexus-ui`'s (`compiler/tests/golden/`)"));
 }
