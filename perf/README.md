@@ -25,6 +25,7 @@ npm run smoke                     # the concurrency ladder's smoke — must pass
 | `reads-probe.mjs` | FILTER-15: `find`, `member`, `ready_set` under a filter | yours |
 | `tree-probe.mjs` | FILTER-13: the kept tree's reads | yours |
 | `ready-probe.mjs` | SCALE-32: ready-set and status pages; the fan-out of one blocker (`fan-out.py`'s store) | yours |
+| `live-probe.mjs` | FRAME-16: the first row on the wire — cold loads of a deployed menger, the waterfall by kind | a deployment (app-test), a session token file |
 | `filter-identical.mjs` | FILTER-4: unfiltered pages byte for byte what another server answers | yours (two) |
 
 `fan-out.py` writes the store `ready-probe.mjs fan-out` reads; `menger_ws.py`

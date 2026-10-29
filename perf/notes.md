@@ -463,3 +463,16 @@ at once (22 sequential requests before), and the route drawn before
 `ui.slots.list` answers. The rows held are 200 at every N (a window); what
 grows the memory with N is not measured apart here — the nav's shortcode
 rows and the extents grow with N (101 shortcodes at 10⁵).
+
+## The first row on the wire — `live-probe.mjs` (FRAME-16, 2026-10-29)
+
+`node perf/live-probe.mjs --token-file FILE` against app-test (976 tickets, release
+20261029T220735Z-68c5c3c), 1440×900, a warm-up then five cold contexts signed in by cookie:
+
+| where | first titled row | TTFB | the socket opens | on the wire |
+|---|---|---|---|---|
+| app-test, from this machine | 0.939 s (1032, 930, 907, 991, 939 ms) | 76 ms | +688 ms, after the wasm instantiated | engine.js 7 KiB, engine.wasm 559 KiB (gzip of 1,868 KiB), manifest 1 KiB, 22 component files 12 KiB |
+
+The chain is serial: the HTML, then engine.js, then the wasm, then the socket, then the manifest,
+then the components, then the board's calls. The local probe (0.218 s at 10⁶) sees none of it.
+FRAME-16 makes the boot parallel; this row is its "before".
