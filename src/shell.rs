@@ -110,8 +110,8 @@ pub const ROOT_FILES: [&str; 6] =
 pub const SERVICE_WORKER: &str = "/sw.js";
 
 /// ACCESS-28: the app's pages' Content-Security-Policy (plexus-shell fills
-/// `{{SCRIPTS}}` with the page's inline-script hashes and `{{HUB}}` with the
-/// hub's WebSocket origins at the name the page was asked for):
+/// `{{SCRIPTS}}` with the page's inline-script hashes and `{{SERVICE}}` with the
+/// service's WebSocket origins at the name the page was asked for):
 ///
 /// - scripts: the app's files, the wasm, the hashed inline blocks — no
 ///   other inline script, no other origin;
@@ -120,7 +120,7 @@ pub const SERVICE_WORKER: &str = "/sw.js";
 ///   sheet (THEME-3: `@import url("https://…")`);
 /// - images: its own and `data:` — a remote image in a body shown in the
 ///   app is refused, so a body cannot learn who reads it (ACCESS-4 M5);
-/// - connections: itself, its hub, and a WebSocket on loopback — MFE-21's
+/// - connections: itself, its service, and a WebSocket on loopback — MFE-21's
 ///   settings point the app at another menger on this machine;
 /// - frames: its own; nothing frames it.
 ///
@@ -128,7 +128,7 @@ pub const SERVICE_WORKER: &str = "/sw.js";
 /// own sign-out page (IDENTITY-30), which the browser checks against it.
 pub const PAGE_CSP: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' {{SCRIPTS}}; \
 style-src 'self' 'unsafe-inline' https:; font-src 'self' data: https:; img-src 'self' data: blob:; \
-connect-src 'self' {{HUB}} ws://127.0.0.1:* ws://localhost:*; frame-src 'self'; \
+connect-src 'self' {{SERVICE}} ws://127.0.0.1:* ws://localhost:*; frame-src 'self'; \
 object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
 
 /// APP-110: **the live test app in a ticket.** The tracker draws test's app

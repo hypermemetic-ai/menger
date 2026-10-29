@@ -516,8 +516,8 @@ reshortcode --to org:epic:CODE` moves tickets between epics.
 
 ## Login (IDENTITY-14)
 
-The login is a crate of its own, [`plexus-login`](plexus-login/README.md)
-(SCAFFOLD-3, SCAFFOLD-9): the provider specs, the login page and its
+The login is a crate and repository of its own, [`plexus-login`](../plexus-login/README.md)
+(SCAFFOLD-3, SCAFFOLD-9; beside menger by sibling path, FRAME-4): the provider specs, the login page and its
 routes, the sessions, the gate at the upgrade and the `auth` backend,
 generic over `LoginAccess`, which menger implements over its members and
 sessions (`src/login_access.rs`). Each `--auth-provider` becomes an adapter
@@ -756,10 +756,10 @@ server.shutdown().await;
 
 `tests/local.rs` is the executable reference.
 
-**plexus-shell** (SCAFFOLD-5, `plexus-shell/`) is the serving half as a
-crate of its own: `AppSource`, the hardened router, the page policy and its
-stamping, and `LocalServer` for any Plexus service. `plexus-shell/toy/` is
-its worked example.
+**plexus-shell** (SCAFFOLD-5; `../plexus-shell`, a repository of its own
+since FRAME-4, taken by sibling path) is the serving half: `AppSource`, the
+hardened router, the page policy and its stamping, and `LocalServer` for
+any Plexus service. Its `toy/` is its worked example.
 
 ## Layout
 
@@ -772,8 +772,6 @@ ui-service/          menger-ui-service: the ui service, its store, the compiler 
 ui-compiler/         menger-ui-compiler: the component compiler, native and wasm
 ui-engine/           menger-ui-engine: the engine, wasm
 ui/                  the UI's source bundle
-plexus-shell/        the shell as a crate (and toy/, its example)
-plexus-login/        the login as a crate
 tether/              menger's local side, its own workspace (TETHER-7)
 tests/               wire tests over the real socket, browser tests
 deploy/              the pipeline, the image, the runner (deploy/README.md)
