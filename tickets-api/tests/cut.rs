@@ -16,7 +16,7 @@ fn root() -> PathBuf {
 /// directory. Grouped as the ticket names them.
 const GOES: &[&str] = &[
     // The activations: chats, comments, deployments (and webhook), media,
-    // notes, themes, profiles, session — and tickets' children inputs,
+    // notes, themes, profiles — and tickets' children inputs,
     // components, the queue (await_reply, request_changes, queued, snooze,
     // unqueue) and assign.
     "tickets-api/src/chats_activation.rs",
@@ -29,7 +29,6 @@ const GOES: &[&str] = &[
     "tickets-api/src/media_activation",
     "tickets-api/src/notes_activation.rs",
     "tickets-api/src/themes_activation.rs",
-    "tickets-api/src/session_activation.rs",
     "tickets-api/src/members_activation/profiles.rs",
     "tickets-api/src/activation/inputs.rs",
     "tickets-api/src/activation/components.rs",
@@ -116,7 +115,8 @@ const GOES: &[&str] = &[
     "tests/webhook_secret.rs",
 ];
 
-/// The activation types of the services that go: none is named anywhere in
+/// The activation types of the services that go (`session` stays, with
+/// members, orgs and epics: the browser's sign-in): none is named anywhere in
 /// `tickets-api/src` or `src` — not declared, not registered, not left in a
 /// comment.
 const TYPES: &[&str] = &[
@@ -128,7 +128,6 @@ const TYPES: &[&str] = &[
     "NotesActivation",
     "ThemesActivation",
     "ProfilesActivation",
-    "SessionActivation",
     "InputsActivation",
     "MessageInputsActivation",
     "ComponentsActivation",
@@ -192,5 +191,63 @@ fn a_name_is_found_only_as_an_identifier_of_its_own() {
     assert!(names("ChatsActivation::with_access(..)", "ChatsActivation"));
     assert!(!names("MessageInputsActivation", "InputsActivation"));
     assert!(!names("ChatsActivationX", "ChatsActivation"));
-    assert!(names("// .register(SessionActivation::offering(..))", "SessionActivation"));
+    assert!(names("// .register(ChatsActivation::with_access(..))", "ChatsActivation"));
+}
+
+/// The store modules the cut names: none is declared in `store/mod.rs`.
+const STORE_MODULES: &[&str] = &[
+    "chats", "comments", "deployments", "media", "notes", "themes", "theme_registry", "queue", "ask", "inputs",
+    "input_writes", "components", "profiles", "assignees", "replies", "threads",
+];
+
+/// The crate's modules of the services that went, and the body parsers that
+/// served them: none is declared in `lib.rs`.
+const CRATE_MODULES: &[&str] = &[
+    "chats", "chats_activation", "chat_inputs", "chat_reply", "chat_tickets", "comments", "comments_activation",
+    "deployments", "deployments_activation", "media", "media_activation", "notes", "notes_activation", "themes",
+    "themes_activation", "inputs", "queue", "assignees", "mockups", "component_docs", "html_runs", "theme_block",
+];
+
+/// The `mod <name>` declarations in `text` (any visibility, inline or not),
+/// of those in `names`.
+fn declared<'a>(text: &str, names: &[&'a str]) -> Vec<&'a str> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let line = line.trim_start();
+        if line.starts_with("//") {
+            continue;
+        }
+        let Some(at) = line.find("mod ") else { continue };
+        if !line[..at].split_whitespace().all(|w| w == "pub" || w.starts_with("pub(")) {
+            continue;
+        }
+        let rest = &line[at + 4..];
+        let name: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+        if let Some(n) = names.iter().find(|n| **n == name) {
+            out.push(*n);
+        }
+    }
+    out
+}
+
+#[test]
+fn no_module_of_the_other_services_is_declared() {
+    assert_eq!(declared("pub(crate) mod chats;\nmod tests_chats;\n// mod queue;\n    pub mod themes {", STORE_MODULES), ["chats", "themes"]);
+    let root = root();
+    let store = std::fs::read_to_string(root.join("tickets-api/src/store/mod.rs")).unwrap();
+    let lib = std::fs::read_to_string(root.join("tickets-api/src/lib.rs")).unwrap();
+    let (in_store, in_lib) = (declared(&store, STORE_MODULES), declared(&lib, CRATE_MODULES));
+    assert!(in_store.is_empty() && in_lib.is_empty(), "V2-4: store/mod.rs declares {in_store:?}; lib.rs declares {in_lib:?}");
+}
+
+/// The binary's flags and environment variables for the services that
+/// went: none is left in `src/main.rs`.
+#[test]
+fn the_binary_has_no_flag_for_them() {
+    let main = std::fs::read_to_string(root().join("src/main.rs")).unwrap();
+    let left: Vec<&str> = ["chat-member", "chat_member", "MENGER_CHAT_MEMBERS", "seed-synthetic-chat", "SEED_SYNTHETIC_CHAT", "webhook", "WEBHOOK"]
+        .into_iter()
+        .filter(|w| main.contains(w))
+        .collect();
+    assert!(left.is_empty(), "V2-4: src/main.rs still names {left:?}");
 }

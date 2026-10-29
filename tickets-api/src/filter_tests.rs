@@ -1778,19 +1778,21 @@ fn a_mistake_is_placed_with_its_fix() {
 
 // -- V2-4: the cells on day one, and the cells that went ---------------------------
 
-/// V2-4, acceptance 3: each cell of a service that does not exist yet — the
-/// chats', the deployments', the assignments', the queue's, a message's
-/// questions' — is refused by the parser, in band, the one chunk named and
-/// its reason naming the word. (`me` is TICKETS-9's `assigned me`; `by me`
-/// is the transition log's, and stays.)
+/// V2-4, acceptance 3: each cell the cut names — the chats', the
+/// deployments', the assignments', the queue's, a message's questions' — is
+/// refused by the parser, in band, as one chunk whose reason names the word.
+/// (`me` is TICKETS-9's `assigned me`; `by me` is the transition log's, and
+/// stays.) `in` before a shortcode still reads, `in CHAT` too.
 #[test]
 fn a_dropped_cell_is_refused_by_name() {
     for (text, word) in [
         ("chatting", "chatting"),
         ("unread", "unread"),
+        ("in chat 6", "in chat"),
         ("deployed prod", "deployed"),
         ("deploying prod", "deploying"),
         ("failed prod", "failed"),
+        ("behind prod", "behind"),
         ("ready for prod", "ready for"),
         ("requested prod", "requested"),
         ("waiting prod", "waiting"),
@@ -1807,12 +1809,13 @@ fn a_dropped_cell_is_refused_by_name() {
             Err(e) => e,
         };
         assert_eq!(e.chunks.len(), 1, "{text}: {e}");
-        assert_eq!(e.chunks[0].text, text, "{text}: {e}");
-        assert!(e.chunks[0].why.contains(&format!("`{word}`")), "{text}: the refusal names `{word}`: {}", e.chunks[0].why);
-        // …and beside a cell that stays, it is still the one named.
+        assert!(e.chunks[0].why.contains(word), "{text}: the refusal names {word}: {}", e.chunks[0].why);
+        // …and beside a cell that stays, it is still the one refused.
         let e = refused(&format!("kind build and {text}"));
-        assert_eq!(e.chunks.iter().map(|c| c.text.as_str()).collect::<Vec<_>>(), [text], "{text}: {e}");
+        assert_eq!(e.chunks.len(), 1, "{text}: {e}");
+        assert!(e.chunks[0].why.contains(word), "{text}: {e}");
     }
+    assert_eq!(parsed("in CHAT"), groups(vec![one(is(within("CHAT")))]), "a shortcode named CHAT is a shortcode");
 }
 
 /// V2-4: the store `the_day_one_cells_parse` answers over —
@@ -1864,14 +1867,16 @@ async fn day_one_store() -> crate::store::Store {
 /// the log's `entered`, `left`, `moved`, `by`; the marks `archived`,
 /// `hidden`; and `in`, `under`, `tree` — parses, reads back canonically,
 /// and answers a filtered `list` on a seeded store with exactly the
-/// tickets it names.
+/// tickets it names. Then each cell of acceptance 3's keep list parses.
 #[cfg(feature = "server")]
 #[tokio::test]
 async fn the_day_one_cells_parse() {
-    use crate::store::{Filtered, Lens, SYS};
+    use crate::store::{Clock, Filtered, Lens, SYS};
     let store = day_one_store().await;
     let listed = |text: &str| -> Vec<String> {
-        let lens = Lens::parse(text).unwrap_or_else(|e| panic!("{text}: {e}"));
+        // `by me` reads as idp:ada.
+        let clock = Clock { me: "idp:ada".into(), ..Clock::default() };
+        let lens = Lens::parse(text).unwrap_or_else(|e| panic!("{text}: {e}")).with_clock(clock);
         let q = Filtered { lens, epic: None, status: None, parent: None, keep: None };
         store.filtered_page(SYS, &q, None, None, None).unwrap_or_else(|e| panic!("{text}: {e}")).tickets.into_iter().map(|t| t.id.into_string()).collect()
     };
@@ -1899,6 +1904,7 @@ async fn the_day_one_cells_parse() {
         ("left Draft", vec!["D-2"]),
         ("moved by idp:ada", vec!["D-2"]),
         ("by idp:ada", vec!["D-2"]),
+        ("by me", vec!["D-2"]),
         // The row's marks.
         ("archived", vec!["D-6"]),
         ("hidden", vec!["D-5"]),
@@ -1912,5 +1918,24 @@ async fn the_day_one_cells_parse() {
         let f = parsed(text);
         assert_eq!(parsed(&f.format()), f, "{text}: reads back from {:?}", f.format());
         assert_eq!(listed(text), want, "{text}");
+    }
+    // Acceptance 3's keep list: the cells the reads need outside the
+    // table stay, and read.
+    for text in [
+        "ready",
+        "category active",
+        "text \"two\"",
+        "saved \"Needs you\"",
+        "epic genesis",
+        "ticket D-2",
+        "frozen",
+        "touched within 1d",
+        "restored",
+        "restored within 1d",
+        "menger doc",
+        "by system",
+    ] {
+        let f = parsed(text);
+        assert_eq!(parsed(&f.format()), f, "{text}: reads back from {:?}", f.format());
     }
 }

@@ -774,12 +774,18 @@ async fn a_form_6_file_gains_form_7_once_and_answers_as_before() {
     s.kill9();
 }
 
+/// The tables of v1's other services — kept in a v2 file, unread.
+const V1_TABLES: [&str; 12] = ["chats", "chat_messages", "comments", "deployments", "notes", "media", "themes", "queue", "inputs", "answers", "components", "assignment_log"];
+
 /// V2-4: the cut gives the derived state a new form — the cells of the
-/// services that went are gone from it — and a file in the form before it
-/// (form 15, v1's last) is built in the new form once, on its first open,
-/// saying so; it then verifies `consistent`; and the next open reads it,
-/// building nothing. Written against the build's own [`FORM`]: it holds the
-/// moment the cut moves the number.
+/// services that went are gone from it — and a file v1's last build wrote
+/// (`tests/fixtures/v1-form15.db`, form 15: NF-1 a scope, NF-2 a build
+/// labelled `stale` whose body holds a decision, NF-3 a Complete build
+/// under it, OF-1 another scope) is built in the new form once, on its
+/// first open, saying so in one line; it answers what it holds; it then
+/// verifies `consistent`; the tables of v1's other services stay in it,
+/// unread; and the next open reads it, building nothing. Written against
+/// the build's own [`FORM`]: it holds the moment the cut moves the number.
 #[tokio::test]
 async fn the_derived_state_is_rebuilt_in_the_new_form_once() {
     use menger_tickets_api::store::FORM;
@@ -788,51 +794,47 @@ async fn the_derived_state_is_rebuilt_in_the_new_form_once() {
 
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let db = dir.path().join("tickets.db");
-    let s = spawn_server(&db, dir.path(), "made").await;
+    std::fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/v1-form15.db"), &db).unwrap();
+    let tables = |db: &Path| -> Vec<(String, i64)> {
+        let conn = rusqlite::Connection::open(db).unwrap();
+        V1_TABLES.iter().map(|t| (t.to_string(), conn.query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get(0)).unwrap_or(-1))).collect()
+    };
+    let kept = tables(&db);
+    assert!(kept.iter().all(|(_, n)| *n >= 0), "the fixture holds v1's tables: {kept:?}");
+    let (code, out, _) = verify(&db);
+    assert_eq!(code, Some(1), "an older form is not consistent with this build: {out}");
+
+    // The first open builds it, once, and says so in one line.
+    let s = spawn_server(&db, dir.path(), "first").await;
     let c = connect(s.port).await;
-    for (epic, kind, parent) in [("NF", "scope", None), ("NF", "build", Some("NF-1")), ("NF", "build", Some("NF-2"))] {
-        let ev = one(&c, "tickets.create", json!({"epic": epic, "title": "t", "kind": kind, "parent": parent})).await.unwrap();
-        assert_eq!(ev["type"], "created", "{ev}");
-    }
-    one(&c, "tickets.set_status", json!({"id": "NF-3", "status": "Complete"})).await.unwrap();
-    one(&c, "tickets.label", json!({"id": "NF-2", "add": ["stale"]})).await.unwrap();
+    let ids = |evs: Vec<Value>| evs.into_iter().filter(|e| e["type"] != "page").map(|e| e["id"].as_str().unwrap_or_default().to_string()).collect::<Vec<_>>();
     let answers = |c: WsClient| async move {
         let mut out = Vec::new();
-        for filter in ["", "kind build", "under NF-2", "label stale", "status Complete"] {
-            out.push(all(&c, "tickets.nav.counts", json!({"filter": filter})).await);
-            out.push(all(&c, "tickets.list", json!({"filter": filter, "summary": true})).await);
+        for filter in ["", "kind build", "under NF-2", "label stale", "status Complete", "in OF"] {
+            out.push(ids(all(&c, "tickets.list", json!({"filter": filter, "summary": true})).await));
         }
         out
     };
-    let before = answers(c).await;
-    s.kill9();
-
-    // The file, as v1's last build left it.
-    rusqlite::Connection::open(&db).unwrap().execute("UPDATE derived_state SET form = ?1", [BEFORE]).unwrap();
-    let (code, out, _) = verify(&db);
-    assert_eq!(code, Some(1), "{out}");
-    assert!(out.contains(&format!("stored in form {BEFORE}; this build reads {FORM}")), "{out}");
-
-    // The first open builds it, once, and says so.
-    let s = spawn_server(&db, dir.path(), "first").await;
-    let after = answers(connect(s.port).await).await;
+    let want: Vec<Vec<&str>> = vec![vec!["NF-1", "NF-2", "NF-3", "OF-1"], vec!["NF-2", "NF-3"], vec!["NF-2", "NF-3"], vec!["NF-2"], vec!["NF-3"], vec!["OF-1"]];
+    assert_eq!(answers(c).await, want, "it answers what it holds");
     let log = s.log();
-    let said = format!("SCALE-28: stored the derived state again: it was stored in form {BEFORE}, this build writes {FORM}");
-    assert_eq!(log.matches(&said).count(), 1, "built once, saying so:\n{log}");
-    assert_eq!(log.matches("SCALE-28: stored").count(), 1, "nothing else built:\n{log}");
-    assert_eq!(after, before, "it answers as before");
+    let built: Vec<&str> = log.lines().filter(|l| l.contains("SCALE-28: stored the derived state")).collect();
+    assert_eq!(built.len(), 1, "built once:\n{log}");
+    assert!(built[0].contains(&BEFORE.to_string()) && built[0].contains(&FORM.to_string()), "the line names form {BEFORE} and form {FORM}: {}", built[0]);
     s.kill9();
     let (code, out, err) = verify(&db);
     assert_eq!(code, Some(0), "{out}\n{err}");
     assert!(out.starts_with("consistent: "), "{out}");
     let form: i64 = rusqlite::Connection::open(&db).unwrap().query_row("SELECT form FROM derived_state", [], |r| r.get(0)).unwrap();
     assert_eq!(form, FORM);
+    assert_eq!(tables(&db), kept, "v1's other services' tables stay, unread");
 
     // The next open reads it: nothing built.
     let s = spawn_server(&db, dir.path(), "second").await;
-    assert_eq!(answers(connect(s.port).await).await, before, "the next open answers the same");
+    assert_eq!(answers(connect(s.port).await).await, want, "the next open answers the same");
     let log = s.log();
     assert!(!log.contains("SCALE-28: stored"), "built once:\n{log}");
     assert!(log.contains("read the derived state from the database"), "{log}");
     s.kill9();
+    assert_eq!(tables(&db), kept);
 }
