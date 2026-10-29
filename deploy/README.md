@@ -76,7 +76,8 @@ and its `install`. Nothing on this machine reads them now.
 ## The pipeline
 
 ```sh
-deploy/pipeline build [REV] [--no-gate]   # a commit → a release (prints its name); --no-gate: the suite comes after
+deploy/pipeline build [REV] [--branch B] [--no-gate]   # a commit → a release (prints its name); --branch: B's tip
+                                          # (V2-7), named in the release; --no-gate: the suite comes after
 deploy/pipeline image [RELEASE]           # RUN-10: the release as an image (IMAGE_STORE=ghcr pushes it to GHCR)
 deploy/pipeline remote test --image IMG   # app-test.menger.sh through infra, then the smoke; recorded as test
 deploy/pipeline suite RELEASE             # DEPLOY-52: the full suite at the release's commit; marks the release
@@ -259,6 +260,41 @@ has not seen (`https://menger.sh/?v=3`); X has no validator any more, and its
 composer often draws no card until the post is published. The edge logs
 every request to menger.sh (Caddy `log`, the edge container's output), so
 whether a crawler came, and what it was answered, can be read there.
+
+### v2: a release with no browser toolchain (V2-7)
+
+`deploy/pipeline build --branch v2` builds v2's tip, and its RELEASE says
+`branch: v2` and the `steps:` it took. A tree with no `frontend/` (v2) never
+runs trunk or npm here: `cargo build --release -p menger`, then its UI in the
+`plexus-codegen` container (`../dockerfiles/plexus-codegen`, the checkout
+mounted at `/work`; `MENGER_CODEGEN_IMAGE` names another) —
+`scripts/ui-build.sh` → `dist/ui.tar` (`ui-build`; a stub holding the
+placeholder page and its `manifest.json` until UI-6) and, when the tree has
+`scripts/ui-compiler-wasm.sh` (UI-5), `dist/ui-compiler.wasm`
+(`ui-compiler-wasm`). The release is `bin/menger`, `bin/run-menger`, `dist/`
+and `RELEASE`, no `app/`. A tree with `frontend/` builds as before. A v2
+release's `suite` is `cargo test --workspace` alone.
+
+The image copies `dist/` to `/opt/menger/dist`; `run-menger` passes
+`--ui-db-path` (`MENGER_UI_DB_PATH`, else `ui.db` beside the database, in
+the data volume), one `--ui-signer` per key of `MENGER_UI_SIGNERS`
+(`;`-separated 64-hex public keys; app-test's line in
+`deploy/env/app-test.env` is the pipeline key's, written by hand, never by a
+test) and `--ui-compiler` when the module is there.
+
+After a deploy is healthy — `remote test`, and `local` — the pipeline
+pushes the release's bundle: `ui.push { bundle, manifest, signature, commit
+}` through `deploy/menger-call.mjs` as the `pipeline` agent, params on stdin,
+signed by `deploy/ui-sign.mjs` (Ed25519 over the bundle's sha256, the
+pipeline key's seed read from `MENGER_DEPLOY_KEY_FILE`, never argv); the
+manifest is the bundle's own `manifest.json`. The smoke then wants that
+version live in `ui.versions` and reads `/app/` signed in (a session from
+`auth.login`, its cookie in a 0600 header file) for the bundle's own
+`index.html`, stamps filled. A refused push fails the deploy — recorded
+`failed`, the reason (`bad_signature`, …) on stderr and in deployments.log
+— and leaves the version live before it live; nothing calls `ui.rollback`.
+`local` starts its container with the `key` provider, the pipeline's
+principal as `MENGER_ADMINS` and its public key as `MENGER_UI_SIGNERS`.
 
 ## The image (RUN-10)
 
@@ -1223,7 +1259,11 @@ tolerate rollback. our system should do this automatically upon something
 entering review." The runner also holds `tickets.watch` (as the pipeline
 key, `viewer` on `*`) and files the test request itself
 (`deployments.request --environment test --branch main`, its `deployer`
-grant) — **for test only**; prod stays the owner's (below).
+grant) — **for test only**; prod stays the owner's (below). V2-7: the
+branch is `MENGER_RUNNER_BRANCH` in `deploy-runner.env` (default `main`) —
+the one source: the runner files and builds that branch's tip (`build
+<sha> --branch <it>`), records each request's branch in `auto.json`, and
+`deploy/pipeline status` prints `  branch    <it>` from the same file.
 
 - **Trigger:** a ticket of the project — MENGER or any shortcode hosted
   under it, by its address — entering **In Review**, or a commit linked

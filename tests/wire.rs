@@ -1079,6 +1079,7 @@ async fn shell_serves_the_page() {
             https: false,
             metadata: None,
             framing: Default::default(),
+            ui: None,
         })
         .await;
     });

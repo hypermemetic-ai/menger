@@ -20,7 +20,11 @@
 # (published as `plexus-login`).
 # v2: `diagrams/` (the mermaid check for bodies the app drew) is out of the
 # workspace with the frontend — its tests read the app's sources.
-members = [".", "tickets-api", "plexus-shell", "plexus-shell/toy", "plexus-login"]
+# UI-3: `ui-service/` (`menger-ui-service`) — the ui activation and its own
+# file, `ui.db`.
+# UI-5: `ui-compiler/` (`menger-ui-compiler`) — the component compiler,
+# native and as a wasm module with no imports.
+members = [".", "tickets-api", "ui-service", "ui-compiler", "plexus-shell", "plexus-shell/toy", "plexus-login"]
 # TETHER-7: `tether/` is a workspace of its own — substrate's sqlx and this
 # workspace's rusqlite link two libsqlite3-sys, which one resolve refuses.
 exclude = ["tether"]
@@ -62,6 +66,9 @@ path = "src/main.rs"
 # app (frontend/), which takes it with `default-features = false`. Default
 # features here: `server`, the real thing.
 menger-tickets-api = { path = "tickets-api", version = "0.6.2" }
+# UI-3: the ui service — its activation registered beside `tickets`, its
+# store serving `/app/*` from the shell.
+menger-ui-service = { path = "ui-service" }
 
 # SCAFFOLD-5: the shell (the app's build as a table, stamped and served) and
 # the local server (`menger::local`'s serving) — lifted out of menger into
@@ -156,6 +163,9 @@ ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
 http-body-util = "0.1"
+# UI-3: tests/wire_ui.rs and tests/ui_serve.rs build a bundle (a small tar)
+# and sign its sha256.
+tar = { version = "0.4", default-features = false }
 
 # MNG-8's `[patch.crates-io]` on the plexus-transport-v0.2.3 tag went with
 # MFE-10: the REST bridge fixes it carried are on plexus-transport `main`

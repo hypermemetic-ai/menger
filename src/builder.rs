@@ -2,6 +2,7 @@ use menger_tickets_api::access::Access;
 // V2-4: `tickets`, and the addresses, the grants its reach reads and the
 // browser's sign-in — `members`, `orgs`, `epics`, `session`.
 use menger_tickets_api::{EpicsActivation, MembersActivation, OrgsActivation, ProviderOffer, SessionActivation, TicketsActivation};
+use menger_ui_service::{Signers, UiActivation, UiStore, UI_DB_FILE};
 use menger_tickets_api::store::{OpenPurge, SeedShape, SeedSpec, Store, StoreError, System, PURGE_EVERY};
 use plexus_core::plexus::{AuthBackend, AuthSetup, DynamicHub, Provider as AuthProvider, ProviderKind as AuthKind};
 
@@ -23,6 +24,41 @@ use std::time::Instant;
 /// (prod, test and the image name theirs).
 pub fn default_db_path() -> PathBuf {
     crate::first_run::default_data_dir().join(crate::first_run::DB_FILE)
+}
+
+/// UI-3: the ui service's file when `--ui-db-path` names none — `ui.db`
+/// beside the tickets file `db_path`, never the same file.
+pub fn default_ui_db_path(db_path: &Path) -> PathBuf {
+    let beside = |name: &str| db_path.parent().map_or_else(|| PathBuf::from(name), |d| d.join(name));
+    match beside(UI_DB_FILE) {
+        // A tickets file that is itself named ui.db: the ui file goes beside it under another name.
+        same if same == db_path => beside("ui-service.db"),
+        ui => ui,
+    }
+}
+
+/// UI-3: what the `ui` activation and the shell's `/app/*` are built over —
+/// the store on its own file and the signers a push may be signed by.
+#[derive(Clone)]
+pub struct UiSetup {
+    pub store: Arc<UiStore>,
+    pub signers: Signers,
+}
+
+impl UiSetup {
+    /// The store at `path` (`--ui-db-path`), pushes signed by `signers`
+    /// (`--ui-signer`).
+    pub fn open(path: &Path, signers: Signers) -> anyhow::Result<Self> {
+        let store = UiStore::open(path).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
+        tracing::info!("ui:        {}", path.display());
+        Ok(Self { store: Arc::new(store), signers })
+    }
+
+    /// The store beside the tickets file ([`default_ui_db_path`]), with no
+    /// signer — every push refused `no_signer`.
+    pub fn beside(db_path: &Path) -> anyhow::Result<Self> {
+        Self::open(&default_ui_db_path(db_path), Signers::none())
+    }
 }
 
 /// ACT-5: the purge of deleted tickets' bodies past their 30 days — at start,
@@ -123,6 +159,24 @@ pub async fn build_rpc_login(
     resource_metadata: Option<String>,
     body_max: usize,
 ) -> anyhow::Result<Arc<DynamicHub>> {
+    let ui = UiSetup::beside(db_path)?;
+    build_rpc_ui(db_path, seed, shape, offers, access, backend, resource_metadata, body_max, ui).await
+}
+
+/// UI-3: [`build_rpc_login`], the `ui` activation over `ui` (main's
+/// `--ui-db-path` and `--ui-signer`) registered beside `tickets`.
+#[allow(clippy::too_many_arguments)]
+pub async fn build_rpc_ui(
+    db_path: &Path,
+    seed: Option<SeedSpec>,
+    shape: SeedShape,
+    offers: Vec<ProviderOffer>,
+    access: Access,
+    backend: Arc<dyn AuthBackend>,
+    resource_metadata: Option<String>,
+    body_max: usize,
+    ui: UiSetup,
+) -> anyhow::Result<Arc<DynamicHub>> {
     let path = db_path.to_path_buf();
     let started = Instant::now();
     // MENGER-15: and its cap on a body (`--max-body-bytes`).
@@ -190,9 +244,12 @@ pub async fn build_rpc_login(
     let tickets = TicketsActivation::with_access(Arc::clone(&store), access.clone());
     // V2-4: `tickets` — its children with it — and the addresses, the
     // grants its reach reads and the browser's sign-in, until the identity
-    // service takes them.
+    // service takes them. UI-3: `ui` beside them — the UI's versions, over
+    // its own file.
+    let ui = UiActivation::new(ui.store, ui.signers, access.clone()).following(Arc::clone(&store));
     let mut hub = DynamicHub::new("menger")
         .register(tickets)
+        .register(ui)
         // ORG-4: `orgs` beside `members` — the organizations, and their making.
         .register(OrgsActivation::with_access(Arc::clone(&store), access.clone()))
         // ORG-13: `epics` beside `orgs` — the level that holds shortcodes.
@@ -236,4 +293,25 @@ async fn purge_planted(store: &Store, system: &System, admins: &[String]) -> any
         Err(e) => anyhow::bail!("ACCESS-24: the purge of grants planted while open failed ({e}); refusing to serve them"),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// UI-3: the ui file is beside the tickets file, never the same file.
+    #[test]
+    fn the_ui_db_is_beside_the_tickets_file_never_it() {
+        for tickets in ["/var/lib/menger/tickets.db", "/tmp/x/local.db", "/tmp/x/ui.db.d/t.db"] {
+            let tickets = Path::new(tickets);
+            let ui = default_ui_db_path(tickets);
+            assert_eq!(ui, tickets.parent().unwrap().join("ui.db"), "{}", tickets.display());
+            assert_ne!(ui, tickets);
+        }
+        // A tickets file that is itself named ui.db: still never the same file.
+        let tickets = Path::new("/tmp/x/ui.db");
+        let ui = default_ui_db_path(tickets);
+        assert_ne!(ui, tickets);
+        assert_eq!(ui.parent(), tickets.parent(), "still beside it");
+    }
 }

@@ -68,7 +68,9 @@
 // holds `tickets.watch` and, for a ticket of its project (MENGER and every shortcode hosted under
 // it) that enters In Review — or that is In Review when a commit is linked to it — files a test
 // request for main's tip itself (`deployments.request --branch main`, the pipeline key's
-// deployer grant). A ticket moved back to Coding triggers nothing; its next entry does. Triggers
+// deployer grant; V2-7: the branch is MENGER_RUNNER_BRANCH, default main — `deploy/pipeline status`
+// reads it from deploy-runner.env, the one source, and auto.json records each request's).
+// A ticket moved back to Coding triggers nothing; its next entry does. Triggers
 // are debounced (--debounce-secs, 60) and coalesced: one run at a time and at most one pending
 // request — a trigger while one is pending folds into it, and it takes main's tip when it starts.
 // A red run of such a request posts the failing lines to the triggering ticket's chat (else
@@ -85,6 +87,7 @@
 //            --state-dir DIR                             default ~/.local/state/menger-deploy-runner
 //            --owner PRINCIPAL                           who may ask for app-prod (repeat; MENGER_RUNNER_OWNERS)
 //            --no-auto-test                              DEPLOY-48 off (MENGER_RUNNER_AUTO_TEST=0)
+//            --branch B                                  V2-7: the branch a test request deploys (MENGER_RUNNER_BRANCH, main)
 //            --debounce-secs N  --chat N                 DEPLOY-48: the quiet before a run (60); a red run's
 //                                                        fallback chat (6; MENGER_RUNNER_DEBOUNCE_SECS, MENGER_RUNNER_CHAT)
 //            --fake                                      no pipeline: each step a pause (MENGER_RUNNER_FAKE_FAIL=<step>
@@ -111,7 +114,8 @@ export const IMAGE_GHCR = "ghcr.io/hypermemetic-ai/menger";
  * to the request's environment may. `env`: the step's environment. */
 export const PLANS = {
   test: [
-    { name: "build", argv: (job) => ["build", job.sha, "--no-gate"], interruptible: true },
+    // V2-7: the release names its branch (--branch), the one the request was for (main: as before)
+    { name: "build", argv: (job) => ["build", job.sha, ...(job.branch && job.branch !== "main" ? ["--branch", job.branch] : []), "--no-gate"], interruptible: true },
     { name: "image", argv: (job) => ["image", job.release], env: { IMAGE_STORE: "ghcr" }, interruptible: true, release: true },
     { name: "deploy", argv: (job) => ["remote", "test", "--image", `${IMAGE_GHCR}:${job.release}`], records: true, release: true },
   ],
@@ -220,6 +224,8 @@ export function options(argv, env = process.env) {
     autoTest: env.MENGER_RUNNER_AUTO_TEST !== "0",
     debounceMs: Number(env.MENGER_RUNNER_DEBOUNCE_SECS || 60) * 1000,
     chat: Number(env.MENGER_RUNNER_CHAT || 6),
+    // V2-7: the branch whose tip a test request (filed here, or naming none) deploys
+    branch: env.MENGER_RUNNER_BRANCH || "main",
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i], next = () => { const v = argv[++i]; if (v === undefined) throw new Error(`${a} needs a value`); return v; };
@@ -238,6 +244,7 @@ export function options(argv, env = process.env) {
     else if (a === "--no-auto-test") o.autoTest = false;
     else if (a === "--debounce-secs") o.debounceMs = Number(next()) * 1000;
     else if (a === "--chat") o.chat = Number(next());
+    else if (a === "--branch") o.branch = next();
     else throw new Error(`unknown argument '${a}'`);
   }
   if (!o.listen && !o.watch) throw new Error("--listen (the webhook), --watch (dialling out), or both");
@@ -333,8 +340,9 @@ export class Runner {
     if (this.taken.has(id)) return null; // a retry of a delivery already taken
     this.taken.add(id);
     fs.writeFileSync(this.takenFile, JSON.stringify([...this.taken].slice(-500)));
-    this.queue.push({ request: id, project: this.o.project, environment: env, revision: p.revision || "", branch: p.branch || "main", release: p.release || "", requestedBy: p.requested_by || "" });
-    this.log(`request ${id}: taken (${env}, ${p.release || p.revision || `the tip of ${p.branch || "main"}`})`);
+    const branch = p.branch || this.o.branch || "main";
+    this.queue.push({ request: id, project: this.o.project, environment: env, revision: p.revision || "", branch, release: p.release || "", requestedBy: p.requested_by || "" });
+    this.log(`request ${id}: taken (${env}, ${p.release || p.revision || `the tip of ${branch}`})`);
     queueMicrotask(() => this.drain());
     return null;
   }
@@ -470,7 +478,7 @@ export class Runner {
     return rows.map((r) => r?.deployment).find((d) => d?.requested?.state === "pending" && !(d.requested.steps || []).length && d.id !== this.current?.request)?.id ?? null;
   }
 
-  /** The debounce ran out: fold the waiting tickets into the pending request, or file one for main's tip. */
+  /** The debounce ran out: fold the waiting tickets into the pending request, or file one for the branch's tip (V2-7: MENGER_RUNNER_BRANCH). */
   async autoFire() {
     this.auto.timer = null; this.auto.due = null;
     const tickets = [...this.auto.waiting.keys()];
@@ -478,22 +486,23 @@ export class Runner {
     const why = [...this.auto.waiting].map(([t, w]) => `${t} ${w}`).join("; ");
     this.auto.waiting.clear();
     const attach = (id) => { this.auto.triggers[id] = [...new Set([...(this.auto.triggers[id] || []), ...tickets])]; };
+    const branch = this.o.branch || "main";
     try {
       const pending = await this.pendingTest();
       if (pending) {
         attach(pending);
-        this.auto.pending = { request: pending, tickets: this.auto.triggers[pending] };
-        this.log(`auto-test: ${tickets.join(", ")} folded into pending request ${pending} (main's tip when it starts)`);
+        this.auto.pending = { request: pending, tickets: this.auto.triggers[pending], branch: this.queue.find((j) => j.request === pending)?.branch || branch };
+        this.log(`auto-test: ${tickets.join(", ")} folded into pending request ${pending} (${this.auto.pending.branch}'s tip when it starts)`);
         return this.saveAuto();
       }
-      const [ev] = await this.menger("deployments.request", { project: this.o.project, environment: "test", branch: "main", note: `auto-test (DEPLOY-48): ${why}`.slice(0, 2000) });
+      const [ev] = await this.menger("deployments.request", { project: this.o.project, environment: "test", branch, note: `auto-test (DEPLOY-48): ${why}`.slice(0, 2000) });
       const d = ev?.deployment;
       if (!d?.id) throw new Error(ev?.message || "no request in the answer");
       attach(d.id);
-      this.auto.pending = { request: d.id, tickets: this.auto.triggers[d.id] };
-      this.log(`auto-test: request ${d.id} filed for main's tip — ${why}`);
+      this.auto.pending = { request: d.id, tickets: this.auto.triggers[d.id], branch };
+      this.log(`auto-test: request ${d.id} filed for ${branch}'s tip — ${why}`);
       this.saveAuto();
-      this.take({ request: d.id, project: d.project || this.o.project, environment: "test", branch: "main", requested_by: d.recorded_by });
+      this.take({ request: d.id, project: d.project || this.o.project, environment: "test", branch, requested_by: d.recorded_by });
     } catch (e) {
       // not filed: the tickets wait again, and the next quiet tries again
       this.log(`auto-test: request not filed — ${e.message}; again in ${Math.round(this.o.debounceMs / 1000)} s`);
@@ -508,7 +517,7 @@ export class Runner {
   /** A test run began: the pending request is now the running one, and the next trigger files another. */
   autoStarted(job) {
     if (!this.auto.triggers[job.request]) return;
-    this.auto.running = { request: job.request, tickets: this.auto.triggers[job.request] };
+    this.auto.running = { request: job.request, tickets: this.auto.triggers[job.request], branch: job.branch };
     if (this.auto.pending?.request === job.request) this.auto.pending = null;
     this.saveAuto();
   }

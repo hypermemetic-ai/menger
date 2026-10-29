@@ -5,8 +5,12 @@
 #
 #   context/release/bin/menger       the binary test ran
 #   context/release/bin/run-menger   the release's own launcher (ports from the env)
-#   context/release/app/             the Leptos app's build, served by --app-dist
-#   context/release/RELEASE          commit, subject, gate results
+#   context/release/app/             the Leptos app's build, served by --app-dist (empty on v2)
+#   context/release/dist/            V2-7: the UI's bundle (ui.tar) and, once UI-5 lands, the
+#                                    compiler module (ui-compiler.wasm) — empty before v2;
+#                                    run-menger passes --ui-db-path, --ui-signer (each key of
+#                                    MENGER_UI_SIGNERS) and --ui-compiler when they are there
+#   context/release/RELEASE          commit, branch, steps, gate results
 #
 # The diagrams service (menger-diagrams + its Node program) is not in it:
 # menger never calls it (README "Diagrams"), and it runs mermaid in a Node
@@ -34,6 +38,7 @@ RUN apt-get update \
 COPY --chmod=0555 release/bin/menger release/bin/run-menger /opt/menger/bin/
 COPY --chmod=0444 release/RELEASE /opt/menger/RELEASE
 COPY release/app /opt/menger/app
+COPY release/dist /opt/menger/dist
 USER menger
 WORKDIR /data
 VOLUME /data
