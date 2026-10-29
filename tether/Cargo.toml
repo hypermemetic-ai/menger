@@ -41,10 +41,10 @@ plexus-transport = { path = "../../plexus-transport", version = "0.5" }
 plexus-auth-core = { path = "../../plexus-auth-core", version = "0.2", features = ["adapters"] }
 base64 = "0.22"
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
-# The same path substrate names (`../menger/plexus-login`): two paths to one
-# crate are two packages to cargo, refused in one lockfile — so even from a
-# worktree of menger, this is the main checkout's.
-plexus-login = { path = "../../menger/plexus-login", version = "0.2" }
+# The sibling checkout (`../plexus-login`, FRAME-4), the one path substrate
+# and everyone else name now (FRAME-9): two paths to one crate are two
+# packages to cargo, so this is never menger's tree's.
+plexus-login = { path = "../../plexus-login", version = "0.2" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = { version = "1.1", features = ["derive", "uuid1"] }
