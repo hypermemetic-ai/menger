@@ -28,7 +28,7 @@ fn title(text: &str) -> Result<String, String> {
 }
 
 text_type!(
-    /// A ticket's (or a note's ticket's) title: not blank, at most
+    /// A ticket's title: not blank, at most
     /// [`TITLE_MAX`] bytes, kept as written (ACCESS-29).
     Title,
     title
@@ -42,10 +42,9 @@ fn body(text: &str) -> Result<String, String> {
 }
 
 text_type!(
-    /// A body — a ticket's markdown, a comment's, a note's — exactly as
-    /// written, at most [`BODY_WIRE_MAX`] bytes on the wire. What each
-    /// keeps beyond that (`--max-body-bytes`, a comment's 64 KiB, a note's,
-    /// not blank) is its store's rule, refused in band.
+    /// A ticket's body, its markdown exactly as written, at most
+    /// [`BODY_WIRE_MAX`] bytes on the wire. What the store keeps beyond
+    /// that (`--max-body-bytes`) is its rule, refused in band.
     Body,
     body
 );

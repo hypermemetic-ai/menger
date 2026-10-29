@@ -112,8 +112,7 @@ impl Revisions {
     ///
     /// TICKETS-7: every field a revision keeps (title, body, status, kind,
     /// severity, parent, blockers, labels, commits) as it was then; the rest
-    /// (its id, address, children, placement) as it is now. A body that uses
-    /// a component or a theme renders with today's definitions. `NotFound`
+    /// (its id, address, children, placement) as it is now. `NotFound`
     /// for a ticket out of reach; an `Error` for a revision it does not have.
     #[plexus_macros::method(
         group = "read",
@@ -170,10 +169,9 @@ impl Revisions {
     /// TICKETS-7: writes the chosen fields of revision `rev` (default: title,
     /// body, status, kind, severity, parent, blocked_by, labels — each that
     /// differs from now) through `update`'s rules: a parent that no longer
-    /// exists, a blocker cycle, a duplicate input id, a component another
-    /// ticket defines are refused, naming why, and nothing is written. The
-    /// revision it keeps says what it restored, from which revision, and
-    /// `message`. Nothing differing writes nothing (`changed: []`, `rev:
+    /// exists or a blocker cycle is refused, naming why, and nothing is
+    /// written. The revision it keeps says what it restored, from which
+    /// revision, and `message`. Nothing differing writes nothing (`changed: []`, `rev:
     /// null`). A deleted ticket is undeleted first; commits are never
     /// restored; a parent is moved, never cleared.
     #[plexus_macros::method(

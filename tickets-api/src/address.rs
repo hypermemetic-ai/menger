@@ -196,8 +196,7 @@ impl fmt::Display for OrgId {
 ///
 /// Internally the store calls the level an *era* (`Namespace::era`, the
 /// `eras` table): `epic` already names a shortcode's letters on the wire
-/// (`--epic MNG`, `Ticket.epic`) and a scope's status (`Epic`) — ORG-13's
-/// `naming` input asks the owner which word moves.
+/// (`--epic MNG`, `Ticket.epic`) and a scope's status (`Epic`).
 ///
 /// ACCESS-8: deserializing one checks it ([`EpicName::new`]).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, JsonSchema)]

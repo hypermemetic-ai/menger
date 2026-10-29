@@ -837,8 +837,7 @@ pub enum Change {
     /// ([`reshortcode`]).
     Reshortcoded { moves: Vec<crate::types::ShortcodeMove>, tickets: Vec<Ticket> },
     /// ARCHIVE-2: an `archive` archived `ids` (each a transition before it),
-    /// `live` those not done, `unqueued` those it took out of the queue,
-    /// `mark` what each carries now ([`archive`]).
+    /// `live` those not done, `mark` what each carries now ([`archive`]).
     Archived { ids: Vec<TicketId>, live: Vec<crate::types::LiveTicket>, mark: crate::types::Archived },
     /// ARCHIVE-2: a `restore` (or a create's or move's chain) brought `ids`
     /// back — `ancestors` the chain among them, `still_archived` what it
