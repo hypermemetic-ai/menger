@@ -5,9 +5,24 @@
 # login (MENGER_AUTH_PROVIDERS, MENGER_ADMINS, …): ACCESS-24, menger refuses
 # to start without a provider, and serves no REST bridge (MENGER_REST_PORT
 # stays in the env files, unused, so a rollback to an older release starts).
+#
+# V2-7: a v2 release (its dist/ui.tar beside bin/) starts the ui service with
+# its file in the data volume (--ui-db-path: MENGER_UI_DB_PATH, else ui.db
+# beside the database), each key of MENGER_UI_SIGNERS (`;`-separated, 64 hex
+# each: the pipeline's for app-test) as a --ui-signer, and the compiler
+# module as --ui-compiler when the release holds one (UI-5). A release before
+# v2 (app/index.html) is started as it always was.
 set -eu
 here=$(dirname "$(readlink -f "$0")")
-exec "$here/menger" \
-  --port "$MENGER_WS_PORT" \
-  --shell-port "$MENGER_SHELL_PORT" \
-  --app-dist "$here/../app"
+set -- --port "$MENGER_WS_PORT" --shell-port "$MENGER_SHELL_PORT"
+[ -f "$here/../app/index.html" ] && set -- "$@" --app-dist "$here/../app"
+if [ -f "$here/../dist/ui.tar" ]; then
+  db=${MENGER_DB_PATH:-/data/tickets.db}
+  set -- "$@" --ui-db-path "${MENGER_UI_DB_PATH:-$(dirname "$db")/ui.db}"
+  keys=${MENGER_UI_SIGNERS:-}
+  old_ifs=$IFS; IFS=';'
+  for k in $keys; do [ -n "$k" ] && set -- "$@" --ui-signer "$k"; done
+  IFS=$old_ifs
+  [ -f "$here/../dist/ui-compiler.wasm" ] && set -- "$@" --ui-compiler "$here/../dist/ui-compiler.wasm"
+fi
+exec "$here/menger" "$@"

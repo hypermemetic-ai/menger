@@ -5,7 +5,14 @@
 //!   the same bytes pushed again are the same version;
 //! - `ui_pointer` — `name → hash` (`live` is the one `/app/` serves), a
 //!   foreign key into `ui_versions`, so it never names a hash not stored;
-//! - `ui_preview` — `principal → hash`, a session's override of `live`.
+//! - `ui_preview` — `principal → hash`, a session's override of `live`;
+//! - `ui_slots` — UI-9: `(layout, slot) → (component, version_hash)`, what
+//!   fills a section in place of the live manifest's default; the hash a
+//!   foreign key into `ui_versions` (a stored version is immutable, so an
+//!   assignment outlives any pointer move). Its methods are in [`slots`].
+//!
+//! UI-9: every pointer move and every assignment is said on the store's
+//! broadcast ([`UiStore::subscribe`], [`UiChange`]), which `ui.watch` holds.
 //!
 //! A push is one transaction: the row (when new) and the pointer moved, or
 //! neither. A rollback moves the pointer and touches no other row.
@@ -37,7 +44,19 @@ CREATE TABLE IF NOT EXISTS ui_pointer (
 CREATE TABLE IF NOT EXISTS ui_preview (
   principal TEXT PRIMARY KEY, hash TEXT NOT NULL REFERENCES ui_versions(hash)
 );
+CREATE TABLE IF NOT EXISTS ui_slots (
+  layout TEXT NOT NULL, slot TEXT NOT NULL, component TEXT NOT NULL,
+  version_hash TEXT NOT NULL REFERENCES ui_versions(hash),
+  PRIMARY KEY (layout, slot)
+);
 ";
+
+/// UI-9: how many changes a watch may fall behind by before it is told
+/// `lagged`.
+pub const CHANGES_CAPACITY: usize = 256;
+
+mod slots;
+pub use slots::{Assignment, Section, UiChange};
 
 /// A kept version, as `versions` names it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,10 +105,16 @@ pub enum UiError {
     Db(String),
     #[error("the bundle is not a tar archive with an index.html: {0}")]
     BadBundle(String),
-    #[error("the manifest names no {0}")]
-    BadManifest(&'static str),
+    #[error("the manifest {0}")]
+    BadManifest(String),
     #[error("no version {0} is kept")]
     UnknownVersion(String),
+    /// UI-9: a set naming a component the version's manifest does not hold.
+    #[error("version {version} holds no component {component}")]
+    UnknownComponent { component: String, version: String },
+    /// UI-9: a set naming a slot the live manifest does not declare for the layout.
+    #[error("the layout {layout} declares no slot {slot}")]
+    UnknownSlot { layout: String, slot: String },
 }
 
 impl From<rusqlite::Error> for UiError {
@@ -102,6 +127,8 @@ impl From<rusqlite::Error> for UiError {
 pub struct UiStore {
     path: PathBuf,
     conn: Mutex<Connection>,
+    /// UI-9: every pointer move and assignment, for `ui.watch`.
+    changes: tokio::sync::broadcast::Sender<UiChange>,
 }
 
 /// A bundle's name: the sha256 of its bytes, hex.
@@ -114,14 +141,38 @@ pub fn digest_of(bundle: &[u8]) -> [u8; 32] {
     Sha256::digest(bundle).into()
 }
 
-/// A manifest's `key: value` line, as text (quotes around the value read
-/// past); not checked here — that is the compiler's and activation's.
-pub fn manifest_field(manifest: &str, key: &str) -> Option<String> {
-    manifest.lines().find_map(|line| {
-        let (k, v) = line.trim().split_once(':')?;
-        let v = v.trim().trim_matches(|c| c == '"' || c == '\'');
-        (k.trim() == key && !v.is_empty()).then(|| v.to_string())
-    })
+/// UI-9: a manifest as the contract writes it (UI-4's JSON) — what the
+/// store reads of it: `abi`, `contract`, the `components` by name, and the
+/// `slots` (`{ layout: { slot: default component } }`). Anything else in it
+/// is kept in the row and read by nobody here.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ManifestDoc {
+    #[serde(default)]
+    pub abi: Option<String>,
+    #[serde(default)]
+    pub contract: Option<String>,
+    #[serde(default)]
+    pub components: std::collections::BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    pub slots: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+}
+
+impl ManifestDoc {
+    /// The text of a manifest, read: refused (`BadManifest`) when it is no
+    /// JSON object of the contract's shape.
+    pub fn parse(text: &str) -> Result<Self, UiError> {
+        serde_json::from_str(text).map_err(|e| UiError::BadManifest(format!("is not the contract's JSON (UI-4): {e}")))
+    }
+
+    /// The default component `slots` names for `slot` of `layout`.
+    pub fn default_for(&self, layout: &str, slot: &str) -> Option<&str> {
+        self.slots.get(layout).and_then(|s| s.get(slot)).map(String::as_str)
+    }
+}
+
+/// A non-empty text field of a manifest, or `BadManifest` naming it.
+fn required(field: Option<String>, name: &str) -> Result<String, UiError> {
+    field.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).ok_or_else(|| UiError::BadManifest(format!("names no {name}")))
 }
 
 /// The file `path` in a tar `bundle` (`./` before a name read past); `Err`
@@ -171,7 +222,14 @@ impl UiStore {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "foreign_keys", true)?;
         conn.execute_batch(SCHEMA)?;
-        Ok(Self { path: path.to_path_buf(), conn: Mutex::new(conn) })
+        let (changes, _) = tokio::sync::broadcast::channel(CHANGES_CAPACITY);
+        Ok(Self { path: path.to_path_buf(), conn: Mutex::new(conn), changes })
+    }
+
+    /// UI-9: the store's changes from now on — a `live` on every pointer
+    /// move, a `slot_changed` on every set and clear.
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<UiChange> {
+        self.changes.subscribe()
     }
 
     /// Where the file is.
@@ -205,8 +263,9 @@ impl UiStore {
     ) -> Result<Pushed, UiError> {
         let hash = hash_of(&v.bundle);
         check_bundle(&v.bundle)?;
-        let contract = manifest_field(&v.manifest, "contract").ok_or(UiError::BadManifest("contract"))?;
-        let abi = manifest_field(&v.manifest, "abi").ok_or(UiError::BadManifest("abi"))?;
+        let doc = ManifestDoc::parse(&v.manifest)?;
+        let contract = required(doc.contract, "contract")?;
+        let abi = required(doc.abi, "abi")?;
         let mut c = self.conn.lock().unwrap_or_else(|p| p.into_inner());
         let tx = c.transaction()?;
         let new = !kept(&tx, &hash)?;
@@ -219,6 +278,8 @@ impl UiStore {
         after_insert(&tx)?;
         point(&tx, LIVE, &hash)?;
         tx.commit()?;
+        // UI-9: the pointer moved — said to every watch.
+        let _ = self.changes.send(UiChange::Live { version: hash.clone() });
         Ok(Pushed { version: hash, live: true, new })
     }
 
@@ -231,6 +292,7 @@ impl UiStore {
         }
         point(&tx, LIVE, to)?;
         tx.commit()?;
+        let _ = self.changes.send(UiChange::Live { version: to.to_string() });
         Ok(to.to_string())
     }
 
@@ -315,3 +377,8 @@ impl UiStore {
 #[cfg(test)]
 #[path = "tests.rs"]
 mod ui_tests;
+
+// UI-9: the sections' store tests (`cargo test -p menger-ui-service slots_`).
+#[cfg(test)]
+#[path = "slots_tests.rs"]
+mod slots_tests;

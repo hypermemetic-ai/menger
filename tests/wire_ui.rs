@@ -153,7 +153,9 @@ async fn a_rollback_over_the_wire_moves_live() {
     let listed = versions(&admin).await;
     let live: Vec<(&str, bool)> = listed.iter().map(|v| (v["hash"].as_str().unwrap(), v["live"].as_bool().unwrap())).collect();
     assert_eq!(live, vec![(two.as_str(), false), (one.as_str(), true)], "newest first; the first is live");
-    assert_eq!(call(&admin, "tickets.health", json!({})).await, health, "the tickets service untouched");
+    // Its clock aside (`unix_now` moves on its own): the tickets service untouched.
+    let untimed = |evs: Vec<Value>| evs.into_iter().map(|mut e| { e.as_object_mut().map(|o| o.remove("unix_now")); e }).collect::<Vec<_>>();
+    assert_eq!(untimed(call(&admin, "tickets.health", json!({})).await), untimed(health), "the tickets service untouched");
 }
 
 #[tokio::test]
@@ -189,7 +191,7 @@ async fn a_bundle_without_an_index_is_refused_in_band() {
     h.set_cksum();
     b.append_data(&mut h, "app.js", &b"x();\n"[..]).unwrap();
     let bytes = b.into_inner().unwrap();
-    refused(&call(&admin, "ui.push", signed(&bytes, "contract: c\nabi: a\n")).await, "bad_bundle");
+    refused(&call(&admin, "ui.push", signed(&bytes, &support::json_manifest("c", "a"))).await, "bad_bundle");
     assert_eq!(versions(&admin).await, before, "nothing written");
 }
 
@@ -198,7 +200,11 @@ async fn a_manifest_without_contract_or_abi_is_refused_in_band() {
     let (s, _dir) = start().await;
     let admin = connect(s.port).await;
     let bytes = support::bundle(1);
-    for manifest in ["contract: c1\n", "abi: a1\n"] {
+    // UI-9: the contract's JSON — one missing abi, one missing contract, and
+    // UI-3's old `key: value` text, which is no JSON.
+    let no_abi = json!({ "contract": "c1", "routes": {}, "components": {}, "slots": {} }).to_string();
+    let no_contract = json!({ "abi": "a1", "routes": {}, "components": {}, "slots": {} }).to_string();
+    for manifest in [no_abi.as_str(), no_contract.as_str(), "contract: c1\nabi: a1\n"] {
         refused(&call(&admin, "ui.push", signed(&bytes, manifest)).await, "bad_manifest");
         assert!(versions(&admin).await.is_empty(), "nothing written ({manifest:?})");
     }

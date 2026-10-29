@@ -261,7 +261,7 @@ pub async fn build_rpc_ui(
     // v2: `tickets` alone — its children (inputs, commits, nav, work,
     // subtasks, …) with it; every other activation comes back one at a time.
     // UI-3: `ui` beside it — the UI's versions, over its own file.
-    let ui = UiActivation::new(ui.store, ui.signers, access.clone());
+    let ui = UiActivation::new(ui.store, ui.signers, access.clone()).following(Arc::clone(&store));
     let mut hub = DynamicHub::new("menger").register(tickets).register(ui);
     // .register(CommentsActivation::with_access(Arc::clone(&store), access.clone()))
     // // CHAT-3: `chats` beside them — conversations inside tickets.

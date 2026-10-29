@@ -232,10 +232,16 @@ pub fn push_params(n: u32, signer: &[u8; 32]) -> serde_json::Value {
     let b64 = base64::engine::general_purpose::STANDARD;
     serde_json::json!({
         "bundle": b64.encode(&bytes),
-        "manifest": format!("contract: c{n}\nabi: a{n}\n"),
+        "manifest": json_manifest(&format!("c{n}"), &format!("a{n}")),
         "signature": b64.encode(signature.to_bytes()),
         "commit": format!("{n:07x}"),
     })
+}
+
+/// UI-9: a manifest as the contract writes it (UI-4's JSON) naming
+/// `contract` and `abi`, with no routes, components or slots.
+pub fn json_manifest(contract: &str, abi: &str) -> String {
+    serde_json::json!({ "abi": abi, "contract": contract, "routes": {}, "components": {}, "slots": {} }).to_string()
 }
 
 /// A loopback port the OS just handed out, never handed to another test in
@@ -324,4 +330,95 @@ pub async fn signing_proxy(upstream: u16) -> u16 {
         }
     });
     port
+}
+
+// ── UI-9: sections — bundles whose manifest declares components and slots ──
+
+/// The layout every sections test fills: its one slot is [`SLOT`].
+pub const LAYOUT: &str = "board-layout";
+
+/// [`LAYOUT`]'s one section; the manifest's default for it is `ticket-list`.
+pub const SLOT: &str = "main";
+
+/// The slots most versions declare: `{ board-layout: { main: "ticket-list" } }`.
+pub fn default_slots() -> serde_json::Value {
+    serde_json::json!({ LAYOUT: { SLOT: "ticket-list" } })
+}
+
+/// Version `n`'s manifest (UI-4's JSON): `components` each named, and
+/// `slots` as given (`{ layout: { slot: default component } }`).
+pub fn sections_manifest(n: u32, components: &[&str], slots: &serde_json::Value) -> String {
+    let components: serde_json::Map<String, serde_json::Value> = components
+        .iter()
+        .map(|c| (c.to_string(), serde_json::json!({ "tree": format!("{n}-{c}-tree"), "handlers": format!("{n}-{c}-rhai"), "uses": [] })))
+        .collect();
+    serde_json::json!({
+        "abi": "engine/1", "contract": format!("c{n}"), "commit": format!("menger@{n:07x}"),
+        "routes": { "#/": LAYOUT },
+        "components": components,
+        "slots": slots,
+    })
+    .to_string()
+}
+
+/// Component `c` of version `n`'s compiled tree, as the bundle holds it.
+pub fn component_json(n: u32, c: &str) -> String {
+    format!("{{\"name\":\"{c}\",\"v\":{n}}}")
+}
+
+/// Version `n` with sections: `index.html` ([`index_html`]), `manifest.json`
+/// ([`sections_manifest`]) and each component's `components/<name>.json`
+/// ([`component_json`]).
+pub fn slotted_bundle(n: u32, components: &[&str], slots: &serde_json::Value) -> Vec<u8> {
+    let mut files = vec![("index.html".to_string(), index_html(n)), ("manifest.json".to_string(), sections_manifest(n, components, slots))];
+    files.extend(components.iter().map(|c| (format!("components/{c}.json"), component_json(n, c))));
+    let mut b = tar::Builder::new(Vec::new());
+    for (name, body) in files {
+        let mut h = tar::Header::new_gnu();
+        h.set_size(body.len() as u64);
+        h.set_mode(0o644);
+        h.set_cksum();
+        b.append_data(&mut h, name, body.as_bytes()).unwrap();
+    }
+    b.into_inner().unwrap()
+}
+
+/// `ui.push`'s params for [`slotted_bundle`]`(n, components, slots)`, signed
+/// by [`UI_SIGNER`]; the `manifest` param is the same JSON the bundle holds.
+pub fn slotted_push_params(n: u32, components: &[&str], slots: &serde_json::Value) -> serde_json::Value {
+    use base64::Engine;
+    use ed25519_dalek::Signer;
+    use sha2::Digest;
+    let bytes = slotted_bundle(n, components, slots);
+    let signature = SigningKey::from_bytes(&UI_SIGNER).sign(&sha2::Sha256::digest(&bytes));
+    let b64 = base64::engine::general_purpose::STANDARD;
+    serde_json::json!({
+        "bundle": b64.encode(&bytes),
+        "manifest": sections_manifest(n, components, slots),
+        "signature": b64.encode(signature.to_bytes()),
+        "commit": format!("{n:07x}"),
+    })
+}
+
+/// An open call through `menger.call` — a watch held; read it with [`next_item`].
+pub async fn subscribe(c: &WsClient, method: &str, params: serde_json::Value) -> jsonrpsee::core::client::Subscription<serde_json::Value> {
+    use jsonrpsee::core::client::SubscriptionClientT;
+    use jsonrpsee::core::params::ObjectParams;
+    let mut p = ObjectParams::new();
+    p.insert("method", method).unwrap();
+    p.insert("params", params).unwrap();
+    c.subscribe("menger.call", p, "menger.call_unsub").await.unwrap()
+}
+
+/// The next item of an open call within `within`: a data item's content,
+/// an error item whole; `None` when the stream ended or nothing came.
+pub async fn next_item(s: &mut jsonrpsee::core::client::Subscription<serde_json::Value>, within: Duration) -> Option<serde_json::Value> {
+    match tokio::time::timeout(within, s.next()).await {
+        Ok(Some(Ok(item))) => match item["type"].as_str() {
+            Some("data") => Some(item["content"].clone()),
+            Some("error") => Some(item),
+            _ => None,
+        },
+        _ => None,
+    }
 }

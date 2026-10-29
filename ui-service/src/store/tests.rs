@@ -29,7 +29,8 @@ fn sha(bytes: &[u8]) -> String {
 fn version(n: u32, at: i64) -> NewVersion {
     NewVersion {
         bundle: bundle(n),
-        manifest: format!("contract: c{n}\nabi: a{n}\n"),
+        // UI-9: the contract's JSON (UI-4).
+        manifest: serde_json::json!({ "abi": format!("a{n}"), "contract": format!("c{n}"), "routes": {}, "components": {}, "slots": {} }).to_string(),
         commit: Some(format!("{n:07x}")),
         pushed_by: "key:admin".into(),
         pushed_at: at,
