@@ -35,6 +35,10 @@
 //     text, and `ui slots list` names it; `ui slots clear` returns it. A
 //     viewer's page: the same pick is refused in the menu and `ui slots
 //     list` is unchanged.
+//   the_dom_events_reach_a_fold
+//     a real scroll of the rows, a keydown and a checkbox reach the
+//     component's folds with scroll_top / scroll_height / client_height,
+//     key and checked (UI-10).
 //
 // Exit 0 when every test passed, 1 when one failed, 2 when setup failed.
 import { spawn, spawnSync } from "node:child_process";
@@ -434,6 +438,30 @@ async function main() {
       await sameDocument(page, origin, "after the clear");
       assert(seen.sockets === 1, `one socket throughout (${seen.sockets})`);
       assert(JSON.stringify(slotsBefore.filter((s) => s.type === "assignment")) === "[]", "no assignment before the pick");
+    });
+    await test("the_dom_events_reach_a_fold", async () => {
+      pushOnce(v1Tar, v1);
+      const { page, seen } = await openPage(browser, server, token);
+      pages.push(seen);
+      await page.goto(`${server.origin}/app/`);
+      await eventually("the rows drawn", async () => (await page.locator("[data-slot=main] li[data-id]").count()) > 20);
+      const said = () => page.locator("[data-slot=main] .seen").textContent({ timeout: 1000 });
+
+      // A real scroll of the list: its metrics reach the fold.
+      await page.locator("[data-slot=main] ul.rows").evaluate((el) => (el.scrollTop = 300));
+      const scroll = await eventually("a scroll reaches the fold", async () => /^scroll (\d+)\/(\d+)\/(\d+)$/.exec((await said()) ?? ""));
+      const [top, height, client] = scroll.slice(1).map(Number);
+      assert(top > 0 && height > client && client > 0, `scroll_top ${top}, scroll_height ${height}, client_height ${client}`);
+
+      // A keydown: its key.
+      await page.locator("[data-slot=main] input.keys").press("k");
+      await eventually("a keydown's key reaches the fold", async () => (await said()) === "key k");
+
+      // A checkbox: checked.
+      await page.locator("[data-slot=main] input.tick").check();
+      await eventually("a checkbox's checked reaches the fold", async () => (await said()) === "checked true");
+      await page.locator("[data-slot=main] input.tick").uncheck();
+      await eventually("and unchecked", async () => (await said()) === "checked false");
     });
   } finally {
     if (results.some((r) => !r.ok)) {

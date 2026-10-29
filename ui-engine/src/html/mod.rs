@@ -36,17 +36,27 @@ const RAW_TEXT: &[&str] = &["script", "style", "textarea", "title", "xmp", "noem
 /// Attributes that hold a URL: kept only for `http:`, `https:`, `#…`, `mailto:`.
 const URL_ATTRS: &[&str] = &["href", "src"];
 
-/// Whether `attr` is kept on `tag`.
+/// Every `(tag, attribute)` kept; `*` is any allowed tag. Widening it is a
+/// deliberate edit (html/tests.rs pins it).
+pub const ALLOWED_ATTRS: &[(&str, &str)] = &[
+    ("*", "title"),
+    ("a", "href"),
+    ("code", "class"),
+    ("img", "alt"),
+    ("img", "height"),
+    ("img", "src"),
+    ("img", "width"),
+    ("ol", "start"),
+    ("pre", "class"),
+    ("td", "colspan"),
+    ("td", "rowspan"),
+    ("th", "colspan"),
+    ("th", "rowspan"),
+];
+
+/// Whether `attr` is kept on `tag` ([`ALLOWED_ATTRS`]).
 pub fn allowed_attr(tag: &str, attr: &str) -> bool {
-    match (tag, attr) {
-        (_, "title") => true,
-        ("a", "href") => true,
-        ("img", "src" | "alt" | "width" | "height") => true,
-        ("code" | "pre", "class") => true,
-        ("td" | "th", "colspan" | "rowspan") => true,
-        ("ol", "start") => true,
-        _ => false,
-    }
+    ALLOWED_TAGS.contains(&tag) && ALLOWED_ATTRS.iter().any(|(t, a)| (*t == "*" || *t == tag) && *a == attr)
 }
 
 fn url_ok(value: &str) -> bool {
@@ -197,11 +207,23 @@ fn skip_to_end(s: &str, tag: &str) -> usize {
     let lower = s.to_ascii_lowercase();
     let (open, close) = (format!("<{tag}"), format!("</{tag}"));
     let raw = RAW_TEXT.contains(&tag);
+    // `<svg` names svg only when the name ends there (`<svgx` does not).
+    let find = |from: usize, pat: &str| -> Option<usize> {
+        let mut at = from;
+        while let Some(j) = lower[at..].find(pat) {
+            let k = at + j;
+            match lower.as_bytes().get(k + pat.len()) {
+                Some(c) if c.is_ascii_alphanumeric() || *c == b'-' || *c == b':' => at = k + pat.len(),
+                _ => return Some(k),
+            }
+        }
+        None
+    };
     let mut depth = 1;
     let mut i = 0;
     loop {
-        let next_close = lower[i..].find(&close).map(|j| i + j);
-        let next_open = if raw { None } else { lower[i..].find(&open).map(|j| i + j) };
+        let next_close = find(i, &close);
+        let next_open = if raw { None } else { find(i, &open) };
         match (next_open, next_close) {
             (Some(o), Some(c)) if o < c => {
                 depth += 1;

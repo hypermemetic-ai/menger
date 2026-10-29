@@ -275,6 +275,7 @@ fn a_live_re_runs_when_a_param_signal_changes_and_waits_debounce_ms() {
     clock.advance(1);
     assert_eq!(wire.opened_of("tickets.list").len(), 2, "80 ms after the second change: once");
     assert_eq!(wire.opened_of("tickets.list")[1].params, json!({ "query": "abc" }), "with the last params");
+    assert!(wire.opened_of("tickets.watch").is_empty(), "one-shot stays one-shot across a param change: no watch");
     clock.advance(500);
     assert_eq!(wire.opened_of("tickets.list").len(), 2, "and only once");
 }
@@ -332,4 +333,82 @@ fn an_in_band_error_is_the_collections_message() {
     wire.feed(wire.last_of("tickets.nav.counts"), WireItem::Refused("filter: a blank value".into()));
     let v = r3.signal().peek();
     assert_eq!((v["status"].as_str(), v["message"].as_str()), (Some("refused"), Some("filter: a blank value")));
+}
+
+/// After a param change, a late answer to the old snapshot changes nothing
+/// the follow shows; the old subscription's watch is closed once its keep
+/// window has passed and a sweep runs.
+#[test]
+fn a_late_answer_to_the_old_snapshot_is_ignored_and_the_old_watch_closes() {
+    let rt = Runtime::new();
+    let (wire, clock) = (FakeWire::new(), ManualClock::new());
+    let cache = LiveCache::new(&rt, wire.clone(), clock.clone());
+    let parent = rt.signal("T-1".to_string());
+    let p = parent.clone();
+    let follow = cache.follow(query(Some("tickets.watch"), None), move || (json!({ "parent": p.get() }), json!({ "parent": p.get() })));
+    let (old_list, old_watch) = (wire.last_of("tickets.list"), wire.last_of("tickets.watch"));
+
+    parent.set("T-9".into());
+    let new_list = wire.last_of("tickets.list");
+    assert_ne!(new_list, old_list);
+    wire.answer(old_list, [summary("T-OLD", "late")]);
+    let now = follow.live();
+    assert!(!ids(&now).contains(&"T-OLD".to_string()), "the old snapshot's late rows are not shown: {:?}", ids(&now));
+    assert_ne!(now.status, Status::Live, "still waiting on the new snapshot");
+    wire.answer(new_list, [summary("T-10", "new")]);
+    assert_eq!(ids(&follow.live()), ["T-10"]);
+
+    clock.advance(4_999);
+    cache.sweep();
+    assert!(!wire.closed().contains(&old_watch), "within the keep window: the old watch kept");
+    clock.advance(2);
+    cache.sweep();
+    assert!(wire.closed().contains(&old_watch), "past it: the old watch closed");
+    assert!(!wire.closed().contains(&wire.last_of("tickets.watch")), "the new one stays");
+}
+
+/// Dropping a follow while a debounced run waits runs nothing; with
+/// `changes` and a debounce, the watch is reopened only when the timer
+/// fires.
+#[test]
+fn dropping_a_follow_mid_debounce_runs_nothing_and_a_watch_reopens_only_when_the_timer_fires() {
+    let rt = Runtime::new();
+    let (wire, clock) = (FakeWire::new(), ManualClock::new());
+    let cache = LiveCache::new(&rt, wire.clone(), clock.clone());
+    let q = rt.signal("a".to_string());
+    let p = q.clone();
+    let follow = cache.follow(query(Some("tickets.watch"), Some(80)), move || (json!({ "query": p.get() }), json!({ "query": p.get() })));
+    assert_eq!((wire.opened_of("tickets.list").len(), wire.opened_of("tickets.watch").len()), (1, 1));
+    q.set("ab".into());
+    clock.advance(79);
+    assert_eq!(wire.opened_of("tickets.watch").len(), 1, "the watch not reopened before the timer");
+    assert_eq!(wire.opened_of("tickets.list").len(), 1);
+    clock.advance(1);
+    assert_eq!(wire.opened_of("tickets.watch").len(), 2, "reopened when the timer fired");
+    assert_eq!(wire.opened_of("tickets.watch")[1].params, json!({ "query": "ab" }));
+
+    q.set("abc".into());
+    clock.advance(40);
+    drop(follow);
+    clock.advance(1_000);
+    assert_eq!(wire.opened_of("tickets.list").len(), 2, "dropped mid-debounce: nothing ran");
+    assert_eq!(wire.opened_of("tickets.watch").len(), 2);
+}
+
+/// A flat event that also holds an object-valued field is the same row
+/// from the snapshot as from the changes: `upsert:.` decides, not a guess
+/// at which field is the row.
+#[test]
+fn a_flat_event_with_an_object_field_is_the_same_row_from_snapshot_and_changes() {
+    let (wire, _clock, cache) = setup();
+    let spec = LiveSpec::new("tickets.nav.groups", json!({}), Some("tickets.watch"), json!({}), "epic", &[("group", "upsert:.")]).expect("a spec");
+    let reader = cache.acquire(&spec);
+    let event = json!({ "type": "group", "epic": "KILN", "counts": { "open": 3, "done": 1 } });
+    wire.answer(wire.last_of("tickets.nav.groups"), [event.clone()]);
+    let from_snapshot = reader.live().rows;
+    assert_eq!(from_snapshot, vec![json!({ "epic": "KILN", "counts": { "open": 3, "done": 1 } })], "the event less type, not its counts");
+    let mut changed = event;
+    changed["counts"]["open"] = json!(4);
+    wire.feed(wire.last_of("tickets.watch"), WireItem::Data(changed));
+    assert_eq!(reader.live().rows, vec![json!({ "epic": "KILN", "counts": { "open": 4, "done": 1 } })], "the same row from the changes, replaced");
 }

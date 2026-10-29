@@ -66,3 +66,53 @@ fn markdown_renders_and_is_sanitized() {
     }
     assert!(!out.contains("script") && !out.contains("javascript") && !out.contains("alert"), "{out}");
 }
+
+/// Entity-encoded markup is text: `&lt;script&gt;` arrives as a text node,
+/// never as an element.
+#[test]
+fn encoded_markup_is_text() {
+    let nodes = sanitize("&lt;script&gt;alert(1)&lt;/script&gt; &#60;b&#62;");
+    assert_eq!(nodes, vec![HNode::Text("<script>alert(1)</script> <b>".into())], "one text node");
+    assert_eq!(to_html(&nodes), "&lt;script&gt;alert(1)&lt;/script&gt; &lt;b&gt;", "escaped again when written");
+}
+
+/// Tags not on the list — a custom element, an engine component's name,
+/// `base`, `meta`, `embed` — are dropped, their text kept; an `svg` is
+/// dropped whole even when a tag inside starts with its name.
+#[test]
+fn unlisted_and_lookalike_tags_are_dropped() {
+    let out = to_html(&sanitize(r##"<x-new>a</x-new><ticket-row>b</ticket-row><base href="https://x.example">c<meta charset="utf-8">d<embed src="https://x.example">e"##));
+    assert_eq!(out, "abcde");
+    assert_eq!(to_html(&sanitize("<svg><svgx></svgx><script>x</script></svg>ok")), "ok");
+    assert_eq!(to_html(&sanitize("<svg></svgx><p>inside</p></svg>ok")), "ok", "</svgx is no </svg");
+}
+
+/// Every `(tag, attribute)` the sanitizer keeps, pinned: widening the
+/// allow-list is a deliberate edit of this table. `*` is any allowed tag.
+#[test]
+fn the_attribute_allow_list_is_pinned() {
+    let pinned: &[(&str, &str)] = &[
+        ("*", "title"),
+        ("a", "href"),
+        ("code", "class"),
+        ("img", "alt"),
+        ("img", "height"),
+        ("img", "src"),
+        ("img", "width"),
+        ("ol", "start"),
+        ("pre", "class"),
+        ("td", "colspan"),
+        ("td", "rowspan"),
+        ("th", "colspan"),
+        ("th", "rowspan"),
+    ];
+    assert_eq!(ALLOWED_ATTRS, pinned, "the table");
+    // And the function answers the table, nothing more.
+    let attrs = ["href", "src", "alt", "width", "height", "class", "id", "style", "title", "start", "colspan", "rowspan", "target", "rel", "name", "onclick", "data-x"];
+    for tag in ALLOWED_TAGS {
+        for attr in attrs {
+            let want = pinned.iter().any(|(t, a)| (*t == "*" || t == tag) && *a == attr);
+            assert_eq!(allowed_attr(tag, attr), want, "({tag}, {attr})");
+        }
+    }
+}

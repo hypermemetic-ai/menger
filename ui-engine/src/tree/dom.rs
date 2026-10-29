@@ -82,31 +82,28 @@ impl Renderer for Dom {
     fn remove(&self, parent: &web_sys::Node, child: &web_sys::Node) {
         let _ = parent.remove_child(child);
     }
-    fn listen(&self, node: &web_sys::Node, event: &str, handler: Rc<dyn Fn(Value)>) {
-        // UI-10: `window-<event>` listens on the window while `node` is in
-        // the page; the first event after it has gone removes the listener.
-        if let Some(event) = event.strip_prefix("window-") {
-            let Some(window) = web_sys::window() else { return };
-            let (n, w, name) = (node.clone(), window.clone(), event.to_string());
-            let cell: Rc<std::cell::RefCell<Option<js_sys::Function>>> = Rc::default();
-            let c2 = cell.clone();
-            let f = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
-                if n.is_connected() {
-                    handler(payload(&e, &n));
-                } else if let Some(f) = c2.borrow_mut().take() {
-                    let _ = w.remove_event_listener_with_callback(&name, &f);
-                }
-            });
-            let func: js_sys::Function = f.as_ref().unchecked_ref::<js_sys::Function>().clone();
-            let _ = window.add_event_listener_with_callback(event, &func);
-            *cell.borrow_mut() = Some(func);
-            f.forget();
-            return;
-        }
-        let on = node.clone();
-        let f = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| handler(payload(&e, &on)));
-        let _ = node.add_event_listener_with_callback(event, f.as_ref().unchecked_ref());
-        // The listener lives as long as its node: the page's.
-        f.forget();
+    fn listen(&self, node: &web_sys::Node, event: &str, handler: Rc<dyn Fn(Value)>) -> super::Unlisten {
+        // UI-10: `window-<event>` listens on the window (while `node` is in
+        // the page); either way the answer removes the listener and drops
+        // its closure — nothing is forgotten.
+        let (target, name, on): (web_sys::EventTarget, String, web_sys::Node) = match event.strip_prefix("window-") {
+            Some(e) => match web_sys::window() {
+                Some(w) => (w.into(), e.to_string(), node.clone()),
+                None => return Box::new(|| {}),
+            },
+            None => (node.clone().into(), event.to_string(), node.clone()),
+        };
+        let window = event.starts_with("window-");
+        let n = on.clone();
+        let f = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+            if !window || n.is_connected() {
+                handler(payload(&e, &n));
+            }
+        });
+        let _ = target.add_event_listener_with_callback(&name, f.as_ref().unchecked_ref());
+        Box::new(move || {
+            let _ = target.remove_event_listener_with_callback(&name, f.as_ref().unchecked_ref());
+            drop(f);
+        })
     }
 }
