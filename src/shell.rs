@@ -49,7 +49,7 @@
 //! ACCESS-28: **every page goes out under a policy.** The app's pages
 //! (`/`, `/app/`, `/vanilla`, "not built") under [`PAGE_CSP`] — scripts
 //! only the app's own files, the wasm and the page's hashed inline blocks;
-//! connections only to itself and its hub; images only its own; nothing
+//! connections only to itself and its service; images only its own; nothing
 //! frames it. The sign-in pages under plexus-login's own (their blocks
 //! hashed, AUTH-22). A ticket body's frame is not a srcdoc any more — a
 //! srcdoc inherits its parent's policy, and a body's inline scripts and
@@ -97,6 +97,12 @@ pub struct ShellConfig {
     /// APP-110: who may frame this shell's pages, and whose pages it frames
     /// ([`Framing`]) — nobody and nothing by default.
     pub framing: Framing,
+    /// TRANSPORT-15: the MCP endpoint's router — `/mcp` and, under OAuth,
+    /// its RFC 9728 document — on the shell's own origin, so the edge needs
+    /// no route of its own. Public, like the metadata: the bridge's identify
+    /// step names the caller from the request's Bearer and refuses with a
+    /// 401 of its own; the session check never sends it to the login page.
+    pub mcp: Option<Router>,
 }
 
 /// ACCESS-30: Strict-Transport-Security, a year, on every answer of a shell
@@ -138,7 +144,7 @@ pub const SERVICE_WORKER: &str = "/sw.js";
 
 /// ACCESS-28: the app's pages' Content-Security-Policy (plexus-shell fills
 /// `{{SCRIPTS}}` with the page's inline-script hashes and `{{HUB}}` with the
-/// hub's WebSocket origins at the name the page was asked for):
+/// service's WebSocket origins at the name the page was asked for):
 ///
 /// - scripts: the app's files, the wasm, the hashed inline blocks — no
 ///   other inline script, no other origin;
@@ -147,7 +153,7 @@ pub const SERVICE_WORKER: &str = "/sw.js";
 ///   sheet (THEME-3: `@import url("https://…")`);
 /// - images: its own and `data:` — a remote image in a body shown in the
 ///   app is refused, so a body cannot learn who reads it (ACCESS-4 M5);
-/// - connections: itself, its hub, and a WebSocket on loopback — MFE-21's
+/// - connections: itself, its service, and a WebSocket on loopback — MFE-21's
 ///   settings point the app at another menger on this machine;
 /// - frames: its own (the body frames, [`FRAME_PATH`]); nothing frames it.
 ///
@@ -341,6 +347,11 @@ async fn router(cfg: ShellConfig, at: std::net::SocketAddr) -> Router {
     let mut app = app.merge(favicon_routes()).merge(frame_routes());
     if let Some(metadata) = cfg.metadata {
         app = app.merge(metadata);
+    }
+    // TRANSPORT-15: `/mcp` beside the metadata — after the session check,
+    // which must not redirect an MCP client to the login page.
+    if let Some(mcp) = cfg.mcp {
+        app = app.merge(mcp);
     }
     // DESIGN-40: a framed body's document has an opaque origin, so the
     // house faces it loads from `/app/fonts/` are cross-origin fetches —
