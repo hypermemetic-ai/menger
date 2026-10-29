@@ -1,6 +1,6 @@
 {
   "abi": "engine/1",
-  "handlers": "7ea650b34412825b6ac44b3116d048bbe32ccadc76b9a9f716b28caa6efee961",
+  "handlers": "76a1eed7671c0cb9c6cc1acac5422015fd7202f52bafa515da22ec41159334c0",
   "live": {
     "rows": {
       "changes": "tickets.watch",
@@ -8,7 +8,7 @@
       "on": {
         "amended": "upsert:ticket",
         "created": "upsert:ticket",
-        "deleted": "remove:id"
+        "deleted": "remove:ids"
       },
       "params": {
         "limit": 200,
@@ -20,8 +20,11 @@
       "snapshot": "tickets.list"
     }
   },
+  "name": "ticket-row",
   "props": [
-    "id"
+    "id",
+    "title",
+    "body"
   ],
   "state": {
     "expanded": false

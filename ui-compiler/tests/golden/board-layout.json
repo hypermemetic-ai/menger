@@ -2,6 +2,7 @@
   "abi": "engine/1",
   "handlers": "51397f9f78271d2fc9b8c9c8cfffe92f0ab200e9ccf927bc8c7e408ea27a53ba",
   "live": {},
+  "name": "board-layout",
   "props": [
     "id"
   ],

@@ -48,16 +48,22 @@ impl From<Result<Compiled, Refusal>> for Answer {
     }
 }
 
-/// Compile one component's source.
-pub fn compile(src: &str) -> Result<Compiled, Refusal> {
-    let _ = src;
+/// Compile one component's source; `name` is its file's stem and goes into
+/// the tree.
+pub fn compile(name: &str, src: &str) -> Result<Compiled, Refusal> {
+    let _ = (name, src);
     todo!("UI-5: the compiler")
 }
 
 /// [`compile`], answered as the JSON the wasm module returns.
-pub fn compile_json(src: &str) -> String {
-    let answer: Answer = compile(src).into();
+pub fn compile_json(name: &str, src: &str) -> String {
+    let answer: Answer = compile(name, src).into();
     serde_json::to_string(&answer).expect("an answer always serialises")
+}
+
+/// A refusal as the wasm module returns it, `{ "err": … }`.
+pub fn refusal_json(r: Refusal) -> String {
+    serde_json::to_string(&Answer::Err(r)).expect("an answer always serialises")
 }
 
 #[cfg(test)]

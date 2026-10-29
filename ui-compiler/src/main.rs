@@ -22,7 +22,7 @@ fn main() -> ExitCode {
         }
     };
     let name = file.file_stem().and_then(|s| s.to_str()).unwrap_or("component").to_string();
-    match menger_ui_compiler::compile(&src) {
+    match menger_ui_compiler::compile(&name, &src) {
         Ok(c) => {
             let write = std::fs::create_dir_all(&dir)
                 .and_then(|_| std::fs::write(dir.join(format!("{name}.json")), &c.tree))

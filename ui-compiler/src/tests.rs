@@ -3,23 +3,28 @@
 use super::{compile, Refusal};
 use serde_json::{json, Value};
 
+#[path = "../tests/common/cases.rs"]
+mod cases;
+
+const NAME: &str = "test-view";
+
 fn tree(src: &str) -> Value {
-    let out = compile(src).unwrap_or_else(|r| panic!("refused at line {}: {}", r.line, r.message));
+    let out = compile(NAME, src).unwrap_or_else(|r| panic!("refused at line {}: {}\n{src}", r.line, r.message));
     serde_json::from_str(&out.tree).expect("the tree is JSON")
 }
 
 fn refusal(src: &str) -> Refusal {
-    match compile(src) {
+    match compile(NAME, src) {
         Err(r) => r,
         Ok(c) => panic!("compiled what should be refused:\n{src}\n→ {}", c.tree),
     }
 }
 
 /// Refused on `line`, the message naming `found`.
-fn refused_at(src: &str, line: u32, found: &str) {
+fn refused_at(what: &str, src: &str, line: u32, found: &str) {
     let r = refusal(src);
-    assert_eq!(r.line, line, "the line of `{found}` in:\n{src}\n(message: {})", r.message);
-    assert!(r.message.contains(found), "the message names `{found}`: {}", r.message);
+    assert_eq!(r.line, line, "{what}: the line of `{found}` in:\n{src}\n(message: {})", r.message);
+    assert!(r.message.contains(found), "{what}: the message names `{found}`: {}", r.message);
 }
 
 #[test]
@@ -27,13 +32,18 @@ fn uses_are_the_calls_and_the_live_methods() {
     let src = r#"<script>
   let rows = live(#{ snapshot: "tickets.list", params: #{ summary: true },
                      changes: "tickets.watch", key: "id", on: #{ created: "upsert:ticket" } });
-  fn rename(state, ev) { call("tickets.update", #{ id: ev.id, title: ev.value }); state }
-  fn retitle(state, ev) { call("tickets.update", #{ id: ev.id, title: "x" }); state }
+  fn rename(state, ev) { call("tickets.update", #{ id: ev.props.id, title: ev.value }); state }
+  // call("tickets.delete", #{ id: 1 }) — a comment calls nothing
+  fn follow(state, ev) { call("tickets.watch", #{ id: ev.props.id }); state }
 </script>
 <ul>{#each rows as r (r.id)}<li>{r.title}</li>{/each}</ul>
 "#;
     let t = tree(src);
-    assert_eq!(t["uses"], json!(["tickets.list", "tickets.update", "tickets.watch"]), "sorted, deduplicated");
+    assert_eq!(t["uses"], json!(["tickets.list", "tickets.update", "tickets.watch"]), "sorted, deduplicated, no comment");
+
+    // A method that is not a literal cannot be checked against `uses`.
+    let src = "<script>\n  fn go(state, ev) {\n    let m = \"tickets.list\";\n    call(m, #{});\n    state\n  }\n</script>\n<p/>\n";
+    refused_at("a non-literal call", src, 4, "call");
 }
 
 #[test]
@@ -46,6 +56,7 @@ fn props_and_state_come_from_the_declarations() {
 <p>{nowhere.declared} {title}</p>
 "#;
     let t = tree(src);
+    assert_eq!(t["name"], json!(NAME));
     assert_eq!(t["props"], json!(["id", "title"]));
     assert_eq!(
         t["state"],
@@ -61,17 +72,44 @@ fn props_and_state_come_from_the_declarations() {
 }
 
 #[test]
+fn each_reads_a_live_collections_rows_and_nothing_else() {
+    let src = r#"<script>
+  prop("items");
+  let rows = live(#{ snapshot: "tickets.list", changes: "tickets.watch", key: "id" });
+</script>
+{#each items as x}<p>{x}</p>{/each}
+<p>{rows.status}</p>
+{#each rows as r (r.id)}<p>{r.id}</p>{/each}
+"#;
+    let t = tree(src);
+    assert_eq!(t["tree"][0]["each"], json!({ "expr": "items", "as": "x" }), "a prop stays itself; no key, none written");
+    assert_eq!(t["tree"][1]["children"][0]["text"], json!({ "expr": "rows.status" }), "outside each, as written");
+    assert_eq!(t["tree"][2]["each"], json!({ "expr": "rows.rows", "as": "r", "key": "r.id" }), "a bare live reads its rows");
+
+    // The name is the only difference between two names on one source.
+    let a = compile("row-a", src).expect("compiles");
+    let b = compile("row-b", src).expect("compiles");
+    assert_eq!(a.handlers, b.handlers);
+    assert_ne!(a.tree, b.tree);
+    assert_eq!(a.tree.replace("\"name\": \"row-a\"", "\"name\": \"row-b\""), b.tree);
+}
+
+#[test]
 fn an_unknown_form_is_refused_naming_the_line() {
-    let head = "<script>\n  prop(\"id\");\n</script>\n\n"; // the template starts on line 5
-    refused_at(&format!("{head}<div>\n{{#await load}}<p>…</p>{{/await}}\n</div>\n"), 6, "{#await");
-    refused_at(&format!("{head}<div>\n  <input bind:value={{name}}/>\n</div>\n"), 6, "bind:value");
-    // A bare <slot> (Svelte's default slot) is not the sections form: a slot
-    // names its section (`<slot name="main" …/>`, UI-4's sections).
-    refused_at(&format!("{head}<div>\n\n  <slot/>\n</div>\n"), 7, "<slot");
-    refused_at(&format!("{head}<div>\n{{#if open}}\n  <p>x</p>\n</div>\n"), 6, "{#if");
-    refused_at(&format!("{head}<section>\n  <frobnicate>x</frobnicate>\n</section>\n"), 6, "frobnicate");
-    refused_at(&format!("{head}{{#key id}}<p/>{{/key}}\n"), 5, "{#key");
-    refused_at(&format!("{head}<p>\n  {{@html body}}\n</p>\n"), 6, "{@html");
+    for c in cases::unknown_forms().into_iter().chain(cases::line_offsets()) {
+        refused_at(c.what, &c.src, c.line, c.found);
+    }
+}
+
+#[test]
+fn a_slot_is_a_named_section() {
+    for c in cases::slot_refusals() {
+        refused_at(c.what, &c.src, c.line, c.found);
+    }
+    // One name in both arms of an if/else is one section.
+    let t = tree("{#if wide}<slot name=\"main\"/>{:else}<slot name=\"main\" compact=\"yes\"/>{/if}\n");
+    assert_eq!(t["tree"][0]["then"][0], json!({ "slot": "main", "props": {} }));
+    assert_eq!(t["tree"][0]["else"][0], json!({ "slot": "main", "props": { "compact": "yes" } }));
 }
 
 #[test]
@@ -82,7 +120,7 @@ fn a_handler_that_is_not_a_fold_is_refused() {
         assert!(r.message.contains("spin"), "fn spin({params}): the refusal names the function: {}", r.message);
         assert_eq!(r.line, 2, "fn spin({params}): its line");
     }
-    let ok = compile("<script>\n  fn spin(state, ev) { state }\n</script>\n<p on:click={spin}/>\n");
+    let ok = compile(NAME, "<script>\n  fn spin(state, ev) { state }\n</script>\n<p on:click={spin}/>\n");
     assert!(ok.is_ok(), "fn spin(state, ev) is a fold: {ok:?}");
 }
 
