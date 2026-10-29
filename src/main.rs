@@ -568,6 +568,9 @@ async fn run(args: Args) -> anyhow::Result<()> {
             max_per_principal: args.max_connections_per_principal,
             max_anonymous: args.max_anonymous_connections,
             max_anonymous_per_ip: args.max_anonymous_connections_per_ip,
+            // BIDIR-8 (plexus-transport main): the transport counts the calls
+            // open on a connection; v2 has not taken menger's side of it yet.
+            max_calls_per_connection: args.max_calls_per_connection,
         })
         .with_allowed_hosts(hosts(ws_port));
     tracing::info!("WebSocket: ws://{}", std::net::SocketAddr::new(args.bind, ws_port));
