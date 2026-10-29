@@ -548,6 +548,21 @@ fn doc_breaks(docs: &[(&str, &str)], wants: &[(&str, &str, &[&str])]) -> Vec<Str
     out
 }
 
+/// The bullet of `doc` that begins with `start` (a line), joined into one
+/// line: to the next line that begins a bullet or a heading, or a blank one.
+fn bullet(doc: &str, start: &str) -> Option<String> {
+    let mut lines = doc.lines().skip_while(|l| !l.starts_with(start));
+    let first = lines.next()?;
+    let rest = lines.take_while(|l| !(l.trim().is_empty() || l.starts_with("- ") || l.starts_with('#')));
+    Some(std::iter::once(first).chain(rest).map(str::trim).collect::<Vec<_>>().join(" "))
+}
+
+/// The sentences of `text` (split at `. ` and `;`) that take something by
+/// path and name `plexus-ui-engine` among it.
+fn engine_by_path(text: &str) -> Vec<String> {
+    text.split(". ").flat_map(|s| s.split(';')).filter(|s| s.contains("by path") && s.contains("plexus-ui-engine")).map(|s| s.trim().to_string()).collect()
+}
+
 #[test]
 fn the_docs_say_menger_is_a_tenant() {
     let root = root();
@@ -557,7 +572,7 @@ fn the_docs_say_menger_is_a_tenant() {
     let mut broken = doc_breaks(
         &docs,
         &[
-            ("README.md", "What v2 is", &["../plexus-ui", "tenant"]),
+            // README's "The services" is its "What v2 is".
             ("README.md", "The services", &["../plexus-ui", "tenant"]),
             ("AGENTS.md", "What v2 is", &["../plexus-ui", "tenant"]),
             // The framework's tool and its contract, kept with its code.
@@ -569,7 +584,41 @@ fn the_docs_say_menger_is_a_tenant() {
     let files = ["README.md", "AGENTS.md", "deploy/README.md"].map(|f| root.join(f));
     broken.extend(lines_where(&root, &files, moved_paths));
     broken.extend(lines_where(&root, &files, |l| if golden_as_ours(l) { vec!["golden/ (ui/golden went, FRAME-8)".into()] } else { vec![] }));
+    // The members bullet: the engine built by the tool, never taken by path.
+    match bullet(&agents, "- **Workspace members**") {
+        None => broken.push("AGENTS.md: no \"Workspace members\" bullet".into()),
+        Some(b) => broken.extend(engine_by_path(&b).into_iter().map(|s| format!("AGENTS.md \"Workspace members\": takes the engine by path: {s}"))),
+    }
     assert!(broken.is_empty(), "FRAME-7: the docs do not yet say menger is the framework's tenant:\n  {}", broken.join("\n  "));
+}
+
+/// The names of the files directly in `dir` (none when it is missing).
+fn names_in(dir: &Path) -> Vec<String> {
+    let mut out: Vec<String> = std::fs::read_dir(dir).map(|e| e.flatten().filter(|e| e.path().is_file()).map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+    out.sort();
+    out
+}
+
+#[test]
+fn no_script_of_mengers_duplicates_the_frameworks() {
+    let root = root();
+    let theirs = names_in(&sibling("plexus-ui").join("scripts"));
+    assert!(theirs.iter().any(|n| n == "ui-compiler-wasm.sh"), "FRAME-7: ../plexus-ui/scripts holds no ui-compiler-wasm.sh: {theirs:?}");
+    let twins: Vec<String> = names_in(&root.join("scripts")).into_iter().filter(|n| theirs.contains(n)).map(|n| format!("scripts/{n} (../plexus-ui/scripts/{n} is the framework's)")).collect();
+    assert!(twins.is_empty(), "FRAME-7: menger keeps a copy of the framework's scripts:\n  {}", twins.join("\n  "));
+    let pipeline = std::fs::read_to_string(root.join("deploy/pipeline")).expect("deploy/pipeline");
+    let calls: Vec<(usize, &str)> = code_lines(&pipeline).into_iter().filter(|(_, l)| !l.trim_start().starts_with('#') && l.contains("ui-compiler-wasm.sh")).collect();
+    assert!(
+        !calls.is_empty() && calls.iter().all(|(_, l)| l.contains("../plexus-ui/scripts/ui-compiler-wasm.sh")),
+        "FRAME-7: deploy/pipeline does not build the compiler module with ../plexus-ui/scripts/ui-compiler-wasm.sh; its lines naming the script: {calls:?}"
+    );
+}
+
+#[test]
+fn the_engines_test_lives_with_the_engine() {
+    let root = root();
+    assert!(sibling("plexus-ui").join("tests/engine_browser.mjs").is_file(), "FRAME-7: ../plexus-ui/tests/engine_browser.mjs is missing — the engine's own smoke");
+    assert!(!root.join("tests/engine_browser.mjs").exists(), "FRAME-7: tests/engine_browser.mjs is the engine's test in menger; it lives with the engine (../plexus-ui's npm test)");
 }
 
 // ── the checks check ──────────────────────────────────────────────────────
@@ -680,6 +729,14 @@ fn the_checks_read_what_they_are_given() {
         doc_breaks(&docs, &[("R", "Next", &["tenant"]), ("R", "Gone", &[]), ("A", "What v2 is", &[])]),
         ["R \"Next\": does not say `tenant`", "R: no section \"Gone\"", "A: not read"]
     );
+
+    // The bullet and the engine taken by path.
+    let agents = "x\n- **Workspace members** (`Cargo.toml`): `.`;\n  each taken by path: `plexus-ui-compiler`,\n  `plexus-ui-engine`. The engine built by the tool.\n- next\n";
+    let b = bullet(agents, "- **Workspace members**").unwrap();
+    assert_eq!(b, "- **Workspace members** (`Cargo.toml`): `.`; each taken by path: `plexus-ui-compiler`, `plexus-ui-engine`. The engine built by the tool.");
+    assert_eq!(engine_by_path(&b), ["each taken by path: `plexus-ui-compiler`, `plexus-ui-engine`"]);
+    assert!(engine_by_path("taken by path: `plexus-ui-compiler`. `plexus-ui-engine` is built by the tool").is_empty());
+    assert_eq!(bullet("a\n", "- **Workspace members**"), None);
 
     // golden/: menger's when not a framework's tests/golden/.
     assert!(golden_as_ours("`src/*.svelte`, `golden/` — compiled by"));
