@@ -124,6 +124,32 @@ session cookie (`signInContext()`: `menger_session_<shell port>`, what
 signed with that name. `--no-rest` keeps a release from before ACCESS-24
 off prod's REST port.
 
+**MCP** (TRANSPORT-15). menger is an MCP server too: `/mcp` on the app's
+origin (`http://127.0.0.1:4456/mcp` here, `https://app.menger.sh/mcp`
+deployed — the edge needs no route of its own; `--no-mcp` turns it off),
+served through plexus-transport-mcp's bridge mounted behind the same login. Every
+`tools/call` goes through the gate as the caller the request's Bearer
+names — an agent's session or key proof, exactly what the WebSocket takes —
+and `tools/list` is that caller's view; a request with no credential is the
+anonymous view (the three `auth.*` tools); a refused one is `401`. An MCP
+client that takes a static header signs in with the session synapse keeps
+after `_login` (its keychain item: `backend=<host:port>`,
+`agent=<name>`, `service=plexus-session`; the JSON's `token`), which ends
+with the session (12 h). A key proof will not do: it opens one upgrade, and
+MCP carries the header on every request, so its second use is refused:
+
+```sh
+synapse --url wss://app.menger.sh/ws _login menger --key builder --as builder
+token=$(secret-tool lookup backend wss://app.menger.sh:443/ws agent builder | jq -r .token)
+claude mcp add --transport http menger https://app.menger.sh/mcp --header "Authorization: Bearer $token"
+```
+
+With `--mcp-authorization-server URL` (repeatable; `MENGER_MCP_AUTHORIZATION_SERVERS`),
+`/mcp` is an OAuth 2.1 protected resource: a request with no token is
+answered `401` naming `/.well-known/oauth-protected-resource/mcp`, so an
+MCP client signs in at that server by itself — once one is hosted
+(ACCOUNT-1). `tests/mcp.rs` pins the three callers.
+
 `http://127.0.0.1:4456/` is the Leptos app (MFE-4). Until you build the
 frontend it serves the day-one vanilla page instead — the binary alone
 always serves something live — and that page keeps its own URL,

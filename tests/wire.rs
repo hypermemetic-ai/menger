@@ -43,14 +43,14 @@ async fn free_port() -> u16 {
 async fn start_server_at(db_path: std::path::PathBuf, keep: Option<tempfile::TempDir>) -> u16 {
     let port = free_port().await;
     let login = support::Login::new();
-    let hub = support::hub(&db_path, &login).await;
+    let service = support::hub(&db_path, &login).await;
     let gate = login.gate(port);
     let conv = |arc: Arc<DynamicHub>| {
         menger::calls::rpc_module(arc, Default::default()).map_err(|e| anyhow::anyhow!("{e}"))
     };
     tokio::spawn(async move {
         let _keep = keep;
-        TransportServer::builder(hub, conv)
+        TransportServer::builder(service, conv)
             .with_websocket(port)
             .with_session_validator(gate)
             .anonymous_view()
@@ -260,8 +260,8 @@ async fn the_frame_over_the_wire() {
 
     // The dispatch itself, with no identity: refused before the body runs.
     let dir = tempfile::tempdir().unwrap();
-    let hub = support::hub(&dir.path().join("t.db"), &support::Login::new()).await;
-    let refused = match hub.route("tickets.health", json!({}), None).await {
+    let service = support::hub(&dir.path().join("t.db"), &support::Login::new()).await;
+    let refused = match service.route("tickets.health", json!({}), None).await {
         Err(e) => e.to_string(),
         Ok(mut s) => {
             use futures::StreamExt;
@@ -1080,6 +1080,7 @@ async fn shell_serves_the_page() {
             https: false,
             metadata: None,
             framing: Default::default(),
+            mcp: None,
         })
         .await;
     });

@@ -296,7 +296,8 @@ IMAGE_STORE=ghcr deploy/pipeline image R   # ghcr.io/hypermemetic-ai/menger:<rel
 **Inside the image**: `debian:trixie-slim` (glibc 2.41 — at least the glibc the release binary links, built on this machine: since DIST-14 it needs 2.39, DEPLOY-51), user `menger` (uid 10001),
 `tini` as PID 1 (so `docker stop` is a SIGTERM menger heeds), menger bound
 to `0.0.0.0` (`MENGER_BIND`), the WebSocket on 8080 and the shell on 8081
-(`MENGER_WS_PORT`, `MENGER_SHELL_PORT`), the REST bridge off
+(`MENGER_WS_PORT`, `MENGER_SHELL_PORT`; TRANSPORT-15: `/mcp` is on the
+shell's origin, so the edge's default route carries it), the REST bridge off
 (`MENGER_NO_REST=1`: it carries no identity), the database at
 `/data/tickets.db` in the `/data` volume, `PLEXUS_NO_REGISTRY=1`. All of
 menger's settings are its environment (`MENGER_*`, `--help` names each).
