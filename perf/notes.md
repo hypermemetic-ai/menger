@@ -460,5 +460,6 @@ The page asks the same few things at every N — `ui.watch`, `nav extents`,
 and `search` — so the first rows hold flat across the decades. Two engine
 changes bought ~60 ms (287 → 224 ms at 10⁵): the components' files fetched
 at once (22 sequential requests before), and the route drawn before
-`ui.slots.list` answers. Memory grows with N through the nav's 101 → ~1,000
-shortcode rows and the extents, not the rows held (200, a window).
+`ui.slots.list` answers. The rows held are 200 at every N (a window); what
+grows the memory with N is not measured apart here — the nav's shortcode
+rows and the extents grow with N (101 shortcodes at 10⁵).
