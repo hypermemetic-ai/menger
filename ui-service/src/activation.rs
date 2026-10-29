@@ -6,9 +6,12 @@
 //! them); `versions` is a viewer's. UI-9: `watch` a viewer's too, and the
 //! child `slots` (`ui.slots.list|set|clear`, [`SlotsActivation`]).
 
-use crate::events::{Reason, UiEvent};
+use crate::compiler::Compiler;
+use crate::events::UiEvent;
+use crate::push::{Push, PushSteps};
+use crate::seam::Seam;
 use crate::signers::Signers;
-use crate::store::{digest_of, NewVersion, UiError, UiStore};
+use crate::store::UiStore;
 use crate::vocab::{Bundle, Manifest, Signature, VersionHash};
 use futures::{Stream, StreamExt};
 use menger_tickets_api::access::{Access, MengerRequest, VerifiedUser};
@@ -31,12 +34,14 @@ pub struct UiActivation {
     /// UI-9: the tickets store, whose grants generation `ui.watch` follows
     /// its caller by (`access::Following`); never read for tickets.
     tickets: Option<Arc<Store>>,
+    /// UI-7: the compiler and the seam a push runs before the store.
+    steps: PushSteps,
 }
 
 impl UiActivation {
     /// Over `store`, accepting pushes signed by `signers`, behind `access`.
     pub fn new(store: Arc<UiStore>, signers: Signers, access: Access) -> Self {
-        Self { store, signers: Arc::new(signers), access, tickets: None }
+        Self { store, signers: Arc::new(signers), access, tickets: None, steps: PushSteps::default() }
     }
 
     /// UI-9: `ui.watch` follows its caller through `tickets`' grants (as
@@ -44,6 +49,19 @@ impl UiActivation {
     pub fn following(mut self, tickets: Arc<Store>) -> Self {
         self.tickets = Some(tickets);
         self
+    }
+
+    /// UI-7: every push compiles its sources in `compiler` (`--ui-compiler`);
+    /// without it, trees are stored as given (`compiled: false`).
+    pub fn compiling(mut self, compiler: Option<Compiler>) -> Self {
+        self.steps.compiler = compiler.map(Arc::new);
+        self
+    }
+
+    /// UI-7: the seam the builder attaches the running hub to, once built —
+    /// how a push asks `tickets` for its methods and hash.
+    pub fn seam(&self) -> &Seam {
+        &self.steps.seam
     }
 
     /// The store it keeps.
@@ -59,42 +77,7 @@ fn answer(work: impl FnOnce() -> UiEvent + Send + 'static) -> impl Stream<Item =
     })
 }
 
-/// The store's refusal, in band: the caller's mistakes `refused`, the
-/// file's own failures `error`.
-fn refusal(e: UiError) -> UiEvent {
-    let reason = match &e {
-        UiError::BadBundle(_) => Reason::BadBundle,
-        UiError::BadManifest(_) => Reason::BadManifest,
-        UiError::UnknownVersion(_) => Reason::UnknownVersion,
-        UiError::UnknownComponent { .. } => Reason::UnknownComponent,
-        UiError::UnknownSlot { .. } => Reason::UnknownSlot,
-        UiError::Db(_) => return UiEvent::Error { message: e.to_string() },
-    };
-    UiEvent::Refused { reason, message: e.to_string() }
-}
-
-fn now() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
-}
-
-/// `push`: a signer named, the signature over the bundle's digest by one of
-/// them, then the store's one transaction.
-fn push(store: &UiStore, signers: &Signers, by: String, bundle: Bundle, manifest: Manifest, signature: Signature, commit: Option<CommitRef>) -> UiEvent {
-    if signers.is_empty() {
-        let message = "no --ui-signer is configured on this server: every push is refused".to_string();
-        return UiEvent::Refused { reason: Reason::NoSigner, message };
-    }
-    let bytes = bundle.bytes();
-    if !signers.verify(&digest_of(&bytes), &signature.bytes()) {
-        let message = "the signature does not verify: Ed25519 over the bundle's sha256 by a --ui-signer".to_string();
-        return UiEvent::Refused { reason: Reason::BadSignature, message };
-    }
-    let v = NewVersion { bundle: bytes, manifest: manifest.into_string(), commit: commit.map(|c| c.to_string()), pushed_by: by, pushed_at: now() };
-    match store.push(v) {
-        Ok(p) => UiEvent::Pushed { version: p.version, live: p.live, new: p.new },
-        Err(e) => refusal(e),
-    }
-}
+pub(crate) use crate::push::refusal;
 
 /// The UI's versions by content hash and the live pointer — push one, roll back to one, list them, preview one.
 #[plexus_macros::activation(
@@ -129,8 +112,9 @@ impl UiActivation {
         /// The commit the bundle was built from, e.g. 77df9a0 (optional).
         commit: Option<CommitRef>,
     ) -> impl Stream<Item = UiEvent> + Send + 'static {
-        let (store, signers, by) = (self.store.clone(), self.signers.clone(), user.principal_text());
-        answer(move || push(&store, &signers, by, bundle, manifest, signature, commit))
+        let (store, signers, steps) = (self.store.clone(), self.signers.clone(), self.steps.clone());
+        let p = Push { by: user.principal_text(), bundle, manifest, signature, commit };
+        futures::stream::once(crate::push::push(store, signers, steps, p))
     }
 
     /// Move the live pointer to a kept version; no other row changes; yields live { version }.

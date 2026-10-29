@@ -40,6 +40,11 @@ base64 = "0.22"
 # A bundle is a tar archive whose `index.html` is the entrypoint.
 tar = { version = "0.4", default-features = false }
 thiserror = "2"
+# UI-7: the compiler module (`--ui-compiler`, dist/ui-compiler.wasm) run in
+# wasmtime — no WASI, an empty linker, 10⁸ fuel, 64 MiB of memory.
+wasmtime = { version = "50", default-features = false, features = ["cranelift", "runtime", "std", "anyhow"] }
 
 [dev-dependencies]
 tempfile = "3"
+# UI-7: compiler/tests.rs writes its hostile modules as text.
+wat = "1"

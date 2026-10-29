@@ -73,6 +73,15 @@ struct Args {
     #[arg(long = "ui-signer", env = "MENGER_UI_SIGNERS", value_name = "HEX", value_delimiter = ';', help_heading = RUN, hide_short_help = true)]
     ui_signer: Vec<String>,
 
+    // UI-7: the compiler module a push recompiles every source in.
+    /// The ui compiler module (dist/ui-compiler.wasm) every `ui.push` compiles its sources in
+    ///
+    /// Run in wasmtime with nothing linked, under fuel and a memory limit;
+    /// a module that imports anything is refused at start. Without it, a
+    /// push stores the bundle's trees as given and says `compiled: false`.
+    #[arg(long = "ui-compiler", env = "MENGER_UI_COMPILER", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
+    ui_compiler: Option<PathBuf>,
+
     // RUN-8: names stay ACCESS-25's: a specific address adds its own literal
     // (and the shell's origin at it may open the socket); any other name is
     // an --allowed-host (and an --allowed-origin).
@@ -513,6 +522,12 @@ async fn run(args: Args) -> anyhow::Result<()> {
         anyhow::bail!("--ui-db-path {} is the database file: the ui service keeps a file of its own", ui_db_path.display());
     }
     let ui = menger::UiSetup::open(&ui_db_path, menger_ui_service::Signers::parse(&args.ui_signer).map_err(anyhow::Error::msg)?)?;
+    // UI-7: refused at start when the module imports anything.
+    let compiler = match &args.ui_compiler {
+        Some(path) => Some(menger_ui_service::Compiler::open(path).map_err(|e| anyhow::anyhow!("--ui-compiler {}: {e}", path.display()))?),
+        None => None,
+    };
+    let ui = ui.compiling(compiler);
     let ui_store = ui.store.clone();
     let hub = build_rpc_ui(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, ui).await?;
 
