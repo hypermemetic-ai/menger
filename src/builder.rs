@@ -2,6 +2,7 @@ use menger_tickets_api::access::Access;
 // v2: only `tickets` is registered; the rest come back one at a time.
 // use menger_tickets_api::{ChatsActivation, CommentsActivation, DeploymentsActivation, EpicsActivation, MediaActivation, MembersActivation, NotesActivation, OrgsActivation, SessionActivation, ThemesActivation};
 use menger_tickets_api::{ProviderOffer, TicketsActivation};
+use menger_ui_service::{Signers, UiActivation, UiStore, UI_DB_FILE};
 use menger_tickets_api::store::{OpenPurge, SeedShape, SeedSpec, Store, StoreError, System, PURGE_EVERY};
 use plexus_core::plexus::{AuthBackend, AuthSetup, DynamicHub, Provider as AuthProvider, ProviderKind as AuthKind};
 
@@ -23,6 +24,36 @@ use std::time::Instant;
 /// (prod, test and the image name theirs).
 pub fn default_db_path() -> PathBuf {
     crate::first_run::default_data_dir().join(crate::first_run::DB_FILE)
+}
+
+/// UI-3: the ui service's file when `--ui-db-path` names none — `ui.db`
+/// beside the tickets file `db_path`, never the same file.
+pub fn default_ui_db_path(db_path: &Path) -> PathBuf {
+    db_path.parent().map_or_else(|| PathBuf::from(UI_DB_FILE), |d| d.join(UI_DB_FILE))
+}
+
+/// UI-3: what the `ui` activation and the shell's `/app/*` are built over —
+/// the store on its own file and the signers a push may be signed by.
+#[derive(Clone)]
+pub struct UiSetup {
+    pub store: Arc<UiStore>,
+    pub signers: Signers,
+}
+
+impl UiSetup {
+    /// The store at `path` (`--ui-db-path`), pushes signed by `signers`
+    /// (`--ui-signer`).
+    pub fn open(path: &Path, signers: Signers) -> anyhow::Result<Self> {
+        let store = UiStore::open(path).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
+        tracing::info!("ui:        {}", path.display());
+        Ok(Self { store: Arc::new(store), signers })
+    }
+
+    /// The store beside the tickets file ([`default_ui_db_path`]), with no
+    /// signer — every push refused `no_signer`.
+    pub fn beside(db_path: &Path) -> anyhow::Result<Self> {
+        Self::open(&default_ui_db_path(db_path), Signers::none())
+    }
 }
 
 /// ACT-5: the purge of deleted tickets' bodies past their 30 days — at start,
@@ -124,6 +155,25 @@ pub async fn build_rpc_login(
     body_max: usize,
     chat_members: Vec<String>,
 ) -> anyhow::Result<Arc<DynamicHub>> {
+    let ui = UiSetup::beside(db_path)?;
+    build_rpc_ui(db_path, seed, shape, offers, access, backend, resource_metadata, body_max, chat_members, ui).await
+}
+
+/// UI-3: [`build_rpc_login`], the `ui` activation over `ui` (main's
+/// `--ui-db-path` and `--ui-signer`) registered beside `tickets`.
+#[allow(clippy::too_many_arguments)]
+pub async fn build_rpc_ui(
+    db_path: &Path,
+    seed: Option<SeedSpec>,
+    shape: SeedShape,
+    offers: Vec<ProviderOffer>,
+    access: Access,
+    backend: Arc<dyn AuthBackend>,
+    resource_metadata: Option<String>,
+    body_max: usize,
+    chat_members: Vec<String>,
+    ui: UiSetup,
+) -> anyhow::Result<Arc<DynamicHub>> {
     let path = db_path.to_path_buf();
     let started = Instant::now();
     // MENGER-15: and its cap on a body (`--max-body-bytes`).
@@ -205,7 +255,9 @@ pub async fn build_rpc_login(
     let tickets = TicketsActivation::with_access(Arc::clone(&store), access.clone());
     // v2: `tickets` alone — its children (inputs, commits, nav, work,
     // subtasks, …) with it; every other activation comes back one at a time.
-    let mut hub = DynamicHub::new("menger").register(tickets);
+    // UI-3: `ui` beside it — the UI's versions, over its own file.
+    let ui = UiActivation::new(ui.store, ui.signers, access.clone());
+    let mut hub = DynamicHub::new("menger").register(tickets).register(ui);
     // .register(CommentsActivation::with_access(Arc::clone(&store), access.clone()))
     // // CHAT-3: `chats` beside them — conversations inside tickets.
     // .register(ChatsActivation::with_access(Arc::clone(&store), access.clone()))

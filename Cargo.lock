@@ -812,6 +812,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
 
 [[package]]
+name = "filetime"
+version = "0.2.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
+dependencies = [
+ "cfg-if",
+ "libc",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1713,6 +1723,7 @@ dependencies = [
  "jsonrpsee",
  "jsonwebtoken",
  "menger-tickets-api",
+ "menger-ui-service",
  "nostr",
  "plexus-auth-core",
  "plexus-client",
@@ -1726,6 +1737,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tar",
  "tempfile",
  "tokio",
  "tracing",
@@ -1760,6 +1772,32 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "menger-ui-service"
+version = "0.1.0"
+dependencies = [
+ "async-stream",
+ "async-trait",
+ "base64",
+ "ed25519-dalek",
+ "futures",
+ "jsonrpsee",
+ "menger-tickets-api",
+ "plexus-client",
+ "plexus-core",
+ "plexus-macros",
+ "rusqlite",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
  "uuid",
 ]
 
@@ -3052,6 +3090,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
 ]
 
 [[package]]

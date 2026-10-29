@@ -57,7 +57,17 @@ pub struct ShellConfig {
     /// APP-110: who may frame this shell's pages, and whose pages it frames
     /// ([`Framing`]) — nobody and nothing by default.
     pub framing: Framing,
+    /// UI-3: the ui service's store — `/app/` serves the live version's
+    /// entrypoint (a session's preview to that session), `/app/<hash>/…` a
+    /// version's files ([`ui_app`]). None: the build in [`Self::app`], as before.
+    pub ui: Option<Arc<menger_ui_service::UiStore>>,
 }
+
+/// UI-3: a version's files never change under its hash — kept a year.
+pub const IMMUTABLE: &str = "public, max-age=31536000, immutable";
+
+/// UI-3: the entrypoint names whichever version is live — never kept.
+pub const NO_STORE: &str = "no-store";
 
 /// ACCESS-30: Strict-Transport-Security, a year, on every answer of a shell
 /// reached over https. The host alone (no `includeSubDomains`): menger's
@@ -256,7 +266,15 @@ async fn router(cfg: ShellConfig, at: std::net::SocketAddr) -> Router {
     // `/rest/{*}` pass-through to the REST port went: the app has spoken
     // the WebSocket since MFE-9, and nothing else called it. IDENTITY-19:
     // behind a session when login is required — no anonymous view.
-    let mut app = plexus_shell::router(app_shell_framed(cfg.env.as_deref(), cfg.app, &cfg.framing), cfg.ws_port).await;
+    let shell = app_shell_framed(cfg.env.as_deref(), cfg.app, &cfg.framing);
+    let stamps = shell.stamps_for(cfg.ws_port);
+    let mut app = plexus_shell::router(shell, cfg.ws_port).await;
+    // UI-3: `/app/*` from the ui store — inside the session check (layered
+    // first, so it runs after it).
+    if let Some(store) = cfg.ui.clone() {
+        let ui = Arc::new(UiServe { store, login: cfg.login.clone(), stamps });
+        app = app.route_layer(axum::middleware::from_fn_with_state(ui, ui_app));
+    }
     if let Some(login) = cfg.login.as_ref().filter(|l| l.require) {
         app = app.route_layer(axum::middleware::from_fn_with_state(login.clone(), require_session));
     }
@@ -297,6 +315,24 @@ async fn router(cfg: ShellConfig, at: std::net::SocketAddr) -> Router {
     } else {
         app
     }
+}
+
+/// UI-3: what `/app/*` is served from — the store, the login (whose session
+/// names a preview's principal) and the entrypoint's stamps.
+struct UiServe {
+    store: Arc<menger_ui_service::UiStore>,
+    login: Option<Arc<crate::web_login::Login>>,
+    stamps: Vec<(String, String)>,
+}
+
+/// UI-3: `/app/<hash>/<path>` — that file of that version's bundle,
+/// [`IMMUTABLE`]; `/app/` — the entrypoint for the request's session (its
+/// preview, else live), stamped, [`NO_STORE`]; with no version live,
+/// [`PLACEHOLDER`]. Anything else goes on to the shell's own routes.
+async fn ui_app(State(ui): State<Arc<UiServe>>, req: Request, next: axum::middleware::Next) -> Response {
+    // UI-3 phase 1: declared, not built — every request goes on as before.
+    let _ = (&ui.store, &ui.login, &ui.stamps);
+    next.run(req).await
 }
 
 /// ACCESS-30: [`HSTS`] on the answer.
