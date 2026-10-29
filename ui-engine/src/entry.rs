@@ -103,10 +103,15 @@ impl Page {
 
     /// Version `version`'s components `names`, fetched.
     async fn components(&self, version: &str, names: &[String]) -> Files {
+        // UI-8: every file asked at once, not one after another (eleven
+        // components were 22 round trips before the first mount).
         let mut files = Files::default();
-        for name in names {
-            let tree = fetch_text(&format!("/app/{version}/components/{name}.json")).await;
-            let rhai = fetch_text(&format!("/app/{version}/components/{name}.rhai")).await;
+        let fetched = futures::future::join_all(names.iter().map(|name| async move {
+            let (t, h) = (format!("/app/{version}/components/{name}.json"), format!("/app/{version}/components/{name}.rhai"));
+            futures::future::join(fetch_text(&t), fetch_text(&h)).await
+        }))
+        .await;
+        for (name, (tree, rhai)) in names.iter().zip(fetched) {
             match (tree, rhai) {
                 (Ok(t), Ok(h)) => files.put_version(version, name, &t, &h),
                 (Err(e), _) | (_, Err(e)) => say(&format!("{name} of {version}: {e}")),
@@ -275,8 +280,12 @@ async fn run(version: String) -> Result<(), String> {
 
     // The watch first, so nothing said while the rest is asked is missed.
     page.watch();
-    page.assignments().await;
+    // UI-8: the route is drawn with the bundle's defaults at once; the
+    // assignments, when they come, refill only the sections they change
+    // (`set_assignments`) — the first rows wait on no `ui.slots.list`.
     page.route();
+    let pg = page.clone();
+    wasm_bindgen_futures::spawn_local(async move { pg.assignments().await });
 
     // The hash.
     let p = page.clone();

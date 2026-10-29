@@ -404,7 +404,12 @@ impl<R: Renderer, W: Wire + Clone + 'static, C: Clock + Clone + 'static> App<R, 
 
     /// Draws `p` into `element` as instance `id`: its state (`state`, else
     /// its initial), its `live` readers, its tree.
-    fn attach(&self, id: MountId, element: &R::Node, p: Prepared, props: Map<String, Value>, state: Option<Map<String, Value>>, pinned: bool) -> Result<(), SwapError> {
+    fn attach(&self, id: MountId, element: &R::Node, p: Prepared, mut props: Map<String, Value>, state: Option<Map<String, Value>>, pinned: bool) -> Result<(), SwapError> {
+        // UI-8: a declared prop nobody passed is there, as null (`()` in an
+        // expression) — `#/` gives the layout no `filter`, `#/f/:filter` does.
+        for name in &p.tree.props {
+            props.entry(name.clone()).or_insert(Value::Null);
+        }
         let state = State::new(&self.rt, state.as_ref().unwrap_or(&p.tree.state));
         let mut readers = Vec::new();
         let mut live = BTreeMap::new();

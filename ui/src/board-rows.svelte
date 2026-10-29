@@ -1,8 +1,8 @@
 <script>
   // UI-8: the board. Unfiltered: `nav extents` once — each shortcode's last
-  // sequence and holes — and the rows are positioned by arithmetic over
-  // them; the window is one `list { after, limit: 200, summary: true }`
-  // page, re-asked only when a scroll leaves it. Filtered (the route's
+  // sequence and holes — and the row a scroll lands on is an id by
+  // arithmetic over them; the window is one `list { after, limit: 200, summary: true }`
+  // page, re-asked only when a scroll leaves it, drawn at its offset. Filtered (the route's
   // `filter`): the count is `nav counts { filter }`'s sum and the page is
   // `list { filter, at }`. `created` moves the count (an extent's last
   // sequence) and puts the row in; `status_changed` patches it in place.
@@ -57,15 +57,16 @@
   </header>
   <div class="board-scroll" data-row-height="28" on:scroll={scrolled}>
     <div class="board-space" style={"height:" + (28 * (if filter == () { extents.rows.reduce(|a, e| a + (if e.last_seq == () { e.seq } else { e.last_seq }) - (if e.holes == () { 0 } else { e.holes.len() }), 0) } else { counts.rows.reduce(|a, c| a + c.held, 0) })) + "px"}>
+      <div class="board-window" style={"transform:translateY(" + (28 * state.first) + "px)"}>
       {#each rows as r (r.id)}
-        <a class="board-row" data-id={r.id} data-status={r.status} href={"#/ticket/" + r.id}
-           style={"top:" + (28 * (if filter == () { extents.rows.reduce(|a, e| a + (if e.shortcode < r.shortcode { (if e.last_seq == () { e.seq } else { e.last_seq }) - (if e.holes == () { 0 } else { e.holes.len() }) } else if e.shortcode == r.shortcode { 0 - (if e.holes == () { 0 } else { e.holes.filter(|h| h < r.seq).len() }) } else { 0 }), r.seq - 1) } else { state.first + rows.rows.index_of(|x| x.id == r.id) })) + "px"}>
+        <a class="board-row" data-id={r.id} data-status={r.status} href={"#/ticket/" + r.id}>
           <span class="row-id" data-field="id">{r.id}</span>
           <span class="row-title" data-field="title">{r.title}</span>
           <span class="row-kind" data-field="kind">{r.kind}</span>
           <span class="row-status" data-field="status">{r.status}</span>
         </a>
       {/each}
+      </div>
     </div>
   </div>
 </section>

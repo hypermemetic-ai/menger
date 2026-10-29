@@ -41,7 +41,8 @@ board-rows { display: flex; flex: 1; min-width: 0; }
 .board-status { margin-left: auto; font-size: 12px; }
 .board-scroll { flex: 1; min-height: 0; overflow: auto; position: relative; }
 .board-space { position: relative; }
-.board-row { position: absolute; left: 0; right: 0; height: var(--pitch); display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.board-window { position: absolute; left: 0; right: 0; top: 0; will-change: transform; }
+.board-row { height: var(--pitch); display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 .board-row:hover, .nav-row:hover, .palette-hit:hover { background: var(--hover); }
 .row-id { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 6.5em; }
 .row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }

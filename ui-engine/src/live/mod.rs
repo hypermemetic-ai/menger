@@ -188,11 +188,21 @@ struct Sub {
     snapshot: Option<CallId>,
     /// The snapshot's rows as they arrive.
     buffer: Vec<Value>,
+    /// UI-8: why the last snapshot was refused — an in-band `error` event's
+    /// `message` (status `error`), or the call's refusal (status `refused`);
+    /// published as the collection's `message`.
+    message: Option<String>,
+    /// An in-band `error` heard while the snapshot runs.
+    erred: Option<String>,
 }
 
 impl Sub {
     fn publish(&self) {
-        self.signal.set(Live { rows: self.rows.clone(), status: self.status }.to_value());
+        let mut v = Live { rows: self.rows.clone(), status: self.status }.to_value();
+        if let (Some(m), Some(o)) = (&self.message, v.as_object_mut()) {
+            o.insert("message".into(), Value::String(m.clone()));
+        }
+        self.signal.set(v);
     }
 
     fn key_of(&self, item: &Value) -> Option<String> {
@@ -305,6 +315,8 @@ impl<W: Wire + Clone + 'static, C: Clock + Clone + 'static> LiveCache<W, C> {
                     changes: None,
                     snapshot: None,
                     buffer: Vec::new(),
+                    message: None,
+                    erred: None,
                 }));
                 self.subs.borrow_mut().insert(key.clone(), sub.clone());
                 self.open_changes(&key, &sub);
@@ -358,6 +370,7 @@ impl<W: Wire + Clone + 'static, C: Clock + Clone + 'static> LiveCache<W, C> {
         let (method, params) = {
             let mut s = sub.borrow_mut();
             s.buffer.clear();
+            s.erred = None;
             (s.spec.snapshot.clone(), s.spec.params.clone())
         };
         let (me, k) = (self.me.clone(), key.to_string());
@@ -383,17 +396,35 @@ impl<W: Wire + Clone + 'static, C: Clock + Clone + 'static> LiveCache<W, C> {
         let mut s = sub.borrow_mut();
         match item {
             WireItem::Data(event) => {
+                // UI-8: an in-band refusal (`{ type: "error", message }`, a
+                // filter not taken) makes the answer an error, not a row.
+                if event.get("type").and_then(Value::as_str) == Some("error") {
+                    s.erred = Some(event.get("message").and_then(Value::as_str).unwrap_or("refused").to_string());
+                    return;
+                }
                 let key = s.spec.key.clone();
                 if let Some(row) = row_of(&event, &key) {
                     s.buffer.push(row);
                 }
                 return;
             }
-            WireItem::Done => {
-                s.rows = std::mem::take(&mut s.buffer);
-                s.status = Status::Live;
+            WireItem::Done => match s.erred.take() {
+                Some(m) => {
+                    s.buffer.clear();
+                    s.rows.clear();
+                    s.status = Status::Error;
+                    s.message = Some(m);
+                }
+                None => {
+                    s.rows = std::mem::take(&mut s.buffer);
+                    s.status = Status::Live;
+                    s.message = None;
+                }
+            },
+            WireItem::Refused(m) => {
+                s.status = Status::Refused;
+                s.message = Some(m);
             }
-            WireItem::Refused(_) => s.status = Status::Refused,
             WireItem::Failed(_) => s.status = Status::Resyncing,
         }
         s.snapshot = None;

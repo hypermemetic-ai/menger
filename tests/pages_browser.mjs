@@ -21,7 +21,7 @@
 // `data-*` attributes for the rest):
 //
 //   /app/ (#/, #/f/:filter)  board-layout: sections `[data-layout=board-layout][data-slot=nav|main|palette]`;
-//                       the filter line `input[data-filter-input]`, its refusal `[data-filter-refused]`
+//                       in its own template the filter line, `input[data-filter-input]`, its refusal `[data-filter-refused]`
 //   main: board-rows    `.board-scroll[data-row-height]` (the scrolling element, one fixed pitch in px),
 //                       `.board-row[data-id]` (a row held; its `[data-field=title]`, `[data-field=status]`),
 //                       `.board-count` (the tickets' number)
@@ -469,9 +469,14 @@ async function main() {
       const query = "map-12";
       const found = sy("tickets", "find", "--query", query).filter((e) => e.type === "summary").map((e) => e.summary.id);
       const hits = sy("tickets", "search", "--query", query).filter((e) => e.type === "hit").map((e) => e.summary.id);
-      const foundMap = sy("tickets", "find", "--query", "map").filter((e) => e.type === "summary").map((e) => e.summary.id);
       assert(found.length > 0 && hits.length > 0, `find and search answer ${query} (${found.length}, ${hits.length})`);
-      assert(JSON.stringify(foundMap) !== JSON.stringify(found), "map and map-12 find different tickets (else newest-only proves nothing)");
+      // For newest-only, a query never asked before (a live already held
+      // for `map-12` is answered from the engine's cache, no frame): `zap`
+      // finds both of these, `zap-34` one.
+      for (const title of ["the zap-34 kettle", "the zap-56 kettle"]) sy("tickets", "create", "--epic", groups.at(-1).epic, "--parent", groups.at(-1).root, "--title", title);
+      const zap = sy("tickets", "find", "--query", "zap").filter((e) => e.type === "summary").map((e) => e.summary.id);
+      const zap34 = sy("tickets", "find", "--query", "zap-34").filter((e) => e.type === "summary").map((e) => e.summary.id);
+      assert(zap34.length > 0 && JSON.stringify(zap) !== JSON.stringify(zap34), `zap and zap-34 find different tickets (${zap.length}, ${zap34.length})`);
 
       const { page } = await openPage();
       await boardUp(page);
@@ -499,19 +504,19 @@ async function main() {
       const searched = await attrs(palette(page).locator("[data-search-hit]"), "data-search-hit");
       assert(searched.includes(hits[0]), `search's best hit is shown below (${hits[0]} in ${JSON.stringify(searched)})`);
 
-      // Newest only: `map`, a pause long enough to ask it, then `-12`.
+      // Newest only: `zap`, a pause long enough to ask it, then `-34`.
       await input.fill("");
       await sleep(400);
       asked = (await sentCalls(page)).length;
       await input.focus();
-      await page.keyboard.type("map", { delay: 20 });
+      await page.keyboard.type("zap", { delay: 20 });
       await sleep(150);
-      await page.keyboard.type("-12", { delay: 20 });
+      await page.keyboard.type("-34", { delay: 20 });
       await sleep(800);
       calls = (await sentCalls(page)).slice(asked).filter((c) => c.method === "tickets.find");
-      assert(calls.at(-1)?.params.query === query, `the last find is ${query}: ${JSON.stringify(calls.map((c) => c.params.query))}`);
+      assert(calls.at(-1)?.params.query === "zap-34", `the last find is zap-34: ${JSON.stringify(calls.map((c) => c.params.query))}`);
       const drawn = await attrs(palette(page).locator("[data-palette-hit]"), "data-palette-hit");
-      assert(JSON.stringify(drawn) === JSON.stringify(found.slice(0, drawn.length)) && drawn.length > 0, `only ${query}'s hits are drawn: ${JSON.stringify(drawn)} vs ${JSON.stringify(found)}`);
+      assert(JSON.stringify(drawn) === JSON.stringify(zap34.slice(0, drawn.length)) && drawn.length > 0, `only zap-34's hits are drawn: ${JSON.stringify(drawn)} vs ${JSON.stringify(zap34)}`);
     });
 
     await test("the_filter_line_filters_the_board_and_the_nav", async () => {
@@ -520,7 +525,7 @@ async function main() {
       const { page } = await openPage();
       await boardUp(page);
       const asked = (await sentCalls(page)).length;
-      const input = page.locator("[data-layout=board-layout] input[data-filter-input]");
+      const input = page.locator("board-layout input[data-filter-input]");
       await input.fill(filter, { timeout: 2000 });
       await input.press("Enter");
       await eventually("the route carries the filter", async () => (await page.evaluate(() => location.hash)) === "#/f/status%20Ready", 2_000);
@@ -532,10 +537,10 @@ async function main() {
       assert(calls.some((c) => c.method === "tickets.list" && c.params.filter === filter && c.params.parent == null), `the board's list carries the filter: ${JSON.stringify(calls.filter((c) => c.method === "tickets.list").map((c) => c.params))}`);
       assert(calls.some((c) => c.method === "tickets.nav.counts" && c.params.filter === filter), `nav counts carries the filter: ${JSON.stringify(calls.map((c) => c.method))}`);
 
-      const input2 = page.locator("[data-layout=board-layout] input[data-filter-input]");
+      const input2 = page.locator("board-layout input[data-filter-input]");
       await input2.fill("text foo", { timeout: 2000 });
       await input2.press("Enter");
-      const refused = page.locator("[data-layout=board-layout] [data-filter-refused]");
+      const refused = page.locator("board-layout [data-filter-refused]");
       await eventually("the refused chunk is shown under the field", async () => trimmed(await refused.textContent({ timeout: 1000 })).length > 0, 5_000);
       const said = await refused.textContent();
       assert(/text/.test(said), `the refusal names the chunk: ${JSON.stringify(said)}`);

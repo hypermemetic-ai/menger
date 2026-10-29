@@ -303,3 +303,33 @@ fn a_flat_event_is_its_own_row() {
     assert_eq!(live.rows[0]["last"], 12);
     assert!(live.rows.iter().all(|r| r.get("type").is_none()), "no row keeps its type");
 }
+
+/// UI-8: an in-band `error` (a filter `nav counts` does not take) makes the
+/// collection `error` with the server's `message`, and no rows; the next
+/// answer that is not one clears it. A call refused is `refused`, its words
+/// the `message`.
+#[test]
+fn an_in_band_error_is_the_collections_message() {
+    let (wire, _clock, cache) = setup();
+    let spec = LiveSpec::new("tickets.nav.counts", json!({ "filter": "text foo" }), None, json!({}), "shortcode", &[("count", "upsert:.")]).expect("a spec");
+    let reader = cache.acquire(&spec);
+    wire.answer(wire.last_of("tickets.nav.counts"), [json!({ "type": "error", "message": "`text foo`: text is not taken here" })]);
+    let v = reader.signal().peek();
+    assert_eq!(v["status"], "error");
+    assert_eq!(v["message"], "`text foo`: text is not taken here");
+    assert_eq!(v["rows"], json!([]));
+
+    let ok = LiveSpec::new("tickets.nav.counts", json!({ "filter": "status Ready" }), None, json!({}), "shortcode", &[("count", "upsert:.")]).expect("a spec");
+    let r2 = cache.acquire(&ok);
+    wire.answer(wire.last_of("tickets.nav.counts"), [json!({ "type": "count", "epic": "K", "shortcode": "K", "held": 3 })]);
+    let v = r2.signal().peek();
+    assert_eq!(v["status"], "live");
+    assert!(v.get("message").is_none(), "no message on an answer: {v}");
+    assert_eq!(v["rows"][0]["held"], 3);
+
+    let refused = LiveSpec::new("tickets.nav.counts", json!({ "filter": "" }), None, json!({}), "shortcode", &[]).expect("a spec");
+    let r3 = cache.acquire(&refused);
+    wire.feed(wire.last_of("tickets.nav.counts"), WireItem::Refused("filter: a blank value".into()));
+    let v = r3.signal().peek();
+    assert_eq!((v["status"].as_str(), v["message"].as_str()), (Some("refused"), Some("filter: a blank value")));
+}
