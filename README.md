@@ -221,6 +221,17 @@ builds, signs and pushes one are the framework's, taken from the sibling
 checkout as `../plexus-shell` and `../plexus-login` are. Any other Plexus
 service ships with the framework the same way.
 
+A service that would rather not link it runs beside the framework's own
+binary instead (FRAME-6): `plexus-ui serve --child NAME=ws://…` keeps its
+`ui.db`, embeds the compiler, signs people in and mounts the service as a
+child behind its gate, so a page's one socket reaches it
+(`../plexus-ui/README.md` "A tenant in ten lines"; its example tenant is
+`examples/shop`). menger links the library and builds no binary of that
+name (`tests/apart.rs`). The tool assumes no service: menger's calls to it
+name `--service menger` (`deploy/pipeline`'s push), and a contract asked of
+a service is its `ui.contract` — menger's, one service named, is
+`tickets.schema`'s hash, as the pipeline stamps it.
+
 One process registers these on the `menger` service (`src/builder.rs`), all
 behind plexus-core's gate; menger's own are declared on the frame
 (ACCESS-13), `auth` is plexus-login's:
