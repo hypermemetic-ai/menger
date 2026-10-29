@@ -41,12 +41,12 @@ async fn start_server() -> u16 {
 async fn serve(db: std::path::PathBuf, dir: tempfile::TempDir) -> u16 {
     let port = free_port().await;
     let login = support::Login::new();
-    let hub = support::hub(&db, &login).await;
+    let service = support::service(&db, &login).await;
     let gate = login.gate(port);
     let conv = |arc: Arc<DynamicHub>| menger::calls::rpc_module(arc, Default::default()).map_err(|e| anyhow::anyhow!("{e}"));
     tokio::spawn(async move {
         let _keep = dir;
-        TransportServer::builder(hub, conv)
+        TransportServer::builder(service, conv)
             .with_websocket(port)
             .with_session_validator(gate)
             .anonymous_view()
@@ -187,10 +187,10 @@ async fn a_saved_filter_holding_a_dropped_cell_is_refused_when_used() {
     // filter that reads, then made v1's text by hand.
     {
         let login = support::Login::new();
-        let hub = support::hub(&db, &login).await;
+        let service = support::service(&db, &login).await;
         let admin = plexus_core::plexus::AuthContext::for_principal(&support::admin().parse().unwrap(), "v2", vec![], json!({"name": "admin"}));
         use futures::StreamExt;
-        let items: Vec<_> = hub
+        let items: Vec<_> = service
             .route_with_ctx("tickets.filters.save", json!({"name": "Held", "filter": "blocked"}), Some(&admin), None)
             .await
             .expect("routed")

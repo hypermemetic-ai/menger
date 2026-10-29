@@ -1,6 +1,7 @@
 // UI-8: the harness the pages' browser test (tests/pages_browser.mjs) and
-// the pages' probe (perf/pages-probe.mjs) share — UI-6's engine_browser.mjs
-// setup, lifted out so both run it the same way:
+// the pages' probe (perf/pages-probe.mjs) share — the setup UI-6's engine
+// browser test had (that test lives with the engine now, ../plexus-ui's
+// `npm test`, FRAME-7), lifted out so both run it the same way:
 //
 //   build(profile)                 menger from $CARGO_TARGET_DIR (else ./target), and the plexus-ui tool
 //                                  (scripts/plexus-ui, ../plexus-ui's cli/, FRAME-8)

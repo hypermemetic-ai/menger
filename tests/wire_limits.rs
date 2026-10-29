@@ -24,12 +24,12 @@ async fn free_port() -> u16 {
 async fn start(limits: CallLimits, quotas: ConnectionQuotas) -> u16 {
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let login = support::Login::new();
-    let hub = support::hub(&dir.path().join("t.db"), &login).await;
+    let service = support::service(&dir.path().join("t.db"), &login).await;
     let port = free_port().await;
     let gate = login.gate(port);
     tokio::spawn(async move {
         let _keep = dir;
-        TransportServer::builder(hub, move |hub| menger::calls::rpc_module(hub, limits))
+        TransportServer::builder(service, move |hub| menger::calls::rpc_module(hub, limits))
             .with_websocket(port)
             .with_session_validator(gate)
             .anonymous_view()

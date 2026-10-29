@@ -4,7 +4,7 @@
 //! (`Authorization: Bearer plexus-key.…`), as an agent does. What a test
 //! once did with login off it does as the operator: admin on `*`.
 //!
-//! In process ([`hub`], [`gate`]): the hub as `main` builds it behind the
+//! In process ([`service`], [`gate`]): the service as `main` builds it behind the
 //! gate, and the upgrade's validator over the same session table, for a
 //! test that wires its own `TransportServer`. A spawned binary
 //! ([`LOGIN_ARGS`]): `--auth-provider key --admin <ADMIN's principal>`.
@@ -108,8 +108,8 @@ impl Default for Login {
     }
 }
 
-/// The hub on `db_path` behind `login` (main's: the gate, `--admin`).
-pub async fn hub(db_path: &Path, login: &Login) -> Arc<DynamicHub> {
+/// The service on `db_path` behind `login` (main's: the gate, `--admin`).
+pub async fn service(db_path: &Path, login: &Login) -> Arc<DynamicHub> {
     menger::build_rpc(db_path, login.access.clone()).await.expect("open database")
 }
 
@@ -425,22 +425,28 @@ pub async fn next_item(s: &mut jsonrpsee::core::client::Subscription<serde_json:
 
 // ── UI-7: bundles with sources — the push compiles, compares and lints ────
 
-/// `dist/ui-compiler.wasm`, built once per test binary by
-/// `scripts/ui-compiler-wasm.sh` (UI-5) into this checkout's `dist/` — what
-/// a test server takes as `--ui-compiler`.
+/// `dist/ui-compiler.wasm`, built once per test binary by the framework's
+/// `../plexus-ui/scripts/ui-compiler-wasm.sh OUT` (UI-5, FRAME-7) into this
+/// checkout's `dist/`, cargo building into this checkout's target
+/// (`$CARGO_TARGET_DIR`, else `./target`) — what a test server takes as
+/// `--ui-compiler`.
 pub fn ui_compiler_wasm() -> std::path::PathBuf {
     static BUILT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
     BUILT
         .get_or_init(|| {
             let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+            let script = root.join("../plexus-ui/scripts/ui-compiler-wasm.sh");
+            let path = root.join("dist/ui-compiler.wasm");
+            let target = std::env::var_os("CARGO_TARGET_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| root.join("target"));
             let status = std::process::Command::new("bash")
-                .arg(root.join("scripts/ui-compiler-wasm.sh"))
+                .arg(&script)
+                .arg(&path)
+                .env("CARGO_TARGET_DIR", target)
                 .current_dir(root)
                 .stdout(std::process::Stdio::null())
                 .status()
-                .expect("scripts/ui-compiler-wasm.sh runs");
-            assert!(status.success(), "scripts/ui-compiler-wasm.sh failed: {status}");
-            let path = root.join("dist/ui-compiler.wasm");
+                .expect("../plexus-ui/scripts/ui-compiler-wasm.sh runs");
+            assert!(status.success(), "../plexus-ui/scripts/ui-compiler-wasm.sh failed: {status}");
             assert!(path.is_file(), "{} was written", path.display());
             path
         })

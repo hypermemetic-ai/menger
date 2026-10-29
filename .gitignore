@@ -17,7 +17,7 @@
 /diagrams/node/node_modules
 # Python bytecode from scripts/ helpers.
 __pycache__/
-# UI-5: scripts/ui-compiler-wasm.sh builds the compiler as a wasm module here.
+# UI-5: ../plexus-ui/scripts/ui-compiler-wasm.sh builds the compiler as a wasm module here.
 # V2-7: the UI bundle (plexus-ui build, FRAME-8) and the compiler module the pipeline builds
 # UI-6: and the engine's build (dist/engine)
 /dist

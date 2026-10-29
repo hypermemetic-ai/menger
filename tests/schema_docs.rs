@@ -243,7 +243,7 @@ async fn start_server() -> (u16, BTreeMap<String, Vec<String>>) {
     let db = dir.path().join("tickets.db");
     let port = free_port().await;
     let login = support::Login::new();
-    let service = support::hub(&db, &login).await;
+    let service = support::service(&db, &login).await;
     let roles = service.declared_roles();
     let gate = login.gate(port);
     let conv = |arc: Arc<DynamicHub>| menger::calls::rpc_module(arc, Default::default()).map_err(|e| anyhow::anyhow!("{e}"));

@@ -1,7 +1,7 @@
 //! UI-7: a push compiles — over the socket, a spawned `menger` under the
 //! fixture operator with its own ui file, the test signer and
 //! `--ui-compiler dist/ui-compiler.wasm` (built once per test binary by
-//! `scripts/ui-compiler-wasm.sh`, `support::ui_compiler_wasm`). Each source
+//! `../plexus-ui/scripts/ui-compiler-wasm.sh`, `support::ui_compiler_wasm`). Each source
 //! is recompiled in the server's sealed compiler and compared with the tree
 //! the bundle claims (or the tree filled in); each `uses` is checked against
 //! the running `tickets` service through the seam. What a source compiles

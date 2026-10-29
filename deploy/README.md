@@ -130,9 +130,10 @@ the owner's.
      manifest naming that hash as its `contract`, and the tar,
      `dist/ui.tar` (`../plexus-ui/CONTRACT.md`'s bytes), which must hold
      `index.html`; no socket asked;
-   - `ui-compiler-wasm` — `scripts/ui-compiler-wasm.sh` (rustup's
-     `wasm32-unknown-unknown`): `dist/ui-compiler.wasm`, the compiler
-     module.
+   - `ui-compiler-wasm` — the framework's `../plexus-ui/scripts/ui-compiler-wasm.sh
+     dist/ui-compiler.wasm` (rustup's `wasm32-unknown-unknown`; FRAME-7):
+     the compiler module. A release of v2 always carries it: no script, a
+     failed one, or no module after it fails the build, named.
 
    The release is `~/.local/share/menger-deploy/releases/<UTC time>-<sha>/`:
 

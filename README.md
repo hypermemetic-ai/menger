@@ -213,6 +213,14 @@ a deploy and after any migration.
 
 ## The services
 
+menger is a **tenant** of the stored-UI framework `../plexus-ui` (FRAME-1,
+FRAME-7): its own code is the tickets service (`tickets-api/`), the server
+that registers it (`src/`) and its UI's components (`ui/`); the ui service,
+the compiler, the engine, the routes that serve a bundle and the tool that
+builds, signs and pushes one are the framework's, taken from the sibling
+checkout as `../plexus-shell` and `../plexus-login` are. Any other Plexus
+service ships with the framework the same way.
+
 One process registers these on the `menger` service (`src/builder.rs`), all
 behind plexus-core's gate; menger's own are declared on the frame
 (ACCESS-13), `auth` is plexus-login's:
@@ -707,9 +715,10 @@ the framework's own repository, a sibling checkout), a pure function: a componen
 source → its view tree (`components/<name>.json`, keys sorted) and its
 handlers (`<name>.rhai`), folds `(state, event) → state`; the same source
 gives the same bytes natively and as a wasm module that imports nothing
-(`scripts/ui-compiler-wasm.sh` → `dist/ui-compiler.wasm`; the build fails if
-it imports anything; it builds from `../plexus-ui` into this checkout's
-target). A refusal names the line. The compiler's golden pairs are
+(`../plexus-ui/scripts/ui-compiler-wasm.sh dist/ui-compiler.wasm`, the
+framework's script, run from here with the module written into this
+checkout's `dist/` and cargo building into its target; the build fails if
+it imports anything). A refusal names the line. The compiler's golden pairs are
 `../plexus-ui`'s (`compiler/tests/golden/`); a bundle's build compiles every
 component in-process with it (`plexus-ui build`, FRAME-8) and has no
 fallback: a source it refuses fails the build.
@@ -757,7 +766,7 @@ The bundle is `../plexus-ui/CONTRACT.md`'s. A deploy pushes it
 (`deploy/README.md`, "v2: a release with no browser toolchain").
 
 ```sh
-scripts/ui-compiler-wasm.sh                                      # dist/ui-compiler.wasm
+../plexus-ui/scripts/ui-compiler-wasm.sh dist/ui-compiler.wasm  # dist/ui-compiler.wasm
 scripts/plexus-ui build --prebuild --engine dist/engine          # the engine, once
 scripts/plexus-ui build ui --engine dist/engine -o dist/ui.tar   # dist/ui.tar
 scripts/plexus-ui sign operator.seed dist/ui.tar                 # the signature, base64
@@ -766,8 +775,8 @@ scripts/plexus-ui push --url ws://127.0.0.1:4460 --key operator dist/ui.tar
 
 `tests/wire_ui.rs`, `tests/wire_ui_compile.rs`, `tests/wire_ui_slots.rs`,
 `tests/ui_serve.rs` and `tests/seam.rs` hold the service over the socket;
-`tests/engine_browser.mjs` and `tests/pages_browser.mjs` the engine and the
-pages in Chromium.
+`tests/pages_browser.mjs` the pages in Chromium. The engine's own browser
+test is the framework's (`../plexus-ui`, `npm test`).
 
 ## As a library (DIST-3)
 
