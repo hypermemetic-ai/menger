@@ -8,9 +8,9 @@
 // `--admin`, a second key as `--ui-signer`; `--seed-synthetic N` tickets,
 // default 1000 — `--seed 100000 --release` is acceptance 3's measurement).
 // Everything is built and spawned from $CARGO_TARGET_DIR (else ./target).
-// Two bundles are built with scripts/ui-build.sh — ui/ as it is (v1), and a
+// Two bundles are built with plexus-ui build — ui/ as it is (v1), and a
 // copy whose hello text says v2 (the engine built once) — signed with
-// `ui-sign` and pushed through synapse (`ui push`, manifest.json as built).
+// `plexus-ui sign` and pushed through synapse (`ui push`, manifest.json as built).
 // Chromium from Playwright (perf/node_modules, else the main checkout's),
 // signed in with the shell's session cookie alone, minted for the admin key
 // (scripts/throwaway-login.mjs).
@@ -57,6 +57,8 @@ const opt = (name, dflt) => (args.includes(name) ? args[args.indexOf(name) + 1] 
 const SEED = Number(opt("--seed", "1000"));
 const PROFILE = flag("--release") ? "release" : "debug";
 const TARGET = process.env.CARGO_TARGET_DIR || path.join(REPO, "target");
+// FRAME-8: the plexus-ui tool (../plexus-ui's cli/), built into the same target by scripts/plexus-ui.
+const TOOL = path.join(REPO, "scripts", "plexus-ui");
 const HELLO_V1 = "Hello from v1";
 const HELLO_V2 = "Hello from v2";
 const FIRST_ROW_MS = 300;
@@ -180,8 +182,9 @@ function synapse(server, sessionFile, ...argv) {
 function push(server, sessionFile, signerFile, tar) {
   const stem = tar.replace(/\.tar$/, "");
   fs.writeFileSync(`${stem}.b64`, fs.readFileSync(tar).toString("base64"));
-  fs.writeFileSync(`${stem}.sig`, run(path.join(TARGET, PROFILE, "ui-sign"), [signerFile, tar]).trim());
-  const [answer] = synapse(server, sessionFile, "ui", "push", "--bundle", `@${stem}.b64`, "--manifest", `@${stem}.d/manifest.json`, "--signature", `@${stem}.sig`);
+  fs.writeFileSync(`${stem}.sig`, run(TOOL, ["sign", signerFile, tar]).trim());
+  fs.writeFileSync(`${stem}.manifest.json`, run("tar", ["-xOf", tar, "manifest.json"]));
+  const [answer] = synapse(server, sessionFile, "ui", "push", "--bundle", `@${stem}.b64`, "--manifest", `@${stem}.manifest.json`, "--signature", `@${stem}.sig`);
   return answer;
 }
 
@@ -282,20 +285,19 @@ async function main() {
   // Build: the server, the signer, and the two bundles (the engine once).
   const cargoProfile = PROFILE === "release" ? ["--release"] : [];
   run("cargo", ["build", ...cargoProfile, "-p", "menger", "--bin", "menger"], { cwd: REPO, stdio: ["ignore", "ignore", "inherit"] });
-  // FRAME-5: the signer is the framework's (../plexus-ui), built into this target.
-  run("cargo", ["build", ...cargoProfile, "--manifest-path", path.join(REPO, "../plexus-ui/Cargo.toml"), "--target-dir", TARGET, "-p", "plexus-ui-service", "--bin", "ui-sign"], { cwd: REPO, stdio: ["ignore", "ignore", "inherit"] });
+  const quiet = { cwd: REPO, stdio: ["ignore", "ignore", "inherit"] };
+  const engine = path.join(work, "engine");
+  run(TOOL, ["build", "--prebuild", "--engine", engine], quiet);
   const v1Tar = path.join(work, "v1.tar");
-  run(path.join(REPO, "scripts", "ui-build.sh"), ["-o", v1Tar], { cwd: REPO, stdio: ["ignore", "ignore", "inherit"] });
+  run(TOOL, ["build", path.join(REPO, "ui"), "--engine", engine, "-o", v1Tar], quiet);
   const ui2 = path.join(work, "ui2");
   fs.cpSync(path.join(REPO, "ui"), ui2, { recursive: true });
-  for (const dir of ["src", "golden"]) {
-    for (const n of fs.readdirSync(path.join(ui2, dir))) {
-      const f = path.join(ui2, dir, n);
-      fs.writeFileSync(f, fs.readFileSync(f, "utf8").replaceAll(HELLO_V1, HELLO_V2));
-    }
+  for (const n of fs.readdirSync(path.join(ui2, "src"))) {
+    const f = path.join(ui2, "src", n);
+    fs.writeFileSync(f, fs.readFileSync(f, "utf8").replaceAll(HELLO_V1, HELLO_V2));
   }
   const v2Tar = path.join(work, "v2.tar");
-  run(path.join(REPO, "scripts", "ui-build.sh"), ["--ui", ui2, "--engine", path.join(work, "v1.d"), "-o", v2Tar], { cwd: REPO, stdio: ["ignore", "ignore", "inherit"] });
+  run(TOOL, ["build", ui2, "--engine", engine, "-o", v2Tar], quiet);
   const v1 = run("sha256sum", [v1Tar]).split(" ")[0];
   const v2 = run("sha256sum", [v2Tar]).split(" ")[0];
   console.log(`v1 ${v1}\nv2 ${v2}`);

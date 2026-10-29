@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# FRAME-8: the plexus-ui tool — ../plexus-ui's cli/ (plexus-ui-cli), the
+# sibling checkout menger takes the framework from — built into this
+# checkout's target ($CARGO_TARGET_DIR, else ./target) and run with the
+# arguments given: `scripts/plexus-ui build ui -o dist/ui.tar`, `sign`,
+# `push`, … (`scripts/plexus-ui --help`). What scripts/ui-build.sh and
+# ui-sign did; the engine it builds (`build --prebuild`) comes from the
+# same checkout.
+set -euo pipefail
+root=$(cd "$(dirname "$0")/.." && pwd)
+target=${CARGO_TARGET_DIR:-$root/target}
+cargo build --quiet --manifest-path "$root/../plexus-ui/Cargo.toml" -p plexus-ui-cli --target-dir "$target" >&2
+exec "$target/debug/plexus-ui" "$@"

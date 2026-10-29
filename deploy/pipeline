@@ -11,7 +11,7 @@
 #
 #   deploy/pipeline build [REV] [--branch B] [--no-gate]  gate + release (default REV: B, else main;
 #                                           V2-7: B named in the release; a tree with no frontend/ builds
-#                                           its UI in the plexus-codegen container); --no-gate: the
+#                                           its UI with ../plexus-ui's plexus-ui, FRAME-8); --no-gate: the
 #                                           release alone, the suite to run after the deploy
 #                                           (DEPLOY-52); refused up front on a low disk (CI-2:
 #                                           scripts/disk-check.sh — under 50 GB free or 90% used);
@@ -364,15 +364,6 @@ run_gate() {
   grep -q '^test result: FAILED' "$lf" && gate_red frontend "$lf" "$short"
   say "gate: workspace $GATE_WS; frontend $GATE_FE"
 }
-# V2-7: the codegen container a v2 build runs its browser-side steps in (scripts/ui-build.sh →
-# dist/ui.tar, scripts/ui-compiler-wasm.sh → dist/ui-compiler.wasm): the build checkout mounted
-# at /work, as this user (SELinux: label=disable for the bind mount).
-CODEGEN_IMAGE=${MENGER_CODEGEN_IMAGE:-plexus-codegen}
-codegen() { # LOG CMD… — CMD in the plexus-codegen container, in $BUILD
-  local lg=$1; shift
-  docker run --rm --security-opt label=disable --user "$(id -u):$(id -g)" -v "$BUILD:/work" -w /work \
-    "$CODEGEN_IMAGE" "$@" >"$lg" 2>&1
-}
 # build_legacy / build_v2 — the release's bytes from $BUILD into $stage (id and stage set by
 # them: id=<UTC>-<short>, stage=$RELEASES/$id.tmp); the caller writes RELEASE.
 build_legacy() {
@@ -423,8 +414,7 @@ cargo_release() { # LOG — cargo build --release of WS_PKGS; dies red, naming t
 # in with that key, reads `tickets.schema`'s hash with synapse (--no-hold: no connection holder
 # outlives the build; the sign-in lands in the scratch HOME, so no default agent of this
 # machine's moves), and stops it — always, by on_exit's contract_stop too. The hash goes to the
-# codegen container as `scripts/ui-build.sh --contract HASH`: the container needs no socket to
-# this machine. A binary that dies, never answers within MENGER_CONTRACT_WAIT seconds (60), or
+# bundle's build as `plexus-ui build --contract HASH`: the build asks no socket of its own. A binary that dies, never answers within MENGER_CONTRACT_WAIT seconds (60), or
 # a read with no hash, fails the build, named: no bundle saying `unknown` is released.
 CONTRACT_WAIT=${MENGER_CONTRACT_WAIT:-60}
 CONTRACT="" CONTRACT_PID="" CONTRACT_SCRATCH=""
@@ -481,37 +471,52 @@ contract_read() { # LOG BINARY → CONTRACT (the tickets service's hash), or die
   [[ $h =~ ^[A-Za-z0-9._:-]+$ ]] || { red_run; die "contract: tickets.schema's hash is not one: '$h'"; }
   CONTRACT=$h
 }
+# FRAME-8: the plexus-ui tool a v2 build makes its bundle with — ../plexus-ui's cli/
+# (plexus-ui-cli), beside the build checkout as the framework's crates are, built with cargo into
+# the build's target; MENGER_PLEXUS_UI names one built already. The release carries it
+# (bin/plexus-ui): a deploy pushes the release's bundle with the release's own tool.
+UI_TOOL=""
+ui_tool_build() { # LOG → UI_TOOL
+  local lg=$1
+  if [[ -n ${MENGER_PLEXUS_UI:-} ]]; then
+    [[ -x $MENGER_PLEXUS_UI ]] || die "plexus-ui: MENGER_PLEXUS_UI=$MENGER_PLEXUS_UI is no executable"
+    UI_TOOL=$MENGER_PLEXUS_UI; say "plexus-ui: $UI_TOOL (MENGER_PLEXUS_UI)"; return 0
+  fi
+  [[ -f $BUILD/../plexus-ui/Cargo.toml ]] || die "plexus-ui: no ../plexus-ui beside $BUILD (FRAME-3: the framework's checkout)"
+  (cd "$BUILD" && cargo build --release --manifest-path "$BUILD/../plexus-ui/Cargo.toml" -p plexus-ui-cli >>"$lg" 2>&1) || { red_run; die "plexus-ui: the tool's build failed — $lg"; }
+  UI_TOOL=$CARGO_TARGET_DIR/release/plexus-ui
+  [[ -x $UI_TOOL ]] || die "plexus-ui: no $UI_TOOL after its build — $lg"
+}
 V2_STEPS=""
-build_v2() { # V2-7: cargo's steps on this machine (the release, the prebuild, the compiler module), the bundle's tar in the container
+build_v2() { # V2-7, FRAME-8: every step on this machine — the release, the tool, the engine, the contract, the bundle, the compiler module
   local lr f
   V2_STEPS="cargo build"
   step "release build"
   lr=$(log_path build-release); say "log: $lr"
   cargo_release "$lr"
-  # UI-6: what the bundle needs cargo for — the engine (wasm32) and the
-  # components compiled by UI-5's ui-compiler — on this machine, into
-  # dist/ui.d; the container then writes the manifest and the tar.
-  if [[ -d $BUILD/ui/src ]] && grep -q -- '--prebuild' "$BUILD/scripts/ui-build.sh" 2>/dev/null; then
-    step "ui-prebuild (scripts/ui-build.sh --prebuild: the engine and the components)"
-    lr=$(log_path build-ui-prebuild); say "log: $lr"
-    (cd "$BUILD" && scripts/ui-build.sh --prebuild) >"$lr" 2>&1 || { red_run; die "ui-prebuild failed — $lr"; }
-    V2_STEPS+=", ui-prebuild"
-  fi
+  [[ -d $BUILD/ui/src ]] || die "ui-build: no ui/src at $short — a v2 tree's UI is its components' sources"
+  step "plexus-ui (the tool, from ../plexus-ui)"
+  lr=$(log_path build-plexus-ui); say "log: $lr"
+  ui_tool_build "$lr"
+  V2_STEPS+=", plexus-ui"
+  # the engine is cargo's (wasm32, wasm-bindgen): built here, into dist/engine
+  step "ui-prebuild (plexus-ui build --prebuild: the engine)"
+  lr=$(log_path build-ui-prebuild); say "log: $lr"
+  (cd "$BUILD" && "$UI_TOOL" build --prebuild --engine "$BUILD/dist/engine") >"$lr" 2>&1 || { red_run; die "ui-prebuild failed — $lr"; }
+  V2_STEPS+=", ui-prebuild"
   step "contract (tickets.schema's hash of the menger just built)"
   lr=$(log_path build-contract); say "log: $lr"
-  [[ -x $BUILD/scripts/ui-build.sh ]] || die "ui-build: no scripts/ui-build.sh at $short"
-  grep -q -- '--contract HASH' "$BUILD/scripts/ui-build.sh" || die "ui-build: scripts/ui-build.sh at $short takes no --contract HASH (UI-12) — its bundle would say unknown"
   contract_read "$lr" "$CARGO_TARGET_DIR/release/menger"
   say "contract: $CONTRACT (the tickets service's hash, tickets.schema)"
-  step "ui-build (scripts/ui-build.sh --contract $CONTRACT in $CODEGEN_IMAGE)"
+  # the bundle: the components compiled in-process, the manifest, the tar — no cargo, no container
+  step "ui-build (plexus-ui build --contract $CONTRACT)"
   lr=$(log_path build-ui); say "log: $lr"
-  codegen "$lr" scripts/ui-build.sh --contract "$CONTRACT" || { red_run; die "ui-build failed — $lr"; }
+  (cd "$BUILD" && "$UI_TOOL" build "$BUILD/ui" --engine "$BUILD/dist/engine" --contract "$CONTRACT" --commit "menger@$short" -o "$BUILD/dist/ui.tar") >"$lr" 2>&1 \
+    || { red_run; die "ui-build failed — $lr"; }
   tar -tf "$BUILD/dist/ui.tar" 2>/dev/null | grep -qx 'index.html' || die "ui-build: $BUILD/dist/ui.tar is no tar holding index.html"
   V2_STEPS+=", ui-build"
   if [[ -f $BUILD/scripts/ui-compiler-wasm.sh ]]; then
-    # cargo's (wasm32-unknown-unknown), so on this machine into the build's target, as UI-6's
-    # prebuild is: the plexus-codegen image has no Rust toolchain (V2-7's provides row; that
-    # image does not build today, NAMING-4)
+    # cargo's (wasm32-unknown-unknown), on this machine into the build's target
     step "ui-compiler-wasm (scripts/ui-compiler-wasm.sh, on this machine)"
     lr=$(log_path build-ui-compiler); say "log: $lr"
     (cd "$BUILD" && scripts/ui-compiler-wasm.sh) >"$lr" 2>&1 || { red_run; die "ui-compiler-wasm failed — $lr"; }
@@ -524,6 +529,7 @@ build_v2() { # V2-7: cargo's steps on this machine (the release, the prebuild, t
   stage=$RELEASES/$id.tmp
   mkdir -p "$stage/bin" "$stage/dist"
   for f in $WS_PKGS; do cp "$CARGO_TARGET_DIR/release/$f" "$stage/bin/"; done
+  cp "$UI_TOOL" "$stage/bin/plexus-ui"
   cp "$REPO/deploy/launch/run-menger" "$stage/bin/"
   chmod 0755 "$stage/bin/"*
   cp "$BUILD/dist/ui.tar" "$stage/dist/"
@@ -552,12 +558,12 @@ cmd_build() {
   short=${sha:0:7}
   step "build $short — $(git -C "$REPO" log -1 --format=%s "$sha")"
   checkout "$BUILD" "$sha"
-  # V2-7: a tree with frontend/ builds as before (trunk, npm); one without it (v2) has no
-  # browser toolchain on this machine — its bundle is built in the plexus-codegen container.
+  # V2-7: a tree with frontend/ builds as before (trunk, npm); one without it (v2) builds its
+  # bundle with the plexus-ui tool on this machine (FRAME-8: no container, no node).
   # A frontend is one the commit tracks: the checkout keeps frontend/target/ untracked across
   # commits (git clean spares it), so the directory alone says nothing (V2-7's first real run).
   local legacy=0; [[ -n $(git -C "$BUILD" ls-files -- frontend | head -n 1) ]] && legacy=1
-  if [[ $legacy == 1 ]]; then need trunk; need npm; need node; else need docker; fi
+  if [[ $legacy == 1 ]]; then need trunk; need npm; need node; fi
   # The build compiles in its own targets, never a shared CARGO_TARGET_DIR: with
   # one set (this machine sets ~/.cache/cargo-target/menger for every
   # worktree), cargo wrote the release elsewhere and the copy below took a
@@ -707,11 +713,12 @@ cmd_image() {
 # hyperforge's ci): each a subcommand here, so the same step runs from a shell.
 #
 # ── the UI's bundle: pushed after a deploy's health, then seen (V2-7) ───────
-# A v2 release carries dist/ui.tar (scripts/ui-build.sh). After the deploy is
+# A v2 release carries dist/ui.tar (plexus-ui build). After the deploy is
 # healthy the pipeline pushes it — `ui.push { bundle, manifest, signature,
-# commit }` through deploy/menger-call.mjs as the pipeline agent, its params on
-# stdin, signed by deploy/ui-sign.mjs over the bundle's sha256 with the pipeline
-# key's seed, read from its file (never argv) — and the smoke then asks
+# commit }` by `plexus-ui push` (FRAME-8; the release's own bin/plexus-ui, else
+# MENGER_PLEXUS_UI, else plexus-ui on PATH) as the pipeline agent, signed in and
+# signing over the bundle's sha256 with the pipeline key's seed, read from its
+# file (never argv) — and the smoke then asks
 # `ui.versions` for that version live and reads /app/ signed in (a session from
 # `auth.login`, its cookie in a 0600 header file, never argv), which must serve
 # the bundle's own index.html (its {{STAMPS}} filled). A push refused fails the
@@ -724,16 +731,19 @@ kcall() { # URL METHOD [ARGS…] — one call through menger-call as the pipelin
   local u=$1 m=$2; shift 2
   env -u MENGER_DEPLOY_KEY MENGER_DEPLOY_KEY_FILE="$DEPLOY_KEY_FILE" timeout 60 node "$CALL_JS" --url "$u" --agent pipeline --timeout 50 "$m" "$@"
 }
+ui_tool() { # REL → the plexus-ui that pushes REL's bundle: its own, else MENGER_PLEXUS_UI, else PATH's
+  local t=$RELEASES/$1/bin/plexus-ui
+  if [[ -x $t ]]; then echo "$t"; elif [[ -n ${MENGER_PLEXUS_UI:-} ]]; then echo "$MENGER_PLEXUS_UI"; else command -v plexus-ui || true; fi
+}
 ui_push() { # WS REL → 0 and UI_PUSHED (the version) and UI_MATCHES (contract_matches: true, false, null), or 1 and UI_WHY
-  local ws=$1 r=$RELEASES/$2 man commit out
+  local ws=$1 r=$RELEASES/$2 commit out tool
   UI_PUSHED="" UI_WHY="" UI_MATCHES=""
   [[ -n $DEPLOY_KEY_FILE ]] || { UI_WHY="no pipeline key (MENGER_DEPLOY_KEY_FILE) to sign the push"; return 1; }
-  man=$(mktemp "${TMPDIR:-/tmp}/menger-manifest.XXXXXX")
-  if ! tar -xOf "$r/dist/ui.tar" manifest.json >"$man" 2>/dev/null; then rm -f "$man"; UI_WHY="the bundle holds no manifest.json"; return 1; fi
+  tool=$(ui_tool "$2"); [[ -n $tool ]] || { UI_WHY="no plexus-ui to push with (the release carries none; MENGER_PLEXUS_UI, or PATH)"; return 1; }
+  tar -tf "$r/dist/ui.tar" 2>/dev/null | grep -qx manifest.json || { UI_WHY="the bundle holds no manifest.json"; return 1; }
   commit=$(sed -n 's/^commit: *//p' "$r/RELEASE" | head -n 1)
-  out=$(env -u MENGER_DEPLOY_KEY MENGER_DEPLOY_KEY_FILE="$DEPLOY_KEY_FILE" node "$REPO/deploy/ui-sign.mjs" "$r/dist/ui.tar" "$man" "$commit" \
-          | kcall "$ws" ui.push 2>&1) || true
-  rm -f "$man"
+  out=$(env -u MENGER_DEPLOY_KEY timeout 70 "$tool" push --url "$ws" --service menger --key-file "$DEPLOY_KEY_FILE" --as pipeline \
+          --timeout 50 --json ${commit:+--commit "$commit"} "$r/dist/ui.tar" 2>&1) || true
   UI_PUSHED=$(jq -rR 'fromjson? | select(.type == "pushed") | .version' <<<"$out" 2>/dev/null | head -n 1)
   # UI-11/UI-12: whether the running tickets service is the one the bundle was built against
   UI_MATCHES=$(jq -rR 'fromjson? | select(.type == "pushed") | .contract_matches | tostring' <<<"$out" 2>/dev/null | head -n 1)

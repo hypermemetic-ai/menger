@@ -8,7 +8,10 @@
 //! - FRAME-3 (wave 1): the compiler and the engine, out whole to
 //!   `../plexus-ui` as `plexus-ui-compiler` and `plexus-ui-engine`. menger
 //!   depends on the compiler (its tests compile natively) and on the engine
-//!   only through `scripts/ui-build.sh`, which builds it into the bundle.
+//!   only through the bundle.
+//! - FRAME-8 (wave 2): the bundle is the framework's tool's — `plexus-ui`
+//!   (`plexus-ui-cli`), built from the sibling by `scripts/plexus-ui` and by
+//!   `deploy/pipeline` — and menger's own build and sign scripts went.
 //! - FRAME-4 (wave 1): `plexus-shell` and `plexus-login`, repositories of
 //!   their own beside plexus-core (`../plexus-shell`, `../plexus-login`);
 //!   `tether/` apart — its `plexus-login` moves with substrate's (FRAME-9).
@@ -46,13 +49,19 @@ const GONE: &[&str] = &[
     // FRAME-4: repositories of their own.
     "plexus-shell",
     "plexus-login",
-    // FRAME-5: the ui service, now ../plexus-ui's.
+    // FRAME-5: the ui service (its ui-sign with it), now ../plexus-ui's.
     "ui-service",
+    // FRAME-8: the bundle's build and the pipeline's signer, now ../plexus-ui's
+    // `plexus-ui` (build, sign, push); ui/golden/ was the build's fallback when
+    // no compiler could be had, and the tool compiles in-process.
+    "scripts/ui-build.sh",
+    "deploy/ui-sign.mjs",
+    "ui/golden",
 ];
 
 /// The crates menger's cargo graph takes from a sibling checkout: the
-/// package, and the sibling it must resolve from (the engine is not one:
-/// menger builds it by script, below).
+/// package, and the sibling it must resolve from (the engine and the tool
+/// are not: the tool is built from the sibling, below, and builds the engine).
 const SIBLINGS: &[(&str, &str)] = &[
     ("plexus-ui-compiler", "plexus-ui"),
     ("plexus-ui-service", "plexus-ui"),
@@ -242,13 +251,13 @@ fn breaks(pkgs: &[(String, PathBuf)], parent: &Path, siblings: &[(&str, &str)], 
     out
 }
 
-/// The line of `script` that builds the engine from the sibling: cargo with
-/// `--manifest-path` into `../plexus-ui/` and `-p plexus-ui-engine`.
-fn engine_build_line(script: &str) -> Option<(usize, &str)> {
+/// The line of `script` that builds the tool from the sibling: cargo with
+/// `--manifest-path` into `../plexus-ui/` and `-p plexus-ui-cli`.
+fn tool_build_line(script: &str) -> Option<(usize, &str)> {
     script
         .lines()
         .enumerate()
-        .find(|(_, l)| l.contains("--manifest-path") && l.contains("../plexus-ui/") && l.contains("-p plexus-ui-engine"))
+        .find(|(_, l)| l.contains("--manifest-path") && l.contains("../plexus-ui/") && l.contains("-p plexus-ui-cli"))
         .map(|(n, l)| (n + 1, l))
 }
 
@@ -262,14 +271,16 @@ fn the_framework_is_a_sibling() {
     let broken = breaks(&packages(&metadata()), &parent, SIBLINGS, &old_packages());
     assert!(broken.is_empty(), "FRAME-1: the framework, the shell and the login are not taken from their sibling checkouts:\n  {}", broken.join("\n  "));
 
-    let script = std::fs::read_to_string(root.join("scripts/ui-build.sh")).expect("scripts/ui-build.sh");
-    let cargo_lines: Vec<String> =
-        script.lines().enumerate().filter(|(_, l)| l.contains("cargo build")).map(|(n, l)| format!("scripts/ui-build.sh:{}: {}", n + 1, l.trim())).collect();
-    assert!(
-        engine_build_line(&script).is_some(),
-        "FRAME-1: scripts/ui-build.sh does not build the engine from ../plexus-ui (`--manifest-path …/../plexus-ui/… -p plexus-ui-engine`); its cargo lines:\n  {}",
-        cargo_lines.join("\n  ")
-    );
+    for file in ["scripts/plexus-ui", "deploy/pipeline"] {
+        let script = std::fs::read_to_string(root.join(file)).unwrap_or_else(|e| panic!("{file}: {e}"));
+        let cargo_lines: Vec<String> =
+            script.lines().enumerate().filter(|(_, l)| l.contains("cargo build")).map(|(n, l)| format!("{file}:{}: {}", n + 1, l.trim())).collect();
+        assert!(
+            tool_build_line(&script).is_some(),
+            "FRAME-8: {file} does not build the tool from ../plexus-ui (`--manifest-path …/../plexus-ui/… -p plexus-ui-cli`); its cargo lines:\n  {}",
+            cargo_lines.join("\n  ")
+        );
+    }
 }
 
 /// The lines of `text` that build `ui-sign` (cargo, `--bin ui-sign`): the
@@ -299,7 +310,9 @@ fn ui_sign_is_built_from_the_sibling() {
             builders.push(at);
         }
     }
-    assert!(builders.len() >= 2, "the walk lost the builders of ui-sign (scripts/ui-throwaway.mjs, tests/engine_browser.mjs): {builders:?}");
+    // FRAME-8: nothing in menger builds it today (the tool's `sign` signs);
+    // a line that comes to build it builds it from the sibling.
+    let _ = &builders;
     assert!(wrong.is_empty(), "FRAME-5: ui-sign is plexus-ui-service's; these build it otherwise than with --manifest-path into ../plexus-ui:\n  {}", wrong.join("\n  "));
 }
 
@@ -380,7 +393,7 @@ fn moved_paths(line: &str) -> Vec<String> {
 fn nothing_names_the_old_crates() {
     let root = root();
     let files = whole_tree(&root);
-    for want in ["scripts/ui-build.sh", "deploy/pipeline", "tests/support/mod.rs", "Cargo.toml", "Cargo.lock", "README.md", "AGENTS.md", "src/builder.rs"] {
+    for want in ["scripts/plexus-ui", "deploy/pipeline", "tests/support/mod.rs", "Cargo.toml", "Cargo.lock", "README.md", "AGENTS.md", "src/builder.rs"] {
         assert!(files.contains(&root.join(want)), "the walk lost {want}");
     }
     let old = old_names();
@@ -452,11 +465,11 @@ fn the_checks_read_what_they_are_given() {
     // And the real graph: menger itself is where it is.
     assert_eq!(packages(&metadata()).iter().filter(|(n, _)| n == "menger").map(|(_, d)| d.clone()).collect::<Vec<_>>(), [root]);
 
-    // The engine's build line.
-    let script = "x\n  (cd \"$root\" && cargo build --manifest-path \"$root/../plexus-ui/Cargo.toml\" -p plexus-ui-engine --lib)\n";
-    assert_eq!(engine_build_line(script).map(|(n, _)| n), Some(2));
-    assert!(engine_build_line("cargo build -p plexus-ui-engine --lib\n").is_none());
-    assert!(engine_build_line("cargo build --manifest-path ../plexus-ui/Cargo.toml -p plexus-ui-compiler\n").is_none());
+    // The tool's build line.
+    let script = "x\n  cargo build --quiet --manifest-path \"$root/../plexus-ui/Cargo.toml\" -p plexus-ui-cli --target-dir \"$target\"\n";
+    assert_eq!(tool_build_line(script).map(|(n, _)| n), Some(2));
+    assert!(tool_build_line("cargo build -p plexus-ui-cli\n").is_none());
+    assert!(tool_build_line("cargo build --manifest-path ../plexus-ui/Cargo.toml -p plexus-ui-compiler\n").is_none());
 
     // The builders of ui-sign.
     let mjs = "  run(\"cargo\", [\"build\", \"--manifest-path\", path.join(REPO, \"../plexus-ui/Cargo.toml\"), \"-p\", \"plexus-ui-service\", \"--bin\", \"ui-sign\"]);\nx\n  run(\"cargo\", [\"build\", \"-p\", \"OLD\", \"--bin\", \"ui-sign\"]);\nnode deploy/ui-sign.mjs\n";

@@ -513,11 +513,11 @@ fn the_pipeline_doc_names_what_exists() {
     let root = root();
     let text = std::fs::read_to_string(root.join(DEPLOY_README)).unwrap_or_else(|e| panic!("{DEPLOY_README}: {e}"));
     let paths = doc_paths(&text);
-    let unnamed: Vec<&str> = ["deploy/pipeline", "deploy/record", "deploy/runner.mjs", "deploy/ui-sign.mjs"]
+    let unnamed: Vec<&str> = ["deploy/pipeline", "deploy/record", "deploy/runner.mjs"]
         .into_iter()
         .filter(|want| !paths.iter().any(|(_, p)| p == want))
         .collect();
-    assert!(unnamed.is_empty(), "V2-10: {DEPLOY_README} never names {unnamed:?}: the pipeline, its record, its runner and the bundle's signer");
+    assert!(unnamed.is_empty(), "V2-10: {DEPLOY_README} never names {unnamed:?}: the pipeline, its record and its runner (FRAME-8: the bundle's signer is ../plexus-ui's plexus-ui)");
     let missing: Vec<String> =
         paths.iter().filter(|(_, p)| !root.join(p).exists()).map(|(n, p)| format!("{DEPLOY_README}:{n}: {p}")).collect();
     assert!(missing.is_empty(), "V2-10: {} path(s) {DEPLOY_README} names are not in the tree:\n  {}", missing.len(), missing.join("\n  "));

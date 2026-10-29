@@ -13,7 +13,7 @@
 # FRAME-3: the component compiler and the engine (UI-5, UI-6) are
 # `../plexus-ui`'s (`plexus-ui-compiler`, `plexus-ui-engine`), by sibling
 # path: the compiler a dev-dependency below, the engine built into the
-# bundle by scripts/ui-build.sh (`--manifest-path`).
+# bundle by ../plexus-ui's plexus-ui tool (FRAME-8; scripts/plexus-ui).
 members = [".", "tickets-api"]
 # TETHER-7: `tether/` is a workspace of its own — substrate's sqlx and this
 # workspace's rusqlite link two libsqlite3-sys, which one resolve refuses.
