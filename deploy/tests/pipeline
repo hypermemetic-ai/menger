@@ -27,7 +27,7 @@ has()  { [[ $2 == *"$3"* ]] && ok || bad "$1: wanted '$3' in: $2"; }
 # ── the throwaway root ──────────────────────────────────────────────────────
 export HOME=$SCRATCH/home
 unset MENGER_DEPLOY_HOME MENGER_DEPLOY_OUTBOX MENGER_DEPLOY_TRACKER_HOST MENGER_DEPLOY_TRACKER_TOKEN DEPLOY_SMOKE_FAIL MENGER_DEPLOY_KEY MENGER_DEPLOY_KEY_FILE MENGER_CALL \
-  MENGER_APP_TEST_URL MENGER_APP_URL MENGER_SUITE_CHECKOUT MENGER_APP_YML IMAGE_STORE MENGER_BUILD_CHECKOUT MENGER_BUILD_TARGET MENGER_CODEGEN_IMAGE MENGER_DEPLOY_LOGS MENGER_CONTRACT_WAIT
+  MENGER_APP_TEST_URL MENGER_APP_URL MENGER_SUITE_CHECKOUT MENGER_APP_YML IMAGE_STORE MENGER_BUILD_CHECKOUT MENGER_BUILD_TARGET MENGER_PLEXUS_UI MENGER_DEPLOY_LOGS MENGER_CONTRACT_WAIT
 export MENGER_DEPLOY_TRACKER_PORT=4769
 # DEPLOY-28: the tracker is app.menger.sh by default; `local` is :4769, the stand-ins
 # below (DEPLOY-28's own checks unset it, and dial app.menger.sh's stand-in)
@@ -822,8 +822,8 @@ same "suite: no such release" "$code" 1
 
 # ════ V2-7: the pipeline for v2 — its testing surface ═══════════════════════
 # Each block below is one test of V2-7's testing surface, its name on every
-# check. Nothing here is real either: cargo, docker, curl and the codegen
-# container are stand-ins, the releases sit in scratch homes, and the ui
+# check. Nothing here is real either: cargo, docker, curl and plexus-ui
+# (FRAME-8) are stand-ins, the releases sit in scratch homes, and the ui
 # service is fake-ui.mjs under a real node — its ui.push checks the signature
 # for real (Ed25519 over the bundle's sha256, by the signer the image was
 # started with: STUB_UI_SIGNER), reads the manifest as JSON (UI-4's), takes
@@ -833,8 +833,8 @@ same "suite: no such release" "$code" 1
 # without that session's cookie, and with it the live version's page,
 # stamped as the shell stamps it (the placeholder while none is live, or with
 # STUB_UI_SERVE=placeholder). $STUB_ORDER keeps what happened when: health,
-# push, smoke. The bundle carried is the one scripts/ui-build.sh makes (a stub
-# until UI-6). A real image on 127.0.0.1:4470 is acceptance 2's run, by hand:
+# push, smoke. The bundles carried are made here by hand: a page and its
+# manifest (the tool's real bytes are its own tests', ../plexus-ui). A real image on 127.0.0.1:4470 is acceptance 2's run, by hand:
 # this harness opens no port.
 REALNODE=$(PATH=${PATH#"$SCRATCH/bin:"} command -v node) || { echo "V2-7's checks need node on PATH" >&2; exit 1; }
 export REALNODE
@@ -848,15 +848,13 @@ K2=$V2/keys/pipeline.key KBAD=$V2/keys/other.key K3=$V2/keys/third.key; newkey "
 PUB2=$(pubof "$K2") PUBBAD=$(pubof "$KBAD") PUB3=$(pubof "$K3")
 [[ $PUB2 =~ ^[0-9a-f]{64}$ && $PUBBAD =~ ^[0-9a-f]{64}$ && $PUB3 =~ ^[0-9a-f]{64}$ ]] || { echo "V2-7: could not make the test keys" >&2; exit 1; }
 
-# the bundle the pipeline carries: scripts/ui-build.sh, run in a scratch copy of what it reads
-UB=$V2/uib; mkdir -p "$UB/scripts" "$UB/src"
-cp "$REPO/scripts/ui-build.sh" "$UB/scripts/" && cp "$REPO/src/shell.rs" "$UB/src/"
-"$UB/scripts/ui-build.sh" 2>/dev/null
-same "ui-build (stub): a tar holding index.html and manifest.json, nothing else" "$(tar -tf "$UB/dist/ui.tar" 2>/dev/null | paste -sd' ')" "index.html manifest.json"
-same "ui-build (stub): the manifest is UI-4's, empty" "$(tar -xOf "$UB/dist/ui.tar" manifest.json 2>/dev/null | jq -c '[.abi, .contract, .routes, .components, .slots]' 2>/dev/null)" '["engine/1","unknown",[],[],{}]'
-UNKNOWN_SHA=$(sha256sum "$UB/dist/ui.tar" | cut -d' ' -f1)
-"$UB/scripts/ui-build.sh" 2>/dev/null
-same "ui-build (stub): the same tree, the same bytes" "$(sha256sum "$UB/dist/ui.tar" | cut -d' ' -f1)" "$UNKNOWN_SHA"
+# the bundle the pipeline carries, by hand: a page with the shell's stamps and an empty manifest
+# that says `unknown` (built against no service)
+UB=$V2/uib; mkdir -p "$UB/stage" "$UB/dist"
+printf '<!doctype html><title>{{TITLE}}</title><p>the bundle, on {{WS_PORT}}</p>\n' >"$UB/stage/index.html"
+printf '{"abi":"engine/1","contract":"unknown","routes":{},"components":{},"slots":{}}\n' >"$UB/stage/manifest.json"
+tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --format=gnu -C "$UB/stage" -cf "$UB/dist/ui.tar" index.html manifest.json
+same "V2-7 (setup): the bundle says unknown" "$(tar -xOf "$UB/dist/ui.tar" manifest.json 2>/dev/null | jq -r .contract 2>/dev/null)" "unknown"
 # UI-12: the bundle a release carries names the contract it was built against —
 # the tickets service's hash, read from the release's own binary (the stand-in
 # menger below answers CONTRACT_HASH). The bundle the deploys carry is UB's
@@ -947,6 +945,52 @@ if (method === "ui.push") {
   out({ type: "session", token, principal });
 } else { out({ type: "error", message: `the stand-in ui service has no ${method}` }); process.exit(3); }
 JS
+# FRAME-8: plexus-ui as the pipeline meets it — a stand-in for ../plexus-ui's tool, on PATH (and
+# what the stand-in cargo builds as plexus-ui-cli). Its argv kept in $STUB_ARGV (and, where it
+# ran, in $STUB_UI_TOOL_LOG); `build --prebuild --engine D` writes D's engine; `build UI --engine D
+# --contract H --commit C -o OUT` a GNU tar of UI/index.html and a manifest naming H and C;
+# `push … TAR` makes ui.push's params here — the signature real, Ed25519 over the bundle's sha256
+# by --key-file's seed — and sends them to the stand-in ui service on stdin, as the agent --as
+# names, printing its answer (--json's lines) and failing unless it pushed.
+export STUB_PLEXUS_UI=$V2/plexus-ui
+cat >"$STUB_PLEXUS_UI" <<'TOOL'
+#!/usr/bin/env bash
+echo "plexus-ui $*" >>"${STUB_ARGV:-/dev/null}"
+[[ -n ${STUB_UI_TOOL_LOG:-} ]] && echo "plexus-ui $*" >>"$STUB_UI_TOOL_LOG"
+cmd=${1:-}; shift
+case $cmd in
+  build)
+    ui="" engine="" contract=unknown commit=unknown out="" prebuild=0
+    while [[ $# -gt 0 ]]; do case $1 in
+      --prebuild) prebuild=1; shift ;; --engine) engine=$2; shift 2 ;; --contract) contract=$2; shift 2 ;;
+      --commit) commit=$2; shift 2 ;; -o|--out) out=$2; shift 2 ;; --*) shift 2 ;; *) ui=$1; shift ;; esac; done
+    if [[ $prebuild == 1 ]]; then mkdir -p "$engine" && echo 'export default 1;' >"$engine/engine.js" && printf '\0asm\1\0\0\0' >"$engine/engine.wasm"; exit; fi
+    [[ -f $engine/engine.js && -f $engine/engine.wasm ]] || { echo "plexus-ui (stand-in): no engine in $engine" >&2; exit 1; }
+    [[ -d $ui/src ]] || { echo "plexus-ui (stand-in): $ui: no src/" >&2; exit 1; }
+    st=$(mktemp -d); cp "$ui/index.html" "$st/index.html"
+    jq -n --arg c "$contract" --arg m "$commit" '{abi: "engine/1", contract: $c, commit: $m, routes: {}, slots: {}, components: {}}' >"$st/manifest.json"
+    mkdir -p "$(dirname "$out")"
+    tar --mtime=@0 --owner=0 --group=0 --numeric-owner --format=gnu -C "$st" -cf "$out" index.html manifest.json; rm -rf "$st"; echo "$out" ;;
+  push)
+    url="" as="" keyfile="" commit="" tar=""
+    while [[ $# -gt 0 ]]; do case $1 in
+      --url) url=$2; shift 2 ;; --as) as=$2; shift 2 ;; --key-file) keyfile=$2; shift 2 ;; --commit) commit=$2; shift 2 ;;
+      --json) shift ;; --*) shift 2 ;; *) tar=$1; shift ;; esac; done
+    out=$("$REALNODE" -e '
+      const fs = require("fs"), c = require("crypto"), { execFileSync } = require("child_process");
+      const [tar, kf, commit] = process.argv.slice(1);
+      const bytes = fs.readFileSync(tar), seed = Buffer.from(fs.readFileSync(kf, "utf8").trim(), "base64");
+      const k = c.createPrivateKey({ key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), seed]), format: "der", type: "pkcs8" });
+      const p = { bundle: bytes.toString("base64"), manifest: execFileSync("tar", ["-xOf", tar, "manifest.json"]).toString().trimEnd(),
+                  signature: c.sign(null, c.createHash("sha256").update(bytes).digest(), k).toString("base64") };
+      if (commit) p.commit = commit;
+      process.stdout.write(JSON.stringify(p) + "\n");' "$tar" "$keyfile" "$commit" \
+      | MENGER_DEPLOY_KEY_FILE=$keyfile "$REALNODE" "$FAKE_UI" --url "$url" --agent "$as" ui.push)
+    echo "$out"; grep -q '"type":"pushed"' <<<"$out" ;;
+  *) echo "plexus-ui (stand-in): no $cmd" >&2; exit 2 ;;
+esac
+TOOL
+chmod +x "$STUB_PLEXUS_UI"; cp "$STUB_PLEXUS_UI" "$SCRATCH/bin/plexus-ui"
 # node: ui.* and auth.login to the stand-in ui service; a key's principal the real menger-call's;
 # health noted in $STUB_ORDER, then the stand-in tracker above; any other script (the signer) the real node
 cp "$SCRATCH/bin/node" "$SCRATCH/bin/node-base"
@@ -1000,14 +1044,17 @@ in_order() { local h p s
 # ── V2-7 build_from_a_branch_has_no_frontend_steps ─────────────────────────
 # A fixture repository with v2's shape (no frontend/): main as the tree is,
 # v2 with scripts/ui-compiler-wasm.sh (UI-5's module, a stand-in here), and
-# v2-early without it. The codegen container is a stand-in docker that runs
-# the command on the host with its mounts mapped; cargo writes the binaries it
-# is asked for; trunk and npm only say they ran.
+# v2-early without it; both hold ui/ (a page, one source). FRAME-8: the bundle is
+# built on this machine by plexus-ui (the stand-in above, which cargo "builds"
+# from ../plexus-ui, a manifest beside the build checkout) — docker is a
+# stand-in that only says it was asked, and must not be; cargo writes the
+# binaries it is asked for; trunk and npm only say they ran.
 T1=build_from_a_branch_has_no_frontend_steps
 B=$SCRATCH/v2b; BR=$B/menger; H5=$SCRATCH/home5; D5=$H5/.local/share/menger-deploy
 mkdir -p "$BR/deploy/launch" "$BR/scripts" "$BR/src" "$B/bin" "$D5/releases"
 cp "$DEPLOY/pipeline" "$BR/deploy/pipeline"; cp "$REPO"/deploy/launch/* "$BR/deploy/launch/"; cp "$REPO/scripts/disk-check.sh" "$BR/scripts/"
-cp "$REPO/scripts/ui-build.sh" "$BR/scripts/"; cp "$REPO/src/shell.rs" "$BR/src/"
+mkdir -p "$BR/ui/src" "$B/plexus-ui" && : >"$B/plexus-ui/Cargo.toml"
+printf '<!doctype html><title>{{TITLE}}</title><p>x</p>\n' >"$BR/ui/index.html"; printf '<p>x</p>\n' >"$BR/ui/src/x-row.svelte"
 gitf() { git -C "$BR" -c user.name=t -c user.email=t@t "$@"; }
 printf '[workspace]\nmembers = ["."]\n' >"$BR/Cargo.toml"
 gitf init -q -b main && gitf add -A && gitf commit -qm "main: v2's shape, no compiler module"
@@ -1026,38 +1073,20 @@ echo "$PWD: cargo $*" >>"$STUB_CARGO_LOG"
 case $1 in
   build) prev=""; for a in "$@"; do
            if [[ $prev == -p ]]; then mkdir -p "$CARGO_TARGET_DIR/release"
-             cp "$STUB_FAKE_MENGER" "$CARGO_TARGET_DIR/release/$a"
-             chmod +x "$CARGO_TARGET_DIR/release/$a"; fi; prev=$a; done; exit 0 ;;
+             if [[ $a == plexus-ui-cli ]]; then cp "$STUB_PLEXUS_UI" "$CARGO_TARGET_DIR/release/plexus-ui"
+             else cp "$STUB_FAKE_MENGER" "$CARGO_TARGET_DIR/release/$a"; chmod +x "$CARGO_TARGET_DIR/release/$a"; fi
+           fi; prev=$a; done; exit 0 ;;
   test) echo "test result: ok. 3 passed; 0 failed"; exit 0 ;;
   # the workspace's packages: menger
   metadata) echo '{"packages":[{"name":"menger"}]}'; exit 0 ;;
 esac
 exit 0
 CARGO
-# docker: the codegen container — `run … plexus-codegen… CMD`, CMD run on the host in the
-# mounted directory (-v HOST:CTR, -w CTR mapped back); everything else a no-op
+# docker: says it was asked (FRAME-8: a build asks no container), and does nothing
 cat >"$B/bin/docker" <<'DOCKER'
 #!/usr/bin/env bash
 echo "docker $*" >>"$STUB_BUILD_DOCKER"
-[[ $1 == run ]] || exit 0
-shift; mounts=() wd="" img="" cmd=()
-while [[ $# -gt 0 ]]; do
-  if [[ -n $img ]]; then cmd+=("$1"); shift; continue; fi
-  case $1 in
-    -v|--volume) mounts+=("$2"); shift 2 ;;
-    --volume=*) mounts+=("${1#--volume=}"); shift ;;
-    -w|--workdir) wd=$2; shift 2 ;;
-    --workdir=*) wd=${1#--workdir=}; shift ;;
-    -e|--env|-u|--user|--security-opt|--network|--entrypoint|--name|--label|--platform|-p) shift 2 ;;
-    -*) shift ;;
-    *) img=$1; shift ;;
-  esac
-done
-[[ $img == plexus-codegen* || $img == */plexus-codegen* ]] || { echo "docker run $img: not the codegen image" >&2; exit 125; }
-map() { local s=$1 m h c; for m in "${mounts[@]}"; do h=${m%%:*}; c=${m#*:}; c=${c%%:*}; s=${s//$c/$h}; done; printf '%s' "$s"; }
-dir=$(map "${wd:-/}"); args=(); for a in "${cmd[@]}"; do args+=("$(map "$a")"); done
-[[ -d $dir ]] || { echo "docker run: no $dir" >&2; exit 125; }
-(cd "$dir" && IN_CODEGEN=1 "${args[@]}")
+exit 0
 DOCKER
 # UI-12: the menger cargo builds — a stand-in server. `--help` as before. Started, it keeps
 # its pid in $STUB_MENGER_PIDS and says how it was started in $STUB_MENGER_RAN (its own path
@@ -1117,10 +1146,10 @@ SYNAPSE
 chmod +x "$B/bin/"* "$B/fake-menger"
 export STUB_CARGO_LOG=$B/cargo.log STUB_BUILD_DOCKER=$B/docker.argv STUB_UI_COMPILER_RAN=$B/ui-compiler.ran \
   STUB_FAKE_MENGER=$B/fake-menger STUB_MENGER_UP=$B/up STUB_MENGER_RAN=$B/menger.ran STUB_BUILD_SYNAPSE=$B/synapse.argv \
-  STUB_MENGER_PIDS=$B/menger.pids
+  STUB_MENGER_PIDS=$B/menger.pids STUB_UI_TOOL_LOG=$B/plexus-ui.log
 # the build's TMPDIR: where mktemp makes its scratch (UI-12: the binary's HOME and data directory)
 T5TMP=$SCRATCH/tmp5; mkdir -p "$T5TMP"
-bb() { : >"$STUB_CARGO_LOG"; : >"$STUB_BUILD_DOCKER"; : >"$B/browser.log"; : >"$STUB_UI_COMPILER_RAN"; : >"$STUB_MENGER_RAN"; : >"$STUB_BUILD_SYNAPSE"; : >"$STUB_MENGER_PIDS"
+bb() { : >"$STUB_CARGO_LOG"; : >"$STUB_BUILD_DOCKER"; : >"$STUB_UI_TOOL_LOG"; : >"$B/browser.log"; : >"$STUB_UI_COMPILER_RAN"; : >"$STUB_MENGER_RAN"; : >"$STUB_BUILD_SYNAPSE"; : >"$STUB_MENGER_PIDS"
   PATH=$B/bin:$PATH HOME=$H5 TMPDIR=$T5TMP DISK_CHECK_USED_PCT=10 DISK_CHECK_AVAIL_GB=900 "$BR/deploy/pipeline" "$@" >"$SCRATCH/out" 2>"$SCRATCH/err"; code=$?; err=$(<"$SCRATCH/err"); }
 field() { sed -n "s/^$1: *//p" "$2" 2>/dev/null; } # FIELD RELEASEFILE
 bb build --branch v2 --no-gate
@@ -1128,13 +1157,15 @@ same "$T1: build --branch v2 exits 0" "$code" 0
 VR=$(tail -n 1 "$SCRATCH/out"); RF=$D5/releases/$VR/RELEASE
 same "$T1: a release of v2's tip" "$(field commit "$RF")" "$VSHA"
 same "$T1: the release names its branch" "$(field branch "$RF")" "v2"
-same "$T1: the release's steps" "$(field steps "$RF")" "cargo build, ui-build, ui-compiler-wasm"
+same "$T1: the release's steps" "$(field steps "$RF")" "cargo build, plexus-ui, ui-prebuild, ui-build, ui-compiler-wasm"
 same "$T1: no trunk, no npm ran" "$(<"$B/browser.log")" ""
-same "$T1: cargo build --release of the workspace's packages: menger alone" "$(grep -o 'cargo build --release.*' "$STUB_CARGO_LOG")" "cargo build --release -p menger"
-has "$T1: the bundle built in the plexus-codegen container" "$(grep -E 'plexus-codegen.*scripts/ui-build\.sh' "$STUB_BUILD_DOCKER")" "scripts/ui-build.sh"
-# the compiler module is cargo's (wasm32): built on this machine, as UI-6's prebuild is — the
-# plexus-codegen image has no Rust toolchain (and does not build today: NAMING-4)
-[[ $(grep -c 'ui-compiler' "$STUB_BUILD_DOCKER") == 0 ]] && ok || bad "$T1: the compiler module sent to the codegen container, which has no cargo"
+same "$T1: cargo build --release of the workspace's packages: menger alone" "$(grep -o 'cargo build --release -p .*' "$STUB_CARGO_LOG")" "cargo build --release -p menger"
+has "$T1: the tool built from ../plexus-ui beside the build checkout" "$(<"$STUB_CARGO_LOG")" "cargo build --release --manifest-path $B/menger-build/../plexus-ui/Cargo.toml -p plexus-ui-cli"
+has "$T1: the engine built by the tool, into dist/engine" "$(<"$STUB_UI_TOOL_LOG")" "plexus-ui build --prebuild --engine $B/menger-build/dist/engine"
+has "$T1: the bundle built by the tool on this machine" "$(<"$STUB_UI_TOOL_LOG")" "plexus-ui build $B/menger-build/ui --engine $B/menger-build/dist/engine --contract $CONTRACT_HASH --commit menger@${VSHA:0:7} -o $B/menger-build/dist/ui.tar"
+same "$T1: no container asked" "$(<"$STUB_BUILD_DOCKER")" ""
+[[ -x $D5/releases/$VR/bin/plexus-ui ]] && ok || bad "$T1: the release carries no bin/plexus-ui"
+# the compiler module is cargo's (wasm32): built on this machine
 has "$T1: the compiler module built on this machine, into the build's target" "$(cat "$B/ui-compiler.ran" 2>/dev/null)" "host CARGO_TARGET_DIR=$B/menger-build/target"
 same "$T1: the release's dist/ui.tar holds the page and its manifest" "$(tar -tf "$D5/releases/$VR/dist/ui.tar" 2>/dev/null | paste -sd' ')" "index.html manifest.json"
 [[ -s $D5/releases/$VR/dist/ui-compiler.wasm ]] && ok || bad "$T1: no dist/ui-compiler.wasm in the release"
@@ -1146,9 +1177,9 @@ bb build --branch v2-early --no-gate
 same "$T1: build --branch v2-early exits 0" "$code" 0
 ER=$(tail -n 1 "$SCRATCH/out")
 same "$T1: v2-early: its tip" "$(field commit "$D5/releases/$ER/RELEASE")" "$ESHA"
-same "$T1: v2-early: no compiler step" "$(field steps "$D5/releases/$ER/RELEASE")" "cargo build, ui-build"
+same "$T1: v2-early: no compiler step" "$(field steps "$D5/releases/$ER/RELEASE")" "cargo build, plexus-ui, ui-prebuild, ui-build"
 [[ -s $D5/releases/$ER/dist/ui.tar && ! -e $D5/releases/$ER/dist/ui-compiler.wasm ]] && ok || bad "$T1: v2-early: a bundle and no compiler module"
-[[ $(grep -c 'ui-compiler' "$STUB_BUILD_DOCKER") == 0 ]] && ok || bad "$T1: v2-early: the compiler built all the same"
+[[ $(grep -c 'ui-compiler' "$STUB_CARGO_LOG") == 0 && ! -s $STUB_UI_COMPILER_RAN ]] && ok || bad "$T1: v2-early: the compiler built all the same"
 same "$T1: an untracked frontend/ left in the build checkout: no trunk, no npm" "$(<"$B/browser.log")" ""
 [[ -d $B/menger-build/frontend/target ]] && ok || bad "$T1: (setup) the untracked frontend/target is gone — the check above proves nothing"
 # --branch absent: main, as before
@@ -1172,9 +1203,8 @@ has "$T1: suite: the release marked passed" "$(cat "$D5/releases/$SR5/SUITE" 2>/
 # key in a scratch data directory and the build holds no key material — under a scratch HOME
 # and XDG_RUNTIME_DIR (mktemp's, under the build's TMPDIR); signs in with that key, reads
 # tickets.schema's hash with synapse (--no-hold: no connection holder outlives the build, and
-# the sign-in moves no default agent of this machine's), stops it, and builds the bundle in the
-# codegen container with --contract HASH — no socket from the container to this machine. The
-# fixture has no ui/ (the placeholder bundle): the stamp holds there too. A read that fails, a
+# the sign-in moves no default agent of this machine's), stops it, and builds the bundle with
+# `plexus-ui build --contract HASH` (FRAME-8) — the tool asks no socket of its own. A read that fails, a
 # binary that dies or never answers, is a failed build, said, within about MENGER_CONTRACT_WAIT
 # seconds, and no release is made: no bundle saying `unknown` is ever released.
 T6=a_release_names_the_contract_it_was_built_against
@@ -1214,8 +1244,8 @@ same "$T6: every synapse call under the binary's HOME and XDG_RUNTIME_DIR" "$(se
 same "$T6: every synapse call --no-hold" "$(grep -vc -- ' --no-hold ' <<<"$syn")" 0
 has "$T6: signed in with the binary's own key, on its port" "$(grep -- "-P $mport" <<<"$syn")" "_login menger --key menger-local"
 has "$T6: the hash read from the port it started" "$(grep -- "-P $mport" <<<"$syn")" "menger tickets schema"
-has "$T6: the container builds with --contract HASH" "$(grep -E 'plexus-codegen.*scripts/ui-build\.sh' "$STUB_BUILD_DOCKER")" "scripts/ui-build.sh --contract $CONTRACT_HASH"
-[[ $(grep -cE -- '--contract-from|--network' "$STUB_BUILD_DOCKER") == 0 ]] && ok || bad "$T6: the container asks a server (--contract-from, --network): $(<"$STUB_BUILD_DOCKER")"
+has "$T6: the bundle built with --contract HASH" "$(<"$STUB_UI_TOOL_LOG")" "--contract $CONTRACT_HASH --commit"
+[[ $(grep -c -- '--contract-from' "$STUB_UI_TOOL_LOG") == 0 ]] && ok || bad "$T6: the tool asks a server (--contract-from): $(<"$STUB_UI_TOOL_LOG")"
 has "$T6: the build says the hash" "$err" "$CONTRACT_HASH"
 same "$T6: the build's scratch removed" "$(ls -A "$T5TMP")" ""
 for how in fail nohash; do
@@ -1224,7 +1254,7 @@ for how in fail nohash; do
   same "$T6: the hash read fails ($how): exits 1" "$code" 1
   has "$T6: the hash read fails ($how): said, naming tickets.schema" "$err" "tickets.schema"
   none_made "$T6: the hash read fails ($how)" "$n"
-  [[ $(grep -c 'scripts/ui-build\.sh' "$STUB_BUILD_DOCKER") == 0 ]] && ok || bad "$T6: the hash read fails ($how): the bundle built all the same"
+  [[ $(grep -c -- ' -o ' "$STUB_UI_TOOL_LOG") == 0 ]] && ok || bad "$T6: the hash read fails ($how): the bundle built all the same"
   stopped "$T6: the hash read fails ($how)"
 done
 # the binary dies at once, or never answers: said (its start, or the wait), within about the wait
@@ -1237,7 +1267,7 @@ for how in crash never-up; do
   (( took <= 8 )) && ok || bad "$T6: the binary $how: took ${took}s with MENGER_CONTRACT_WAIT=2"
   [[ -s $STUB_MENGER_RAN ]] && ok || bad "$T6: the binary $how: (setup) nothing was started — the check proves nothing"
   none_made "$T6: the binary $how" "$n"
-  [[ $(grep -c 'scripts/ui-build\.sh' "$STUB_BUILD_DOCKER") == 0 ]] && ok || bad "$T6: the binary $how: the bundle built all the same"
+  [[ $(grep -c -- ' -o ' "$STUB_UI_TOOL_LOG") == 0 ]] && ok || bad "$T6: the binary $how: the bundle built all the same"
   stopped "$T6: the binary $how"
 done
 

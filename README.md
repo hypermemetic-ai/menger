@@ -626,10 +626,10 @@ deploy**.
   claims (filled in when absent);
   every component's `uses` is looked up in the running tickets service
   through the seam; the manifest's `contract` is compared with that
-  service's hash (`tickets.schema`'s, which `scripts/ui-build.sh
-  --contract-from PORT` stamps, or `--contract HASH` as given — UI-12: the
+  service's hash (`tickets.schema`'s, which `plexus-ui build
+  --contract-from URL` stamps, or `--contract HASH` as given — UI-12: the
   pipeline's build reads it from the binary it built and passes it so;
-  `unknown`, the script's without either flag and never accepted as
+  `unknown`, the build's without either flag and never accepted as
   `--contract`'s value, answers `contract_matches: null`; UI-11). The row and the live pointer move together. The same
   bytes pushed again are the same version (`new: false`). Refusals are in
   band, nothing written: `no_signer`, `bad_signature`, `bad_bundle`,
@@ -647,8 +647,10 @@ deploy**.
 - **Who may**: viewers and editors `versions`, `watch`, `slots list`; a
   `deployer` `push` (V2-7: a deploy pushes as the pipeline key); `rollback`,
   `preview`, `slots set`, `slots clear` are the admin's.
-- **Signing** a bundle by hand: `ui-sign <seed-file> <bundle>` (a binary of
-  `ui-service`) prints the signature; the pipeline uses `deploy/ui-sign.mjs`.
+- **Signing and pushing** a bundle: `plexus-ui sign KEYFILE TAR` prints the
+  signature; `plexus-ui push --url ws://… --key NAME TAR` signs in as the key
+  and pushes it (FRAME-8: `../plexus-ui`'s tool, `scripts/plexus-ui` here;
+  the pipeline pushes with the release's own `bin/plexus-ui`).
 
 ### Sections (UI-9)
 
@@ -662,8 +664,9 @@ and the engine remounts that section alone.
 
 ### The component contract (UI-4)
 
-The contract is ticket **UI-4** ("The component contract, v1") on the
-tracker — read it there; this is its layout. A bundle is a tar:
+The contract is `../plexus-ui/CONTRACT.md` (FRAME-8: kept with the code; it
+was ticket **UI-4** on the tracker, which points at it) — read it there;
+this is its layout. A bundle is a tar:
 
 ```
 index.html                 the entrypoint (the shell stamps it)
@@ -688,14 +691,15 @@ gives the same bytes natively and as a wasm module that imports nothing
 (`scripts/ui-compiler-wasm.sh` → `dist/ui-compiler.wasm`; the build fails if
 it imports anything; it builds from `../plexus-ui` into this checkout's
 target). A refusal names the line. The compiler's golden pairs are
-`../plexus-ui`'s (`compiler/tests/golden/`); `ui/golden/` is menger's: the
-compiled `hello-list` and `page-shell` that `scripts/ui-build.sh` falls back
-to when no compiler can be had.
+`../plexus-ui`'s (`compiler/tests/golden/`); a bundle's build compiles every
+component in-process with it (`plexus-ui build`, FRAME-8) and has no
+fallback: a source it refuses fails the build.
 
 ### The engine (UI-6, UI-10)
 
 The engine is `../plexus-ui`'s `engine/` (`plexus-ui-engine`), Rust built to
-wasm by `scripts/ui-build.sh` (`--manifest-path`), and implements `engine/1`:
+wasm by the framework's tool (`plexus-ui build --prebuild --engine DIR`),
+and implements `engine/1`:
 it owns the socket, the cache, the signals and the registry; a component
 owns only its tree and its folds.
 
@@ -724,17 +728,21 @@ with the stamped version.
 → `board-layout`, `#/ticket/:id` → `ticket-page`), `slots.json` (the
 layouts' default sections), `src/*.svelte` (`board-layout`, `board-rows`,
 `filter-line`, `jump-palette`, `nav-tree`, `nav-flat`, `nav-children`,
-`ticket-page`, `ticket-chip`, `page-shell`, `hello-list`) and `golden/`.
-`scripts/ui-build.sh` builds it into `dist/ui.tar`: `--prebuild` the halves
-that need cargo (the engine for `wasm32-unknown-unknown` and wasm-bindgen,
-the components compiled), then the manifest and the tar — the same inputs,
-the same bytes. A deploy pushes it (`deploy/README.md`, "v2: a release with
-no browser toolchain").
+`ticket-page`, `ticket-chip`, `page-shell`, `hello-list`).
+`../plexus-ui`'s `plexus-ui` tool (FRAME-8; `scripts/plexus-ui` builds it
+from the sibling into this checkout's target and runs it) builds it into
+`dist/ui.tar`: `build --prebuild` the engine (cargo: `wasm32-unknown-unknown`
+and wasm-bindgen), then `build` the components compiled in-process, the
+manifest and the tar — the same inputs, the same bytes, no cargo needed.
+The bundle is `../plexus-ui/CONTRACT.md`'s. A deploy pushes it
+(`deploy/README.md`, "v2: a release with no browser toolchain").
 
 ```sh
-scripts/ui-compiler-wasm.sh                      # dist/ui-compiler.wasm
-scripts/ui-build.sh                              # dist/ui.tar
-cargo run -p menger-ui-service --bin ui-sign -- operator.seed dist/ui.tar   # the signature, base64
+scripts/ui-compiler-wasm.sh                                      # dist/ui-compiler.wasm
+scripts/plexus-ui build --prebuild --engine dist/engine          # the engine, once
+scripts/plexus-ui build ui --engine dist/engine -o dist/ui.tar   # dist/ui.tar
+scripts/plexus-ui sign operator.seed dist/ui.tar                 # the signature, base64
+scripts/plexus-ui push --url ws://127.0.0.1:4460 --key operator dist/ui.tar
 ```
 
 `tests/wire_ui.rs`, `tests/wire_ui_compile.rs`, `tests/wire_ui_slots.rs`,

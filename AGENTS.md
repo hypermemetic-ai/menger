@@ -111,14 +111,15 @@ native and as a wasm module with no imports) and drawn by its
 `plexus-ui-engine` (UI-6, UI-10: signals,
 `live()`, the DOM renderer, the Rhai folds, hot-swap on `ui.watch`,
 sections, the sanitized `{@html markdown()}`). The contract between them is
-ticket **UI-4** ("The component contract, v1") on the tracker; README "The
-component contract" has the bundle's layout. The two crates live in the
-sibling checkout `../plexus-ui` (FRAME-3) — the scripts below build them
-from there by `--manifest-path` into this checkout's target.
+`../plexus-ui/CONTRACT.md` (it was ticket **UI-4** on the tracker); README
+"The component contract" has the bundle's layout. The two crates and the
+tool that builds, signs and pushes a bundle — `plexus-ui` (FRAME-8) — live
+in the sibling checkout `../plexus-ui` (FRAME-3); the scripts below build
+them from there by `--manifest-path` into this checkout's target.
 
 ```sh
-scripts/ui-compiler-wasm.sh       # dist/ui-compiler.wasm (rustup's wasm32-unknown-unknown)
-scripts/ui-build.sh               # dist/ui.tar, the bundle a deploy pushes
+scripts/ui-compiler-wasm.sh                          # dist/ui-compiler.wasm (rustup's wasm32-unknown-unknown)
+scripts/plexus-ui build ui -o dist/ui.tar            # the bundle a deploy pushes (scripts/plexus-ui --help)
 ```
 
 A change to `ui/src` is checked in Chromium by `tests/pages_browser.mjs`
@@ -173,16 +174,21 @@ push: `ui slots set` (or the right-click menu on a section), which is how two
 versions of one component are swapped (`--version` names the other);
 `ui slots clear` puts the default back.
 
-**3. Build.** Once, the compiler module and the halves that need cargo; then
-the bundle, every time:
+**3. Build.** With the framework's tool, `plexus-ui` (`../plexus-ui`'s
+`cli/`, FRAME-8; `scripts/plexus-ui` builds it into this checkout's target
+and runs it). Once, the compiler module and the engine — what needs cargo;
+then the bundle, every time — the components compiled in-process, the
+manifest, the tar:
 
 ```sh
-scripts/ui-compiler-wasm.sh                 # dist/ui-compiler.wasm
-scripts/ui-build.sh --prebuild              # the engine and the compiled components, into dist/ui.d
-scripts/ui-build.sh                         # dist/ui.tar, its manifest at dist/ui.d/manifest.json
+scripts/ui-compiler-wasm.sh                                       # dist/ui-compiler.wasm
+scripts/plexus-ui build --prebuild --engine dist/engine           # the engine (wasm32, wasm-bindgen)
+scripts/plexus-ui build ui --engine dist/engine -o dist/ui.tar    # the bundle; `--contract HASH` to stamp one
 ```
 
-A source the compiler refuses names its line.
+A source the compiler refuses names its line (`ui/src/<name>.svelte:LINE:
+…`), and nothing is written. `scripts/plexus-ui --help` documents every
+command.
 
 **4. See it.** A dev server in local mode — no `--auth-provider`, so it
 prints a one-time sign-in link for your browser — with your key as admin
@@ -193,16 +199,17 @@ and as the signer (the signer is the public key: your principal without
 PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --data-dir /tmp/menger-dev \
   --admin "$(synapse _key show builder)" --ui-signer "$(synapse _key show builder | sed 's/^key://')" \
   --ui-compiler dist/ui-compiler.wasm
-synapse -P 4460 _login menger --key builder --as builder
-base64 -w0 dist/ui.tar > dist/ui.b64
-cargo run -p menger-ui-service --bin ui-sign -- ~/.plexus/keys/builder.key dist/ui.tar > dist/ui.sig
-synapse -P 4460 menger ui push --bundle @dist/ui.b64 --manifest @dist/ui.d/manifest.json --signature @dist/ui.sig
+scripts/plexus-ui push --url ws://127.0.0.1:4460 --key builder dist/ui.tar
+scripts/plexus-ui versions --url ws://127.0.0.1:4460 --key builder   # `rollback HASH`, `preview HASH` the same way
 ```
 
-`ui-sign` reads the seed from the key's file (`~/.plexus/keys/<name>.key`,
-0600 — the path goes in argv, never the seed; a key synapse keeps in the
-keychain has no file: make one with `synapse _key new NAME --store file`).
-The push answers `pushed { version, live: true, compiled: true }`. Open the
+`push` signs in as the key and, with no `--signer`, signs the bundle with
+it too (Ed25519 over its sha256; `plexus-ui sign KEYFILE dist/ui.tar`
+prints that signature alone). It reads the seed from the key's file
+(`~/.plexus/keys/<name>.key`, 0600 — a name or a path goes in argv, never
+the seed; a key synapse keeps in the keychain has no file: make one with
+`synapse _key new NAME --store file`). The push answers `pushed { version,
+live: true, compiled: true }`. Open the
 banner's link, then `http://127.0.0.1:4461/app/#/kids/KILN-1`; `cargo run --
 login --data-dir /tmp/menger-dev` prints another link (a local start also
 links `~/.plexus/keys/menger-local.key` to its own key when none is there).
@@ -228,8 +235,8 @@ toolchain" (V2-7) is v2's path:
 
 ```sh
 deploy/pipeline build --branch v2 --no-gate   # v2's tip → a release (RELEASE says `branch: v2`); no frontend/,
-                                              # so the workspace, the bundle in the codegen container, the
-                                              # compiler module on this machine
+                                              # so the workspace, the plexus-ui tool, the engine, the bundle
+                                              # and the compiler module, all on this machine
 deploy/pipeline image R                       # RUN-10: the release as an image (IMAGE_STORE=ghcr pushes it)
 deploy/pipeline remote test --image ghcr.io/hypermemetic-ai/menger:R
                                               # app-test.menger.sh through infra, the bundle pushed through
@@ -242,14 +249,17 @@ deploy/pipeline releases                      # every release: its suite, tested
 ```
 
 - **The release names its branch** (`build --branch B`: B's tip). A tree
-  with no `frontend/` builds `cargo build --release -p menger`, the bundle
-  (`scripts/ui-build.sh` → `dist/ui.tar`) in the `plexus-codegen`
-  container, and `dist/ui-compiler.wasm` on this machine. The image runs
+  with no `frontend/` builds `cargo build --release -p menger`, the
+  `plexus-ui` tool from `../plexus-ui` (FRAME-8; the release carries it as
+  `bin/plexus-ui`), the engine (`plexus-ui build --prebuild`), the bundle
+  (`plexus-ui build --contract HASH` → `dist/ui.tar`) and
+  `dist/ui-compiler.wasm`, all on this machine — no container. The image runs
   with `--ui-db-path`, a `--ui-signer` per key of `MENGER_UI_SIGNERS` and
   `--ui-compiler`.
 - **A deploy pushes the bundle**: after a healthy `remote test` (and
-  `local`), `ui.push` as the `pipeline` key (a `deployer`), signed by
-  `deploy/ui-sign.mjs`; the smoke wants that version live. A refused push
+  `local`), `plexus-ui push` as the `pipeline` key (a `deployer`; the
+  release's own `bin/plexus-ui`), signed by that key; the smoke wants that
+  version live. A refused push
   fails the deploy and leaves the version that was live.
 - **Every remote test and remote prod records itself on the tracker**
   (DEPLOY-12, DEPLOY-28) as the `pipeline` key, through `deploy/record`; a
@@ -569,7 +579,8 @@ question.
   hold what menger lifted out, each taken by path like `../plexus-core`:
   `../plexus-shell` and `../plexus-login` (FRAME-4), and `../plexus-ui`'s
   `plexus-ui-compiler` and `plexus-ui-engine` (FRAME-3: the compiler a
-  dev-dependency, the engine built by `scripts/ui-build.sh`).
+  dev-dependency, the engine built by the framework's `plexus-ui` tool,
+  FRAME-8, which `scripts/plexus-ui` and `deploy/pipeline` build from there).
 - The `tickets` activation lives ONCE, in `tickets-api/`
   (`menger-tickets-api`, MFE-11): the vocabulary, the store, and
   `activation/mod.rs`'s `#[activation]` on `impl TicketsActivation` (its
