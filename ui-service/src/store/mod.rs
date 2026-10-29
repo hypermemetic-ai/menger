@@ -5,7 +5,14 @@
 //!   the same bytes pushed again are the same version;
 //! - `ui_pointer` — `name → hash` (`live` is the one `/app/` serves), a
 //!   foreign key into `ui_versions`, so it never names a hash not stored;
-//! - `ui_preview` — `principal → hash`, a session's override of `live`.
+//! - `ui_preview` — `principal → hash`, a session's override of `live`;
+//! - `ui_slots` — UI-9: `(layout, slot) → (component, version_hash)`, what
+//!   fills a section in place of the live manifest's default; the hash a
+//!   foreign key into `ui_versions` (a stored version is immutable, so an
+//!   assignment outlives any pointer move). Its methods are in [`slots`].
+//!
+//! UI-9: every pointer move and every assignment is said on the store's
+//! broadcast ([`UiStore::subscribe`], [`UiChange`]), which `ui.watch` holds.
 //!
 //! A push is one transaction: the row (when new) and the pointer moved, or
 //! neither. A rollback moves the pointer and touches no other row.
@@ -37,7 +44,19 @@ CREATE TABLE IF NOT EXISTS ui_pointer (
 CREATE TABLE IF NOT EXISTS ui_preview (
   principal TEXT PRIMARY KEY, hash TEXT NOT NULL REFERENCES ui_versions(hash)
 );
+CREATE TABLE IF NOT EXISTS ui_slots (
+  layout TEXT NOT NULL, slot TEXT NOT NULL, component TEXT NOT NULL,
+  version_hash TEXT NOT NULL REFERENCES ui_versions(hash),
+  PRIMARY KEY (layout, slot)
+);
 ";
+
+/// UI-9: how many changes a watch may fall behind by before it is told
+/// `lagged`.
+pub const CHANGES_CAPACITY: usize = 256;
+
+mod slots;
+pub use slots::{Assignment, Section, UiChange};
 
 /// A kept version, as `versions` names it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,6 +109,12 @@ pub enum UiError {
     BadManifest(&'static str),
     #[error("no version {0} is kept")]
     UnknownVersion(String),
+    /// UI-9: a set naming a component the version's manifest does not hold.
+    #[error("version {version} holds no component {component}")]
+    UnknownComponent { component: String, version: String },
+    /// UI-9: a set naming a slot the live manifest does not declare for the layout.
+    #[error("the layout {layout} declares no slot {slot}")]
+    UnknownSlot { layout: String, slot: String },
 }
 
 impl From<rusqlite::Error> for UiError {
@@ -102,6 +127,8 @@ impl From<rusqlite::Error> for UiError {
 pub struct UiStore {
     path: PathBuf,
     conn: Mutex<Connection>,
+    /// UI-9: every pointer move and assignment, for `ui.watch`.
+    changes: tokio::sync::broadcast::Sender<UiChange>,
 }
 
 /// A bundle's name: the sha256 of its bytes, hex.
@@ -171,7 +198,14 @@ impl UiStore {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "foreign_keys", true)?;
         conn.execute_batch(SCHEMA)?;
-        Ok(Self { path: path.to_path_buf(), conn: Mutex::new(conn) })
+        let (changes, _) = tokio::sync::broadcast::channel(CHANGES_CAPACITY);
+        Ok(Self { path: path.to_path_buf(), conn: Mutex::new(conn), changes })
+    }
+
+    /// UI-9: the store's changes from now on — a `live` on every pointer
+    /// move, a `slot_changed` on every set and clear.
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<UiChange> {
+        self.changes.subscribe()
     }
 
     /// Where the file is.
@@ -315,3 +349,8 @@ impl UiStore {
 #[cfg(test)]
 #[path = "tests.rs"]
 mod ui_tests;
+
+// UI-9: the sections' store tests (`cargo test -p menger-ui-service slots_`).
+#[cfg(test)]
+#[path = "slots_tests.rs"]
+mod slots_tests;

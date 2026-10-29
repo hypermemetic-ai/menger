@@ -153,3 +153,42 @@ impl Signature {
         out
     }
 }
+
+/// The most a layout's, a slot's or a component's name may be: 64 bytes.
+pub const NAME_MAX: usize = 64;
+
+/// UI-9 / UI-4: a name in a bundle — lowercase ASCII letters and digits,
+/// hyphen-separated, beginning with a letter (`board`, `ticket-row`), at most
+/// [`NAME_MAX`] bytes.
+fn ui_name(what: &'static str, text: &str) -> Result<String, String> {
+    let t = text.trim();
+    let mut parts = t.split('-');
+    let well_formed = !t.is_empty()
+        && t.len() <= NAME_MAX
+        && t.as_bytes()[0].is_ascii_lowercase()
+        && parts.all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()));
+    match well_formed {
+        true => Ok(t.to_string()),
+        false => Err(format!("`{t}` is not a {what}'s name: lowercase letters and digits, hyphen-separated, beginning with a letter, at most {NAME_MAX} bytes (e.g. `ticket-row`)")),
+    }
+}
+
+text_type!(
+    /// UI-9: a layout — a component of a bundle whose template holds
+    /// `<slot name="…"/>` (UI-4 "Sections"), by name (`board-layout`).
+    LayoutName,
+    |t| ui_name("layout", t)
+);
+
+text_type!(
+    /// UI-9: a section of a layout — the `name` of its `<slot>` (`main`).
+    SlotName,
+    |t| ui_name("slot", t)
+);
+
+text_type!(
+    /// UI-9: a component of a bundle, by name (`ticket-row`), as its
+    /// manifest's `components` keys it.
+    ComponentName,
+    |t| ui_name("component", t)
+);

@@ -3,7 +3,8 @@
 //! `typed_params`, every method's caller the `VerifiedUser` the gate's
 //! resolver answers. `push`, `rollback` and `preview` are admin's alone
 //! (unlisted in `roles`, so only `admin`, which holds every grant, holds
-//! them); `versions` is a viewer's.
+//! them); `versions` is a viewer's. UI-9: `watch` a viewer's too, and the
+//! child `slots` (`ui.slots.list|set|clear`, [`SlotsActivation`]).
 
 use crate::events::{Reason, UiEvent};
 use crate::signers::Signers;
@@ -12,7 +13,13 @@ use crate::vocab::{Bundle, Manifest, Signature, VersionHash};
 use futures::{Stream, StreamExt};
 use menger_tickets_api::access::{Access, MengerRequest, VerifiedUser};
 use menger_tickets_api::vocab::CommitRef;
+use menger_tickets_api::store::Store;
 use std::sync::Arc;
+
+// UI-9: `ui.slots.*`, the child; `ui.watch`'s stream.
+mod slots;
+pub use slots::{SlotsActivation, SlotsClient};
+mod watch;
 
 /// The activation: the store over `ui.db`, the signers named at start, and
 /// the rule every caller is verified by.
@@ -21,12 +28,22 @@ pub struct UiActivation {
     store: Arc<UiStore>,
     signers: Arc<Signers>,
     access: Access,
+    /// UI-9: the tickets store, whose grants generation `ui.watch` follows
+    /// its caller by (`access::Following`); never read for tickets.
+    tickets: Option<Arc<Store>>,
 }
 
 impl UiActivation {
     /// Over `store`, accepting pushes signed by `signers`, behind `access`.
     pub fn new(store: Arc<UiStore>, signers: Signers, access: Access) -> Self {
-        Self { store, signers: Arc::new(signers), access }
+        Self { store, signers: Arc::new(signers), access, tickets: None }
+    }
+
+    /// UI-9: `ui.watch` follows its caller through `tickets`' grants (as
+    /// `tickets.watch` does); without it, a watch is refused in band.
+    pub fn following(mut self, tickets: Arc<Store>) -> Self {
+        self.tickets = Some(tickets);
+        self
     }
 
     /// The store it keeps.
@@ -49,6 +66,8 @@ fn refusal(e: UiError) -> UiEvent {
         UiError::BadBundle(_) => Reason::BadBundle,
         UiError::BadManifest(_) => Reason::BadManifest,
         UiError::UnknownVersion(_) => Reason::UnknownVersion,
+        UiError::UnknownComponent { .. } => Reason::UnknownComponent,
+        UiError::UnknownSlot { .. } => Reason::UnknownSlot,
         UiError::Db(_) => return UiEvent::Error { message: e.to_string() },
     };
     UiEvent::Refused { reason, message: e.to_string() }
@@ -83,7 +102,7 @@ fn push(store: &UiStore, signers: &Signers, by: String, bundle: Bundle, manifest
     request = MengerRequest,
     typed_params,
     roles(
-        viewer = ["versions"],
+        viewer = ["versions", "watch"],
         editor = [viewer],
     )
 )]
@@ -174,5 +193,26 @@ impl UiActivation {
             Ok(version) => UiEvent::Preview { principal, version },
             Err(e) => refusal(e),
         })
+    }
+
+    /// Follow the UI: live { version } on every pointer move (a push, a rollback), slot_changed { layout, slot, component, version } on every set or clear; open-ended, ends with watch_closed { reason, message }.
+    ///
+    /// Held to its caller as `tickets.watch` is (ACCESS-12): verified again
+    /// when the grants move, a sign-out or the expiry comes, and closed
+    /// with a typed reason (`signed_out`, `expired`, `revoked`, `refused`).
+    /// `lagged { missed }` when it fell behind: read `versions` and
+    /// `slots.list` again.
+    #[plexus_macros::method(group = "read", streaming)]
+    pub async fn watch(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+    ) -> impl Stream<Item = UiEvent> + Send + 'static {
+        watch::watch_stream(self.store.clone(), self.access.clone(), self.tickets.clone(), user)
+    }
+
+    /// What fills each section of each layout — `ui.slots.list|set|clear` (UI-9).
+    #[plexus_macros::child]
+    fn slots(&self) -> SlotsActivation {
+        SlotsActivation { store: Arc::clone(&self.store), access: self.access.clone() }
     }
 }

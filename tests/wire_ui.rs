@@ -153,7 +153,9 @@ async fn a_rollback_over_the_wire_moves_live() {
     let listed = versions(&admin).await;
     let live: Vec<(&str, bool)> = listed.iter().map(|v| (v["hash"].as_str().unwrap(), v["live"].as_bool().unwrap())).collect();
     assert_eq!(live, vec![(two.as_str(), false), (one.as_str(), true)], "newest first; the first is live");
-    assert_eq!(call(&admin, "tickets.health", json!({})).await, health, "the tickets service untouched");
+    // Its clock aside (`unix_now` moves on its own): the tickets service untouched.
+    let untimed = |evs: Vec<Value>| evs.into_iter().map(|mut e| { e.as_object_mut().map(|o| o.remove("unix_now")); e }).collect::<Vec<_>>();
+    assert_eq!(untimed(call(&admin, "tickets.health", json!({})).await), untimed(health), "the tickets service untouched");
 }
 
 #[tokio::test]
