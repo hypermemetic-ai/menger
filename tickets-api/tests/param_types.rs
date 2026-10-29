@@ -13,7 +13,7 @@
 //! ```
 //!
 //! This test holds the flag: it reads every file that declares an
-//! activation — the workspace, `diagrams/` and the shell's toy included —
+//! activation — the workspace and the shell's toy included —
 //! and fails on an attribute without `typed_params`, naming the file. (It
 //! replaces the hand-rolled guard ACCESS-8's body first described, which
 //! read the signatures; the macro reads them better.) A parameter's type

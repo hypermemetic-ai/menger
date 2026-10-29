@@ -72,7 +72,7 @@ plexus-client = { path = "../../plexus-macros/plexus-client", version = "0.6.1",
 # COMP-3: the component registry reads a body as the app renders it — the
 # app's own markdown parser (frontend/src/md.rs, MFE-7), so a fence, a code
 # span and raw HTML are what the renderer will say they are. Already in the
-# lock (`diagrams` takes it the same way); no renderer, no default features.
+# lock; no renderer, no default features.
 # ART-5: not server-only — `fields` (a body's fields, read the same way) is
 # wasm-safe, like `component_docs`, and pulldown-cmark builds for wasm32 (the
 # app renders with it).
