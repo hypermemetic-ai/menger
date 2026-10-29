@@ -1,13 +1,13 @@
 # plexus-login
 
-Login for a [Plexus RPC](https://github.com/hypermemetic-ai) hub: our own
+Login for a [Plexus RPC](https://github.com/hypermemetic-ai) service: our own
 sign-in page over a swappable identity backend (WorkOS, plexus-idp, …),
 identity provider specs, a login page and its routes, server-side sessions, the
 WebSocket gate, and the protocol's `auth` backend. It is generic over one
 trait, `LoginAccess`, which carries the app's access rules.
 
 It is menger's login, lifted as it is (SCAFFOLD-3) and named for whichever
-app takes it (SCAFFOLD-9). menger runs on it, and so can any other hub. A
+app takes it (SCAFFOLD-9). menger runs on it, and so can any other service. A
 new app gets login in about a dozen lines with the ready-made rules,
 `SimpleAccess`.
 
@@ -214,7 +214,7 @@ and `GET /login/callback`.
 
 ```rust
 use std::sync::Arc;
-use plexus_core::plexus::DynamicHub;
+use plexus_core::plexus::DynamicService;
 use plexus_login::{Branding, LoginOptions, Wiring, simple::SimpleAccess};
 use plexus_transport::TransportServer;
 
@@ -227,10 +227,10 @@ let opts = LoginOptions { identity: Some(identity), ..LoginOptions::new(BRANDING
 let wiring = Wiring::new(opts)?;                                        // providers checked, sessions made
 let access = SimpleAccess::new(wiring.sessions(), &admins)?;            // in-memory rules, roles global
 let wired = wiring.finish(access.clone(), None)?;                       // page, gate, auth backend
-let hub = DynamicHub::new("myapp").with_auth(access.auth_setup(wired.backend.clone()));
-// … register the app's activations on `hub` …
-access.seed_roles(&hub);
-let server = wired.apply(TransportServer::builder(Arc::new(hub), into_rpc).with_websocket(ws_port));
+let service = DynamicService::new("myapp").with_auth(access.auth_setup(wired.backend.clone()));
+// … register the app's activations on `service` …
+access.seed_roles(&service);
+let server = wired.apply(TransportServer::builder(Arc::new(service), into_rpc).with_websocket(ws_port));
 let shell = my_pages.merge(wired.router().expect("a provider: a page"));
 ```
 
@@ -281,7 +281,7 @@ impl Wiring {
 pub struct Wired<A: LoginAccess> {
     pub sessions: Arc<Sessions>,
     pub login: Option<Arc<Login<A>>>,     // the page (login on, page true)
-    pub backend: Arc<LoginAuth<A>>,       // DynamicHub::with_auth(AuthSetup::new(backend, …))
+    pub backend: Arc<LoginAuth<A>>,       // DynamicService::with_auth(AuthSetup::new(backend, …))
     pub gate: Option<Arc<Gate>>,          // the upgrade's validator (login on)
     pub protected: ProtectedResource,     // RFC 9728: the socket and its issuers
     pub origins: Vec<String>,             // the shell's own + --allowed-origin
@@ -292,7 +292,7 @@ pub struct Wired<A: LoginAccess> {
 impl<A: LoginAccess> Wired<A> {
     pub fn apply<H: Activation>(&self, b: TransportServerBuilder<H>) -> TransportServerBuilder<H>;
     pub fn router(&self) -> Option<axum::Router>;   // every /login… route
-    pub fn metadata_url(&self) -> Option<String>;   // for the hub's 401s
+    pub fn metadata_url(&self) -> Option<String>;   // for the service's 401s
     pub fn offered(&self) -> impl Iterator<Item = &Provider>;   // all but `key`
     pub fn login_on(&self) -> bool;
 }
