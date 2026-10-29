@@ -21,7 +21,7 @@ use std::time::Instant;
 /// (prod, test and the image name theirs).
 static CHILDREN: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
 
-/// POLYGLOT-4 (spike): the `--child` specs the hub mounts.
+/// POLYGLOT-4 (spike): the `--child` specs the service mounts.
 pub fn set_children(specs: Vec<String>) {
     let _ = CHILDREN.set(specs);
 }
@@ -229,7 +229,7 @@ pub async fn build_rpc_login(
     // POLYGLOT-4 (spike): each `--child`, connected and mounted like any activation.
     for spec in CHILDREN.get().cloned().unwrap_or_default() {
         let spec: plexus_core::plexus::remote_child::ChildSpec = spec.parse().map_err(|e| anyhow::anyhow!("--child {spec}: {e}"))?;
-        let opts = plexus_core::plexus::remote_child::ChildOptions { principal: "hub:menger".into(), ..Default::default() };
+        let opts = plexus_core::plexus::remote_child::ChildOptions { principal: "service:menger".into(), ..Default::default() };
         let child = plexus_core::plexus::remote_child::RemoteChild::connect(spec, opts).await.map_err(|e| anyhow::anyhow!("{e}"))?;
         hub = hub.register(child);
     }
