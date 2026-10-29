@@ -34,6 +34,10 @@
 //!   reached from `routes.json` or `slots.json` and every name there a
 //!   source, and README / AGENTS.md / deploy/README.md say Svelte only of
 //!   real Svelte (`svelte/1`, FRAME-13) or of what rhx borrowed.
+//! - FRAME-13: real Svelte (`svelte/1`) is the framework's tool's — it
+//!   compiles a `.svelte` in Node at build. menger has none until FRAME-14
+//!   (`ui/src` holds no `.svelte`), and `deploy/pipeline`'s `build_v2` checks
+//!   for `node` before it builds a UI that holds one, saying `svelte/1`.
 //! - FRAME-9: `tether/` takes `plexus-login` from the sibling, as
 //!   plexus-substrate (which tether takes) does — one `plexus-login` in its
 //!   graph, never menger's tree's.
@@ -1136,4 +1140,71 @@ fn the_dialect_is_rhx() {
         broken.push("README.md: names no rhx (rhx/1, <name>.rhx)".into());
     }
     assert!(broken.is_empty(), "FRAME-11: the dialect is rhx, and Svelte is said only of real Svelte:\n  {}", broken.join("\n  "));
+}
+
+/// FRAME-13: real Svelte (`svelte/1`) is the framework's from FRAME-13 on,
+/// and menger has none of it yet — its first Svelte components are
+/// FRAME-14's (the board in real Svelte). Until then `ui/src` holds no
+/// `.svelte`, so a release of menger needs no Node to build its UI.
+#[test]
+fn svelte_is_not_in_menger_yet() {
+    let found = svelte_files(&root(), &["ui/src"]);
+    assert!(found.is_empty(), "FRAME-14 brings menger's first svelte/1 components; until then ui/src holds none: {found:?}");
+}
+
+/// The lines of the shell function `name` in `script`, each with its number:
+/// from `name() {` to the first line that is `}` alone.
+fn shell_fn<'a>(script: &'a str, name: &str) -> Vec<(usize, &'a str)> {
+    let open = format!("{name}() {{");
+    script
+        .lines()
+        .enumerate()
+        .skip_while(|(_, l)| !l.starts_with(&open))
+        .take_while(|(_, l)| l.trim_end() != "}")
+        .map(|(n, l)| (n + 1, l))
+        .collect()
+}
+
+/// What a v2 build lacks to build a `svelte/1` component (FRAME-13: the tool
+/// compiles it with the real Svelte compiler in Node; `rhx/1` needs none):
+/// the line of `build_v2` that, when the UI holds a `.svelte`, checks for
+/// `node` and dies saying `svelte/1` — before the tool builds `$BUILD/ui` —
+/// or why there is none.
+fn node_check(body: &[(usize, &str)]) -> Result<usize, String> {
+    let code: Vec<&(usize, &str)> = body.iter().filter(|(_, l)| !l.trim_start().starts_with('#')).collect();
+    let build = code
+        .iter()
+        .find(|(_, l)| l.contains("\"$UI_TOOL\" build \"$BUILD/ui\""))
+        .map(|(n, _)| *n)
+        .ok_or_else(|| "build_v2 has no \"$UI_TOOL\" build \"$BUILD/ui\"".to_string())?;
+    let check = code.iter().find(|(_, l)| (l.contains("command -v node") || l.contains("need node")) && l.contains(".svelte") && l.contains("die") && l.contains("svelte/1"));
+    match check {
+        None => Err("build_v2 never checks for node when ui/src holds a .svelte, saying svelte/1 (a line with the .svelte test, command -v node, die and svelte/1)".into()),
+        Some((n, _)) if *n > build => Err(format!("build_v2 checks for node at line {n}, after the tool builds the UI at line {build}")),
+        Some((n, _)) => Ok(*n),
+    }
+}
+
+/// FRAME-13: the pipeline's build host has Node when it must — `build_v2`
+/// checks for `node` before the tool builds a UI holding a `.svelte` and
+/// says why (svelte/1); an rhx-only UI asks nothing of Node.
+#[test]
+fn the_build_host_has_node() {
+    // The check, on what it is given first.
+    let given = |s: &'static str| s.lines().enumerate().map(|(n, l)| (n + 1, l)).collect::<Vec<_>>();
+    let good = "build_v2() {\n  if compgen -G \"$BUILD/ui/src/*.svelte\" >/dev/null; then command -v node >/dev/null || die \"ui-build: svelte/1 needs node\"; fi\n  (cd \"$BUILD\" && \"$UI_TOOL\" build \"$BUILD/ui\" -o x)\n";
+    assert_eq!(node_check(&given(good)), Ok(2));
+    let late = "build_v2() {\n  (cd \"$BUILD\" && \"$UI_TOOL\" build \"$BUILD/ui\" -o x)\n  if compgen -G \"$BUILD/ui/src/*.svelte\" >/dev/null; then command -v node >/dev/null || die \"svelte/1 needs node\"; fi\n";
+    assert_eq!(node_check(&given(late)), Err("build_v2 checks for node at line 3, after the tool builds the UI at line 2".to_string()));
+    let mute = "build_v2() {\n  # command -v node .svelte die svelte/1\n  need node\n  (cd \"$BUILD\" && \"$UI_TOOL\" build \"$BUILD/ui\" -o x)\n";
+    assert!(node_check(&given(mute)).is_err(), "a comment, or a bare `need node`, is no check");
+    let script = "x() {\n  a\n}\nbuild_v2() {\n  b\n  c\n}\ny() {\n}\n";
+    assert_eq!(shell_fn(script, "build_v2"), [(4, "build_v2() {"), (5, "  b"), (6, "  c")]);
+
+    let pipeline = std::fs::read_to_string(root().join("deploy/pipeline")).expect("deploy/pipeline");
+    let body = shell_fn(&pipeline, "build_v2");
+    assert!(!body.is_empty(), "deploy/pipeline has build_v2");
+    if let Err(why) = node_check(&body) {
+        panic!("FRAME-13: the build host has Node when the UI holds svelte/1 — {why}");
+    }
 }
