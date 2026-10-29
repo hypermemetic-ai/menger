@@ -134,6 +134,30 @@ impl Recording {
         }
     }
 
+    /// UI-10: a `window-<event>` listener is the window's while its node is
+    /// in the page (reachable from the root), as the DOM renderer holds it:
+    /// fires `event` on the window — each such listener whose node is drawn
+    /// runs; one whose node is gone is dropped.
+    pub fn fire_window(&self, event: &str, payload: Value) {
+        let name = format!("window-{event}");
+        let drawn = self.under(0);
+        let hit: Vec<Rc<dyn Fn(Value)>> = {
+            let mut log = self.0.borrow_mut();
+            log.listeners.retain(|(n, e, _)| *e != name || drawn.contains(n));
+            log.listeners.iter().filter(|(_, e, _)| *e == name).map(|(_, _, h)| h.clone()).collect()
+        };
+        for h in hit {
+            h(payload.clone());
+        }
+    }
+
+    /// The `window-*` listeners held now (after the last
+    /// [`Self::fire_window`] dropped those whose node was gone).
+    pub fn window_listeners(&self) -> usize {
+        let drawn = self.under(0);
+        self.0.borrow().listeners.iter().filter(|(n, e, _)| e.starts_with("window-") && drawn.contains(n)).count()
+    }
+
     fn push(&self, call: Call) {
         self.0.borrow_mut().calls.push(call);
     }

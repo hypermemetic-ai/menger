@@ -17,6 +17,8 @@ thread_local! {
         let mut e = Engine::new();
         e.set_max_operations(FUEL);
         e.set_optimization_level(rhai::OptimizationLevel::Simple);
+        // UI-10: markdown(text) → HTML, sanitized where `{@html}` draws it.
+        e.register_fn("markdown", |text: &str| crate::html::markdown(text));
         e
     });
 }

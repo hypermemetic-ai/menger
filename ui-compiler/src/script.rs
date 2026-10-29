@@ -153,6 +153,7 @@ pub fn analyse(script: Option<&Script>, lines: &Lines, j: &mut Arena) -> Result<
 fn live(name: &str, spec: &Expr, j: &mut Arena, uses: &mut BTreeSet<String>) -> Result<Id, String> {
     let Expr::Map(m, _) = spec else { return Err(format!("the live `{name}` is live(#{{ snapshot, changes, key, params, on }})")) };
     let (mut snapshot, mut changes, mut key, mut params, mut changes_params, mut on) = (None, None, None, None, None, None);
+    let mut debounce_ms: Option<i64> = None;
     for (field, e) in m.0.iter() {
         let lit = || match e {
             Expr::StringConstant(s, _) => Ok(s.to_string()),
@@ -162,6 +163,11 @@ fn live(name: &str, spec: &Expr, j: &mut Arena, uses: &mut BTreeSet<String>) -> 
             "snapshot" => snapshot = Some(lit()?),
             "changes" => changes = Some(lit()?),
             "key" => key = Some(lit()?),
+            // UI-10: how long the params must be quiet before the snapshot runs again.
+            "debounce_ms" => match e {
+                Expr::IntegerConstant(n, _) if *n >= 0 => debounce_ms = Some(*n),
+                _ => return Err(format!("the live `{name}`'s debounce_ms is a whole number of milliseconds")),
+            },
             f @ ("params" | "changes_params") => match e {
                 Expr::Map(..) => {
                     let id = constant(e, j, true).map_err(|m| format!("the live `{name}`'s {f}: {m}"))?;
@@ -178,15 +184,16 @@ fn live(name: &str, spec: &Expr, j: &mut Arena, uses: &mut BTreeSet<String>) -> 
                 }
                 on = Some(j.obj(entries));
             }
-            other => return Err(format!("the live `{name}` has an unknown field `{other}`: snapshot, params, changes, changes_params, key, on")),
+            other => return Err(format!("the live `{name}` has an unknown field `{other}`: snapshot, params, changes, changes_params, key, on, debounce_ms")),
         }
     }
-    let missing = |f: &str| format!("the live `{name}` has no `{f}`: a live names its snapshot, its changes and its key");
+    let missing = |f: &str| format!("the live `{name}` has no `{f}`: a live names its snapshot and its key (and its changes, unless it is a one-shot read)");
     let snapshot = snapshot.ok_or_else(|| missing("snapshot"))?;
-    let changes = changes.ok_or_else(|| missing("changes"))?;
     let key = key.ok_or_else(|| missing("key"))?;
     uses.insert(snapshot.clone());
-    uses.insert(changes.clone());
+    if let Some(c) = &changes {
+        uses.insert(c.clone());
+    }
     let params = match params {
         Some(p) => p,
         None => j.obj(Vec::new()),
@@ -199,8 +206,18 @@ fn live(name: &str, spec: &Expr, j: &mut Arena, uses: &mut BTreeSet<String>) -> 
         Some(o) => o,
         None => j.obj(Vec::new()),
     };
-    let (s, c, k) = (j.str(snapshot), j.str(changes), j.str(key));
-    Ok(j.obj(vec![("snapshot".into(), s), ("changes".into(), c), ("key".into(), k), ("params".into(), params), ("changes_params".into(), changes_params), ("on".into(), on)]))
+    let (s, k) = (j.str(snapshot), j.str(key));
+    let mut fields = vec![("snapshot".into(), s), ("key".into(), k), ("params".into(), params), ("changes_params".into(), changes_params), ("on".into(), on)];
+    // UI-10: a live without changes is a one-shot read — no `changes` key.
+    if let Some(c) = changes {
+        let c = j.str(c);
+        fields.push(("changes".into(), c));
+    }
+    if let Some(d) = debounce_ms {
+        let d = j.int(d);
+        fields.push(("debounce_ms".into(), d));
+    }
+    Ok(j.obj(fields))
 }
 
 /// A constant expression as JSON; with `names`, a name or a dotted path is

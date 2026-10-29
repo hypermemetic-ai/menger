@@ -281,7 +281,7 @@ pub async fn spawn_menger(port: u16, db: &Path, extra: &[String]) -> Spawned {
     cmd.arg("--port").arg(port.to_string()).arg("--db-path").arg(db).args(login_args()).args(extra);
     // Never the default data directory.
     cmd.arg("--data-dir").arg(db.parent().expect("a db in a directory"));
-    for var in ["MENGER_DB_PATH", "MENGER_AUTH_PROVIDERS", "MENGER_ADMINS", "MENGER_UI_DB_PATH", "MENGER_UI_SIGNERS", "RUST_LOG"] {
+    for var in ["MENGER_DB_PATH", "MENGER_AUTH_PROVIDERS", "MENGER_ADMINS", "MENGER_UI_DB_PATH", "MENGER_UI_SIGNERS", "MENGER_UI_COMPILER", "RUST_LOG"] {
         cmd.env_remove(var);
     }
     cmd.env("PLEXUS_NO_REGISTRY", "1").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
@@ -421,4 +421,207 @@ pub async fn next_item(s: &mut jsonrpsee::core::client::Subscription<serde_json:
         },
         _ => None,
     }
+}
+
+// ── UI-7: bundles with sources — the push compiles, compares and lints ────
+
+/// `dist/ui-compiler.wasm`, built once per test binary by
+/// `scripts/ui-compiler-wasm.sh` (UI-5) into this checkout's `dist/` — what
+/// a test server takes as `--ui-compiler`.
+pub fn ui_compiler_wasm() -> std::path::PathBuf {
+    static BUILT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    BUILT
+        .get_or_init(|| {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+            let status = std::process::Command::new("bash")
+                .arg(root.join("scripts/ui-compiler-wasm.sh"))
+                .current_dir(root)
+                .stdout(std::process::Stdio::null())
+                .status()
+                .expect("scripts/ui-compiler-wasm.sh runs");
+            assert!(status.success(), "scripts/ui-compiler-wasm.sh failed: {status}");
+            let path = root.join("dist/ui-compiler.wasm");
+            assert!(path.is_file(), "{} was written", path.display());
+            path
+        })
+        .clone()
+}
+
+/// What a bundle holds as a component's compiled tree.
+#[derive(Debug, Clone)]
+pub enum Tree {
+    /// The tree the compiler makes of the source, and its handlers.
+    Compiled,
+    /// These bytes as `components/<name>.json` (the compiled handlers beside).
+    Given(String),
+    /// Neither `components/<name>.json` nor `.rhai`: the source alone.
+    Absent,
+}
+
+/// One component of a bundle: `src/<name>.svelte`, its tree as [`Tree`]
+/// says, and the `uses` its manifest entry names.
+#[derive(Debug, Clone)]
+pub struct Component {
+    pub name: String,
+    pub src: String,
+    pub tree: Tree,
+    pub uses: Vec<String>,
+    /// These bytes as `components/<name>.rhai` in place of the compiled
+    /// handlers (when the bundle holds a tree).
+    pub rhai: Option<String>,
+}
+
+impl Component {
+    /// `name` from `src`, its tree compiled, its `uses` what the compiler finds.
+    pub fn compiled(name: &str, src: &str) -> Self {
+        let uses = compile(name, src).tree_json()["uses"].as_array().map(|a| a.iter().filter_map(|u| u.as_str().map(str::to_string)).collect()).unwrap_or_default();
+        Self { name: name.into(), src: src.into(), tree: Tree::Compiled, uses, rhai: None }
+    }
+
+    /// `name` from `src`, which need not compile: no tree, no uses.
+    pub fn source(name: &str, src: &str) -> Self {
+        Self { name: name.into(), src: src.into(), tree: Tree::Absent, uses: vec![], rhai: None }
+    }
+
+    pub fn tree(mut self, tree: Tree) -> Self {
+        self.tree = tree;
+        self
+    }
+
+    pub fn rhai(mut self, rhai: &str) -> Self {
+        self.rhai = Some(rhai.into());
+        self
+    }
+
+    pub fn uses(mut self, uses: &[&str]) -> Self {
+        self.uses = uses.iter().map(|u| u.to_string()).collect();
+        self
+    }
+}
+
+/// The compiler's answer for `src` as `name`, natively — the same bytes the
+/// module answers (UI-5).
+pub struct Native(pub menger_ui_compiler::Compiled);
+
+impl Native {
+    pub fn tree_json(&self) -> serde_json::Value {
+        serde_json::from_str(&self.0.tree).expect("a compiled tree is JSON")
+    }
+}
+
+/// [`Native`] for a source that compiles.
+pub fn compile(name: &str, src: &str) -> Native {
+    Native(menger_ui_compiler::compile(name, src).unwrap_or_else(|r| panic!("{name} must compile natively: {r:?}")))
+}
+
+/// A component whose one handler calls `method` (its `uses`).
+pub fn calling(method: &str) -> String {
+    format!(
+        "<script>\n  prop(\"id\");\n  fn open(state, ev) {{ call(\"{method}\", #{{ id: ev.props.id }}); state }}\n</script>\n<p class=\"row\" on:click={{open}}>{{id}}</p>\n"
+    )
+}
+
+/// A source that compiles: [`calling`] `tickets.list`.
+pub fn row_source() -> String {
+    calling("tickets.list")
+}
+
+/// The manifest (UI-4's JSON) of `components`, its `contract` as given:
+/// each component's `tree` and `handlers` the sha256 of the files the
+/// bundle holds (of the compiled ones when it holds none), and its `uses`.
+pub fn compiled_manifest(n: u32, contract: &str, components: &[Component]) -> String {
+    let entries: serde_json::Map<String, serde_json::Value> = components
+        .iter()
+        .map(|c| {
+            let native = menger_ui_compiler::compile(&c.name, &c.src).ok();
+            let tree = match (&c.tree, &native) {
+                (Tree::Given(t), _) => sha_hex(t.as_bytes()),
+                (_, Some(n)) => sha_hex(n.tree.as_bytes()),
+                (_, None) => String::new(),
+            };
+            let handlers = match (&c.rhai, &native) {
+                (Some(r), _) if !matches!(c.tree, Tree::Absent) => sha_hex(r.as_bytes()),
+                (_, Some(n)) => sha_hex(n.handlers.as_bytes()),
+                (_, None) => String::new(),
+            };
+            (c.name.clone(), serde_json::json!({ "tree": tree, "handlers": handlers, "uses": c.uses }))
+        })
+        .collect();
+    serde_json::json!({
+        "abi": "engine/1", "contract": contract, "commit": format!("menger@{n:07x}"),
+        "routes": { "#/": components.first().map(|c| c.name.clone()).unwrap_or_default() },
+        "components": entries,
+        "slots": {},
+    })
+    .to_string()
+}
+
+/// Version `n` holding `components`: `index.html`, `manifest.json`
+/// ([`compiled_manifest`]), each `src/<name>.svelte`, and the trees and
+/// handlers each [`Tree`] says.
+pub fn compiled_bundle(n: u32, contract: &str, components: &[Component]) -> Vec<u8> {
+    let mut files = vec![("index.html".to_string(), index_html(n)), ("manifest.json".to_string(), compiled_manifest(n, contract, components))];
+    for c in components {
+        files.push((format!("src/{}.svelte", c.name), c.src.clone()));
+        let native = menger_ui_compiler::compile(&c.name, &c.src).ok();
+        match (&c.tree, native) {
+            (Tree::Absent, _) => {}
+            (Tree::Given(t), n) => {
+                files.push((format!("components/{}.json", c.name), t.clone()));
+                if let Some(h) = c.rhai.clone().or(n.map(|n| n.handlers)) {
+                    files.push((format!("components/{}.rhai", c.name), h));
+                }
+            }
+            (Tree::Compiled, Some(n)) => {
+                files.push((format!("components/{}.json", c.name), n.tree));
+                files.push((format!("components/{}.rhai", c.name), c.rhai.clone().unwrap_or(n.handlers)));
+            }
+            (Tree::Compiled, None) => {}
+        }
+    }
+    let mut b = tar::Builder::new(Vec::new());
+    for (name, body) in files {
+        let mut h = tar::Header::new_gnu();
+        h.set_size(body.len() as u64);
+        h.set_mode(0o644);
+        h.set_cksum();
+        b.append_data(&mut h, name, body.as_bytes()).unwrap();
+    }
+    b.into_inner().unwrap()
+}
+
+/// The test signer's signature over `bytes`, and `ui.push`'s params for them
+/// with `manifest` — an upload built by hand.
+pub fn signed_params(bytes: &[u8], manifest: &str, n: u32) -> serde_json::Value {
+    use base64::Engine;
+    use ed25519_dalek::Signer;
+    use sha2::Digest;
+    let signature = SigningKey::from_bytes(&UI_SIGNER).sign(&sha2::Sha256::digest(bytes));
+    let b64 = base64::engine::general_purpose::STANDARD;
+    serde_json::json!({ "bundle": b64.encode(bytes), "manifest": manifest, "signature": b64.encode(signature.to_bytes()), "commit": format!("{n:07x}") })
+}
+
+/// `ui.push`'s params for [`compiled_bundle`]`(n, contract, components)`,
+/// signed by [`UI_SIGNER`]; the `manifest` param is the JSON the bundle
+/// holds. With the bundle's bytes.
+pub fn compiled_push_params(n: u32, contract: &str, components: &[Component]) -> (serde_json::Value, Vec<u8>) {
+    compiled_push_params_with(n, contract, components, |m| m)
+}
+
+/// [`compiled_push_params`], the `manifest` param `param` of the JSON the
+/// bundle holds — a param that disagrees with `manifest.json`.
+pub fn compiled_push_params_with(n: u32, contract: &str, components: &[Component], param: impl FnOnce(serde_json::Value) -> serde_json::Value) -> (serde_json::Value, Vec<u8>) {
+    use base64::Engine;
+    use ed25519_dalek::Signer;
+    use sha2::Digest;
+    let bytes = compiled_bundle(n, contract, components);
+    let signature = SigningKey::from_bytes(&UI_SIGNER).sign(&sha2::Sha256::digest(&bytes));
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let params = serde_json::json!({
+        "bundle": b64.encode(&bytes),
+        "manifest": param(serde_json::from_str(&compiled_manifest(n, contract, components)).unwrap()).to_string(),
+        "signature": b64.encode(signature.to_bytes()),
+        "commit": format!("{n:07x}"),
+    });
+    (params, bytes)
 }

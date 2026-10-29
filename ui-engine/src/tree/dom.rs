@@ -19,24 +19,44 @@ impl Dom {
     }
 }
 
-/// What a handler sees of a DOM event: `{ value, target }` — the target's
-/// value (an input's), and its tag, name, id and `data-*`.
-fn payload(e: &web_sys::Event) -> Value {
-    let Some(t) = e.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok()) else { return json!({ "value": null, "target": null }) };
-    let value = js_sys::Reflect::get(&t, &"value".into()).ok().and_then(|v| v.as_string());
-    let mut data = serde_json::Map::new();
-    let attrs = t.get_attribute_names();
-    for i in 0..attrs.length() {
-        if let Some(name) = attrs.get(i).as_string() {
-            if let Some(key) = name.strip_prefix("data-") {
-                data.insert(key.to_string(), Value::String(t.get_attribute(&name).unwrap_or_default()));
+/// What a handler sees of a DOM event: `value` and `checked` (an input's),
+/// `key` (a key event's), the scroll metrics of the element listened on
+/// (`scroll_top`, `scroll_height`, `client_height`), and `target` — its
+/// tag, id, name and `data-*`.
+fn payload(e: &web_sys::Event, on: &web_sys::Node) -> Value {
+    let get = |o: &JsValue, k: &str| js_sys::Reflect::get(o, &k.into()).ok().filter(|v| !v.is_undefined() && !v.is_null());
+    let mut out = serde_json::Map::new();
+    let target = e.target().and_then(|t| t.dyn_into::<web_sys::Element>().ok());
+    if let Some(t) = &target {
+        out.insert("value".into(), get(t, "value").and_then(|v| v.as_string()).map_or(Value::Null, Value::String));
+        if let Some(c) = get(t, "checked").and_then(|v| v.as_bool()) {
+            out.insert("checked".into(), Value::Bool(c));
+        }
+        let mut data = serde_json::Map::new();
+        let attrs = t.get_attribute_names();
+        for i in 0..attrs.length() {
+            if let Some(name) = attrs.get(i).as_string() {
+                if let Some(key) = name.strip_prefix("data-") {
+                    data.insert(key.to_string(), Value::String(t.get_attribute(&name).unwrap_or_default()));
+                }
             }
         }
+        out.insert("target".into(), json!({ "tag": t.tag_name().to_ascii_lowercase(), "id": t.id(), "name": t.get_attribute("name"), "data": data }));
+    } else {
+        out.insert("value".into(), Value::Null);
+        out.insert("target".into(), Value::Null);
     }
-    json!({
-        "value": value,
-        "target": { "tag": t.tag_name().to_ascii_lowercase(), "id": t.id(), "name": t.get_attribute("name"), "data": data },
-    })
+    if let Some(k) = e.dyn_ref::<web_sys::KeyboardEvent>() {
+        out.insert("key".into(), Value::String(k.key()));
+    }
+    if let Some(el) = on.dyn_ref::<web_sys::Element>() {
+        if e.type_() == "scroll" {
+            out.insert("scroll_top".into(), json!(el.scroll_top()));
+            out.insert("scroll_height".into(), json!(el.scroll_height()));
+            out.insert("client_height".into(), json!(el.client_height()));
+        }
+    }
+    Value::Object(out)
 }
 
 impl Renderer for Dom {
@@ -63,7 +83,28 @@ impl Renderer for Dom {
         let _ = parent.remove_child(child);
     }
     fn listen(&self, node: &web_sys::Node, event: &str, handler: Rc<dyn Fn(Value)>) {
-        let f = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| handler(payload(&e)));
+        // UI-10: `window-<event>` listens on the window while `node` is in
+        // the page; the first event after it has gone removes the listener.
+        if let Some(event) = event.strip_prefix("window-") {
+            let Some(window) = web_sys::window() else { return };
+            let (n, w, name) = (node.clone(), window.clone(), event.to_string());
+            let cell: Rc<std::cell::RefCell<Option<js_sys::Function>>> = Rc::default();
+            let c2 = cell.clone();
+            let f = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+                if n.is_connected() {
+                    handler(payload(&e, &n));
+                } else if let Some(f) = c2.borrow_mut().take() {
+                    let _ = w.remove_event_listener_with_callback(&name, &f);
+                }
+            });
+            let func: js_sys::Function = f.as_ref().unchecked_ref::<js_sys::Function>().clone();
+            let _ = window.add_event_listener_with_callback(event, &func);
+            *cell.borrow_mut() = Some(func);
+            f.forget();
+            return;
+        }
+        let on = node.clone();
+        let f = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| handler(payload(&e, &on)));
         let _ = node.add_event_listener_with_callback(event, f.as_ref().unchecked_ref());
         // The listener lives as long as its node: the page's.
         f.forget();

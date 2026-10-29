@@ -26,7 +26,7 @@
 //! then swaps.
 
 use crate::folds::{FoldError, Folds, Host};
-use crate::live::{Clock, LiveCache, LiveSpec, Reader};
+use crate::live::{Clock, Follow, LiveCache, LiveQuery};
 use crate::signals::{Runtime, Signal};
 use crate::transport::Wire;
 use crate::tree::{Children, ComponentTree, Mounted, Renderer, Scope, State};
@@ -202,7 +202,7 @@ struct Inst<R: Renderer> {
     props: Map<String, Value>,
     state: State,
     live: BTreeMap<String, Signal<Value>>,
-    readers: Vec<Reader>,
+    readers: Vec<Follow>,
     folds: Rc<Folds>,
     tree: Rc<ComponentTree>,
     mounted: Option<Mounted<R>>,
@@ -409,12 +409,21 @@ impl<R: Renderer, W: Wire + Clone + 'static, C: Clock + Clone + 'static> App<R, 
         let mut readers = Vec::new();
         let mut live = BTreeMap::new();
         for (name, d) in &p.tree.live {
-            let on: Vec<(&str, &str)> = d.on.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
-            let params = crate::live::resolve(&d.params, &props);
-            let changes_params = crate::live::resolve(&d.changes_params, &props);
-            let spec = LiveSpec::new(&d.snapshot, params, &d.changes, changes_params, &d.key, &on)
-                .map_err(|message| SwapError::Failed { component: p.tree.name.clone(), message })?;
-            let r = self.cache.acquire(&spec);
+            // A bad fold rule is refused at mount, naming it.
+            for rule in d.on.values() {
+                rule.parse::<crate::live::FoldRule>().map_err(|message| SwapError::Failed { component: p.tree.name.clone(), message })?;
+            }
+            // UI-10: the params follow the scope — a state key they read
+            // changing runs the snapshot again (after debounce_ms).
+            let query = LiveQuery {
+                snapshot: d.snapshot.clone(),
+                changes: d.changes.clone(),
+                key: d.key.clone(),
+                on: d.on.iter().map(|(a, b)| (a.clone(), b.clone())).collect(),
+                debounce_ms: d.debounce_ms,
+            };
+            let (pp, cp, pr, st) = (d.params.clone(), d.changes_params.clone(), props.clone(), state.clone());
+            let r = self.cache.follow(query, move || (crate::tree::eval_params(&pp, &pr, &st), crate::tree::eval_params(&cp, &pr, &st)));
             live.insert(name.clone(), r.signal());
             readers.push(r);
         }

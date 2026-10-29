@@ -194,7 +194,7 @@ impl Folds {
     }
 
     /// Runs `handler` on `state` and the event: `ev` is the DOM event's
-    /// payload (`{ value, target }`) with the props as `ev.props` and each
+    /// payload (`value`, `checked`, `target`, `key`, the scroll metrics) with the props as `ev.props` and each
     /// `live` collection's rows as `ev.live.<name>`. The new state.
     pub fn run(
         &self,
@@ -207,12 +207,16 @@ impl Folds {
         if !self.handlers.iter().any(|h| h == handler) {
             return Err(FoldError::NoHandler(handler.to_string()));
         }
-        let ev = json!({
-            "value": event.get("value").cloned().unwrap_or(Value::Null),
-            "target": event.get("target").cloned().unwrap_or(Value::Null),
-            "props": props,
-            "live": live,
-        });
+        // UI-10: what the DOM gave (value, checked, target, key, scroll_top,
+        // scroll_height, client_height, as they apply), then the props and
+        // the live rows.
+        let mut ev = event.as_object().cloned().unwrap_or_default();
+        for k in ["value", "target"] {
+            ev.entry(k).or_insert(Value::Null);
+        }
+        ev.insert("props".into(), json!(props));
+        ev.insert("live".into(), json!(live));
+        let ev = Value::Object(ev);
         let to = |v: &Value| rhai::serde::to_dynamic(v).unwrap_or(Dynamic::UNIT);
         let run = |message: String| FoldError::Run { handler: handler.to_string(), message };
         let out: Dynamic = self
