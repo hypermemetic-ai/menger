@@ -2,9 +2,9 @@ use menger_tickets_api::access::Access;
 // v2: only `tickets` is registered; the rest come back one at a time.
 // use menger_tickets_api::{ChatsActivation, CommentsActivation, DeploymentsActivation, EpicsActivation, MediaActivation, MembersActivation, NotesActivation, OrgsActivation, SessionActivation, ThemesActivation};
 use menger_tickets_api::{ProviderOffer, TicketsActivation};
-use menger_ui_service::{Signers, UiActivation, UiStore, UI_DB_FILE};
+use menger_ui_service::{Compiler, Signers, UiActivation, UiStore, UI_DB_FILE};
 use menger_tickets_api::store::{OpenPurge, SeedShape, SeedSpec, Store, StoreError, System, PURGE_EVERY};
-use plexus_core::plexus::{AuthBackend, AuthSetup, DynamicHub, Provider as AuthProvider, ProviderKind as AuthKind};
+use plexus_core::plexus::{Activation, AuthBackend, AuthSetup, ChildRouter, DynamicHub, Provider as AuthProvider, ProviderKind as AuthKind};
 
 use crate::auth_backend::MengerAuth;
 
@@ -43,6 +43,9 @@ pub fn default_ui_db_path(db_path: &Path) -> PathBuf {
 pub struct UiSetup {
     pub store: Arc<UiStore>,
     pub signers: Signers,
+    /// UI-7: the compiler module (`--ui-compiler`) every push compiles its
+    /// sources in; none: the trees are stored as given (`compiled: false`).
+    pub compiler: Option<Compiler>,
 }
 
 impl UiSetup {
@@ -51,7 +54,13 @@ impl UiSetup {
     pub fn open(path: &Path, signers: Signers) -> anyhow::Result<Self> {
         let store = UiStore::open(path).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
         tracing::info!("ui:        {}", path.display());
-        Ok(Self { store: Arc::new(store), signers })
+        Ok(Self { store: Arc::new(store), signers, compiler: None })
+    }
+
+    /// UI-7: pushes compile in `compiler` (`--ui-compiler`).
+    pub fn compiling(mut self, compiler: Option<Compiler>) -> Self {
+        self.compiler = compiler;
+        self
     }
 
     /// The store beside the tickets file ([`default_ui_db_path`]), with no
@@ -179,6 +188,35 @@ pub async fn build_rpc_ui(
     chat_members: Vec<String>,
     ui: UiSetup,
 ) -> anyhow::Result<Arc<DynamicHub>> {
+    build_rpc_ui_over(db_path, seed, shape, offers, access, backend, resource_metadata, body_max, chat_members, ui, |store, access| {
+        TicketsActivation::with_access(store, access)
+    })
+    .await
+}
+
+/// UI-7: [`build_rpc_ui`] with the activation registered as `tickets` made
+/// by `tickets` over the store and the rule — main's is
+/// [`TicketsActivation`]; a test's may be a reduced service, to show the
+/// ui service reads the running one through the seam, never a copy. The
+/// ui activation's seam is attached to the hub built here.
+#[allow(clippy::too_many_arguments)]
+pub async fn build_rpc_ui_over<T, F>(
+    db_path: &Path,
+    seed: Option<SeedSpec>,
+    shape: SeedShape,
+    offers: Vec<ProviderOffer>,
+    access: Access,
+    backend: Arc<dyn AuthBackend>,
+    resource_metadata: Option<String>,
+    body_max: usize,
+    chat_members: Vec<String>,
+    ui: UiSetup,
+    tickets: F,
+) -> anyhow::Result<Arc<DynamicHub>>
+where
+    T: Activation + ChildRouter + Clone + 'static,
+    F: FnOnce(Arc<Store>, Access) -> T,
+{
     let path = db_path.to_path_buf();
     let started = Instant::now();
     // MENGER-15: and its cap on a body (`--max-body-bytes`).
@@ -257,11 +295,13 @@ pub async fn build_rpc_ui(
     //     tracing::info!("CHAT-13: standing chat members {:?}; seated in {} open chat(s)", store.chat_members(), seated.len());
     // }
     let _ = (seating, chat_members, offers);
-    let tickets = TicketsActivation::with_access(Arc::clone(&store), access.clone());
+    let tickets = tickets(Arc::clone(&store), access.clone());
     // v2: `tickets` alone — its children (inputs, commits, nav, work,
     // subtasks, …) with it; every other activation comes back one at a time.
     // UI-3: `ui` beside it — the UI's versions, over its own file.
-    let ui = UiActivation::new(ui.store, ui.signers, access.clone()).following(Arc::clone(&store));
+    // UI-7: and its pushes compiled in `--ui-compiler`'s module.
+    let ui = UiActivation::new(ui.store, ui.signers, access.clone()).following(Arc::clone(&store)).compiling(ui.compiler);
+    let seam = ui.seam().clone();
     let mut hub = DynamicHub::new("menger").register(tickets).register(ui);
     // .register(CommentsActivation::with_access(Arc::clone(&store), access.clone()))
     // // CHAT-3: `chats` beside them — conversations inside tickets.
@@ -293,7 +333,10 @@ pub async fn build_rpc_ui(
     // MACRO-20: `declared_roles` holds the children's too, each grant
     // under its path (`tickets.commits.link`).
     book.seed(hub.declared_roles());
-    Ok(Arc::new(hub))
+    let hub = Arc::new(hub);
+    // UI-7: the ui service calls the tickets service through this hub.
+    seam.attach(&hub);
+    Ok(hub)
 }
 
 /// ACCESS-24 (ACCESS-4 C2): the grants open mode planted — every stored

@@ -160,6 +160,14 @@ http-body-util = "0.1"
 # UI-3: tests/wire_ui.rs and tests/ui_serve.rs build a bundle (a small tar)
 # and sign its sha256.
 tar = { version = "0.4", default-features = false }
+# UI-7: tests/wire_ui_compile.rs knows a source's tree from the compiler
+# natively (the same bytes as the module, UI-5), and registers a reduced
+# `tickets` — a probe activation — to show the lint reads the running service.
+menger-ui-compiler = { path = "ui-compiler" }
+plexus-macros = { path = "../plexus-macros" }
+async-stream = "0.3"
+schemars = { version = "1.1", features = ["derive"] }
+uuid = { version = "1.6", features = ["v4", "serde"] }
 
 # MNG-8's `[patch.crates-io]` on the plexus-transport-v0.2.3 tag went with
 # MFE-10: the REST bridge fixes it carried are on plexus-transport `main`
