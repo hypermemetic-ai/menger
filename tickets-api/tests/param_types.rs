@@ -13,8 +13,8 @@
 //! ```
 //!
 //! This test holds the flag: it reads every file that declares an
-//! activation — the workspace and the shell's toy included —
-//! and fails on an attribute without `typed_params`, naming the file. (It
+//! activation in menger's tree (FRAME-4: the shell's toy is plexus-shell's
+//! own, in its repository) and fails on an attribute without `typed_params`, naming the file. (It
 //! replaces the hand-rolled guard ACCESS-8's body first described, which
 //! read the signatures; the macro reads them better.) A parameter's type
 //! comes from `menger_tickets_api::vocab`, the vocabulary's enums, or a
@@ -85,8 +85,8 @@ fn every_activation_is_declared_with_typed_params() {
             }
         }
     }
-    // tickets, comments, notes, members, orgs, session, themes, deployments,
-    // diagrams' mermaid and the toy's echo.
+    // tickets' and its children, members, orgs, epics, session, teams, ui
+    // and its slots, and tether's.
     assert!(seen >= 10, "found only {seen} activations: the walk lost some");
     assert!(missing.is_empty(), "\n{}\n", missing.join("\n"));
 }

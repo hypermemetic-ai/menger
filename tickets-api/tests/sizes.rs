@@ -27,7 +27,6 @@ const BUDGETS: &[(&str, usize)] = &[
     ("tickets-api/src/members_activation.rs", 206),
     ("tickets-api/src/orgs_activation.rs", 240),
     ("tickets-api/src/session_activation.rs", 250),
-    ("plexus-shell/toy/src/lib.rs", 60),
     // Not an activation, held all the same: the store's write path.
     ("tickets-api/src/store/mod.rs", 5900),
 ];

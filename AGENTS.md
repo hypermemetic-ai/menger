@@ -553,14 +553,15 @@ question.
 ## Conventions
 
 - Plexus crates come from the **0.6 line by sibling path** (MFE-10):
-  `../plexus-core`, `../plexus-macros`, `../plexus-transport`, all on
+  `../plexus-core`, `../plexus-macros`, `../plexus-transport` — and
+  `../plexus-shell`, `../plexus-login` (FRAME-4: repositories of their
+  own) — all on
   `main`, referencing each other the same way so the graph resolves one of
   each. A clone of menger alone does not build; the sibling checkouts must
   be beside it. Every activation is `impl FooActivation` (MACRO-13,
   MACRO-21): the stem names the namespace, the trait and the client.
 - **Workspace members** (`Cargo.toml`): `.`, `tickets-api`, `ui-service`,
-  `ui-compiler`, `ui-engine`, `plexus-shell`, `plexus-shell/toy`,
-  `plexus-login`; `tether/` is its own workspace.
+  `ui-compiler`, `ui-engine`; `tether/` is its own workspace.
 - The `tickets` activation lives ONCE, in `tickets-api/`
   (`menger-tickets-api`, MFE-11): the vocabulary, the store, and
   `activation/mod.rs`'s `#[activation]` on `impl TicketsActivation` (its

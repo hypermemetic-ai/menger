@@ -2484,7 +2484,6 @@ dependencies = [
  "futures",
  "ipnet",
  "jsonrpsee",
- "jsonwebtoken",
  "plexus-auth-core",
  "plexus-core",
  "plexus-transport",
@@ -2495,9 +2494,7 @@ dependencies = [
  "sha1 0.10.7",
  "sha2",
  "tokio",
- "tower",
  "tracing",
- "tracing-subscriber",
  "url",
 ]
 
@@ -2524,28 +2521,8 @@ dependencies = [
  "plexus-core",
  "plexus-transport",
  "sha2",
- "tempfile",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "plexus-shell-toy"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "async-stream",
- "async-trait",
- "futures",
- "jsonrpsee",
- "plexus-core",
- "plexus-macros",
- "plexus-shell",
- "schemars",
- "serde",
- "serde_json",
- "tokio",
- "uuid",
 ]
 
 [[package]]
