@@ -411,7 +411,7 @@ cargo_release() { # LOG — cargo build --release of WS_PKGS; dies red, naming t
   for p in $WS_PKGS; do [[ -s $CARGO_TARGET_DIR/release/$p ]] || die "release build: $CARGO_TARGET_DIR/release/$p is missing or empty"; done
 }
 V2_STEPS=""
-build_v2() { # V2-7: cargo build on this machine, the bundle (and the compiler module) in the container
+build_v2() { # V2-7: cargo's steps on this machine (the release, the prebuild, the compiler module), the bundle's tar in the container
   local lr f
   V2_STEPS="cargo build"
   step "release build"
@@ -433,9 +433,12 @@ build_v2() { # V2-7: cargo build on this machine, the bundle (and the compiler m
   tar -tf "$BUILD/dist/ui.tar" 2>/dev/null | grep -qx 'index.html' || die "ui-build: $BUILD/dist/ui.tar is no tar holding index.html"
   V2_STEPS+=", ui-build"
   if [[ -f $BUILD/scripts/ui-compiler-wasm.sh ]]; then
-    step "ui-compiler-wasm (scripts/ui-compiler-wasm.sh in $CODEGEN_IMAGE)"
+    # cargo's (wasm32-unknown-unknown), so on this machine into the build's target, as UI-6's
+    # prebuild is: the plexus-codegen image has no Rust toolchain (V2-7's provides row; that
+    # image does not build today, NAMING-4)
+    step "ui-compiler-wasm (scripts/ui-compiler-wasm.sh, on this machine)"
     lr=$(log_path build-ui-compiler); say "log: $lr"
-    codegen "$lr" scripts/ui-compiler-wasm.sh || { red_run; die "ui-compiler-wasm failed — $lr"; }
+    (cd "$BUILD" && scripts/ui-compiler-wasm.sh) >"$lr" 2>&1 || { red_run; die "ui-compiler-wasm failed — $lr"; }
     [[ -s $BUILD/dist/ui-compiler.wasm ]] || die "ui-compiler-wasm: no $BUILD/dist/ui-compiler.wasm"
     V2_STEPS+=", ui-compiler-wasm"
   else

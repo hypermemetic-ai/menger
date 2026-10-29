@@ -271,7 +271,10 @@ mounted at `/work`; `MENGER_CODEGEN_IMAGE` names another) —
 `scripts/ui-build.sh` → `dist/ui.tar` (`ui-build`; a stub holding the
 placeholder page and its `manifest.json` until UI-6) and, when the tree has
 `scripts/ui-compiler-wasm.sh` (UI-5), `dist/ui-compiler.wasm`
-(`ui-compiler-wasm`). The release is `bin/menger`, `bin/run-menger`, `dist/`
+(`ui-compiler-wasm`) — cargo's, so built on this machine into the build's
+target (rustup's `wasm32-unknown-unknown`), as UI-6's prebuild is: the
+`plexus-codegen` image has no Rust toolchain yet (and does not build today,
+NAMING-4). The release is `bin/menger`, `bin/run-menger`, `dist/`
 and `RELEASE`, no `app/`. A tree that tracks `frontend/` builds as before
 (a `frontend/target/` the build checkout kept untracked is no frontend). The
 release build builds the workspace's own packages (`cargo metadata`):
