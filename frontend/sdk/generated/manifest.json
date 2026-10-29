@@ -25,7 +25,9 @@
         "role"
       ],
       "roles": [],
-      "schema": [],
+      "schema": [
+        "method"
+      ],
       "signup": [
         "via"
       ],
@@ -115,7 +117,9 @@
         "ids",
         "to"
       ],
-      "schema": [],
+      "schema": [
+        "method"
+      ],
       "tickets": [
         "chat"
       ],
@@ -154,7 +158,9 @@
         "input",
         "message"
       ],
-      "schema": []
+      "schema": [
+        "method"
+      ]
     },
     "comments": {
       "add": [
@@ -191,7 +197,9 @@
       "resolve": [
         "id"
       ],
-      "schema": [],
+      "schema": [
+        "method"
+      ],
       "watch": []
     },
     "deployments": {
@@ -244,7 +252,9 @@
         "ids",
         "project"
       ],
-      "schema": [],
+      "schema": [
+        "method"
+      ],
       "step": [
         "detail",
         "name",
@@ -259,7 +269,9 @@
         "environment",
         "project"
       ],
-      "schema": [],
+      "schema": [
+        "method"
+      ],
       "set": [
         "environment",
         "project",
@@ -308,7 +320,9 @@
         "name",
         "org"
       ],
-      "schema": [],
+      "schema": [
+        "method"
+      ],
       "set_default": [
         "name",
         "org"
@@ -330,7 +344,9 @@
         "mime",
         "ticket"
       ],
-      "schema": []
+      "schema": [
+        "method"
+      ]
     },
     "members": {
       "grant": [
@@ -354,14 +370,18 @@
         "scope",
         "team"
       ],
-      "schema": []
+      "schema": [
+        "method"
+      ]
     },
     "members.profiles": {
       "get": [
         "principal"
       ],
       "list": [],
-      "schema": []
+      "schema": [
+        "method"
+      ]
     },
     "members.teams": {
       "add": [
@@ -386,7 +406,9 @@
         "team",
         "to"
       ],
-      "schema": [],
+      "schema": [
+        "method"
+      ],
       "show": [
         "team"
       ]
@@ -406,7 +428,9 @@
         "state",
         "text"
       ],
-      "schema": [],
+      "schema": [
+        "method"
+      ],
       "upgrade": [
         "epic",
         "id",
@@ -428,7 +452,9 @@
         "name",
         "to"
       ],
-      "schema": []
+      "schema": [
+        "method"
+      ]
     },
     "session": {
       "login": [
@@ -437,7 +463,9 @@
       ],
       "logout": [],
       "providers": [],
-      "schema": [],
+      "schema": [
+        "method"
+      ],
       "whoami": []
     },
     "themes": {
@@ -450,7 +478,9 @@
         "name"
       ],
       "list": [],
-      "schema": [],
+      "schema": [
+        "method"
+      ],
       "set": [
         "reach",
         "scope",
@@ -588,7 +618,9 @@
         "tz",
         "with_children"
       ],
-      "schema": [],
+      "schema": [
+        "method"
+      ],
       "search": [
         "filter",
         "limit",
@@ -675,7 +707,9 @@
         "id",
         "ids"
       ],
-      "schema": [],
+      "schema": [
+        "method"
+      ],
       "unlink": [
         "commits",
         "id"
@@ -683,7 +717,9 @@
     },
     "tickets.components": {
       "list": [],
-      "schema": []
+      "schema": [
+        "method"
+      ]
     },
     "tickets.filters": {
       "check": [
@@ -704,7 +740,9 @@
         "filter",
         "name"
       ],
-      "schema": []
+      "schema": [
+        "method"
+      ]
     },
     "tickets.inputs": {
       "answer": [
@@ -736,7 +774,9 @@
         "input",
         "ticket"
       ],
-      "schema": []
+      "schema": [
+        "method"
+      ]
     },
     "tickets.nav": {
       "counts": [
@@ -756,7 +796,9 @@
         "ids",
         "tz"
       ],
-      "schema": [],
+      "schema": [
+        "method"
+      ],
       "tree": [
         "after",
         "epic",
@@ -791,7 +833,9 @@
         "rev",
         "source"
       ],
-      "schema": []
+      "schema": [
+        "method"
+      ]
     },
     "tickets.subtasks": {
       "create": [
@@ -806,7 +850,9 @@
         "limit",
         "parent"
       ],
-      "schema": []
+      "schema": [
+        "method"
+      ]
     },
     "tickets.work": {
       "blockers": [
@@ -820,7 +866,9 @@
         "summary",
         "tz"
       ],
-      "schema": [],
+      "schema": [
+        "method"
+      ],
       "waves": [
         "epics",
         "kinds"
