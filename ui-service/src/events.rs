@@ -14,7 +14,7 @@ pub enum Reason {
     BadSignature,
     /// The bundle is not a tar archive with an `index.html`.
     BadBundle,
-    /// The manifest names no `contract` or no `abi`.
+    /// The manifest is not the contract's JSON, or names no `contract` or no `abi`.
     BadManifest,
     /// The version named is not kept (or, a set naming none, nothing is live).
     UnknownVersion,
@@ -33,8 +33,9 @@ pub enum UiEvent {
     /// already) and the pointer on it.
     Pushed { version: String, live: bool, new: bool },
     /// `rollback`: the version the pointer names now. UI-9: and on
-    /// `ui.watch`, on every pointer move (a push, a rollback).
-    Live { version: String },
+    /// `ui.watch` — first, the pointer as it stands (`null` when nothing is
+    /// live), then on every pointer move (a push, a rollback).
+    Live { version: Option<String> },
     /// UI-9 `ui.slots.set`: the assignment written — `version` the stored
     /// hash it names (the live one when none was given).
     Set { layout: String, slot: String, component: String, version: String },

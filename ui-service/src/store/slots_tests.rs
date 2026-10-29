@@ -11,9 +11,13 @@ use tokio::sync::broadcast::error::TryRecvError;
 const LAYOUT: &str = "board-layout";
 const SLOT: &str = "main";
 
-/// Version `n`'s `manifest.json`: `components` each named, and the layout's
-/// one slot defaulting to `ticket-list`.
-fn manifest_json(n: u32, components: &[&str]) -> String {
+/// The slots most versions declare: the layout's one section, defaulting to `ticket-list`.
+fn default_slots() -> serde_json::Value {
+    serde_json::json!({ LAYOUT: { SLOT: "ticket-list" } })
+}
+
+/// Version `n`'s manifest (UI-4's JSON): `components` each named, `slots` as given.
+fn manifest_json(n: u32, components: &[&str], slots: &serde_json::Value) -> String {
     let components: serde_json::Map<String, serde_json::Value> = components
         .iter()
         .map(|c| (c.to_string(), serde_json::json!({ "tree": format!("{n}-{c}-tree"), "handlers": format!("{n}-{c}-rhai"), "uses": [] })))
@@ -22,14 +26,14 @@ fn manifest_json(n: u32, components: &[&str]) -> String {
         "abi": "engine/1", "contract": format!("c{n}"), "commit": format!("menger@{n:07x}"),
         "routes": { "#/": LAYOUT },
         "components": components,
-        "slots": { LAYOUT: { SLOT: "ticket-list" } },
+        "slots": slots,
     })
     .to_string()
 }
 
 /// A bundle holding `index.html`, `manifest.json` and each component's tree.
-fn bundle(n: u32, components: &[&str]) -> Vec<u8> {
-    let mut files = vec![("index.html".to_string(), format!("<!doctype html><title>v{n}</title>")), ("manifest.json".to_string(), manifest_json(n, components))];
+fn bundle(n: u32, components: &[&str], slots: &serde_json::Value) -> Vec<u8> {
+    let mut files = vec![("index.html".to_string(), format!("<!doctype html><title>v{n}</title>")), ("manifest.json".to_string(), manifest_json(n, components, slots))];
     files.extend(components.iter().map(|c| (format!("components/{c}.json"), format!("{{\"name\":\"{c}\",\"v\":{n}}}"))));
     let mut b = tar::Builder::new(Vec::new());
     for (name, body) in files {
@@ -42,15 +46,19 @@ fn bundle(n: u32, components: &[&str]) -> Vec<u8> {
     b.into_inner().unwrap()
 }
 
-fn version(n: u32, components: &[&str]) -> NewVersion {
+fn version_with(n: u32, components: &[&str], slots: serde_json::Value) -> NewVersion {
     NewVersion {
-        bundle: bundle(n, components),
+        bundle: bundle(n, components, &slots),
         // The contract's JSON (UI-4), as the push's param and the bundle hold it.
-        manifest: manifest_json(n, components),
+        manifest: manifest_json(n, components, &slots),
         commit: Some(format!("{n:07x}")),
         pushed_by: "key:admin".into(),
         pushed_at: 100 * n as i64,
     }
+}
+
+fn version(n: u32, components: &[&str]) -> NewVersion {
+    version_with(n, components, default_slots())
 }
 
 /// v1: the layout and two components that may fill its section.
@@ -67,6 +75,10 @@ fn row(layout: &str, slot: &str, component: &str, hash: &str) -> Vec<Value> {
     [layout, slot, component, hash].iter().map(|s| Value::Text(s.to_string())).collect()
 }
 
+fn section(component: Option<&str>, version: Option<&str>) -> Section {
+    Section { layout: LAYOUT.into(), slot: SLOT.into(), component: component.map(str::to_string), version: version.map(str::to_string) }
+}
+
 #[test]
 fn an_assignment_is_a_row_and_clear_removes_it() {
     let dir = tempfile::tempdir().unwrap();
@@ -76,7 +88,7 @@ fn an_assignment_is_a_row_and_clear_removes_it() {
     let v2 = s.push(version(2, &["board-layout", "ticket-list"])).unwrap().version;
     let mut changes = s.subscribe();
 
-    // No version named: the live one's hash is kept — v2 holds no ticket-grid, so name v1.
+    // v2 is live and holds no ticket-grid: name v1.
     let set = s.slots_set(LAYOUT, SLOT, "ticket-grid", Some(&v1)).unwrap();
     let want = Assignment { layout: LAYOUT.into(), slot: SLOT.into(), component: "ticket-grid".into(), version: v1.clone(), default: Some("ticket-list".into()) };
     assert_eq!(set, want, "the set answers the row, with the default it overrides");
@@ -84,23 +96,42 @@ fn an_assignment_is_a_row_and_clear_removes_it() {
     assert_eq!(s.slots_list(None).unwrap(), vec![want.clone()], "list shows it");
     assert_eq!(s.slots_list(Some(LAYOUT)).unwrap(), vec![want], "and under its layout");
     assert!(s.slots_list(Some("ticket-page")).unwrap().is_empty(), "and under no other");
-    let said = changes.try_recv().expect("the set is said on the broadcast");
-    let section = Section { layout: LAYOUT.into(), slot: SLOT.into(), component: Some("ticket-grid".into()), version: Some(v1.clone()) };
-    assert_eq!(said, UiChange::SlotChanged(section));
+    assert_eq!(changes.try_recv().expect("the set is said on the broadcast"), UiChange::SlotChanged(section(Some("ticket-grid"), Some(&v1))));
 
-    // Set again, the live version by default: still one row per section.
+    // Set again, no version named: the live hash at that moment, pinned; still one row per section.
     let again = s.slots_set(LAYOUT, SLOT, "ticket-list", None).unwrap();
     assert_eq!((again.component.as_str(), again.version.as_str()), ("ticket-list", v2.as_str()), "no version: the live one's hash");
     assert_eq!(slot_rows(&path), vec![row(LAYOUT, SLOT, "ticket-list", &v2)], "the row replaced, not added");
-    let _ = changes.try_recv().expect("said too");
+    assert_eq!(changes.try_recv().expect("said too"), UiChange::SlotChanged(section(Some("ticket-list"), Some(&v2))));
 
-    // Clear: the row gone, and the section's default said.
+    // A later push never moves it; the default follows the live manifest (v3's is ticket-grid).
+    let v3 = s.push(version_with(3, &["board-layout", "ticket-grid"], serde_json::json!({ LAYOUT: { SLOT: "ticket-grid" } }))).unwrap().version;
+    assert_eq!(changes.try_recv().expect("the push is said"), UiChange::Live { version: v3.clone() });
+    assert_eq!(slot_rows(&path), vec![row(LAYOUT, SLOT, "ticket-list", &v2)], "the row still names v2");
+    let listed = s.slots_list(None).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!((listed[0].version.as_str(), listed[0].default.as_deref()), (v2.as_str(), Some("ticket-grid")), "v2 pinned; v3's default");
+
+    // Clear: the row gone, and the live manifest's default said, in the live version.
     let cleared = s.slots_clear(LAYOUT, SLOT).unwrap();
-    let default = Section { layout: LAYOUT.into(), slot: SLOT.into(), component: Some("ticket-list".into()), version: Some(v2.clone()) };
-    assert_eq!(cleared, default, "the section shows the live manifest's default");
+    assert_eq!(cleared, section(Some("ticket-grid"), Some(&v3)), "the section shows the live manifest's default");
     assert!(slot_rows(&path).is_empty(), "the row removed");
     assert!(s.slots_list(None).unwrap().is_empty(), "list shows none");
-    assert_eq!(changes.try_recv().expect("the clear is said"), UiChange::SlotChanged(default));
+    assert_eq!(changes.try_recv().expect("the clear is said"), UiChange::SlotChanged(cleared.clone()));
+
+    // A clear on a section with no row: the default answered, nothing written, nothing said.
+    assert_eq!(s.slots_clear(LAYOUT, SLOT).unwrap(), cleared, "the default, again");
+    assert!(slot_rows(&path).is_empty());
+    assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)), "nothing said");
+
+    // A live manifest without the layout: the default is null, and a clear's too.
+    s.slots_set(LAYOUT, SLOT, "ticket-list", Some(&v2)).unwrap();
+    let _ = changes.try_recv();
+    let v4 = s.push(version_with(4, &["ticket-page"], serde_json::json!({}))).unwrap().version;
+    assert_eq!(changes.try_recv().unwrap(), UiChange::Live { version: v4 });
+    assert_eq!(s.slots_list(None).unwrap()[0].default, None, "v4 declares no such layout");
+    assert_eq!(s.slots_clear(LAYOUT, SLOT).unwrap(), section(None, None), "nulls");
+    assert_eq!(changes.try_recv().unwrap(), UiChange::SlotChanged(section(None, None)));
     assert!(matches!(changes.try_recv(), Err(TryRecvError::Empty)), "and nothing else");
 }
 

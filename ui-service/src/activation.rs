@@ -147,7 +147,7 @@ impl UiActivation {
         let _ = user;
         let store = self.store.clone();
         answer(move || match store.rollback(to.as_str()) {
-            Ok(version) => UiEvent::Live { version },
+            Ok(version) => UiEvent::Live { version: Some(version) },
             Err(e) => refusal(e),
         })
     }

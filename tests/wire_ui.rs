@@ -191,7 +191,7 @@ async fn a_bundle_without_an_index_is_refused_in_band() {
     h.set_cksum();
     b.append_data(&mut h, "app.js", &b"x();\n"[..]).unwrap();
     let bytes = b.into_inner().unwrap();
-    refused(&call(&admin, "ui.push", signed(&bytes, "contract: c\nabi: a\n")).await, "bad_bundle");
+    refused(&call(&admin, "ui.push", signed(&bytes, &support::json_manifest("c", "a"))).await, "bad_bundle");
     assert_eq!(versions(&admin).await, before, "nothing written");
 }
 
@@ -200,7 +200,11 @@ async fn a_manifest_without_contract_or_abi_is_refused_in_band() {
     let (s, _dir) = start().await;
     let admin = connect(s.port).await;
     let bytes = support::bundle(1);
-    for manifest in ["contract: c1\n", "abi: a1\n"] {
+    // UI-9: the contract's JSON — one missing abi, one missing contract, and
+    // UI-3's old `key: value` text, which is no JSON.
+    let no_abi = json!({ "contract": "c1", "routes": {}, "components": {}, "slots": {} }).to_string();
+    let no_contract = json!({ "abi": "a1", "routes": {}, "components": {}, "slots": {} }).to_string();
+    for manifest in [no_abi.as_str(), no_contract.as_str(), "contract: c1\nabi: a1\n"] {
         refused(&call(&admin, "ui.push", signed(&bytes, manifest)).await, "bad_manifest");
         assert!(versions(&admin).await.is_empty(), "nothing written ({manifest:?})");
     }

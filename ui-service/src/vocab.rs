@@ -158,37 +158,42 @@ impl Signature {
 pub const NAME_MAX: usize = 64;
 
 /// UI-9 / UI-4: a name in a bundle — lowercase ASCII letters and digits,
-/// hyphen-separated, beginning with a letter (`board`, `ticket-row`), at most
-/// [`NAME_MAX`] bytes.
-fn ui_name(what: &'static str, text: &str) -> Result<String, String> {
+/// hyphen-separated, beginning with a letter, at most [`NAME_MAX`] bytes; a
+/// component's (a layout is one) holds a hyphen, as the contract gives
+/// component names (`ticket-row`), a slot's need not (`main`).
+fn ui_name(what: &'static str, hyphen: bool, text: &str) -> Result<String, String> {
     let t = text.trim();
     let mut parts = t.split('-');
     let well_formed = !t.is_empty()
         && t.len() <= NAME_MAX
         && t.as_bytes()[0].is_ascii_lowercase()
+        && (!hyphen || t.contains('-'))
         && parts.all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()));
+    let example = if hyphen { "ticket-row" } else { "main" };
+    let must = if hyphen { " holding a hyphen," } else { "" };
     match well_formed {
         true => Ok(t.to_string()),
-        false => Err(format!("`{t}` is not a {what}'s name: lowercase letters and digits, hyphen-separated, beginning with a letter, at most {NAME_MAX} bytes (e.g. `ticket-row`)")),
+        false => Err(format!("`{t}` is not a {what}'s name: lowercase letters and digits, hyphen-separated,{must} beginning with a letter, at most {NAME_MAX} bytes (e.g. `{example}`)")),
     }
 }
 
 text_type!(
     /// UI-9: a layout — a component of a bundle whose template holds
-    /// `<slot name="…"/>` (UI-4 "Sections"), by name (`board-layout`).
+    /// `<slot name="…"/>` (UI-4 "Sections"), by name, holding a hyphen
+    /// (`board-layout`).
     LayoutName,
-    |t| ui_name("layout", t)
+    |t| ui_name("layout", true, t)
 );
 
 text_type!(
     /// UI-9: a section of a layout — the `name` of its `<slot>` (`main`).
     SlotName,
-    |t| ui_name("slot", t)
+    |t| ui_name("slot", false, t)
 );
 
 text_type!(
-    /// UI-9: a component of a bundle, by name (`ticket-row`), as its
-    /// manifest's `components` keys it.
+    /// UI-9: a component of a bundle, by name, holding a hyphen
+    /// (`ticket-row`), as its manifest's `components` keys it.
     ComponentName,
-    |t| ui_name("component", t)
+    |t| ui_name("component", true, t)
 );
