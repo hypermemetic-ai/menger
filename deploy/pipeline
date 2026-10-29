@@ -757,16 +757,23 @@ cmd_local() {
       -v "$LOCAL_VOLUME:/data" \
       -e "MENGER_WS_PORT=$LOCAL_WS_PORT" -e "MENGER_SHELL_PORT=$LOCAL_SHELL_PORT" \
       -e "MENGER_AUTH_PROVIDERS=key=ws://127.0.0.1:$LOCAL_WS_PORT" -e "MENGER_ADMINS=$principal" -e "MENGER_UI_SIGNERS=${principal#key:}" \
-      -e "MENGER_PUBLIC_URL=http://127.0.0.1:$LOCAL_SHELL_PORT" \
+      -e "MENGER_PUBLIC_URL=http://localhost:$LOCAL_SHELL_PORT" \
       -p "127.0.0.1:$LOCAL_WS_PORT:$LOCAL_WS_PORT" -p "127.0.0.1:$LOCAL_SHELL_PORT:$LOCAL_SHELL_PORT" \
       "$img" >/dev/null \
     || { record app-local run "$rel" "docker run failed"; die "docker run $img failed (is :$LOCAL_WS_PORT or :$LOCAL_SHELL_PORT held by something else?)"; }
-  local h="" page="" until=$((SECONDS + LOCAL_WAIT))
+  # The shell's page: a v2 release's shell is behind login (/ is a 303 to it), so its page is the
+  # sign-in page at /login; a release before v2 serves the app at /, stamped with the socket's port.
+  local h="" page="" until=$((SECONDS + LOCAL_WAIT)) v2=0 hs ps
+  release_bundle "$rel" && v2=1
   while (( SECONDS < until )); do
     [[ -n $h ]] || { h=$(health_of "ws://127.0.0.1:$LOCAL_WS_PORT"); [[ $h =~ ^[0-9]+$ ]] || h=""; }
     # grep reads the whole page (DEPLOY-6: no -q under pipefail)
-    [[ -n $page ]] || page=$(curl -fsS -m 5 "http://127.0.0.1:$LOCAL_SHELL_PORT/" 2>/dev/null \
-                              | grep -o "name=\"menger-ws-port\" content=\"$LOCAL_WS_PORT\"" || true)
+    if [[ -z $page && $v2 == 1 ]]; then
+      page=$(curl -fsS -m 5 "http://127.0.0.1:$LOCAL_SHELL_PORT/login" 2>/dev/null | grep -o '<h1>Sign in</h1>' || true)
+    elif [[ -z $page ]]; then
+      page=$(curl -fsS -m 5 "http://127.0.0.1:$LOCAL_SHELL_PORT/" 2>/dev/null \
+               | grep -o "name=\"menger-ws-port\" content=\"$LOCAL_WS_PORT\"" || true)
+    fi
     [[ -n $h && -n $page ]] && break
     docker container inspect -f '{{.State.Running}}' "$LOCAL_CONTAINER" 2>/dev/null | grep true >/dev/null || break
     sleep 0.5
@@ -775,10 +782,14 @@ cmd_local() {
     say "local: its log, the last lines:"
     docker logs --tail 20 "$LOCAL_CONTAINER" 2>&1 | sed 's/^/  /' >&2 || true
     record app-local run "$rel" "not healthy"
-    die "$LOCAL_CONTAINER did not answer in ${LOCAL_WAIT}s:${h:+ health ok}${h:- no tickets.health on :$LOCAL_WS_PORT};${page:+ page ok}${page:- no page stamped :$LOCAL_WS_PORT on :$LOCAL_SHELL_PORT} — the container is left for a look (docker logs $LOCAL_CONTAINER)"
+    if [[ -n $h ]]; then hs="health ok"; else hs="no tickets.health on :$LOCAL_WS_PORT"; fi
+    if [[ -n $page ]]; then ps="page ok"; elif [[ $v2 == 1 ]]; then ps="no sign-in page at :$LOCAL_SHELL_PORT/login"
+    else ps="no page stamped :$LOCAL_WS_PORT on :$LOCAL_SHELL_PORT"; fi
+    die "$LOCAL_CONTAINER did not answer in ${LOCAL_WAIT}s: $hs; $ps — the container is left for a look (docker logs $LOCAL_CONTAINER)"
   fi
   say "ok   tickets.health on :$LOCAL_WS_PORT — $h tickets"
-  say "ok   the app on :$LOCAL_SHELL_PORT, stamped with :$LOCAL_WS_PORT"
+  if [[ $v2 == 1 ]]; then say "ok   the shell on :$LOCAL_SHELL_PORT — its sign-in page at /login"
+  else say "ok   the app on :$LOCAL_SHELL_PORT, stamped with :$LOCAL_WS_PORT"; fi
   if release_bundle "$rel"; then
     if ! ui_push "ws://127.0.0.1:$LOCAL_WS_PORT" "$rel"; then
       record app-local run "$rel" "push failed: $UI_WHY"

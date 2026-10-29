@@ -302,9 +302,11 @@ version live in `ui.versions` and reads `/app/` signed in (a session from
 — and leaves the version live before it live; nothing calls `ui.rollback`.
 `local` starts its container with the `key` provider, the pipeline's
 principal as `MENGER_ADMINS`, its public key as `MENGER_UI_SIGNERS`, and
-`MENGER_PUBLIC_URL=http://127.0.0.1:<shell port>` — the image binds 0.0.0.0,
-which needs a public URL, and loopback http is allowed (ACCESS-30); the
-smoke's session cookie is then `menger_session_<shell port>`.
+`MENGER_PUBLIC_URL=http://localhost:<shell port>` — the image binds 0.0.0.0,
+which needs a public URL (ACCESS-30, `src/bind.rs`): http on `127.0.0.1` is
+refused there, http on a LAN name (`localhost` is one label) is served with
+a warning; the smoke still reads `127.0.0.1:<shell port>`, always answered,
+and its session cookie is `menger_session_<shell port>`.
 
 ## The image (RUN-10)
 
