@@ -90,6 +90,7 @@ stub curl 'echo "curl $*" >>"$STUB_ARGV"
 url=""; for a in "$@"; do [[ $a == http://* || $a == https://* ]] && url=$a; done
 host=${url#*://}; host=${host%%/*}
 case $url in
+  http://127.0.0.1:*/login) [[ ${STUB_LOCAL_LOGIN:-ok} == ok ]] && echo "<h1>Sign in</h1>" || echo "<h1>Not found</h1>" ;;
   http://127.0.0.1:*) echo "<meta name=\"menger-ws-port\" content=\"${STUB_WS_PORT:-1}\">" ;;
   http://*) printf "308 https://%s/" "$host" ;;
   */.well-known/oauth-protected-resource/ws) printf "{\"resource\":\"https://%s/ws\"}" "$host" ;;
@@ -1168,7 +1169,7 @@ case "$1 $2" in
   logs\ *) echo "menger: a log line" ;;
 esac; exit 0'
 v2run() { : >"$STUB_DOCKER"; : >"$STUB_SYNAPSE_ARGV"; : >"$HF"; : >"$STUB_ARGV"; : >"$STUB_ORDER"
-  HOME=$H4 MENGER_DEPLOY_KEY_FILE=$K2 STUB_WS_PORT=4470 MENGER_LOCAL_WAIT=30 MENGER_INFRA_DIR=$SCRATCH/infra \
+  HOME=$H4 MENGER_DEPLOY_KEY_FILE=$K2 STUB_WS_PORT=4470 MENGER_LOCAL_WAIT=${MENGER_LOCAL_WAIT:-30} MENGER_INFRA_DIR=$SCRATCH/infra \
     MENGER_APP_YML=$SCRATCH/app.yml HF_OUTPUTS=$HF run "$@"; }
 uivers() { jq -c "$1" "$STUB_UI_STATE/versions.json" 2>/dev/null; }
 export STUB_UI_SIGNER=$PUB2
@@ -1180,6 +1181,7 @@ has "$T3: the pipeline's key its admin" "$r" "-e MENGER_ADMINS=key:$PUB2 "
 has "$T3: the pipeline's key its signer" "$r" "-e MENGER_UI_SIGNERS=$PUB2 "
 # ACCESS-30 (src/bind.rs): --bind 0.0.0.0 needs a public URL; http on 127.0.0.1 is refused there
 # ("reached beyond this machine"), http on a LAN host — `localhost`, one label — served with a warning
+has "$T3: under login the shell's page is its sign-in page (/ is a 303 to it)" "$err" "ok   the shell on :4471 — its sign-in page at /login"
 has "$T3: its public URL, http on localhost (ACCESS-30: --bind 0.0.0.0 needs one)" "$r" "-e MENGER_PUBLIC_URL=http://localhost:4471 "
 has "$T3: pushed to the local service, as the pipeline, params on stdin" "$(cat "$STUB_UI_STATE/calls" 2>/dev/null)" "ui.push ws://127.0.0.1:4470 pipeline stdin"
 same "$T3: ui versions: one version, live, the image's bundle, pushed by the pipeline's key" \
@@ -1204,6 +1206,11 @@ same "$T3: again: still one version" "$(uivers length)" 1
 STUB_UI_SERVE=placeholder v2run local --image "menger:$V4"
 same "$T3: /app/ the placeholder: exits 1" "$code" 1
 grep -E '^FAIL .*/app/' <<<"$err" >/dev/null && ok || bad "$T3: no FAIL line naming /app/ in: $err"
+# the shell answers no sign-in page: not healthy, nothing pushed
+: >"$STUB_UI_STATE/calls"; STUB_LOCAL_LOGIN=no MENGER_LOCAL_WAIT=2 v2run local --image "menger:$V4"
+same "$T3: no sign-in page on :4471: exits 1" "$code" 1
+has "$T3: no sign-in page on :4471: said" "$err" "no sign-in page at :4471/login"
+[[ $(grep -c '^ui.push ' "$STUB_UI_STATE/calls") == 0 ]] && ok || bad "$T3: pushed to a container whose shell never answered"
 # ui versions lists nothing live: the smoke fails
 STUB_UI_VERSIONS=none v2run local --image "menger:$V4"
 same "$T3: nothing live in ui versions: exits 1" "$code" 1
