@@ -190,9 +190,10 @@ pub fn ui_args(ui_db: &Path) -> [String; 4] {
     ["--ui-db-path".into(), ui_db.display().to_string(), "--ui-signer".into(), public_hex(&UI_SIGNER)]
 }
 
-/// Version `n`'s `index.html`: names `n` and the socket's port placeholder.
+/// Version `n`'s `index.html`: names `n`, the socket's port placeholder
+/// and (UI-6) the served version's.
 pub fn index_html(n: u32) -> String {
-    format!("<!doctype html><title>v{n}</title><p>version {n} on {{{{WS_PORT}}}}</p>")
+    format!("<!doctype html><title>v{n}</title><p>version {n} on {{{{WS_PORT}}}} at {{{{UI_VERSION}}}}</p>")
 }
 
 /// Version `n`'s one asset.

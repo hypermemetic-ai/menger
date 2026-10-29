@@ -24,7 +24,7 @@ pub mod swap;
 pub mod router;
 pub mod transport;
 
-#[cfg(feature = "dom")]
+#[cfg(all(target_arch = "wasm32", feature = "dom"))]
 pub mod entry;
 
 /// The host interface this engine implements; a manifest's `abi`.
