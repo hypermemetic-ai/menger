@@ -627,8 +627,10 @@ deploy**.
   every component's `uses` is looked up in the running tickets service
   through the seam; the manifest's `contract` is compared with that
   service's hash (`tickets.schema`'s, which `scripts/ui-build.sh
-  --contract-from PORT` stamps; `unknown`, the script's without the flag,
-  answers `contract_matches: null`; UI-11). The row and the live pointer move together. The same
+  --contract-from PORT` stamps, or `--contract HASH` as given — UI-12: the
+  pipeline's build reads it from the binary it built and passes it so;
+  `unknown`, the script's without either flag and never accepted as
+  `--contract`'s value, answers `contract_matches: null`; UI-11). The row and the live pointer move together. The same
   bytes pushed again are the same version (`new: false`). Refusals are in
   band, nothing written: `no_signer`, `bad_signature`, `bad_bundle`,
   `bad_manifest`, and the compile and lint refusals naming the component and

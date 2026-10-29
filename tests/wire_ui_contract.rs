@@ -13,6 +13,11 @@
 //! push's seam reads, `ui-service/src/seam.rs`) — and refuses any other call
 //! or port, naming it. The bundle it builds is then pushed to that server.
 //! Servers on ports the OS hands out, their files under /tmp/claude-1000.
+//!
+//! UI-12: `--contract HASH` stamps HASH as it is given — no server asked,
+//! so the pipeline's codegen container needs no socket to the build's
+//! menger — and refuses `unknown` passed explicitly (the literal is what
+//! the script writes when it is told nothing, never what it is told).
 
 #![cfg(unix)]
 
@@ -129,23 +134,35 @@ printf '\n' >"$3/$name.rhai"
     );
 }
 
-/// `scripts/ui-build.sh` on the fixture, `--contract-from port` when given,
-/// the stand-in first on PATH: the tar's bytes and its manifest's text.
-fn ui_build(dir: &Path, bin: &Path, contract_from: Option<u16>) -> (Vec<u8>, String) {
+/// `scripts/ui-build.sh` on the fixture with `args` after the fixture's own,
+/// the stand-in first on PATH: whether it succeeded, and what it said.
+fn ui_build_run(dir: &Path, bin: &Path, args: &[String]) -> (bool, String) {
     let root = env!("CARGO_MANIFEST_DIR");
-    let out = dir.join("out/ui.tar");
     let mut cmd = Command::new("bash");
     cmd.arg(format!("{root}/scripts/ui-build.sh"))
         .arg("--ui").arg(dir.join("ui"))
         .arg("--engine").arg(dir.join("engine"))
-        .arg("-o").arg(&out);
-    if let Some(port) = contract_from {
-        cmd.arg("--contract-from").arg(port.to_string());
-    }
+        .arg("-o").arg(dir.join("out/ui.tar"))
+        .args(args);
     let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default());
     let run = cmd.env("PATH", path).env("UI_COMPILER", dir.join("compiler")).env("CARGO_TARGET_DIR", dir.join("target")).output().expect("bash runs scripts/ui-build.sh");
     let said = format!("{}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
-    assert!(run.status.success(), "scripts/ui-build.sh failed ({}):\n{said}", run.status);
+    (run.status.success(), said)
+}
+
+/// `scripts/ui-build.sh` on the fixture, `--contract-from port` when given,
+/// the stand-in first on PATH: the tar's bytes and its manifest's text.
+fn ui_build(dir: &Path, bin: &Path, contract_from: Option<u16>) -> (Vec<u8>, String) {
+    let args: Vec<String> = contract_from.map(|p| vec!["--contract-from".to_string(), p.to_string()]).unwrap_or_default();
+    ui_build_with(dir, bin, &args)
+}
+
+/// `scripts/ui-build.sh` on the fixture with `args`, which must succeed: the
+/// tar's bytes and its manifest's text.
+fn ui_build_with(dir: &Path, bin: &Path, args: &[String]) -> (Vec<u8>, String) {
+    let out = dir.join("out/ui.tar");
+    let (ok, said) = ui_build_run(dir, bin, args);
+    assert!(ok, "scripts/ui-build.sh {args:?} failed:\n{said}");
     let bytes = std::fs::read(&out).unwrap_or_else(|e| panic!("no {}: {e}\n{said}", out.display()));
     let manifest = std::fs::read_to_string(dir.join("out/ui.d/manifest.json")).expect("the manifest beside the tar");
     (bytes, manifest)
@@ -233,4 +250,47 @@ async fn a_bundle_built_without_contract_from_is_unknown() {
     assert_eq!(doc["contract"], "unknown", "without --contract-from the script writes unknown: {doc}");
     let evs = call(&admin, "ui.push", signed_params(&bytes, &manifest, 1)).await;
     unknown(pushed(&evs));
+}
+
+/// UI-12: `--contract HASH` stamps HASH and asks no server — the pipeline
+/// reads the hash from the binary it built and hands it to the codegen
+/// container, which has no socket to it. The hash is the one the push
+/// compares against, so the bundle matches.
+#[tokio::test]
+async fn a_contract_passed_straight_is_stamped_and_asks_no_server() {
+    let m = start().await;
+    let admin = connect(m.s.port).await;
+    let want = tickets_hash(&admin).await;
+    let bin = stand_in(m.dir.path(), m.s.port, &admin).await;
+    fixture(m.dir.path());
+
+    let (bytes, manifest) = ui_build_with(m.dir.path(), &bin, &["--contract".to_string(), want.clone()]);
+    let calls = std::fs::read_to_string(m.dir.path().join("calls.log")).unwrap_or_default();
+    assert!(calls.is_empty(), "--contract HASH asks no server; the script asked: {calls}");
+    let doc: Value = serde_json::from_str(&manifest).expect("the manifest is JSON");
+    assert_eq!(doc["contract"].as_str(), Some(want.as_str()), "--contract HASH stamps HASH: {doc}");
+
+    let evs = call(&admin, "ui.push", signed_params(&bytes, &manifest, 1)).await;
+    let p = pushed(&evs);
+    assert_eq!(p["contract_matches"], true, "a bundle stamped with this server's hash matches it: {p}");
+}
+
+/// UI-12: `unknown` is what the script writes when it is told nothing; told
+/// it explicitly (`--contract unknown`), the script refuses, naming the
+/// flag, and writes no bundle — a build that meant to stamp a hash and has
+/// none stops there, never shipping a bundle that says unknown.
+#[tokio::test]
+async fn unknown_passed_explicitly_is_refused_naming_the_flag() {
+    let dir = scratch("menger-ui-contract-unknown-");
+    // A stand-in synapse that answers nothing: no server is to be asked.
+    executable(&dir.path().join("bin/synapse"), "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >>\"$(dirname \"$0\")/../calls.log\"\nexit 1\n");
+    fixture(dir.path());
+    for value in ["unknown", ""] {
+        let (ok, said) = ui_build_run(dir.path(), &dir.path().join("bin"), &["--contract".to_string(), value.to_string()]);
+        assert!(!ok, "--contract {value:?} is refused:\n{said}");
+        assert!(!said.contains("unknown argument"), "the script knows --contract (UI-12); it refused {value:?} as an unknown argument:\n{said}");
+        assert!(said.contains("--contract"), "the refusal of {value:?} names the flag:\n{said}");
+        assert!(!dir.path().join("out/ui.tar").exists(), "--contract {value:?}: no bundle written");
+    }
+    assert!(!dir.path().join("calls.log").exists(), "no server asked");
 }

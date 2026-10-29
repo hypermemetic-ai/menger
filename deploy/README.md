@@ -111,10 +111,20 @@ the owner's.
    - `ui-prebuild` — `scripts/ui-build.sh --prebuild` on this machine: the
      engine (wasm32) and the components the compiler builds, into
      `dist/ui.d`;
-   - `ui-build` — `scripts/ui-build.sh` in the `plexus-codegen` container
-     (`../dockerfiles/plexus-codegen`, the checkout mounted at `/work`;
-     `MENGER_CODEGEN_IMAGE` names another): the manifest and the tar,
-     `dist/ui.tar`, which must hold `index.html`;
+   - `contract` (UI-12) — the tickets service's hash of the `menger` just
+     built: the binary is started on two free loopback ports in local mode
+     (no login provider: it makes its own admin key in a scratch data
+     directory, so the build holds no key material), under a scratch `HOME`
+     and `XDG_RUNTIME_DIR`; synapse signs in with that key as `menger-local`
+     and reads `tickets.schema`'s `hash` (`--no-hold`), and the binary is
+     stopped and the scratch removed — always, a failed build too. A binary
+     that exits, does not answer within `MENGER_CONTRACT_WAIT` seconds (60)
+     or answers no hash fails the build, named; the log says the hash;
+   - `ui-build` — `scripts/ui-build.sh --contract HASH` in the
+     `plexus-codegen` container (`../dockerfiles/plexus-codegen`, the
+     checkout mounted at `/work`; `MENGER_CODEGEN_IMAGE` names another; no
+     socket to this machine): the manifest, naming that hash as its
+     `contract`, and the tar, `dist/ui.tar`, which must hold `index.html`;
    - `ui-compiler-wasm` — `scripts/ui-compiler-wasm.sh` on this machine
      (rustup's `wasm32-unknown-unknown`; the codegen image has no Rust
      toolchain): `dist/ui-compiler.wasm`, the compiler module.
@@ -183,7 +193,13 @@ on test (the role that holds `ui.push` and nothing else), the admin of
 `manifest.json`, and an Ed25519 signature over the bundle's sha256 with the
 pipeline key's seed, read from `MENGER_DEPLOY_KEY_FILE` (never argv). The
 service keeps a version once per hash (the same bytes again are `new:
-false`) and moves its live pointer in the same write.
+false`) and moves its live pointer in the same write. It answers
+`contract_matches` (UI-11): whether the running tickets service is the one
+the bundle names. Only `true` passes (UI-12) — the push line says
+`contract_matches: true`; `null` (a bundle saying `unknown`) or `false` (a
+bundle built against another service, a hand-built tar pushed to another
+release) fails the deploy, named on stderr and in deployments.log, recorded
+`failed`.
 
 The smoke then wants that version live in `ui versions` and reads `/app/`
 signed in (a session from `auth.login`, its cookie in a 0600 header file)
