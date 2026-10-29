@@ -185,8 +185,8 @@ export async function sentCalls(page) {
  *  one), every frame it sends stamped (`__pages.sent`), the frame that
  *  carries a `created` ticket stamped (`__pages.created[id]`), each row —
  *  any element with `data-id` — stamped as it appears (`__pages.rows[id]`;
- *  a `.board-row` in `__pages.boardRows[id]` too, `__pages.firstRow` the
- *  first), each text `.board-count` shows (`__pages.counts`), the last key pressed
+ *  a `.board-row` in `__pages.boardRows[id]` too; `__pages.firstRow` when
+ *  the first `.board-row` shows its title, `[data-field=title]`), each text `.board-count` shows (`__pages.counts`), the last key pressed
  *  (`__pages.lastKey`), and the engine's wasm memory kept
  *  (`__pages.memory`). Times are the page's own (`performance.now()`). */
 export const INIT = () => {
@@ -238,9 +238,17 @@ export const INIT = () => {
           if (!(id in P.rows)) P.rows[id] = t;
           if (!el.classList.contains("board-row")) continue;
           if (!(id in P.boardRows)) P.boardRows[id] = t;
-          P.firstRow ??= t;
         }
       }
+    // The first row counts once it shows its title, as `list` answered it.
+    if (P.firstRow == null) {
+      for (const el of document.querySelectorAll(".board-row[data-id] [data-field=title]")) {
+        if (el.textContent.trim()) {
+          P.firstRow = t;
+          break;
+        }
+      }
+    }
     for (const r of records) {
       const el = r.target.nodeType === 3 ? r.target.parentElement : r.target;
       const count = el?.closest?.(".board-count") ?? (el?.querySelector?.(".board-count") || null);

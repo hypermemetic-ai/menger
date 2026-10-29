@@ -9,11 +9,12 @@
 // in a fresh browser context signed in by cookie:
 //
 //   board first rows painted   navigation start (the page's own time origin)
-//                              to the first `.board-row[data-id]` in the DOM,
+//                              to the first `.board-row[data-id]` showing its
+//                              title (`[data-field=title]`, from `list`),
 //                              stamped by a MutationObserver installed
 //                              before the engine (INIT); the median of the runs
-//   wasm memory                the engine's linear memory once the first rows
-//                              are on screen (INIT keeps the module's exports
+//   wasm memory                the engine's linear memory about a second after
+//                              the first rows are on screen (INIT keeps the module's exports
 //                              as wasm-bindgen instantiates it); the median
 //   rows held                  `.board-row`s in the DOM at that moment
 //
@@ -79,10 +80,15 @@ async function main() {
         got = await page.evaluate(() => {
           const P = window.__pages;
           if (P.firstRow == null) return null;
-          return { firstRow: P.firstRow, memory: P.memory?.buffer?.byteLength ?? null, held: document.querySelectorAll(".board-row[data-id]").length };
+          return { firstRow: P.firstRow, memory: null, held: document.querySelectorAll(".board-row[data-id]").length };
         });
         if (got) break;
         await sleep(20);
+      }
+      // The memory a second after the first rows: what the page holds once settled.
+      if (got) {
+        await sleep(1_000);
+        got.memory = await page.evaluate(() => window.__pages.memory?.buffer?.byteLength ?? null);
       }
       got ??= { firstRow: null, held: 0, memory: await page.evaluate(() => window.__pages.memory?.buffer?.byteLength ?? null) };
       if (i > 0) runs.push(got);
