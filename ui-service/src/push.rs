@@ -17,6 +17,11 @@ use std::io::Read;
 use menger_tickets_api::vocab::CommitRef;
 use std::sync::Arc;
 
+/// UI-11: the contract a manifest names when it was built against no
+/// running service (`scripts/ui-build.sh` without `--contract-from`): the
+/// match is unknown, never `false`.
+const UNKNOWN: &str = "unknown";
+
 /// What a push runs before the store: the compiler (`--ui-compiler`; none:
 /// the trees are stored as given, `compiled: false`) and the seam to the
 /// running tickets service.
@@ -89,11 +94,12 @@ pub(crate) async fn push(store: Arc<UiStore>, signers: Arc<Signers>, steps: Push
 
 /// What the steps answer: the bytes to store (the upload, or the upload
 /// with its trees filled in), whether the server compiled them, and whether
-/// the manifest's contract is the running tickets service's hash.
+/// the manifest's contract is the running tickets service's hash (`None`:
+/// the manifest says `unknown`).
 struct Checked {
     bundle: Vec<u8>,
     compiled: bool,
-    contract_matches: bool,
+    contract_matches: Option<bool>,
 }
 
 /// A refusal naming a component.
@@ -139,7 +145,10 @@ async fn checked(steps: &PushSteps, upload: Vec<u8>, manifest: &str) -> Result<C
         }
     }
     let hash = schemas.hash().await.map_err(|message| UiEvent::Error { message })?;
-    let contract_matches = param.contract.as_deref().map(str::trim) == Some(hash.as_str());
+    let contract_matches = match param.contract.as_deref().map(str::trim) {
+        Some(UNKNOWN) => None,
+        contract => Some(contract == Some(hash.as_str())),
+    };
     Ok(Checked { bundle, compiled: compiled.is_some(), contract_matches })
 }
 
