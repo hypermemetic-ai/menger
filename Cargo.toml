@@ -86,7 +86,7 @@ plexus-shell = { path = "plexus-shell", version = "0.1.3" }
 # `main`, which reference each other the same way, so the graph resolves
 # exactly one of each. DIST-3: each carries its version too, which is what
 # the published crate takes from crates.io.
-plexus-core = { path = "../plexus-core", version = "0.6.1" }
+plexus-core = { path = "../plexus-core", version = "0.6.2", features = ["clap"] }
 # Slim: default features off keeps the rmcp/MCP stack out (default-off as
 # of 0.5.0 anyway); http-gateway enables the REST + SSE bridge (MNG-8).
 # TRANSPORT-15: `mcp` mounts the MCP bridge (plexus-transport-mcp) behind the

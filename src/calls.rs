@@ -156,13 +156,10 @@ fn too_many(ns: &str, max: usize) -> Value {
         message: format!("too many calls open on this connection (at most {max}): close one (a watch) or open another connection"),
         code: Some(TOO_MANY_CALLS.into()),
         recoverable: true,
+        // POLYGLOT-5: the typed fields ride in the item (plexus-core 0.6.2).
+        fields: [("error_kind".to_string(), Value::from(TOO_MANY_CALLS)), ("max".to_string(), Value::from(max))].into_iter().collect(),
     };
-    let mut v = serde_json::to_value(&item).unwrap_or(Value::Null);
-    if let Some(o) = v.as_object_mut() {
-        o.insert("error_kind".into(), TOO_MANY_CALLS.into());
-        o.insert("max".into(), max.into());
-    }
-    v
+    serde_json::to_value(&item).unwrap_or(Value::Null)
 }
 
 /// The connections that have made a call: when each last began or ended

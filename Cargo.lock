@@ -2130,13 +2130,16 @@ dependencies = [
 
 [[package]]
 name = "plexus-core"
-version = "0.6.1"
+version = "0.6.2"
 dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
+ "base64 0.22.1",
  "bitflags 2.13.1",
  "chrono",
+ "clap",
+ "ed25519-dalek",
  "futures",
  "futures-core",
  "futures-util",
@@ -2149,9 +2152,11 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "shell-words",
  "thiserror 1.0.69",
  "tokio",
  "tokio-stream",
+ "tokio-tungstenite",
  "tracing",
  "uuid",
 ]
@@ -3140,6 +3145,12 @@ checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
 dependencies = [
  "lazy_static",
 ]
+
+[[package]]
+name = "shell-words"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 
 [[package]]
 name = "shlex"
