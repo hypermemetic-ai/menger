@@ -162,7 +162,7 @@ async fn a_bundle_stamped_from_the_service_matches() {
     let key = admin_key(m.dir.path());
 
     let url = format!("ws://127.0.0.1:{}", m.s.port);
-    let (bytes, manifest) = ui_build_with(m.dir.path(), &["--contract-from".into(), url, "--key-file".into(), key.display().to_string()]);
+    let (bytes, manifest) = ui_build_with(m.dir.path(), &["--contract-from".into(), url, "--service".into(), "menger".into(), "--key-file".into(), key.display().to_string()]);
     let doc: Value = serde_json::from_str(&manifest).expect("the manifest is JSON");
     assert_eq!(doc["contract"].as_str(), Some(want.as_str()), "--contract-from stamps the hash the push compares against (tickets.schema's), not another: {doc}");
 

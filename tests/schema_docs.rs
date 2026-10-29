@@ -398,6 +398,7 @@ const UI_ROLES: &[(&str, &str, &str)] = &[
     ("ui.slots", "clear", "admin"),
     ("ui", "versions", "viewer"),
     ("ui", "watch", "viewer"),
+    ("ui", "contract", "viewer"),
     ("ui.slots", "list", "viewer"),
 ];
 
