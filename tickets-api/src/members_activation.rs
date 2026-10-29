@@ -126,7 +126,7 @@ impl MembersActivation {
         everyone: Option<bool>,
         /// An organization (acme:), a shortcode in one (hypermemetic:IDENTITY, or IDENTITY — covers the shortcodes hosted under it), a ticket alone (IDENTITY-12), a ticket and its subtree (under IDENTITY-12), or *.
         scope: ScopeRef,
-        /// viewer | editor | admin | deployer (a CI's key: the reads and deployments.record, DEPLOY-14).
+        /// viewer | editor | admin | deployer (a CI's key: the reads and ui.push, V2-7).
         role: Role,
     ) -> impl Stream<Item = MembersEvent> + Send + 'static {
         let (store, access) = (self.store.clone(), self.access.clone());

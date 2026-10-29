@@ -100,7 +100,7 @@ impl UiActivation {
     /// The row — with its commit, the manifest's `contract` and `abi`, who
     /// and when — and the live pointer move in one transaction. Refused in
     /// band (`refused { reason }`: `no_signer`, `bad_signature`,
-    /// `bad_bundle`, `bad_manifest`) with nothing written. Admin only.
+    /// `bad_bundle`, `bad_manifest`) with nothing written. Deployer only.
     #[plexus_macros::method(group = "write")]
     pub async fn push(
         &self,

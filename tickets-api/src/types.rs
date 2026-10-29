@@ -473,8 +473,8 @@ pub struct Ticket {
     /// TICKETS-27: a hidden ticket is in no nav view (`list`, `nav tree`,
     /// `nav counts`, `nav groups`, the board) unless the filter names it
     /// (the cell `hidden`) or the read is its parent's children; it is
-    /// otherwise a normal ticket — `get`, `search`, `find`, blockers, inputs
-    /// and chats reach it. Set by `create`/`update`. Omitted when false.
+    /// otherwise a normal ticket — `get`, `search`, `find`, blockers and
+    /// `watch` reach it. Set by `create`/`update`. Omitted when false.
     #[serde(default, skip_serializing_if = "is_false")]
     pub hidden: bool,
     /// Markdown body (Problem / Required behavior / Acceptance criteria …).
@@ -986,9 +986,9 @@ pub struct ShortcodeMove {
 }
 
 /// ACCESS-12: why an open watch ended — its caller verified again when the
-/// grants moved (or its sign-in ended), and refused. Every watch (`tickets`,
-/// `comments`, `themes`, `deployments`) ends with one `watch_closed { reason,
-/// message }` and nothing after it.
+/// grants moved (or its sign-in ended), and refused. Every watch
+/// (`tickets.watch`, `epics.watch`, `ui.watch`) ends with one
+/// `watch_closed { reason, message }` and nothing after it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WatchEnd {
@@ -1148,10 +1148,10 @@ pub enum TicketsEvent {
     /// `ids` every ticket the write archived (the selection and each one's
     /// whole subtree, in the store's order; one already archived is not
     /// among them), `live` those of them that were not in category done
-    /// (the warning: never a refusal), `unqueued` those it took out of the
-    /// owner's queue, `mark` what each now carries. `dry_run`: what the
-    /// write would do, nothing written (`mark.write` is then 0). After it on
-    /// `watch`: the groups that moved, and a filter's `left`.
+    /// (the warning: never a refusal), `mark` what each now carries.
+    /// `dry_run`: what the write would do, nothing written (`mark.write` is
+    /// then 0). After it on `watch`: the groups that moved, and a filter's
+    /// `left`.
     Archived { ids: Vec<TicketId>, live: Vec<LiveTicket>, mark: Archived, dry_run: bool },
     /// ARCHIVE-2: `restore`'s answer, and its write's event on `watch` (and
     /// a create's or a move's under an archived parent, after its own) —

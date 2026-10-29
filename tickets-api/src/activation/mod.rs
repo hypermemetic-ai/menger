@@ -247,11 +247,7 @@ impl TicketsActivation {
     /// after it, `kind` is `doc`, and `parent` is the shortcode's scope root
     /// (or omitted, which defaults to it); a path another ticket of the
     /// shortcode already holds is an in-band error naming that ticket.
-    /// COMP-3: a body's ` ```component <tag> ` blocks register components
-    /// (`watch` says so after the rest of the birth); a block whose tag is
-    /// not a component name, a name defined twice, and a name another
-    /// ticket defines are in-band errors — the last naming that ticket —
-    /// with nothing stored or allocated.
+    /// The body is text, kept as written; nothing in it refuses the write.
     /// Yields exactly one event: `Created` or `Error`.
     #[plexus_macros::method(
         group = "write",
@@ -400,12 +396,11 @@ impl TicketsActivation {
     /// MENGER-13: the change is a transition — the caller's (always
     /// someone, ACCESS-24), from `source` (`api` unless the call says `app` or
     /// `pipeline`), with its `message` — kept in the log and said on `watch`
-    /// right after the `StatusChanged`. Into `Canceled`, the ticket's open
-    /// inputs are withdrawn and every descendant still open work is
-    /// canceled in the same write, each a transition of `system`'s naming
-    /// the cause. Out of `Canceled`, its withdrawn inputs come back; with
-    /// `restore_children`, so do the descendants its cancel canceled (and
-    /// nothing has moved since), to the statuses they had.
+    /// right after the `StatusChanged`. Into `Canceled`, every descendant
+    /// still open work is canceled in the same write, each a transition of
+    /// `system`'s naming the cause. Out of `Canceled`, with
+    /// `restore_children`, the descendants its cancel canceled (and nothing
+    /// has moved since) come back, to the statuses they had.
     #[plexus_macros::method(
         group = "write",
         target = "id",
@@ -531,11 +526,8 @@ impl TicketsActivation {
     /// did (neither given, or the values already there), which writes and
     /// broadcasts nothing — `NotFound` if `id` names no ticket, or an
     /// in-band `Error` for a title that is empty after trimming. `watch`
-    /// carries every `Amended` that changed something. COMP-3: a new body
-    /// moves the component registry — its ` ```component ` blocks and `<tag`
-    /// references — and `watch` says so after the `Amended`; a malformed
-    /// block, or a name another ticket defines, is an in-band `Error` (the
-    /// latter naming that ticket) and nothing is written, title included.
+    /// carries every `Amended` that changed something. A body is text:
+    /// nothing in it refuses the write.
     #[plexus_macros::method(
         group = "write",
         target = "id",
@@ -745,7 +737,7 @@ impl TicketsActivation {
         update_many_stream(self.store.clone(), user, ids, filter, max, tz, ask, source, message)
     }
 
-    /// Delete tickets for good (admin): refused while children, blockers, a shortcode, a component, a theme or a live input point at one, unless children reparent|delete and unblock say what moves; a tombstone kept (get answers deleted), the body 30 days for undelete; yields deleted { ids, tombstones }.
+    /// Delete tickets for good (admin): refused while one has children, is among another's blockers, or roots a shortcode that holds others, unless children reparent|delete and unblock say what moves; a tombstone kept (get answers deleted), the body 30 days for undelete; yields deleted { ids, tombstones }.
     ///
     /// ACT-5: tickets gone for good — refused while something points at
     /// them unless told what moves; a tombstone kept, the body 30 days. The
@@ -800,9 +792,9 @@ impl TicketsActivation {
         undelete_stream(self.store.clone(), user, texts(ids))
     }
 
-    /// Archive tickets — each named (or a filter's) with its whole subtree, live work included and named (live); out of every view unless a filter says archived; status unchanged; yields archived { ids, live, unqueued, mark, dry_run }.
+    /// Archive tickets — each named (or a filter's) with its whole subtree, live work included and named (live); out of every view unless a filter says archived; status unchanged; yields archived { ids, live, mark, dry_run }.
     ///
-    /// ARCHIVE-2 ([`crate::store::ArchiveAnswer`]'s module): a mark apart from status — status, kind, place and blockers stay; one already archived is a no-op; a queued one leaves the queue. dry_run: the answer, nothing written.
+    /// ARCHIVE-2 ([`crate::store::ArchiveAnswer`]'s module): a mark apart from status — status, kind, place and blockers stay; one already archived is a no-op. dry_run: the answer, nothing written.
     #[plexus_macros::method(
         group = "write",
         target = "ids",
@@ -1017,7 +1009,7 @@ impl TicketsActivation {
         SubtasksActivation { store: Arc::clone(&self.store), access: self.access.clone() }
     }
 
-    /// A ticket's history: each status and kind transition (from, to, when, who, source, message, cause), oldest first, then those it caused in other tickets, then its queue records (MENGER-39), then history_end (when the log began; what a restore would put back; since when it has held its status).
+    /// A ticket's history: each status and kind transition (from, to, when, who, source, message, cause), oldest first, then those it caused in other tickets, then history_end (when the log began; what a restore would put back; since when it has held its status).
     ///
     /// MENGER-13: a ticket's history — every change of its status and its
     /// kind since the log began, as the store keeps them. Yields one
@@ -1045,7 +1037,7 @@ impl TicketsActivation {
         crate::store::reading_as(user.principal_text(), history_stream(self.store.clone(), user, id.into_string()))
     }
 
-    /// Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / AssigneesChanged / UnlocksChanged / UnlocksRemoved / BlockersChanged / SeverityChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged / UpdatedMany / Deleted / Undeleted / Reshortcoded), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events; Entered / Left / Recount when the caller's grants move what it sees; WatchClosed { reason } when they end it.
+    /// Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / FrozenChanged / HiddenChanged / UnlocksChanged / UnlocksRemoved / BlockersChanged / SeverityChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / UpdatedMany / Deleted / Undeleted / Archived / Restored / Reshortcoded), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events; Entered / Left / Recount when the caller's grants move what it sees; WatchClosed { reason } when they end it.
     ///
     /// The reactive primitive: an open-ended stream of every mutation, as
     /// `Created` / `StatusChanged` / `UnlocksChanged` / `ChildrenChanged`
@@ -1091,20 +1083,6 @@ impl TicketsActivation {
     /// child's own `Created` / `ParentChanged` already says where it
     /// hangs. The `epic` filter applies to them by the parent's shortcode.
     ///
-    /// COMP-3: a `create` or `amend` that moved the component registry ends
-    /// with one `ComponentChanged` per component it registered or moved
-    /// (source, owner, references — the whole component), in name order,
-    /// then one `ComponentRemoved` per component it took out — after every
-    /// other event of the write. A component is in no shortcode, so both
-    /// pass any `epic` filter.
-    ///
-    /// INPUT-3: an input a write moved is one `InputChanged` — the whole
-    /// input — after every other event of the write, the component events
-    /// included: an `inputs.answer`, `inputs.clear`, `inputs.close` or
-    /// `inputs.reopen`; or a `create` or `amend` whose body declared,
-    /// re-declared or removed inputs (in the body's order, the removed
-    /// after). The `epic` filter applies to it by its ticket's shortcode.
-    ///
     /// FILTER-4: with a `filter`, the same stream plus, as each write's
     /// last events, one `Entered { id, epic, seq }` or `Left { id, epic,
     /// seq }` per ticket the write moved into or out of the filter — a
@@ -1132,7 +1110,7 @@ impl TicketsActivation {
     pub async fn watch(
         &self,
         #[from_auth(self.access.verify)] user: VerifiedUser,
-        /// Only changes in this epic (optional; a GroupChanged by its group's shortcode; an InputChanged by its ticket's; component changes always).
+        /// Only changes in this epic (optional; a GroupChanged by its group's shortcode).
         epic: Option<ShortcodeRef>,
         /// A filter, e.g. 'category in (active, review)' (optional): adds Entered / Left for each ticket a write moves into or out of it, or Recount past 256.
         filter: Option<FilterText>,
