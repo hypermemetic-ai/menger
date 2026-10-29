@@ -552,7 +552,6 @@ dependencies = [
  "castaway",
  "cfg-if",
  "itoa",
- "serde",
  "static_assertions",
  "zmij",
 ]
@@ -2069,7 +2068,6 @@ dependencies = [
  "jsonrpsee",
  "jsonwebtoken",
  "menger-tickets-api",
- "menger-ui-compiler",
  "menger-ui-service",
  "nostr",
  "plexus-auth-core",
@@ -2079,6 +2077,7 @@ dependencies = [
  "plexus-macros",
  "plexus-shell",
  "plexus-transport",
+ "plexus-ui-compiler",
  "rand 0.8.8",
  "reqwest",
  "rusqlite",
@@ -2124,34 +2123,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
-]
-
-[[package]]
-name = "menger-ui-compiler"
-version = "0.1.0"
-dependencies = [
- "rhai",
- "serde",
- "serde_json",
- "sha2",
- "wasmtime",
-]
-
-[[package]]
-name = "menger-ui-engine"
-version = "0.1.0"
-dependencies = [
- "futures",
- "js-sys",
- "plexus-client",
- "pulldown-cmark",
- "rhai",
- "serde",
- "serde_json",
- "sha2",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
 ]
 
 [[package]]
@@ -2437,8 +2408,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-tungstenite",
- "wasm-bindgen",
- "web-sys",
 ]
 
 [[package]]
@@ -2550,6 +2519,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "plexus-ui-compiler"
+version = "0.1.0"
+dependencies = [
+ "rhai",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "poly1305"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2637,15 +2616,8 @@ checksum = "e9f068eba8e7071c5f9511831b44f32c740d5adf574e990f946ddb53db2f314e"
 dependencies = [
  "bitflags 2.13.1",
  "memchr",
- "pulldown-cmark-escape",
  "unicase",
 ]
-
-[[package]]
-name = "pulldown-cmark-escape"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "007d8adb5ddab6f8e3f491ac63566a7d5002cc7ed73901f72057943fa71ae1ae"
 
 [[package]]
 name = "pulley-interpreter"
@@ -2954,7 +2926,6 @@ dependencies = [
  "num-traits",
  "once_cell",
  "rhai_codegen",
- "serde",
  "smallvec",
  "smartstring",
  "thin-vec",

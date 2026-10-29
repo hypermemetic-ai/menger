@@ -680,17 +680,22 @@ the sanitizer's allow-list.
 
 ### The compiler (UI-5)
 
-`ui-compiler/` (`menger-ui-compiler`) is a pure function: a component's
+The compiler is `../plexus-ui`'s `compiler/` (`plexus-ui-compiler`, FRAME-3:
+the framework's own repository, a sibling checkout), a pure function: a component's
 source → its view tree (`components/<name>.json`, keys sorted) and its
 handlers (`<name>.rhai`), folds `(state, event) → state`; the same source
 gives the same bytes natively and as a wasm module that imports nothing
 (`scripts/ui-compiler-wasm.sh` → `dist/ui-compiler.wasm`; the build fails if
-it imports anything). A refusal names the line. `ui/golden/` holds golden
-pairs (`ui-compiler/tests/golden.rs`).
+it imports anything; it builds from `../plexus-ui` into this checkout's
+target). A refusal names the line. The compiler's golden pairs are
+`../plexus-ui`'s (`compiler/tests/golden/`); `ui/golden/` is menger's: the
+compiled `hello-list` and `page-shell` that `scripts/ui-build.sh` falls back
+to when no compiler can be had.
 
 ### The engine (UI-6, UI-10)
 
-`ui-engine/` (`menger-ui-engine`), Rust built to wasm, implements `engine/1`:
+The engine is `../plexus-ui`'s `engine/` (`plexus-ui-engine`), Rust built to
+wasm by `scripts/ui-build.sh` (`--manifest-path`), and implements `engine/1`:
 it owns the socket, the cache, the signals and the registry; a component
 owns only its tree and its folds.
 
@@ -769,9 +774,8 @@ src/                 the binary: main.rs (flags), builder.rs (the services regis
 tickets-api/         menger-tickets-api: the tickets service — vocabulary, store, filter
                      language, activations (activation/), access (access/)
 ui-service/          menger-ui-service: the ui service, its store, the compiler sandbox, the seam
-ui-compiler/         menger-ui-compiler: the component compiler, native and wasm
-ui-engine/           menger-ui-engine: the engine, wasm
-ui/                  the UI's source bundle
+ui/                  the UI's source bundle (compiled and drawn by ../plexus-ui's
+                     plexus-ui-compiler and plexus-ui-engine, FRAME-3)
 tether/              menger's local side, its own workspace (TETHER-7)
 tests/               wire tests over the real socket, browser tests
 deploy/              the pipeline, the image, the runner (deploy/README.md)

@@ -501,7 +501,7 @@ impl Component {
 
 /// The compiler's answer for `src` as `name`, natively — the same bytes the
 /// module answers (UI-5).
-pub struct Native(pub menger_ui_compiler::Compiled);
+pub struct Native(pub plexus_ui_compiler::Compiled);
 
 impl Native {
     pub fn tree_json(&self) -> serde_json::Value {
@@ -511,7 +511,7 @@ impl Native {
 
 /// [`Native`] for a source that compiles.
 pub fn compile(name: &str, src: &str) -> Native {
-    Native(menger_ui_compiler::compile(name, src).unwrap_or_else(|r| panic!("{name} must compile natively: {r:?}")))
+    Native(plexus_ui_compiler::compile(name, src).unwrap_or_else(|r| panic!("{name} must compile natively: {r:?}")))
 }
 
 /// A component whose one handler calls `method` (its `uses`).
@@ -533,7 +533,7 @@ pub fn compiled_manifest(n: u32, contract: &str, components: &[Component]) -> St
     let entries: serde_json::Map<String, serde_json::Value> = components
         .iter()
         .map(|c| {
-            let native = menger_ui_compiler::compile(&c.name, &c.src).ok();
+            let native = plexus_ui_compiler::compile(&c.name, &c.src).ok();
             let tree = match (&c.tree, &native) {
                 (Tree::Given(t), _) => sha_hex(t.as_bytes()),
                 (_, Some(n)) => sha_hex(n.tree.as_bytes()),
@@ -563,7 +563,7 @@ pub fn compiled_bundle(n: u32, contract: &str, components: &[Component]) -> Vec<
     let mut files = vec![("index.html".to_string(), index_html(n)), ("manifest.json".to_string(), compiled_manifest(n, contract, components))];
     for c in components {
         files.push((format!("src/{}.svelte", c.name), c.src.clone()));
-        let native = menger_ui_compiler::compile(&c.name, &c.src).ok();
+        let native = plexus_ui_compiler::compile(&c.name, &c.src).ok();
         match (&c.tree, native) {
             (Tree::Absent, _) => {}
             (Tree::Given(t), n) => {

@@ -3,7 +3,7 @@
 # `deploy/pipeline build` puts in a release and pushes through `ui.push`):
 #
 #   index.html                 ui/index.html (the shell stamps it; nothing is stamped here)
-#   engine.js  engine.wasm     the engine (ui-engine/, abi engine/1)
+#   engine.js  engine.wasm     the engine (../plexus-ui's plexus-ui-engine, abi engine/1)
 #   manifest.json              abi, contract, commit, routes (ui/routes.json),
 #                              slots (ui/slots.json), components (hashes, uses)
 #   components/<name>.json     each ui/src/<name>.svelte compiled by UI-5's
@@ -15,10 +15,10 @@
 #
 #   --prebuild   what needs cargo, on a machine with it: the engine
 #                (`cargo build --target wasm32-unknown-unknown --features dom`,
-#                then wasm-bindgen-cli `--target web` at the version Cargo.lock
-#                pins — from PATH, else installed once with cargo into
-#                ~/.cache/menger-tools) and the components compiled
-#                (`cargo build -p menger-ui-compiler`), into the staging
+#                then wasm-bindgen-cli `--target web` at the version
+#                ../plexus-ui/Cargo.lock pins — from PATH, else installed once
+#                with cargo into ~/.cache/menger-tools) and the components
+#                compiled (`cargo build -p plexus-ui-compiler`), into the staging
 #                directory beside the tar (dist/ui.d); then it stops.
 #   (default)    the bundle: whatever the staging directory lacks is built
 #                (cargo when there is one, else refused naming --prebuild),
@@ -40,7 +40,9 @@
 #                          hands it to the codegen container, which has no socket to
 #                          it); `unknown` or empty is refused: unknown is what the
 #                          script writes when told nothing, never what it is told
-# Everything cargo builds goes to $CARGO_TARGET_DIR (else ./target).
+# Everything cargo builds goes to $CARGO_TARGET_DIR (else ./target). FRAME-3: the
+# engine and the compiler are ../plexus-ui's, built from there by --manifest-path
+# into this checkout's target; the container's half needs neither.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -101,11 +103,12 @@ for src in "$ui"/src/*.svelte; do names+=("$(basename "$src" .svelte)"); done
 build_engine() {
   # Small: opt-level z, LTO, one codegen unit, stripped — for this build
   # alone (the workspace's release profile is the server's).
-  (cd "$root" && cargo build -p menger-ui-engine --lib --release --target wasm32-unknown-unknown --features dom \
+  (cd "$root" && cargo build --manifest-path "$root/../plexus-ui/Cargo.toml" -p plexus-ui-engine --target-dir "$target" \
+    --lib --release --target wasm32-unknown-unknown --features dom \
     --config 'profile.release.opt-level="z"' --config 'profile.release.lto=true' \
     --config 'profile.release.codegen-units=1' --config 'profile.release.strip=true')
   local want bindgen tools
-  want=$(awk '/^name = "wasm-bindgen"$/ { getline; gsub(/version = |"/, ""); print; exit }' "$root/Cargo.lock")
+  want=$(awk '/^name = "wasm-bindgen"$/ { getline; gsub(/version = |"/, ""); print; exit }' "$root/../plexus-ui/Cargo.lock")
   if command -v wasm-bindgen >/dev/null && wasm-bindgen --version | grep -q " $want\$"; then
     bindgen=$(command -v wasm-bindgen)
   else
@@ -114,7 +117,7 @@ build_engine() {
     bindgen=$tools/bin/wasm-bindgen
   fi
   "$bindgen" --target web --no-typescript --out-name engine --out-dir "$stage" \
-    "$target/wasm32-unknown-unknown/release/menger_ui_engine.wasm"
+    "$target/wasm32-unknown-unknown/release/plexus_ui_engine.wasm"
   mv -f "$stage/engine_bg.wasm" "$stage/engine.wasm"
 }
 if [ -n "$engine" ]; then
@@ -128,8 +131,8 @@ fi
 
 # ── the components ────────────────────────────────────────────────────────
 compiler=${UI_COMPILER:-$(command -v ui-compiler || true)}
-if [ -z "$compiler" ] && have_cargo && [ -d "$root/ui-compiler" ]; then
-  (cd "$root" && cargo build -p menger-ui-compiler --release --bin ui-compiler)
+if [ -z "$compiler" ] && have_cargo && [ -f "$root/../plexus-ui/compiler/Cargo.toml" ]; then
+  (cd "$root" && cargo build --manifest-path "$root/../plexus-ui/Cargo.toml" -p plexus-ui-compiler --target-dir "$target" --release --bin ui-compiler)
   compiler=$target/release/ui-compiler
 fi
 for name in "${names[@]}"; do
