@@ -145,3 +145,29 @@ fn an_incomplete_live_or_a_declaration_twice_is_refused() {
     assert!(r.message.contains("state"), "state twice names it: {}", r.message);
     assert_eq!(r.line, 3);
 }
+
+// UI-4, "The compiler's choices, pinned": a live holds snapshot, params,
+// changes, changes_params, key and on; params, changes_params and on are
+// always written, {} when absent.
+#[test]
+fn a_live_carries_its_changes_params() {
+    let src = r#"<script>
+  prop("epic");
+  let rows = live(#{ snapshot: "tickets.list", params: #{ epic: epic, limit: 50 },
+                     changes: "tickets.watch", changes_params: #{ epic: epic, summary: true }, key: "id" });
+</script>
+<p/>
+"#;
+    let t = tree(src);
+    assert_eq!(t["live"]["rows"]["changes_params"], json!({ "epic": { "expr": "epic" }, "summary": true }));
+    assert_eq!(t["live"]["rows"]["on"], json!({}), "on absent: {{}}");
+
+    let bare = tree("<script>\n  let rows = live(#{ snapshot: \"tickets.list\", changes: \"tickets.watch\", key: \"id\" });\n</script>\n<p/>\n");
+    for f in ["params", "changes_params", "on"] {
+        assert_eq!(bare["live"]["rows"][f], json!({}), "{f} absent: {{}}");
+    }
+
+    let r = refusal("<script>\n  let rows = live(#{ snapshot: \"a.b\", changes: \"a.c\", key: \"id\", filter: #{} });\n</script>\n<p/>\n");
+    assert!(r.message.contains("filter"), "a sixth field is refused, naming it: {}", r.message);
+    assert_eq!(r.line, 2);
+}

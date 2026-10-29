@@ -152,7 +152,7 @@ pub fn analyse(script: Option<&Script>, lines: &Lines, j: &mut Arena) -> Result<
 /// into `uses`. The error says what is wrong, naming the live.
 fn live(name: &str, spec: &Expr, j: &mut Arena, uses: &mut BTreeSet<String>) -> Result<Id, String> {
     let Expr::Map(m, _) = spec else { return Err(format!("the live `{name}` is live(#{{ snapshot, changes, key, params, on }})")) };
-    let (mut snapshot, mut changes, mut key, mut params, mut on) = (None, None, None, None, None);
+    let (mut snapshot, mut changes, mut key, mut params, mut changes_params, mut on) = (None, None, None, None, None, None);
     for (field, e) in m.0.iter() {
         let lit = || match e {
             Expr::StringConstant(s, _) => Ok(s.to_string()),
@@ -162,9 +162,12 @@ fn live(name: &str, spec: &Expr, j: &mut Arena, uses: &mut BTreeSet<String>) -> 
             "snapshot" => snapshot = Some(lit()?),
             "changes" => changes = Some(lit()?),
             "key" => key = Some(lit()?),
-            "params" => match e {
-                Expr::Map(..) => params = Some(constant(e, j, true).map_err(|m| format!("the live `{name}`'s params: {m}"))?),
-                _ => return Err(format!("the live `{name}`'s params is a map")),
+            f @ ("params" | "changes_params") => match e {
+                Expr::Map(..) => {
+                    let id = constant(e, j, true).map_err(|m| format!("the live `{name}`'s {f}: {m}"))?;
+                    *(if f == "params" { &mut params } else { &mut changes_params }) = Some(id);
+                }
+                _ => return Err(format!("the live `{name}`'s {f} is a map")),
             },
             "on" => {
                 let Expr::Map(om, _) = e else { return Err(format!("the live `{name}`'s on is a map of event → \"upsert:field\" | \"remove:field\"")) };
@@ -175,7 +178,7 @@ fn live(name: &str, spec: &Expr, j: &mut Arena, uses: &mut BTreeSet<String>) -> 
                 }
                 on = Some(j.obj(entries));
             }
-            other => return Err(format!("the live `{name}` has an unknown field `{other}`: snapshot, changes, key, params, on")),
+            other => return Err(format!("the live `{name}` has an unknown field `{other}`: snapshot, params, changes, changes_params, key, on")),
         }
     }
     let missing = |f: &str| format!("the live `{name}` has no `{f}`: a live names its snapshot, its changes and its key");
@@ -188,12 +191,16 @@ fn live(name: &str, spec: &Expr, j: &mut Arena, uses: &mut BTreeSet<String>) -> 
         Some(p) => p,
         None => j.obj(Vec::new()),
     };
+    let changes_params = match changes_params {
+        Some(p) => p,
+        None => j.obj(Vec::new()),
+    };
     let on = match on {
         Some(o) => o,
         None => j.obj(Vec::new()),
     };
     let (s, c, k) = (j.str(snapshot), j.str(changes), j.str(key));
-    Ok(j.obj(vec![("snapshot".into(), s), ("changes".into(), c), ("key".into(), k), ("params".into(), params), ("on".into(), on)]))
+    Ok(j.obj(vec![("snapshot".into(), s), ("changes".into(), c), ("key".into(), k), ("params".into(), params), ("changes_params".into(), changes_params), ("on".into(), on)]))
 }
 
 /// A constant expression as JSON; with `names`, a name or a dotted path is
