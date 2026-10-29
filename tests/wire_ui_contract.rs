@@ -161,7 +161,7 @@ fn pushed(evs: &[Value]) -> &Value {
 /// `contract_matches` is there and `null`: unknown, never `false`.
 fn unknown(p: &Value) {
     assert!(p.as_object().is_some_and(|o| o.contains_key("contract_matches")), "pushed says contract_matches: {p}");
-    assert!(p["contract_matches"].is_null(), "no contract is unknown (null), never false: {p}");
+    assert!(p["contract_matches"].is_null(), "a contract of unknown is unknown (null), never false: {p}");
 }
 
 #[tokio::test]
@@ -169,6 +169,8 @@ async fn a_bundle_stamped_from_the_service_matches() {
     let m = start().await;
     let admin = connect(m.s.port).await;
     let want = tickets_hash(&admin).await;
+    let whole = one(&admin, "menger.hash").await;
+    assert_ne!(whole["value"].as_str(), Some(want.as_str()), "the whole service's hash is another, so only the right call can pass: {whole}");
     let bin = stand_in(m.dir.path(), m.s.port, &admin).await;
     fixture(m.dir.path());
 
@@ -200,16 +202,22 @@ async fn another_hash_does_not_match() {
 }
 
 #[tokio::test]
-async fn no_contract_is_unknown() {
+async fn an_empty_or_absent_contract_stays_refused() {
     let m = start().await;
     let admin = connect(m.s.port).await;
-    // Absent, then empty: each pushed, and the match unknown.
+    // UI-3: a manifest names what it was built against, or says `unknown`.
     let absent = json!({ "abi": "engine/1", "routes": {}, "components": {}, "slots": {} }).to_string();
     let empty = json_manifest("", "engine/1");
     for (n, manifest) in [(1, absent), (2, empty)] {
         let evs = call(&admin, "ui.push", signed_params(&support::bundle(n), &manifest, n)).await;
-        unknown(pushed(&evs));
+        assert_eq!(evs.len(), 1, "{evs:?}");
+        assert_eq!((evs[0]["type"].as_str(), evs[0]["reason"].as_str()), (Some("refused"), Some("bad_manifest")), "{evs:?}");
+        assert!(call(&admin, "ui.versions", json!({})).await.is_empty(), "nothing stored");
     }
+    // The literal the script writes without --contract-from: pushed, unknown.
+    let manifest = json_manifest("unknown", "engine/1");
+    let evs = call(&admin, "ui.push", signed_params(&support::bundle(3), &manifest, 3)).await;
+    unknown(pushed(&evs));
 }
 
 #[tokio::test]
@@ -221,6 +229,8 @@ async fn a_bundle_built_without_contract_from_is_unknown() {
 
     let (bytes, manifest) = ui_build(m.dir.path(), &bin, None);
     assert!(!m.dir.path().join("calls.log").exists(), "without --contract-from the script asks no server");
+    let doc: Value = serde_json::from_str(&manifest).expect("the manifest is JSON");
+    assert_eq!(doc["contract"], "unknown", "without --contract-from the script writes unknown: {doc}");
     let evs = call(&admin, "ui.push", signed_params(&bytes, &manifest, 1)).await;
     unknown(pushed(&evs));
 }
