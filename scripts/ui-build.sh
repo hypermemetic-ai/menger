@@ -83,7 +83,11 @@ for src in "$ui"/src/*.svelte; do names+=("$(basename "$src" .svelte)"); done
 
 # ── the engine ────────────────────────────────────────────────────────────
 build_engine() {
-  (cd "$root" && cargo build -p menger-ui-engine --lib --release --target wasm32-unknown-unknown --features dom)
+  # Small: opt-level z, LTO, one codegen unit, stripped — for this build
+  # alone (the workspace's release profile is the server's).
+  (cd "$root" && cargo build -p menger-ui-engine --lib --release --target wasm32-unknown-unknown --features dom \
+    --config 'profile.release.opt-level="z"' --config 'profile.release.lto=true' \
+    --config 'profile.release.codegen-units=1' --config 'profile.release.strip=true')
   local want bindgen tools
   want=$(awk '/^name = "wasm-bindgen"$/ { getline; gsub(/version = |"/, ""); print; exit }' "$root/Cargo.lock")
   if command -v wasm-bindgen >/dev/null && wasm-bindgen --version | grep -q " $want\$"; then
@@ -128,7 +132,12 @@ for name in "${names[@]}"; do
     exit 1
   fi
 done
-[ -n "$prebuild" ] && { echo "ui-build: prebuilt into $stage" >&2; exit 0; }
+if [ -n "$prebuild" ]; then
+  # The container that writes the tar has no git: the commit rides along.
+  git -C "$root" rev-parse --short HEAD >"$stage/commit" 2>/dev/null || true
+  echo "ui-build: prebuilt into $stage" >&2
+  exit 0
+fi
 
 # ── the manifest ──────────────────────────────────────────────────────────
 for name in "${names[@]}"; do cp "$ui/src/$name.svelte" "$stage/src/$name.svelte"; done
@@ -145,7 +154,7 @@ if [ -n "$contract_from" ]; then
     });')
   [ -n "$contract" ] || { echo "ui-build: no hash from the service on :$contract_from" >&2; exit 1; }
 fi
-commit="menger@$(git -C "$root" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+commit="menger@$(git -C "$root" rev-parse --short HEAD 2>/dev/null || cat "$stage/commit" 2>/dev/null || echo unknown)"
 UI_DIR=$ui STAGE=$stage CONTRACT=$contract COMMIT=$commit NAMES="${names[*]}" node -e '
   const fs = require("fs"), crypto = require("crypto"), path = require("path");
   const { UI_DIR, STAGE, CONTRACT, COMMIT, NAMES } = process.env;

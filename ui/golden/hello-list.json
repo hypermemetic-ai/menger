@@ -4,6 +4,7 @@
   "live": {
     "rows": {
       "changes": "tickets.watch",
+      "changes_params": {},
       "key": "id",
       "on": {
         "amended": "upsert:ticket",

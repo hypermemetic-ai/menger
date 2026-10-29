@@ -373,11 +373,15 @@ async function main() {
       await create("made after the reconnect");
       await sameDocument(page, origin, "after the reconnect");
 
-      // A second push: the hello text swapped in place.
+      // A second push: the hello text swapped in place, the rows as they
+      // were (the resync after the reconnect asked tickets.list again, so a
+      // ticket made before it may be past the first 200: compare, not look up).
+      const rowsBefore = await page.locator("li[data-id]").evaluateAll((els) => els.map((e) => e.getAttribute("data-id")));
       pushOnce(v2Tar, v2);
       await eventually("the second push's hello text is drawn", async () => (await hello(page)) === HELLO_V2);
       await sameDocument(page, origin, "after the push");
-      assert((await page.locator(`li[data-id="${id}"]`).count()) === 1, "the rows still shown after the swap");
+      const rowsAfter = await page.locator("li[data-id]").evaluateAll((els) => els.map((e) => e.getAttribute("data-id")));
+      assert(rowsAfter.length > 0 && JSON.stringify(rowsAfter) === JSON.stringify(rowsBefore), `the rows as they were after the swap (${rowsBefore.length} → ${rowsAfter.length})`);
       assert(seen.sockets === 2, `no socket opened for the push (${seen.sockets})`);
     });
 
