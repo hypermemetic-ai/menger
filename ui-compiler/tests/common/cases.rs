@@ -30,7 +30,8 @@ pub fn unknown_forms() -> Vec<Case> {
         case("an {#if} open at </div>", format!("{HEAD}<div>\n{{#if open}}\n  <p>x</p>\n</div>\n"), 6, "{#if"),
         case("an unknown tag", format!("{HEAD}<section>\n  <frobnicate>x</frobnicate>\n</section>\n"), 6, "frobnicate"),
         case("{#key}", format!("{HEAD}{{#key id}}<p/>{{/key}}\n"), 5, "{#key"),
-        case("{@html}", format!("{HEAD}<p>\n  {{@html body}}\n</p>\n"), 6, "{@html"),
+        // UI-10: {@html expr} is in the subset; another {@…} is not.
+        case("{@debug}", format!("{HEAD}<p>\n  {{@debug body}}\n</p>\n"), 6, "{@debug"),
     ]
 }
 

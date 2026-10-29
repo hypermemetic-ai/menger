@@ -599,7 +599,19 @@ impl<'a, 'b> P<'a, 'b> {
             }
             Some(b'@') => {
                 let kw = word(&raw[1..]);
-                return refuse(line, format!("{{@{kw} is not in the subset"));
+                if kw != "html" {
+                    return refuse(line, format!("{{@{kw} is not in the subset: {{@html expr}} only"));
+                }
+                // UI-10: `{@html expr}` — the engine draws it through its sanitizer.
+                let expr = raw[1 + kw.len()..].trim();
+                if expr.is_empty() {
+                    return refuse(line, "{@html } needs an expression: {@html expr}");
+                }
+                let e = self.j.expr(expr);
+                let node = self.j.obj(vec![("html".into(), e)]);
+                self.add(node, start)?;
+                self.pos = after;
+                return Ok(());
             }
             _ => {
                 if inner.is_empty() {

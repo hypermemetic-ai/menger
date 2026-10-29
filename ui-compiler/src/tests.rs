@@ -125,11 +125,12 @@ fn a_handler_that_is_not_a_fold_is_refused() {
 }
 
 // Required behaviour beyond the testing surface's rows: a `live` missing any
-// of snapshot / changes / key, and a prop or state declared twice, refused
+// of snapshot / key (UI-10: changes may be absent — a one-shot read), and a
+// prop or state declared twice, refused
 // naming it.
 #[test]
 fn an_incomplete_live_or_a_declaration_twice_is_refused() {
-    for missing in ["snapshot", "changes", "key"] {
+    for missing in ["snapshot", "key"] {
         let mut fields = vec![r#"snapshot: "tickets.list""#, r#"changes: "tickets.watch""#, r#"key: "id""#];
         fields.retain(|f| !f.starts_with(missing));
         let src = format!("<script>\n  let rows = live(#{{ {} }});\n</script>\n<p/>\n", fields.join(", "));

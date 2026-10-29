@@ -33,6 +33,11 @@ impl Clock for PageClock {
     fn now_ms(&self) -> u64 {
         js_sys::Date::now() as u64
     }
+    fn schedule(&self, after_ms: u64, f: Box<dyn FnOnce()>) {
+        // Freed once it has run.
+        let c = Closure::once_into_js(move || f());
+        let _ = window().set_timeout_with_callback_and_timeout_and_arguments_0(c.unchecked_ref(), after_ms.min(i32::MAX as u64) as i32);
+    }
 }
 
 type PageApp = App<Dom, WsWire, PageClock>;

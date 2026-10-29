@@ -374,6 +374,42 @@ impl State {
     }
 }
 
+/// UI-10: a `live`'s params evaluated over the scope — a `{ "expr" }`
+/// value a Rhai expression over the props and `state` (its reads of state
+/// tracked, so a binding around this re-runs when they change), any other
+/// value as written.
+pub fn eval_params(params: &BTreeMap<String, Value>, props: &Map<String, Value>, state: &State) -> Value {
+    let mut out = Map::new();
+    for (k, v) in params {
+        let value = match v.as_object().and_then(|o| o.get("expr")).and_then(Value::as_str) {
+            None => v.clone(),
+            Some(text) => match Expr::compile(text) {
+                Err(m) => {
+                    warn(&format!("the param {k}: `{text}`: {m}"));
+                    Value::Null
+                }
+                Ok(e) => {
+                    let mut scope = rhai::Scope::new();
+                    for (pk, pv) in props {
+                        if e.reads.names.contains(pk) {
+                            scope.push_constant_dynamic(pk.clone(), expr::to_dynamic(pv));
+                        }
+                    }
+                    if e.reads.names.contains("state") {
+                        scope.push_dynamic("state", expr::to_dynamic(&Value::Object(state.read(e.reads.state_keys.as_ref()))));
+                    }
+                    e.eval(&mut scope).map(|d| expr::to_value(&d)).unwrap_or_else(|m| {
+                        warn(&format!("the param {k}: `{text}`: {m}"));
+                        Value::Null
+                    })
+                }
+            },
+        };
+        out.insert(k.clone(), value);
+    }
+    Value::Object(out)
+}
+
 /// What a tree is mounted with: the props by name, the state, the `live`
 /// collections by name (each `{ rows, status }`), and where its events go.
 pub struct Scope {
@@ -617,7 +653,17 @@ fn build_node<R: Renderer>(ctx: &Rc<Ctx<R>>, env: &Env, node: &Node, parent: &R:
             block.hosts.push(e.clone());
             place(ctx, parent, &e, before, block, top);
         }
-        Node::Html(_) => todo!("UI-10: an html node"),
+        Node::Html(x) => {
+            let anchor = r.create_text("");
+            place(ctx, parent, &anchor, before, block, top);
+            let d = Rc::new(RefCell::new(Dyn { parent: parent.clone(), top, rows: Vec::new() }));
+            let (c, env2, x2) = (ctx.clone(), env.clone(), x.clone());
+            let (c2, d2, a2) = (ctx.clone(), d.clone(), anchor.clone());
+            let (id, first) = watch(&ctx.rt, move || expr::as_text(&c.eval(&env2, &x2)), move |html: String| fill_html(&c2, &d2, &a2, &html));
+            block.bindings.push(id);
+            ctx.rt.untracked(|| fill_html(ctx, &d, &anchor, &first));
+            block.dyns.push(d);
+        }
         Node::Slot { name, props } => {
             let e = r.create_element("div");
             r.set_attr(&e, "data-layout", &ctx.layout);
@@ -628,6 +674,38 @@ fn build_node<R: Renderer>(ctx: &Rc<Ctx<R>>, env: &Env, node: &Node, parent: &R:
             place(ctx, parent, &e, before, block, top);
         }
     }
+}
+
+/// UI-10: an `{@html}`'s nodes: the old ones out, the sanitized tree drawn
+/// before the anchor through the renderer (no HTML string reaches it).
+fn fill_html<R: Renderer>(ctx: &Rc<Ctx<R>>, d: &Rc<RefCell<Dyn<R>>>, anchor: &R::Node, html: &str) {
+    let (old, parent) = {
+        let mut d = d.borrow_mut();
+        (std::mem::take(&mut d.rows), d.parent.clone())
+    };
+    for (_, b, _) in old {
+        dispose(ctx, b, Some(&parent));
+    }
+    fn draw<R: Renderer>(r: &R, nodes: &[crate::html::HNode], parent: &R::Node, before: Option<&R::Node>, top: &mut Vec<R::Node>) {
+        for n in nodes {
+            let node = match n {
+                crate::html::HNode::Text(t) => r.create_text(t),
+                crate::html::HNode::Element { tag, attrs, children } => {
+                    let e = r.create_element(tag);
+                    for (k, v) in attrs {
+                        r.set_attr(&e, k, v);
+                    }
+                    draw(r, children, &e, None, &mut Vec::new());
+                    e
+                }
+            };
+            r.insert(parent, &node, before);
+            top.push(node);
+        }
+    }
+    let mut b = Block::default();
+    draw(&ctx.renderer, &crate::html::sanitize(html), &parent, Some(anchor), &mut b.top);
+    d.borrow_mut().rows.push((String::new(), b, None));
 }
 
 fn fill_if<R: Renderer>(ctx: &Rc<Ctx<R>>, env: &Env, d: &Rc<RefCell<Dyn<R>>>, anchor: &R::Node, branches: &(Vec<Node>, Vec<Node>), on: bool) {
