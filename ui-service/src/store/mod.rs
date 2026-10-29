@@ -105,8 +105,8 @@ pub enum UiError {
     Db(String),
     #[error("the bundle is not a tar archive with an index.html: {0}")]
     BadBundle(String),
-    #[error("the manifest names no {0}")]
-    BadManifest(&'static str),
+    #[error("the manifest {0}")]
+    BadManifest(String),
     #[error("no version {0} is kept")]
     UnknownVersion(String),
     /// UI-9: a set naming a component the version's manifest does not hold.
@@ -141,14 +141,38 @@ pub fn digest_of(bundle: &[u8]) -> [u8; 32] {
     Sha256::digest(bundle).into()
 }
 
-/// A manifest's `key: value` line, as text (quotes around the value read
-/// past); not checked here — that is the compiler's and activation's.
-pub fn manifest_field(manifest: &str, key: &str) -> Option<String> {
-    manifest.lines().find_map(|line| {
-        let (k, v) = line.trim().split_once(':')?;
-        let v = v.trim().trim_matches(|c| c == '"' || c == '\'');
-        (k.trim() == key && !v.is_empty()).then(|| v.to_string())
-    })
+/// UI-9: a manifest as the contract writes it (UI-4's JSON) — what the
+/// store reads of it: `abi`, `contract`, the `components` by name, and the
+/// `slots` (`{ layout: { slot: default component } }`). Anything else in it
+/// is kept in the row and read by nobody here.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ManifestDoc {
+    #[serde(default)]
+    pub abi: Option<String>,
+    #[serde(default)]
+    pub contract: Option<String>,
+    #[serde(default)]
+    pub components: std::collections::BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    pub slots: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+}
+
+impl ManifestDoc {
+    /// The text of a manifest, read: refused (`BadManifest`) when it is no
+    /// JSON object of the contract's shape.
+    pub fn parse(text: &str) -> Result<Self, UiError> {
+        serde_json::from_str(text).map_err(|e| UiError::BadManifest(format!("is not the contract's JSON (UI-4): {e}")))
+    }
+
+    /// The default component `slots` names for `slot` of `layout`.
+    pub fn default_for(&self, layout: &str, slot: &str) -> Option<&str> {
+        self.slots.get(layout).and_then(|s| s.get(slot)).map(String::as_str)
+    }
+}
+
+/// A non-empty text field of a manifest, or `BadManifest` naming it.
+fn required(field: Option<String>, name: &str) -> Result<String, UiError> {
+    field.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).ok_or_else(|| UiError::BadManifest(format!("names no {name}")))
 }
 
 /// The file `path` in a tar `bundle` (`./` before a name read past); `Err`
@@ -239,8 +263,9 @@ impl UiStore {
     ) -> Result<Pushed, UiError> {
         let hash = hash_of(&v.bundle);
         check_bundle(&v.bundle)?;
-        let contract = manifest_field(&v.manifest, "contract").ok_or(UiError::BadManifest("contract"))?;
-        let abi = manifest_field(&v.manifest, "abi").ok_or(UiError::BadManifest("abi"))?;
+        let doc = ManifestDoc::parse(&v.manifest)?;
+        let contract = required(doc.contract, "contract")?;
+        let abi = required(doc.abi, "abi")?;
         let mut c = self.conn.lock().unwrap_or_else(|p| p.into_inner());
         let tx = c.transaction()?;
         let new = !kept(&tx, &hash)?;
@@ -253,6 +278,8 @@ impl UiStore {
         after_insert(&tx)?;
         point(&tx, LIVE, &hash)?;
         tx.commit()?;
+        // UI-9: the pointer moved — said to every watch.
+        let _ = self.changes.send(UiChange::Live { version: hash.clone() });
         Ok(Pushed { version: hash, live: true, new })
     }
 
@@ -265,6 +292,7 @@ impl UiStore {
         }
         point(&tx, LIVE, to)?;
         tx.commit()?;
+        let _ = self.changes.send(UiChange::Live { version: to.to_string() });
         Ok(to.to_string())
     }
 

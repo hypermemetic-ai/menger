@@ -22,7 +22,7 @@ pub mod signers;
 pub use signers::Signers;
 
 pub mod store;
-pub use store::{Assignment, NewVersion, Pointer, Pushed, Section, UiChange, UiError, UiStore, UiVersion, LIVE, UI_DB_FILE};
+pub use store::{Assignment, ManifestDoc, NewVersion, Pointer, Pushed, Section, UiChange, UiError, UiStore, UiVersion, LIVE, UI_DB_FILE};
 
 pub mod activation;
 pub use activation::{SlotsActivation, SlotsClient, UiActivation};

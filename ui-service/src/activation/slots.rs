@@ -8,9 +8,10 @@
 //! children are.
 
 use crate::events::UiEvent;
-use crate::store::UiStore;
+use super::{answer, refusal};
+use crate::store::{Assignment, UiError, UiStore};
 use crate::vocab::{ComponentName, LayoutName, SlotName, VersionHash};
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use menger_tickets_api::access::{Access, MengerRequest, VerifiedUser};
 use std::sync::Arc;
 
@@ -21,9 +22,15 @@ pub struct SlotsActivation {
     pub(super) access: Access,
 }
 
-/// UI-9 phase 1: every method answers this until the build.
-fn unimplemented(what: &str) -> impl Stream<Item = UiEvent> + Send + 'static {
-    futures::stream::once(std::future::ready(UiEvent::Error { message: format!("unimplemented: ui.slots.{what} (UI-9)") }))
+/// `list`'s answer: one `assignment` each, or the refusal.
+fn listed(r: Result<Vec<Assignment>, UiError>) -> Vec<UiEvent> {
+    match r {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|a| UiEvent::Assignment { layout: a.layout, slot: a.slot, component: a.component, version: a.version, default: a.default })
+            .collect(),
+        Err(e) => vec![refusal(e)],
+    }
 }
 
 /// What fills each section of each layout — list the assignments, set one, clear one.
@@ -46,8 +53,16 @@ impl SlotsActivation {
         /// Only this layout's sections, e.g. board-layout (optional).
         layout: Option<LayoutName>,
     ) -> impl Stream<Item = UiEvent> + Send + 'static {
-        let _ = (user, layout, &self.store);
-        unimplemented("list")
+        let _ = user;
+        let store = self.store.clone();
+        let read = async move { tokio::task::spawn_blocking(move || store.slots_list(layout.as_ref().map(LayoutName::as_str))).await };
+        futures::stream::once(read).flat_map(|r| {
+            let events = match r {
+                Ok(r) => listed(r),
+                Err(e) => vec![UiEvent::Error { message: format!("the ui store failed: {e}") }],
+            };
+            futures::stream::iter(events)
+        })
     }
 
     /// Fill a section with a component of a stored version (none: the live one); yields set { layout, slot, component, version } and says slot_changed on every ui.watch.
@@ -70,8 +85,12 @@ impl SlotsActivation {
         /// The stored version the component is of, by hash (optional: the live version's).
         version: Option<VersionHash>,
     ) -> impl Stream<Item = UiEvent> + Send + 'static {
-        let _ = (user, layout, slot, component, version);
-        unimplemented("set")
+        let _ = user;
+        let store = self.store.clone();
+        answer(move || match store.slots_set(layout.as_str(), slot.as_str(), component.as_str(), version.as_ref().map(VersionHash::as_str)) {
+            Ok(a) => UiEvent::Set { layout: a.layout, slot: a.slot, component: a.component, version: a.version },
+            Err(e) => refusal(e),
+        })
     }
 
     /// Return a section to its default; yields cleared { layout, slot, component, version } (the default it shows now) and says slot_changed on every ui.watch.
@@ -86,7 +105,11 @@ impl SlotsActivation {
         /// The section: its slot's name in the layout, e.g. main.
         slot: SlotName,
     ) -> impl Stream<Item = UiEvent> + Send + 'static {
-        let _ = (user, layout, slot);
-        unimplemented("clear")
+        let _ = user;
+        let store = self.store.clone();
+        answer(move || match store.slots_clear(layout.as_str(), slot.as_str()) {
+            Ok(s) => UiEvent::Cleared { layout: s.layout, slot: s.slot, component: s.component, version: s.version },
+            Err(e) => refusal(e),
+        })
     }
 }

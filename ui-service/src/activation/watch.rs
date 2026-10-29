@@ -5,31 +5,86 @@
 //! stream ends with one `watch_closed { reason, message }`.
 
 use crate::events::UiEvent;
-use crate::store::UiStore;
-use futures::Stream;
+use crate::store::{UiChange, UiStore};
+use async_stream::stream;
+use futures::{Stream, StreamExt};
+use tokio::sync::broadcast::error::RecvError;
 use menger_tickets_api::access::{Access, Following, VerifiedUser};
 use menger_tickets_api::store::Store;
 use std::sync::Arc;
 
-/// The stream. UI-9 phase 1: unimplemented, in band.
+/// The stream: the caller followed from the call (`Following::of`, the
+/// tickets store's grants generation), then [`changes`].
 pub(super) fn watch_stream(store: Arc<UiStore>, access: Access, tickets: Option<Arc<Store>>, user: VerifiedUser) -> impl Stream<Item = UiEvent> + Send + 'static {
-    let _ = (access, tickets, user);
-    changes(store, None)
+    let opened = match tickets {
+        Some(t) => Following::of(&access, &t, user).map(|f| changes(store, Some(f))),
+        None => Err("ui.watch: this server holds no caller's grants to follow it by".to_string()),
+    };
+    stream! {
+        match opened {
+            Ok(inner) => {
+                let mut inner = Box::pin(inner);
+                while let Some(e) = inner.next().await {
+                    yield e;
+                }
+            }
+            Err(message) => yield UiEvent::Error { message },
+        }
+    }
+}
+
+/// Waits for what could change the caller — never, with nobody to hold.
+async fn caller_moved(following: &mut Option<Following>) {
+    match following {
+        Some(f) => f.changed().await,
+        None => std::future::pending().await,
+    }
 }
 
 /// The store's changes as the watch says them, held to `following` (none:
 /// nobody to hold — the tests'): subscribed at the call, before the first
 /// poll, and opened with `live` for the pointer as it stands.
 pub(super) fn changes(store: Arc<UiStore>, following: Option<Following>) -> impl Stream<Item = UiEvent> + Send + 'static {
-    let _ = (store, following);
-    futures::stream::once(std::future::ready(UiEvent::Error { message: "unimplemented: ui.watch (UI-9)".into() }))
+    // Subscribed first, then the pointer read: no move between is missed.
+    let mut rx = store.subscribe();
+    let opening = store.pointer().map(|p| p.map(|p| p.hash));
+    stream! {
+        let mut following = following;
+        match opening {
+            Ok(version) => yield UiEvent::Live { version },
+            Err(e) => {
+                yield UiEvent::Error { message: e.to_string() };
+                return;
+            }
+        }
+        loop {
+            let woke = tokio::select! {
+                biased;
+                () = caller_moved(&mut following) => None,
+                r = rx.recv() => Some(r),
+            };
+            // ACCESS-12: the caller as it stands, before anything is relayed.
+            if let Some(f) = following.as_mut() {
+                if let Err(closed) = f.again() {
+                    yield UiEvent::WatchClosed { reason: closed.reason, message: closed.message };
+                    return;
+                }
+            }
+            match woke {
+                None => continue,
+                Some(Ok(UiChange::Live { version })) => yield UiEvent::Live { version: Some(version) },
+                Some(Ok(UiChange::SlotChanged(s))) => yield UiEvent::SlotChanged { layout: s.layout, slot: s.slot, component: s.component, version: s.version },
+                Some(Err(RecvError::Lagged(missed))) => yield UiEvent::Lagged { missed },
+                Some(Err(RecvError::Closed)) => break,
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::store::NewVersion;
-    use futures::StreamExt;
 
     fn version(n: u32) -> NewVersion {
         let mut b = tar::Builder::new(Vec::new());
