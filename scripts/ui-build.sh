@@ -30,11 +30,16 @@
 # bundle: src/shell.rs's PLACEHOLDER as index.html beside an empty manifest.
 #
 # Usage: scripts/ui-build.sh [--prebuild] [--ui DIR] [-o|--out FILE]
-#                            [--contract-from PORT] [--engine DIR]
+#                            [--contract-from PORT | --contract HASH] [--engine DIR]
 #   --engine DIR   take engine.js / engine.wasm from DIR (built already)
 #   --contract-from PORT   manifest.contract from the service on PORT: the tickets
 #                          service's hash (tickets.schema's), what ui.push compares
 #                          (UI-11); without it, "unknown", which the push answers null
+#   --contract HASH        manifest.contract is HASH, as given — no service asked
+#                          (UI-12: the pipeline reads it from the binary it built and
+#                          hands it to the codegen container, which has no socket to
+#                          it); `unknown` or empty is refused: unknown is what the
+#                          script writes when told nothing, never what it is told
 # Everything cargo builds goes to $CARGO_TARGET_DIR (else ./target).
 set -euo pipefail
 
@@ -42,6 +47,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 ui=$root/ui
 out=$root/dist/ui.tar
 contract_from=
+contract_given=
 engine=
 prebuild=
 while [ $# -gt 0 ]; do
@@ -50,11 +56,19 @@ while [ $# -gt 0 ]; do
     --ui) ui=$(cd "$2" && pwd); shift 2 ;;
     -o|--out) out=$2; shift 2 ;;
     --contract-from) contract_from=$2; shift 2 ;;
+    --contract)
+      contract_given=${2-}
+      case $contract_given in
+        ""|unknown) echo "ui-build: --contract '${contract_given}': a hash is required (unknown is what no --contract writes; it is never passed)" >&2; exit 2 ;;
+      esac
+      [[ $contract_given =~ ^[A-Za-z0-9._:-]+$ ]] || { echo "ui-build: --contract '$contract_given': a hash is letters, digits and . _ : - only" >&2; exit 2; }
+      shift 2 ;;
     --engine) engine=$(cd "$2" && pwd); shift 2 ;;
-    -h|--help) sed -n '2,38p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,43p' "$0"; exit 0 ;;
     *) echo "ui-build: unknown argument $1" >&2; exit 2 ;;
   esac
 done
+[ -n "$contract_from" ] && [ -n "$contract_given" ] && { echo "ui-build: --contract and --contract-from: one at most" >&2; exit 2; }
 
 mkdir -p "$(dirname "$out")"
 out=$(cd "$(dirname "$out")" && pwd)/$(basename "$out")
@@ -67,7 +81,7 @@ if [ ! -d "$ui/src" ]; then
   [[ $page == "<!doctype html>"* ]] || { echo "ui-build: no PLACEHOLDER page in src/shell.rs" >&2; exit 1; }
   stage=$(mktemp -d); trap 'rm -rf "$stage"' EXIT
   printf '%s\n' "$page" >"$stage/index.html"
-  printf '%s\n' '{"abi":"engine/1","contract":"unknown","routes":[],"components":[],"slots":{}}' >"$stage/manifest.json"
+  printf '{"abi":"engine/1","contract":"%s","routes":[],"components":[],"slots":{}}\n' "${contract_given:-unknown}" >"$stage/manifest.json"
   tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --format=gnu -C "$stage" -cf "$out.part" index.html manifest.json
   mv "$out.part" "$out"
   echo "ui-build: $out (the placeholder page: no ui/src here)" >&2
@@ -142,7 +156,7 @@ fi
 # ── the manifest ──────────────────────────────────────────────────────────
 for name in "${names[@]}"; do cp "$ui/src/$name.svelte" "$stage/src/$name.svelte"; done
 cp "$ui/index.html" "$stage/index.html"
-contract=unknown
+contract=${contract_given:-unknown}
 if [ -n "$contract_from" ]; then
   contract=$(synapse -P "$contract_from" -j menger tickets schema | node -e '
     let t = ""; process.stdin.on("data", (d) => (t += d)).on("end", () => {
