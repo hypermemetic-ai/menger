@@ -12,6 +12,7 @@
 
 use crate::members::{Grant, Role, Scope};
 use crate::vocab::{GrantedBy, Grantee, TeamName};
+use plexus_auth_core::grants::GrantsGeneration;
 use rusqlite::{params, Connection};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -36,18 +37,24 @@ pub(super) const TABLE: &str = "
 /// ACCESS-22: and the teams themselves ([`super::teams`]), by name — kept
 /// here beside the grants because a change to who is in one is a change to
 /// who holds what: the generation moves with it.
+///
+/// BIDIR-8: the generation is the gate's ([`GrantsGeneration`],
+/// plexus-auth-core): the access layer hands its gates' one over when the
+/// store is attached ([`Members::share_generation`]), so a grant written
+/// here moves the count every gate of this server decides by — one
+/// generation, not two.
 #[derive(Debug, Clone, Default)]
 pub struct Members {
     by_principal: BTreeMap<String, BTreeMap<String, Grant>>,
     teams: BTreeMap<String, BTreeSet<TeamName>>,
     pub(super) records: BTreeMap<TeamName, super::teams::Record>,
-    generation: u64,
+    generation: GrantsGeneration,
 }
 
 impl Members {
     pub(super) fn put(&mut self, g: Grant) {
         self.by_principal.entry(g.principal.to_string()).or_default().insert(g.scope.text(), g);
-        self.generation += 1;
+        self.generation.bump();
     }
 
     pub(super) fn remove(&mut self, principal: &Grantee, scope: &Scope) -> Option<Grant> {
@@ -58,7 +65,7 @@ impl Members {
             self.by_principal.remove(&principal);
         }
         if gone.is_some() {
-            self.generation += 1;
+            self.generation.bump();
         }
         gone
     }
@@ -66,12 +73,19 @@ impl Members {
     /// ACCESS-12: something else moved who holds what (a role's grants
     /// edited) — the generation moves with it.
     pub(super) fn moved(&mut self) {
-        self.generation += 1;
+        self.generation.bump();
     }
 
     /// ACCESS-9: the grants generation ([`Members`]).
     pub fn generation(&self) -> u64 {
-        self.generation
+        self.generation.current()
+    }
+
+    /// BIDIR-8: count in `shared` from now on — the gate's — carrying the
+    /// count so far over (never back).
+    pub(super) fn share_generation(&mut self, shared: GrantsGeneration) {
+        shared.raise_to(self.generation.current());
+        self.generation = shared;
     }
 
     /// ACCESS-9: the teams `principal` is in, by name — the input a reach
@@ -90,7 +104,7 @@ impl Members {
             self.teams.remove(principal);
         }
         if moved {
-            self.generation += 1;
+            self.generation.bump();
         }
     }
 

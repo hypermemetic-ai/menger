@@ -77,6 +77,9 @@ async fn free_port() -> u16 {
 struct World {
     port: u16,
     iss: String,
+    /// BIDIR-8: the service call gate's grants generation, and the access layer's.
+    service_generation: plexus_auth_core::grants::GrantsGeneration,
+    access_generation: plexus_auth_core::grants::GrantsGeneration,
 }
 
 async fn start() -> World {
@@ -97,6 +100,8 @@ async fn start() -> World {
     let access = Access::with_login(menger::session_table(&sessions), vec![format!("idp:{ADA}")]).minting(menger::session_table(&sessions));
     let offers = providers.iter().map(menger::offer).collect();
     let hub = build_rpc_offering(&dir.path().join("t.db"), None, Default::default(), offers, access.clone()).await.unwrap();
+    let service_generation = hub.gate().expect("menger's service is gated").generation().clone();
+    let access_generation = access.gate().generation().clone();
     // AUTH-7: as main wires it, the upgrade notices who signs in holding nothing.
     let gate = Arc::new(Gate::new(sessions, login::boundary(&providers).unwrap()).noticing(menger::MengerAccess(access)));
     let conv = |arc: Arc<DynamicHub>| DynamicHub::arc_into_rpc_module(arc).map_err(|e| anyhow::anyhow!("{e}"));
@@ -114,7 +119,7 @@ async fn start() -> World {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    World { port, iss }
+    World { port, iss, service_generation, access_generation }
 }
 
 async fn as_(w: &World, sub: &str, name: &str) -> WsClient {
@@ -1194,4 +1199,25 @@ async fn an_admin_reads_who_signed_in_and_how() {
     let no = call(&alice, "members.profiles.list", json!({})).await;
     assert_eq!(no[0]["type"], "error", "{no:?}");
     assert_eq!(call(&ada, "members.profiles.get", json!({ "principal": "key:00" })).await[0]["type"], "error", "never signed in");
+}
+
+/// BIDIR-8: menger keeps one grants generation, and it is the gate's — a
+/// revoke written through `members.revoke` (menger's store, not the service's
+/// `auth.revoke`) moves the call gate's count once, and the access layer's
+/// gate reads the same count.
+#[tokio::test]
+async fn a_grant_written_through_menger_moves_the_gates_generation() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    tickets(&ada).await;
+    assert_eq!(call(&ada, "members.grant", grant(ALICE, "IDENTITY", "editor")).await[0]["type"], "grant");
+    let before = w.service_generation.current();
+    assert!(before > 0, "the grant moved it");
+    assert_eq!(w.access_generation.current(), before, "one generation, not two");
+    let out = call(&ada, "members.revoke", json!({ "principal": format!("idp:{ALICE}"), "scope": "IDENTITY" })).await;
+    assert_ne!(out[0]["type"], "error", "{out:?}");
+    assert_eq!(w.service_generation.current(), before + 1, "members.revoke: the gate's generation +1");
+    assert_eq!(w.access_generation.current(), before + 1);
+    w.access_generation.bump();
+    assert_eq!(w.service_generation.current(), before + 2, "the same count");
 }

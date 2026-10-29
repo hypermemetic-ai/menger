@@ -15,7 +15,10 @@
 //!   `error_kind: too_many_calls` with the `max`, recoverable — close a
 //!   watch, or open another connection (the per-IP and per-principal
 //!   connection quotas, AUTH-12, bound that). jsonrpsee's own 1,024 stays
-//!   behind it.
+//!   behind it. BIDIR-8: the count is the transport's — each connection's
+//!   [`plexus_transport::ConnectionCalls`] ([`Connection::calls`]), where a
+//!   duplex call counts as one too; this module takes its place there,
+//!   within `--max-calls-per-connection`, and keeps only the idle clock.
 //! - **Idle** ([`IDLE_SECS`], `--idle-timeout-secs`): a connection with no
 //!   call open and none begun for that long is closed. An app holds its
 //!   `watch` open, so it is never idle; a script's socket closes itself.
@@ -38,8 +41,9 @@ use plexus_transport::websocket::Connection;
 use serde_json::Value;
 
 /// The calls one connection may have open at once: room for the app's
-/// watches and windows and a frame's bridge, a quarter of jsonrpsee's 1,024.
-pub const CALLS_PER_CONNECTION: usize = 256;
+/// watches and windows and a frame's bridge, a quarter of jsonrpsee's 1,024
+/// (BIDIR-8: the transport's default, [`plexus_transport::CALLS_PER_CONNECTION`]).
+pub const CALLS_PER_CONNECTION: usize = plexus_transport::CALLS_PER_CONNECTION;
 
 /// How long a connection may sit with no call open before it is closed:
 /// fifteen minutes.
@@ -161,10 +165,10 @@ fn too_many(ns: &str, max: usize) -> Value {
     v
 }
 
-/// The connections that have made a call: each one's calls open, and when
-/// it last began or ended one. Keyed by the connection's address in memory,
-/// held weakly: a connection gone is dropped at the next sweep (or when its
-/// address is reused).
+/// The connections that have made a call: when each last began or ended
+/// one (its calls open are its own count, [`Connection::calls`]). Keyed by
+/// the connection's address in memory, held weakly: a connection gone is
+/// dropped at the next sweep (or when its address is reused).
 struct Open {
     limits: CallLimits,
     conns: Mutex<HashMap<usize, Entry>>,
@@ -172,14 +176,15 @@ struct Open {
 
 struct Entry {
     conn: Weak<Connection>,
-    open: usize,
     last: Instant,
 }
 
-/// One call's place on its connection, given back when the call ends.
+/// One call's place on its connection — the transport's, given back when
+/// the call ends — and the idle clock restarted then.
 struct Place {
     open: Arc<Open>,
     key: usize,
+    _place: plexus_core::plexus::duplex_gate::CallPlace,
 }
 
 impl Open {
@@ -187,21 +192,19 @@ impl Open {
         Arc::new(Self { limits, conns: Mutex::new(HashMap::new()) })
     }
 
-    /// A place for a call on `conn`, or the limit it is at.
+    /// A place for a call on `conn` — in the transport's count, within
+    /// `--max-calls-per-connection` — or the limit it is at.
     fn admit(self: &Arc<Self>, conn: &Arc<Connection>) -> Result<Place, usize> {
         let key = Arc::as_ptr(conn) as usize;
         let weak = Arc::downgrade(conn);
         let mut conns = self.conns.lock().unwrap_or_else(|p| p.into_inner());
-        let e = conns.entry(key).or_insert_with(|| Entry { conn: weak.clone(), open: 0, last: Instant::now() });
+        let e = conns.entry(key).or_insert_with(|| Entry { conn: weak.clone(), last: Instant::now() });
         if !e.conn.ptr_eq(&weak) {
-            *e = Entry { conn: weak, open: 0, last: Instant::now() };
+            *e = Entry { conn: weak, last: Instant::now() };
         }
         e.last = Instant::now();
-        if e.open >= self.limits.per_connection {
-            return Err(self.limits.per_connection);
-        }
-        e.open += 1;
-        Ok(Place { open: self.clone(), key })
+        let place = conn.calls().try_open_within(self.limits.per_connection).map_err(|t| t.max)?;
+        Ok(Place { open: self.clone(), key, _place: place })
     }
 
     /// Closes every connection idle past `idle`, every `idle / 10` (1 s to
@@ -225,7 +228,7 @@ impl Open {
             if conn.is_closed() {
                 return false;
             }
-            if e.open == 0 && e.last.elapsed() >= idle {
+            if conn.calls().open_count() == 0 && e.last.elapsed() >= idle {
                 tracing::info!(peer = %conn.peer(), "closing socket: idle for {} s with no call open", e.last.elapsed().as_secs());
                 conn.close();
                 return false;
@@ -244,7 +247,6 @@ impl Drop for Place {
     fn drop(&mut self) {
         let mut conns = self.open.conns.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(e) = conns.get_mut(&self.key) {
-            e.open = e.open.saturating_sub(1);
             e.last = Instant::now();
         }
     }
