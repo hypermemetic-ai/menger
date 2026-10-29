@@ -180,3 +180,57 @@ fn the_tree_mounts_and_patches_through_the_renderer() {
     assert!(r.calls_since(at).is_empty(), "a removed branch's key: no calls");
     assert_eq!(rt.runs() - runs, 0, "and no binding ran");
 }
+
+/// UI-10: `on:window-keydown` on a component's root listens on the window
+/// while the component is mounted, and never after: registered at mount,
+/// removed at unmount.
+#[test]
+fn a_window_key_listener_lives_with_its_component() {
+    let rt = Runtime::new();
+    let r = Recording::new();
+    let tree = ComponentTree::parse(
+        r#"{ "name": "jump-palette", "abi": "engine/1", "props": [], "state": {}, "live": {}, "uses": [], "handlers": "",
+             "tree": [ { "el": "div", "on": { "window-keydown": "keyed" }, "children": [ { "text": "palette" } ] } ] }"#,
+    )
+    .expect("parses");
+    let heard: Rc<RefCell<Vec<(String, Value)>>> = Rc::default();
+    let h = heard.clone();
+    let scope = Scope {
+        props: Map::new(),
+        state: State::new(&rt, &Map::new()),
+        live: BTreeMap::new(),
+        on_event: Rc::new(move |handler: &str, ev: Value| h.borrow_mut().push((handler.to_string(), ev))),
+    };
+    assert_eq!(r.window_listeners(), 0);
+    let m = mount(&rt, &r, &tree, scope, &r.root(), Rc::new(Kids::default())).expect("mounts");
+    assert_eq!(r.window_listeners(), 1, "registered at mount");
+    r.fire_window("keydown", json!({ "key": "k" }));
+    assert_eq!(*heard.borrow(), [("keyed".to_string(), json!({ "key": "k" }))], "the window's keydown reaches the handler");
+
+    m.unmount();
+    r.fire_window("keydown", json!({ "key": "j" }));
+    assert_eq!(heard.borrow().len(), 1, "never after unmount");
+    assert_eq!(r.window_listeners(), 0, "removed");
+}
+
+/// UI-10: `{@html expr}` draws the expression's HTML through the
+/// sanitizer — elements and text through the renderer, what is not allowed
+/// gone — and draws it again when what the expression reads changes.
+#[test]
+fn an_html_node_draws_the_sanitized_tree() {
+    let rt = Runtime::new();
+    let r = Recording::new();
+    let tree = ComponentTree::parse(
+        r#"{ "name": "ticket-body", "abi": "engine/1", "props": [], "state": { "body": "" }, "live": {}, "uses": [], "handlers": "",
+             "tree": [ { "el": "article", "children": [ { "html": { "expr": "state.body" } } ] }, { "el": "footer", "children": [] } ] }"#,
+    )
+    .expect("parses");
+    let state = State::new(&rt, &obj(json!({ "body": r#"<p>a<script>alert(1)</script><b onclick="x()">b</b></p>"# })));
+    let scope = Scope { props: Map::new(), state: state.clone(), live: BTreeMap::new(), on_event: Rc::new(|_: &str, _: Value| {}) };
+    let _m = mount(&rt, &r, &tree, scope, &r.root(), Rc::new(Kids::default())).expect("mounts");
+    assert_eq!(r.html(0), "<article><p>a<b>b</b></p></article><footer></footer>");
+    let footer = r.find_tag("footer")[0];
+    state.replace(&obj(json!({ "body": "<em>c</em> &amp; d" })));
+    assert_eq!(r.html(0), "<article><em>c</em> & d</article><footer></footer>", "drawn again; an entity decoded into the text node (the recording draws text as it is)");
+    assert_eq!(r.find_tag("footer"), [footer], "nothing else redrawn");
+}

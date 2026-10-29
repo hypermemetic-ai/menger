@@ -89,3 +89,56 @@ fn a_fold_returns_the_new_state_and_a_call_outside_uses_is_refused() {
     let refused = Folds::compile("fn helper(x) { x + 1 }", &uses(&[]), host).err().expect("refused");
     assert_eq!(refused, FoldError::NotAFold { name: "helper".into() });
 }
+
+/// UI-10: a handler's event carries what the DOM gave — a scroll's
+/// `scroll_top` / `scroll_height` / `client_height`, a keydown's `key`, a
+/// checkbox's `checked` (and `value`, `target`) — through the tree's
+/// listeners (the recording renderer) to the fold.
+#[test]
+fn an_event_carries_what_the_dom_gave() {
+    use crate::signals::Runtime;
+    use crate::tree::{mount, Children, ComponentTree, Recording, Scope, State};
+    use std::collections::BTreeMap;
+
+    struct NoKids;
+    impl Children<Recording> for NoKids {
+        fn mount_component(&self, _: &u32, _: &str, _: Map<String, Value>) {}
+        fn mount_slot(&self, _: &u32, _: &str, _: &str, _: Map<String, Value>) {}
+        fn unmount(&self, _: &u32) {}
+    }
+
+    let tree = ComponentTree::parse(
+        r#"{ "name": "dom-events", "abi": "engine/1", "props": [], "state": {}, "live": {}, "uses": [], "handlers": "",
+             "tree": [
+               { "el": "div", "attrs": { "class": "rows" }, "on": { "scroll": "scrolled" }, "children": [] },
+               { "el": "input", "attrs": { "name": "q" }, "on": { "keydown": "typed" }, "children": [] },
+               { "el": "input", "attrs": { "type": "checkbox" }, "on": { "change": "ticked" }, "children": [] }
+             ] }"#,
+    )
+    .expect("parses");
+    let handlers = r#"
+fn scrolled(state, ev) { state.scroll = [ev.scroll_top, ev.scroll_height, ev.client_height]; state }
+fn typed(state, ev) { state.key = ev.key; state.value = ev.value; state.target = ev.target.name; state }
+fn ticked(state, ev) { state.checked = ev.checked; state }
+"#;
+    let folds = Rc::new(Folds::compile(handlers, &[], Rc::new(Calls::default())).expect("compiles"));
+    let rt = Runtime::new();
+    let r = Recording::new();
+    let state = State::new(&rt, &Map::new());
+    let (f, s) = (folds.clone(), state.clone());
+    let on_event: Rc<dyn Fn(&str, Value)> = Rc::new(move |h: &str, ev: Value| {
+        let next = f.run(h, &s.snapshot(), &ev, &Map::new(), &Map::new()).expect("the fold runs");
+        s.replace(&next);
+    });
+    let scope = Scope { props: Map::new(), state: state.clone(), live: BTreeMap::new(), on_event };
+    let _m = mount(&rt, &r, &tree, scope, &r.root(), Rc::new(NoKids)).expect("mounts");
+
+    let (rows, q, box_) = (r.find_tag("div")[0], r.find_tag("input")[0], r.find_tag("input")[1]);
+    r.fire(rows, "scroll", json!({ "scroll_top": 480, "scroll_height": 12000, "client_height": 800 }));
+    r.fire(q, "keydown", json!({ "key": "Enter", "value": "kiln", "target": { "tag": "input", "name": "q" } }));
+    r.fire(box_, "change", json!({ "checked": true, "value": "on" }));
+    let now = state.snapshot();
+    assert_eq!(now["scroll"], json!([480, 12000, 800]), "a scroll's metrics");
+    assert_eq!((now["key"].clone(), now["value"].clone(), now["target"].clone()), (json!("Enter"), json!("kiln"), json!("q")), "a keydown's key, the value, the target");
+    assert_eq!(now["checked"], json!(true), "a checkbox's checked");
+}

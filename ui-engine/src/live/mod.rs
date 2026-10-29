@@ -90,7 +90,8 @@ impl Live {
 pub struct LiveSpec {
     pub snapshot: String,
     pub params: Value,
-    pub changes: String,
+    /// UI-10: none — a one-shot read, no watch opened.
+    pub changes: Option<String>,
     pub changes_params: Value,
     pub key: String,
     pub on: BTreeMap<String, FoldRule>,
@@ -98,14 +99,14 @@ pub struct LiveSpec {
 
 impl LiveSpec {
     /// From its parts; an `on` rule that is no `upsert:`/`remove:` is refused.
-    pub fn new(snapshot: &str, params: Value, changes: &str, changes_params: Value, key: &str, on: &[(&str, &str)]) -> Result<Self, String> {
+    pub fn new(snapshot: &str, params: Value, changes: Option<&str>, changes_params: Value, key: &str, on: &[(&str, &str)]) -> Result<Self, String> {
         let on = on.iter().map(|(t, r)| Ok((t.to_string(), r.parse()?))).collect::<Result<_, String>>()?;
         let obj = |v: Value| if v.is_null() { json!({}) } else { v };
-        Ok(Self { snapshot: snapshot.into(), params: obj(params), changes: changes.into(), changes_params: obj(changes_params), key: key.into(), on })
+        Ok(Self { snapshot: snapshot.into(), params: obj(params), changes: changes.map(str::to_string), changes_params: obj(changes_params), key: key.into(), on })
     }
 
     fn cache_key(&self) -> String {
-        format!("{}\u{0}{}\u{0}{}\u{0}{}", self.snapshot, self.params, self.changes, self.changes_params)
+        format!("{}\u{0}{}\u{0}{}\u{0}{}", self.snapshot, self.params, self.changes.as_deref().unwrap_or(""), self.changes_params)
     }
 
     /// Whether `item` matches every snapshot param that names a field of it.
@@ -115,27 +116,63 @@ impl LiveSpec {
     }
 }
 
-/// The clock the cache keeps time by.
+/// The clock the cache keeps time by, and its timers (UI-10: a `live`'s
+/// `debounce_ms`).
 pub trait Clock {
     fn now_ms(&self) -> u64;
+    /// Runs `f` once, `after_ms` from now.
+    fn schedule(&self, after_ms: u64, f: Box<dyn FnOnce()>);
 }
 
-/// The tests' clock: moves only when told.
-#[derive(Debug, Clone, Default)]
-pub struct ManualClock(Rc<Cell<u64>>);
+/// A timer of [`ManualClock`]: when it is due, its order, what it runs.
+type Timer = (u64, u64, Box<dyn FnOnce()>);
+
+/// The tests' clock: moves only when told, running each timer that comes
+/// due on the way, in order.
+#[derive(Clone, Default)]
+pub struct ManualClock {
+    now: Rc<Cell<u64>>,
+    timers: Rc<RefCell<Vec<Timer>>>,
+    seq: Rc<Cell<u64>>,
+}
+
+impl std::fmt::Debug for ManualClock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ManualClock({} ms, {} timers)", self.now.get(), self.timers.borrow().len())
+    }
+}
 
 impl ManualClock {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Moves `ms` on, running the timers that come due (a timer set by one
+    /// that runs is run too, when due by the end).
     pub fn advance(&self, ms: u64) {
-        self.0.set(self.0.get() + ms);
+        let end = self.now.get() + ms;
+        loop {
+            let next = {
+                let mut t = self.timers.borrow_mut();
+                let i = t.iter().enumerate().filter(|(_, (due, _, _))| *due <= end).min_by_key(|(_, (due, seq, _))| (*due, *seq)).map(|(i, _)| i);
+                i.map(|i| t.remove(i))
+            };
+            let Some((due, _, f)) = next else { break };
+            self.now.set(due.max(self.now.get()));
+            f();
+        }
+        self.now.set(end);
     }
 }
 
 impl Clock for ManualClock {
     fn now_ms(&self) -> u64 {
-        self.0.get()
+        self.now.get()
+    }
+    fn schedule(&self, after_ms: u64, f: Box<dyn FnOnce()>) {
+        let seq = self.seq.get() + 1;
+        self.seq.set(seq);
+        self.timers.borrow_mut().push((self.now.get() + after_ms, seq, f));
     }
 }
 
@@ -174,7 +211,15 @@ impl Sub {
         let Some(kind) = event.get("type").and_then(Value::as_str) else { return false };
         match self.spec.on.get(kind).cloned() {
             Some(FoldRule::Upsert(field)) => {
-                let Some(item) = event.get(&field).filter(|i| i.is_object()).cloned() else { return false };
+                // UI-10: `upsert:.` — the event itself, less `type`, is the row.
+                let item = if field == "." {
+                    let mut flat = event.as_object().cloned().unwrap_or_default();
+                    flat.remove("type");
+                    Some(Value::Object(flat))
+                } else {
+                    event.get(&field).filter(|i| i.is_object()).cloned()
+                };
+                let Some(item) = item else { return false };
                 let Some(key) = self.key_of(&item) else { return false };
                 let at = self.position(&key);
                 match (self.spec.admits(&item), at) {
@@ -211,12 +256,20 @@ impl Sub {
     }
 }
 
-/// A snapshot event's row: its one object-valued field.
-fn row_of(event: &Value) -> Option<Value> {
+/// A snapshot event's row: its one object-valued field; else (UI-10: a
+/// flat event such as `extent`) the event itself less `type`, when it
+/// carries the key; else none (a `page`).
+fn row_of(event: &Value, key: &str) -> Option<Value> {
     let o = event.as_object()?;
     let mut objects = o.iter().filter(|(k, v)| k.as_str() != "type" && v.is_object());
-    let (_, row) = objects.next()?;
-    objects.next().is_none().then(|| row.clone())
+    if let Some((_, row)) = objects.next() {
+        return objects.next().is_none().then(|| row.clone());
+    }
+    o.contains_key(key).then(|| {
+        let mut flat = o.clone();
+        flat.remove("type");
+        Value::Object(flat)
+    })
 }
 
 /// Every `live` subscription of the page.
@@ -290,6 +343,8 @@ impl<W: Wire + Clone + 'static, C: Clock + Clone + 'static> LiveCache<W, C> {
             let s = sub.borrow();
             (s.spec.changes.clone(), s.spec.changes_params.clone())
         };
+        // UI-10: a live without changes is a one-shot read: no watch.
+        let Some(method) = method else { return };
         let (me, k) = (self.me.clone(), key.to_string());
         let id = self.wire.open(&method, params, Box::new(move |item| {
             if let Some(cache) = me.upgrade() {
@@ -328,7 +383,8 @@ impl<W: Wire + Clone + 'static, C: Clock + Clone + 'static> LiveCache<W, C> {
         let mut s = sub.borrow_mut();
         match item {
             WireItem::Data(event) => {
-                if let Some(row) = row_of(&event) {
+                let key = s.spec.key.clone();
+                if let Some(row) = row_of(&event, &key) {
                     s.buffer.push(row);
                 }
                 return;
@@ -425,6 +481,148 @@ impl<W: Wire + Clone + 'static, C: Clock + Clone + 'static> LiveCache<W, C> {
     /// How many subscriptions are kept (read or waiting out their 5 s).
     pub fn kept(&self) -> usize {
         self.subs.borrow().len()
+    }
+}
+
+/// UI-10: a `live` as declared, before its params are known: the methods,
+/// the key, the folds, and how long its params must be quiet before it
+/// runs again.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveQuery {
+    pub snapshot: String,
+    pub changes: Option<String>,
+    pub key: String,
+    pub on: Vec<(String, String)>,
+    pub debounce_ms: Option<u64>,
+}
+
+impl<W: Wire + Clone + 'static, C: Clock + Clone + 'static> LiveCache<W, C> {
+    /// UI-10: a collection whose params are `params()` — `(params,
+    /// changes_params)`, read in a binding: when a signal it read changes,
+    /// the snapshot runs again (after `debounce_ms` of quiet when given),
+    /// the old rows kept, `resyncing`, until the new snapshot lands.
+    pub fn follow(self: &Rc<Self>, query: LiveQuery, mut params: impl FnMut() -> (Value, Value) + 'static) -> Follow {
+        let out = self.rt.signal(Live { rows: Vec::new(), status: Status::Pending }.to_value());
+        let st: Rc<RefCell<Following>> = Rc::new(RefCell::new(Following { reader: None, mirror: None, generation: 0, last: None, stopped: false }));
+        let (me, st2, out2, q) = (Rc::downgrade(self), st.clone(), out.clone(), Rc::new(query));
+        let rt = self.rt.clone();
+        let binding = self.rt.bind(move || {
+            let p = params();
+            let Some(cache) = me.upgrade() else { return };
+            let first = {
+                let mut s = st2.borrow_mut();
+                if s.last.as_ref() == Some(&p) {
+                    return;
+                }
+                let first = s.last.is_none();
+                s.last = Some(p.clone());
+                s.generation += 1;
+                first
+            };
+            match q.debounce_ms.filter(|_| !first) {
+                None => rt.untracked(|| cache.switch(&st2, &out2, &q, p, first)),
+                Some(ms) => {
+                    let generation = st2.borrow().generation;
+                    let (me, st3, out3, q2, rt2) = (Rc::downgrade(&cache), st2.clone(), out2.clone(), q.clone(), rt.clone());
+                    cache.clock.schedule(
+                        ms,
+                        Box::new(move || {
+                            let current = { let s = st3.borrow(); !s.stopped && s.generation == generation };
+                            if let (true, Some(cache)) = (current, me.upgrade()) {
+                                rt2.untracked(|| cache.switch(&st3, &out3, &q2, p, false));
+                            }
+                        }),
+                    );
+                }
+            }
+        });
+        let rt = self.rt.clone();
+        Follow {
+            signal: out,
+            stop: Some(Box::new(move || {
+                rt.dispose(binding);
+                let mut s = st.borrow_mut();
+                s.stopped = true;
+                if let Some(m) = s.mirror.take() {
+                    rt.dispose(m);
+                }
+                s.reader = None;
+            })),
+        }
+    }
+
+    /// The followed collection on the params `p`: a reader of their spec,
+    /// mirrored into `out` — the old rows, `resyncing`, while the new one
+    /// is pending.
+    fn switch(self: &Rc<Self>, st: &Rc<RefCell<Following>>, out: &Signal<Value>, q: &LiveQuery, p: (Value, Value), first: bool) {
+        let on: Vec<(&str, &str)> = q.on.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+        let spec = match LiveSpec::new(&q.snapshot, p.0, q.changes.as_deref(), p.1, &q.key, &on) {
+            Ok(spec) => spec,
+            Err(_) => {
+                out.set(Live { rows: Vec::new(), status: Status::Error }.to_value());
+                return;
+            }
+        };
+        let reader = self.acquire(&spec);
+        let sig = reader.signal();
+        let old_rows = if first { Vec::new() } else { Live::from_value(&out.peek()).map(|l| l.rows).unwrap_or_default() };
+        let switching = Rc::new(Cell::new(!first));
+        let (o, sw) = (out.clone(), switching.clone());
+        let mirror = self.rt.bind(move || {
+            let v = sig.get();
+            let live = Live::from_value(&v);
+            match live {
+                Some(l) if sw.get() && matches!(l.status, Status::Pending) => o.set(Live { rows: old_rows.clone(), status: Status::Resyncing }.to_value()),
+                _ => {
+                    sw.set(false);
+                    o.set(v);
+                }
+            }
+        });
+        let mut s = st.borrow_mut();
+        if let Some(old) = s.mirror.replace(mirror) {
+            self.rt.dispose(old);
+        }
+        s.reader = Some(reader);
+    }
+}
+
+/// What a [`Follow`] holds: its reader now, the binding mirroring it, the
+/// params last seen and how many times they changed (a debounced run
+/// checks it is still the last).
+struct Following {
+    reader: Option<Reader>,
+    mirror: Option<crate::signals::BindingId>,
+    generation: u64,
+    last: Option<(Value, Value)>,
+    stopped: bool,
+}
+
+/// UI-10: a collection that follows its params; dropping it stops that and
+/// releases its reader.
+pub struct Follow {
+    signal: Signal<Value>,
+    stop: Option<Box<dyn FnOnce()>>,
+}
+
+impl Follow {
+    /// The collection as a signal of `{ rows, status }` — the same signal
+    /// whatever the params become.
+    pub fn signal(&self) -> Signal<Value> {
+        self.signal.clone()
+    }
+
+    /// The collection now, untracked.
+    pub fn live(&self) -> Live {
+        Live::from_value(&self.signal.peek()).expect("a live collection's value")
+    }
+}
+
+impl Drop for Follow {
+    fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            stop();
+        }
     }
 }
 
