@@ -17,8 +17,9 @@
 #
 # Its address — `-P N`, `--url URL` — becomes `-P PORT` (`--as X` stays),
 # and it runs as `synapse -j …` (once) under `timeout 20`, from a temp
-# directory holding a stand-in for every `@file` the commands name (`{}` for
-# a .json, a line of text otherwise).
+# directory holding a stand-in for every relative `@file` the commands name,
+# its directories made (`{}` for a .json, base64 for a .b64, 64 bytes'
+# base64 for a .sig, a line of text otherwise).
 #
 # ok    the server took the call: synapse exited 0 (an in-band answer —
 #       `not_found`, `forbidden`, an error about a missing ticket — exits 0:
@@ -123,16 +124,35 @@ fi
 
 command -v synapse >/dev/null || { echo "$0: synapse is not on PATH" >&2; exit 2; }
 work=$(mktemp -d "${TMPDIR:-/tmp}/agents-commands.XXXXXX")
-standins=()
+standins=() dirs=()
 for c in "${commands[@]}"; do
   while read -r f; do
-    [[ -n $f && $f != */* && ! -e $work/$f ]] || continue
-    case "$f" in *.json) echo '{}' ;; *) echo 'a stand-in body (V2-8)' ;; esac > "$work/$f"
+    # A relative path, made inside the temp directory; never one that climbs out.
+    [[ -n $f && $f != /* && $f != *..* && $f != ~* && ! -e $work/$f ]] || continue
+    if [[ $f == */* ]]; then
+      # Each directory it makes is kept, to be removed (empty) at the end.
+      d=""
+      IFS=/ read -ra parts <<<"${f%/*}"
+      for part in "${parts[@]}"; do
+        d+=${d:+/}$part
+        [[ -d $work/$d ]] || { mkdir -- "$work/$d"; dirs+=("$work/$d"); }
+      done
+    fi
+    case "$f" in
+      *.json) echo '{}' ;;
+      *.b64) printf 'a stand-in bundle (V2-8)' | base64 -w0 ;;    # base64 of something
+      *.sig) head -c 64 /dev/zero | base64 -w0 ;;                # 64 bytes, as a signature is
+      *) echo 'a stand-in body (V2-8)' ;;
+    esac > "$work/$f"
     standins+=("$work/$f")
-  done < <(grep -oE '@[A-Za-z0-9._-]+\.[A-Za-z0-9]+' <<<"$c" | sed 's/^@//')
+  done < <(grep -oE '@[A-Za-z0-9._/-]+\.[A-Za-z0-9]+' <<<"$c" | sed 's/^@//')
 done
 out=$(mktemp "${TMPDIR:-/tmp}/agents-commands-out.XXXXXX")
-cleanup() { rm -f -- "$out" "${standins[@]}"; rmdir -- "$work" 2>/dev/null; }
+cleanup() {
+  rm -f -- "$out" "${standins[@]}"
+  local i; for ((i = ${#dirs[@]} - 1; i >= 0; i--)); do rmdir -- "${dirs[i]}" 2>/dev/null; done   # deepest first
+  rmdir -- "$work" 2>/dev/null
+}
 trap cleanup EXIT
 
 refused() {
