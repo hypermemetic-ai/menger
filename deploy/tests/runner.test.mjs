@@ -8,6 +8,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { GUARDS, PLANS, Runner, SUITE, failingLines, ofProject, options, releaseIn, shaOf, signed, stepLog, suiteIn, tail, triggerOf, unowned } from "../runner.mjs";
 
 const SECRET = "runner-test-secret-0123456789";
@@ -460,21 +461,33 @@ test("DEPLOY-52: one suite at a time — the newest waits, one passed over never
 });
 
 // ── V2-7: the runner on a branch — MENGER_RUNNER_BRANCH (v2) ────────────────
-test("V2-7 the_runner_targets_the_branch: MENGER_RUNNER_BRANCH=v2 — a V2 or UI ticket entering In Review files a request for v2's tip; auto.json says the branch", async () => {
+// The branch is MENGER_RUNNER_BRANCH in deploy-runner.env, the one source: the runner reads it
+// (options) and so does `deploy/pipeline status` (deploy/tests/pipeline, the_runner_targets_the_branch);
+// the runner records each request's branch in auto.json.
+test("V2-7 the_runner_targets_the_branch: MENGER_RUNNER_BRANCH=v2 — a V2 or UI ticket entering In Review files a request for v2's tip, built from v2", async () => {
   assert.equal(options(["--watch"], { MENGER_RUNNER_BRANCH: "v2" }).branch, "v2", "the env file's branch");
   assert.equal(options(["--watch"], {}).branch, "main", "absent: main, as before");
-  const r = autoRunner({ extra: { branch: "v2" } });
+  // a fixture repository whose v2 is not main
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "menger-runner-branch-"));
+  const git = (...a) => execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", ...a], { encoding: "utf8" }).trim();
+  git("init", "-q", "-b", "main"); git("commit", "-q", "--allow-empty", "-m", "main");
+  git("checkout", "-q", "-b", "v2"); git("commit", "-q", "--allow-empty", "-m", "v2"); git("checkout", "-q", "main");
+  const r = autoRunner({ extra: { branch: "v2", repo } });
   const v2 = triggerOf({ type: "status_changed", ticket: T("V2-7", "In Review", "hypermemetic:MENGER/V2-7"), previous: "Coding" }, "MENGER");
   const ui = triggerOf({ type: "status_changed", ticket: T("UI-3", "In Review", "hypermemetic:MENGER/V2/UI-3"), previous: "Coding" }, "MENGER");
   assert.deepEqual([v2, ui], [{ ticket: "V2-7", why: "entered In Review" }, { ticket: "UI-3", why: "entered In Review" }]);
   r.trigger(v2);
   r.trigger(ui);
-  await sleep(90);
-  assert.equal(r.requests().length, 1);
+  await until(() => r.requests().length === 1 && r.queue.length === 1);
   assert.equal(r.requests()[0].branch, "v2", "the request names v2, not main");
   assert.deepEqual([r.queue[0].request, r.queue[0].branch, r.queue[0].revision], [101, "v2", ""], "taken for v2's tip");
+  const job = r.queue[0];
+  assert.equal(r.resolve(job), git("rev-parse", "v2"), "v2's tip, not main's");
+  assert.notEqual(r.resolve(job), git("rev-parse", "main"));
+  job.sha = r.resolve(job);
+  assert.deepEqual(PLANS.test[0].argv(job), ["build", job.sha, "--branch", "v2", "--no-gate"], "built as v2's");
   const doc = JSON.parse(fs.readFileSync(path.join(r.o.stateDir, "auto.json"), "utf8"));
-  assert.equal(doc.branch, "v2", "what deploy/pipeline status reads");
+  assert.deepEqual(doc.pending, { request: 101, tickets: ["V2-7", "UI-3"], branch: "v2" }, "auto.json records the request's branch");
   // a webhook's request that names no branch is the runner's branch too
   const w = runner({ branch: "v2" });
   assert.equal(w.take({ request: 7, project: "menger", environment: "test" }), null);

@@ -199,8 +199,15 @@ on_exit() {
   [[ -n $LANDING_EXPORT && -d $LANDING_EXPORT ]] && rm -rf "$LANDING_EXPORT"
   [[ -n ${IMAGE_CONTEXT:-} && -d $IMAGE_CONTEXT ]] && { chmod -R u+w "$IMAGE_CONTEXT"; rm -rf "$IMAGE_CONTEXT"; }
   # what the run said goes through tee into its log: close our ends and let the tees finish,
-  # or the last lines (a die's) can be lost to whoever reads the output
-  if [[ -n ${_l:-} ]]; then exec 1>&- 2>&-; wait 2>/dev/null || true; fi
+  # or the last lines (a die's) can be lost to whoever reads the output. V2-7: both tees, by
+  # their pids — `wait` alone waits for the last process substitution only (stderr's), and
+  # stdout's could still be writing when the caller read it (the harness's flaky empty
+  # stdout). Polled until each has gone, at most 10 s (a child that kept our pipe open).
+  if [[ -n ${_l:-} ]]; then
+    exec 1>&- 2>&-
+    local t n
+    for t in ${_tees:-}; do n=0; while kill -0 "$t" 2>/dev/null && (( n++ < 500 )); do sleep 0.02; done; done
+  fi
   return 0
 }
 trap on_exit EXIT
@@ -1054,7 +1061,8 @@ case $cmd in
   build|smoke|suite|landing|media|image|local|remote)
     LOG_STAMP=$(date -u +%Y%m%dT%H%M%SZ)
     _l=$(log_path "$cmd${1:+-${1//[^A-Za-z0-9._-]/_}}"); say "log: $_l"
-    exec > >(tee -a "$_l") 2> >(tee -a "$_l" >&2) ;;
+    exec > >(tee -a "$_l"); _tees=$!
+    exec 2> >(tee -a "$_l" >&2); _tees+=" $!" ;;
 esac
 case $cmd in
   install|deploy|sync|promote|rollback|logs)
