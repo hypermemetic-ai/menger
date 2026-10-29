@@ -4,12 +4,12 @@
 //! request carries the shell's session cookie, a session minted on the
 //! socket (`support::mint_session`).
 //!
-//! Ports 4494–4499: a socket and a shell per test.
+//! Each server on ports the OS hands out.
 
 mod support;
 
 use serde_json::json;
-use support::{call, connect, push_params, sha_hex, spawn_menger, ui_args, UI_SIGNER};
+use support::{call, connect, free_port, push_params, sha_hex, spawn_menger, ui_args, UI_SIGNER};
 
 /// A key that holds a session and no preview.
 const SOMEONE: [u8; 32] = [0x50; 32];
@@ -41,7 +41,8 @@ impl Served {
     }
 }
 
-async fn start(ws: u16, shell: u16) -> Served {
+async fn start() -> Served {
+    let (ws, shell) = (free_port().await, free_port().await);
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let empty = dir.path().join("no-dist");
     std::fs::create_dir_all(&empty).unwrap();
@@ -64,7 +65,7 @@ fn cache(r: &reqwest::Response) -> Option<String> {
 
 #[tokio::test]
 async fn a_hashed_path_is_immutable_and_the_entrypoint_is_not() {
-    let m = start(4494, 4495).await;
+    let m = start().await;
     let admin = connect(m.ws).await;
     let pushed = call(&admin, "ui.push", push_params(1, &UI_SIGNER)).await;
     assert_eq!(pushed[0]["type"], "pushed", "{pushed:?}");
@@ -73,16 +74,16 @@ async fn a_hashed_path_is_immutable_and_the_entrypoint_is_not() {
 
     let file = m.get(&format!("/app/{hash}/index.html"), Some(&token)).await;
     assert_eq!(file.status(), 200);
-    assert_eq!(cache(&file).as_deref(), Some(menger::shell::IMMUTABLE), "a hashed path is immutable");
+    assert_eq!(cache(&file).as_deref(), Some("public, max-age=31536000, immutable"), "a hashed path is immutable");
     assert_eq!(file.text().await.unwrap(), support::index_html(1), "the bundle's file, as pushed");
     let asset = m.get(&format!("/app/{hash}/app.js"), Some(&token)).await;
-    assert_eq!((asset.status().as_u16(), cache(&asset).as_deref()), (200, Some(menger::shell::IMMUTABLE)));
+    assert_eq!((asset.status().as_u16(), cache(&asset).as_deref()), (200, Some("public, max-age=31536000, immutable")));
     assert_eq!(asset.text().await.unwrap(), support::asset_js(1));
     assert_eq!(m.get(&format!("/app/{hash}/nothing.js"), Some(&token)).await.status(), 404, "a file the bundle lacks");
 
     let entry = m.get("/app/", Some(&token)).await;
     assert_eq!(entry.status(), 200);
-    assert_eq!(cache(&entry).as_deref(), Some(menger::shell::NO_STORE), "the entrypoint is never kept");
+    assert_eq!(cache(&entry).as_deref(), Some("no-store"), "the entrypoint is never kept");
     let body = entry.text().await.unwrap();
     assert!(body.contains(&format!("version 1 on {}", m.ws)), "the live entrypoint, stamped with the socket's port: {body}");
     assert!(!body.contains("{{"), "{body}");
@@ -90,7 +91,7 @@ async fn a_hashed_path_is_immutable_and_the_entrypoint_is_not() {
 
 #[tokio::test]
 async fn a_preview_is_served_to_its_principal_alone() {
-    let m = start(4496, 4497).await;
+    let m = start().await;
     let admin = connect(m.ws).await;
     for n in [1, 2] {
         let pushed = call(&admin, "ui.push", push_params(n, &UI_SIGNER)).await;
@@ -98,7 +99,10 @@ async fn a_preview_is_served_to_its_principal_alone() {
     }
     let one = sha_hex(&support::bundle(1));
     let set = call(&admin, "ui.preview", json!({ "version": one })).await;
-    assert_eq!(set, vec![json!({ "type": "preview", "principal": support::admin(), "version": one })], "{set:?}");
+    assert_eq!(set.len(), 1, "{set:?}");
+    assert_eq!(set[0]["type"], "preview", "{set:?}");
+    assert_eq!(set[0]["principal"], support::admin(), "{set:?}");
+    assert_eq!(set[0]["version"], one.as_str(), "{set:?}");
 
     let mine = support::mint_session(m.ws).await;
     let body = m.get("/app/", Some(&mine)).await.text().await.unwrap();
@@ -112,17 +116,28 @@ async fn a_preview_is_served_to_its_principal_alone() {
     // And with no session at all, the app's routes still ask for a sign-in.
     let anonymous = m.get("/app/", None).await;
     assert_eq!(anonymous.status(), 303, "no session: the login page");
+    let to = anonymous.headers().get("location").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+    assert!(to.starts_with("/login?next="), "{to}");
+
+    // `preview {}` clears it: the admin's page is live again.
+    let cleared = call(&admin, "ui.preview", json!({})).await;
+    assert_eq!(cleared.len(), 1, "{cleared:?}");
+    assert_eq!(cleared[0]["type"], "preview", "{cleared:?}");
+    assert_eq!(cleared[0]["principal"], support::admin(), "{cleared:?}");
+    assert!(cleared[0]["version"].is_null(), "{cleared:?}");
+    let body = m.get("/app/", Some(&mine)).await.text().await.unwrap();
+    assert!(body.contains("version 2 on"), "cleared: live again: {body}");
 }
 
 #[tokio::test]
 async fn no_live_version_is_the_placeholder() {
-    let m = start(4498, 4499).await;
-    let admin = connect(m.ws).await;
-    assert!(call(&admin, "ui.versions", json!({})).await.is_empty(), "versions answers none");
+    let m = start().await;
     let token = support::mint_session(m.ws).await;
     let r = m.get("/app/", Some(&token)).await;
     assert_eq!(r.status(), 200);
     let body = r.text().await.unwrap();
     assert!(body.contains("menger v2") && body.contains("No frontend yet"), "the placeholder: {body}");
     assert!(body.contains(&format!("-P {}", m.ws)), "stamped as the placeholder is: {body}");
+    let admin = connect(m.ws).await;
+    assert!(call(&admin, "ui.versions", json!({})).await.is_empty(), "versions answers none");
 }

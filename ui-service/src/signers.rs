@@ -49,3 +49,27 @@ impl Signers {
         todo!("UI-3 phase 2: verify a push's signature")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
+
+    fn hex(seed: &[u8; 32]) -> String {
+        SigningKey::from_bytes(seed).verifying_key().as_bytes().iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    #[test]
+    fn ui_signers_verify_a_configured_key_over_the_digest_alone() {
+        let (key, other) = ([0x5a; 32], [0x3c; 32]);
+        let digest = [7u8; 32];
+        let signed = SigningKey::from_bytes(&key).sign(&digest).to_bytes();
+        let signers = Signers::parse(&[hex(&key)]).unwrap();
+        assert!(signers.verify(&digest, &signed), "the right key over the right digest");
+        assert!(!signers.verify(&[8u8; 32], &signed), "another digest");
+        let by_other = SigningKey::from_bytes(&other).sign(&digest).to_bytes();
+        assert!(!signers.verify(&digest, &by_other), "another key");
+        assert!(!Signers::none().verify(&digest, &signed), "no signer: nothing verifies");
+        assert!(Signers::parse(&["xyz".into()]).is_err(), "a value that is no key is refused");
+    }
+}

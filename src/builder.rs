@@ -313,3 +313,24 @@ async fn purge_planted(store: &Store, system: &System, admins: &[String]) -> any
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// UI-3: the ui file is beside the tickets file, never the same file.
+    #[test]
+    fn the_ui_db_is_beside_the_tickets_file_never_it() {
+        for tickets in ["/var/lib/menger/tickets.db", "/tmp/x/local.db", "/tmp/x/ui.db.d/t.db"] {
+            let tickets = Path::new(tickets);
+            let ui = default_ui_db_path(tickets);
+            assert_eq!(ui, tickets.parent().unwrap().join("ui.db"), "{}", tickets.display());
+            assert_ne!(ui, tickets);
+        }
+        // A tickets file that is itself named ui.db: still never the same file.
+        let tickets = Path::new("/tmp/x/ui.db");
+        let ui = default_ui_db_path(tickets);
+        assert_ne!(ui, tickets);
+        assert_eq!(ui.parent(), tickets.parent(), "still beside it");
+    }
+}

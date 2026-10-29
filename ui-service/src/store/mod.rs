@@ -126,13 +126,23 @@ impl UiStore {
     /// Keeps `v` (once per hash) and moves the live pointer onto it — one
     /// transaction.
     pub fn push(&self, v: NewVersion) -> Result<Pushed, UiError> {
-        self.push_then(v, |_| Ok(()))
+        self.push_with(v, |_| Ok(()))
     }
 
     /// [`Self::push`], running `after_insert` inside the transaction after
     /// the row is written and before the pointer moves — the tests' way to
     /// abort a push midway.
+    #[cfg(test)]
     pub(crate) fn push_then(
+        &self,
+        v: NewVersion,
+        after_insert: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<()>,
+    ) -> Result<Pushed, UiError> {
+        self.push_with(v, after_insert)
+    }
+
+    /// The one push both [`Self::push`] and the tests' seam run.
+    fn push_with(
         &self,
         v: NewVersion,
         after_insert: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<()>,

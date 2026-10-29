@@ -56,11 +56,20 @@ fn a_push_stores_once_per_hash() {
     let s = UiStore::open(&path).unwrap();
     let first = s.push(version(1, 100)).unwrap();
     assert_eq!(first, Pushed { version: sha(&bundle(1)), live: true, new: true });
-    let again = s.push(version(1, 200)).unwrap();
+    let row_one = rows(&path, "ui_versions").into_iter().find(|r| r[0] == Value::Text(first.version.clone())).unwrap();
+    let second = s.push(version(2, 200)).unwrap();
+    assert_eq!(second, Pushed { version: sha(&bundle(2)), live: true, new: true });
+    let mut later = version(1, 300);
+    later.pushed_by = "key:someone-else".into();
+    let again = s.push(later).unwrap();
     assert_eq!(again, Pushed { version: sha(&bundle(1)), live: true, new: false }, "the same bytes are the same version");
-    assert_eq!(rows(&path, "ui_versions").len(), 1, "one row");
+    let all = rows(&path, "ui_versions");
+    assert_eq!(all.len(), 2, "two rows");
+    let row = all.iter().find(|r| r[0] == Value::Text(first.version.clone())).unwrap();
+    assert_eq!(row, &row_one, "row 1 as first pushed: its pushed_at and pushed_by unchanged");
+    assert_eq!((&row[6], &row[7]), (&Value::Text("key:admin".into()), &Value::Integer(100)));
     assert_eq!(s.pointer().unwrap(), Some(Pointer { name: LIVE.into(), hash: sha(&bundle(1)) }), "the pointer on it");
-    assert_eq!(s.versions().unwrap().len(), 1, "versions lists it once");
+    assert_eq!(s.versions().unwrap().len(), 2, "versions lists each once");
 }
 
 #[test]
@@ -75,7 +84,8 @@ fn a_rollback_moves_only_the_pointer() {
     assert_eq!(s.rollback(&a.version).unwrap(), a.version);
     assert_eq!(rows(&path, "ui_versions"), versions, "every ui_versions row byte-identical");
     assert_eq!(rows(&path, "ui_preview"), previews, "no preview moved");
-    assert_eq!(rows(&path, "ui_pointer"), vec![vec![Value::Text(LIVE.into()), Value::Text(a.version.clone())]], "only the pointer changed");
+    let live = rows(&path, "ui_pointer").into_iter().find(|r| r[0] == Value::Text(LIVE.into()));
+    assert_eq!(live, Some(vec![Value::Text(LIVE.into()), Value::Text(a.version.clone())]), "the live pointer moved");
     assert!(matches!(s.rollback(&"0".repeat(64)), Err(UiError::UnknownVersion(_))), "a version not kept is refused");
     assert_eq!(s.pointer().unwrap().map(|p| p.hash), Some(a.version), "and the pointer stays");
 }
@@ -87,7 +97,13 @@ fn an_aborted_push_leaves_no_dangling_pointer() {
     let s = UiStore::open(&path).unwrap();
     let a = s.push(version(1, 100)).unwrap();
     let (versions, pointer) = (rows(&path, "ui_versions"), rows(&path, "ui_pointer"));
-    let failed = s.push_then(version(2, 200), |_| Err(rusqlite::Error::QueryReturnedNoRows));
+    let new_hash = sha(&bundle(2));
+    let mut seen = None;
+    let failed = s.push_then(version(2, 200), |tx| {
+        seen = Some(tx.query_row("SELECT count(*) FROM ui_versions WHERE hash = ?1", [&new_hash], |r| r.get::<_, i64>(0))?);
+        Err(rusqlite::Error::QueryReturnedNoRows)
+    });
+    assert_eq!(seen, Some(1), "the hook ran after the insert: the new row visible inside the transaction");
     assert!(failed.is_err(), "the push failed");
     assert_eq!(rows(&path, "ui_versions"), versions, "no new row");
     assert_eq!(rows(&path, "ui_pointer"), pointer, "the pointer where it was");

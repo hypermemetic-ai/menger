@@ -237,6 +237,21 @@ pub fn push_params(n: u32, signer: &[u8; 32]) -> serde_json::Value {
     })
 }
 
+/// A loopback port the OS just handed out, never handed to another test in
+/// this process.
+pub async fn free_port() -> u16 {
+    static HANDED: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
+    loop {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        let mut handed = HANDED.lock().unwrap();
+        if !handed.contains(&port) {
+            handed.push(port);
+            return port;
+        }
+    }
+}
+
 /// A spawned `menger`. Dropping SIGKILLs it.
 pub struct Spawned {
     child: std::process::Child,
