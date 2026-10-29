@@ -939,3 +939,33 @@ fn the_binary_is_the_frameworks() {
     let broken = binary_breaks(&metadata(), theirs.as_ref().map_err(String::as_str), &root(), &canonical(&sibling("plexus-ui")));
     assert!(broken.is_empty(), "FRAME-6: the plexus-ui binary is the framework's, and serves:\n  {}", broken.join("\n  "));
 }
+
+/// The lines of `script` that run the tool against a service — `"$tool"`
+/// or `"$UI_TOOL"` with `push`, `versions`, `preview` or `rollback`, or
+/// `build` with `--contract-from` — and whether each names `--service`.
+fn tool_calls(script: &str) -> Vec<(usize, &str, bool)> {
+    script
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| l.contains("\"$tool\"") || l.contains("\"$UI_TOOL\""))
+        .filter(|(_, l)| [" push ", " versions ", " preview ", " rollback "].iter().any(|c| l.contains(c)) || (l.contains(" build ") && l.contains("--contract-from")))
+        .map(|(n, l)| (n + 1, l.trim(), l.contains("--service ")))
+        .collect()
+}
+
+/// FRAME-6: the tool assumes no service (its `--service` has no default and
+/// `--contract-method` is gone), so every call of menger's to it names
+/// `menger` itself, and nothing of menger's names the old flag.
+#[test]
+fn menger_names_its_service_to_the_tool() {
+    assert_eq!(tool_calls("  out=$(\"$tool\" push --url \"$ws\" --service menger x)\n  \"$tool\" versions --url u\n  \"$UI_TOOL\" build ui --contract H\n"), [(1, "out=$(\"$tool\" push --url \"$ws\" --service menger x)", true), (2, "\"$tool\" versions --url u", false)]);
+
+    let pipeline = std::fs::read_to_string(root().join("deploy/pipeline")).expect("deploy/pipeline");
+    let calls = tool_calls(&pipeline);
+    assert!(calls.iter().any(|(_, l, _)| l.contains(" push ")), "deploy/pipeline pushes with the tool");
+    let bare: Vec<String> = calls.iter().filter(|(_, _, named)| !named).map(|(n, l, _)| format!("deploy/pipeline:{n}: {l}")).collect();
+    assert!(bare.is_empty(), "FRAME-6: the tool assumes no service; these name none:\n  {}", bare.join("\n  "));
+
+    let old = lines_where(&root(), &readers(&root()), |l| if l.contains("--contract-method") { vec![l.trim().to_string()] } else { vec![] });
+    assert!(old.is_empty(), "FRAME-6: --contract-method is gone from the tool:\n  {}", old.join("\n  "));
+}
