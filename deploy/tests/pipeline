@@ -1055,36 +1055,53 @@ dir=$(map "${wd:-/}"); args=(); for a in "${cmd[@]}"; do args+=("$(map "$a")"); 
 [[ -d $dir ]] || { echo "docker run: no $dir" >&2; exit 125; }
 (cd "$dir" && IN_CODEGEN=1 "${args[@]}")
 DOCKER
-# UI-12: the menger cargo builds — a stand-in server. `--help` as before; started with
-# `--port P` it is up on P (a file, $STUB_MENGER_UP/P, holding its pid: this harness opens
-# no port), says how it was started in $STUB_MENGER_RAN (its own path first), and stays up
-# until it is stopped (TERM or INT; the file goes with it) or a minute passes.
+# UI-12: the menger cargo builds — a stand-in server. `--help` as before. Started, it keeps
+# its pid in $STUB_MENGER_PIDS and says how it was started in $STUB_MENGER_RAN (its own path
+# first, then HOME= and XDG_RUNTIME_DIR= as it saw them, then its argv). With `--port P
+# --shell-port Q --data-dir D` it does what the real one does in local mode (no provider): makes
+# D, its admin key D/local.key, and the link $HOME/.plexus/keys/menger-local.key to it; then it
+# is up on P (a file, $STUB_MENGER_UP/P, holding its pid: this harness opens no port) until it is
+# stopped (TERM or INT; the file goes with it) or a minute passes. STUB_MENGER=never-up: started,
+# never up; crash: exits 1 at once.
 cat >"$B/fake-menger" <<'MENGER'
 #!/usr/bin/env bash
 case ${1:-} in --help-all|--help) echo "--bind <ADDR>"; exit 0 ;; esac
-port="" prev=""
-for a in "$@"; do [[ $prev == --port ]] && port=$a; [[ $a == --port=* ]] && port=${a#--port=}; prev=$a; done
-echo "$(readlink -f "$0") $*" >>"$STUB_MENGER_RAN"
-[[ -n $port ]] || { echo "menger (stand-in): no --port" >&2; exit 2; }
+echo $$ >>"$STUB_MENGER_PIDS"
+echo "$(readlink -f "$0") HOME=$HOME XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-} $*" >>"$STUB_MENGER_RAN"
+port="" shell="" data="" prev=""
+for a in "$@"; do
+  case $prev in --port) port=$a ;; --shell-port) shell=$a ;; --data-dir) data=$a ;; esac
+  case $a in --port=*) port=${a#*=} ;; --shell-port=*) shell=${a#*=} ;; --data-dir=*) data=${a#*=} ;; esac
+  prev=$a
+done
+[[ ${STUB_MENGER:-} == crash ]] && { echo "menger (stand-in): crashed" >&2; exit 1; }
+[[ -n $port && -n $shell && -n $data ]] || { echo "menger (stand-in): needs --port, --shell-port and --data-dir" >&2; exit 2; }
+mkdir -p "$data" "$HOME/.plexus/keys" && echo "c2VlZA==" >"$data/local.key" && ln -sfn "$data/local.key" "$HOME/.plexus/keys/menger-local.key" || exit 1
 up=$STUB_MENGER_UP/$port
 trap 'rm -f "$up"; exit 0' TERM INT HUP
-mkdir -p "$STUB_MENGER_UP"; echo $$ >"$up"
+mkdir -p "$STUB_MENGER_UP"; [[ ${STUB_MENGER:-} == never-up ]] || echo $$ >"$up"
 for _ in $(seq 300); do sleep 0.2; done
 rm -f "$up"; echo "menger (stand-in): never stopped" >>"$STUB_MENGER_RAN"
 MENGER
-# UI-12: synapse as the build meets it — `-P P … menger tickets schema` answers (-j's lines)
-# the tickets service's hash, CONTRACT_HASH, while a stand-in menger is up on P, and
-# "connection refused" otherwise; `-P P … _login …` signs in while one is up. Every call kept in
-# $STUB_BUILD_SYNAPSE. STUB_SCHEMA=fail: the read fails; nohash: a schema with no hash.
+# UI-12: synapse as the build meets it. Every call kept in $STUB_BUILD_SYNAPSE as
+# `HOME=… XDG_RUNTIME_DIR=… argv`. Nothing answers on -P P unless a stand-in menger is up on P
+# ("connection refused"); `_login menger --key menger-local` signs in there when that key is in
+# $HOME/.plexus/keys (the link the menger made: the same HOME) — any other key is refused; then,
+# and only then, `menger tickets schema` answers (-j's lines) with CONTRACT_HASH, else 77 (sign
+# in). STUB_SCHEMA=fail: the read fails; nohash: a schema with no hash.
 cat >"$B/bin/synapse" <<'SYNAPSE'
 #!/usr/bin/env bash
-echo "synapse $*" >>"$STUB_BUILD_SYNAPSE"
-port="" prev=""
-for a in "$@"; do [[ $prev == -P || $prev == --port ]] && port=$a; prev=$a; done
+echo "HOME=$HOME XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-} $*" >>"$STUB_BUILD_SYNAPSE"
+port="" key="" prev=""
+for a in "$@"; do [[ $prev == -P || $prev == --port ]] && port=$a; [[ $prev == --key || $prev == -k ]] && key=$a; prev=$a; done
 [[ -n $port && -f $STUB_MENGER_UP/$port ]] || { echo "synapse (stand-in): connection refused on :${port:-?}" >&2; exit 69; }
+signed=$STUB_MENGER_UP/.signed-$port
 case " $* " in
-  *" _login "*) exit 0 ;;
+  *" _login "*)
+    [[ $key == menger-local && -f $HOME/.plexus/keys/menger-local.key ]] || { echo "synapse (stand-in): Protocol handshake failed (key ${key:-none})" >&2; exit 1; }
+    : >"$signed"; exit 0 ;;
   *" menger tickets schema "*)
+    [[ -f $signed ]] || { echo "synapse (stand-in): sign in to reach tickets schema" >&2; exit 77; }
     case ${STUB_SCHEMA:-ok} in
       fail) echo "synapse (stand-in): Protocol handshake failed" >&2; exit 1 ;;
       nohash) echo '{"type":"data","content":{"namespace":"tickets","methods":[]}}'; echo '{"type":"done"}'; exit 0 ;;
@@ -1095,9 +1112,12 @@ echo "synapse (stand-in): no answer for: $*" >&2; exit 1
 SYNAPSE
 chmod +x "$B/bin/"* "$B/fake-menger"
 export STUB_CARGO_LOG=$B/cargo.log STUB_BUILD_DOCKER=$B/docker.argv STUB_UI_COMPILER_RAN=$B/ui-compiler.ran \
-  STUB_FAKE_MENGER=$B/fake-menger STUB_MENGER_UP=$B/up STUB_MENGER_RAN=$B/menger.ran STUB_BUILD_SYNAPSE=$B/synapse.argv
-bb() { : >"$STUB_CARGO_LOG"; : >"$STUB_BUILD_DOCKER"; : >"$B/browser.log"; : >"$STUB_UI_COMPILER_RAN"; : >"$STUB_MENGER_RAN"; : >"$STUB_BUILD_SYNAPSE"
-  PATH=$B/bin:$PATH HOME=$H5 DISK_CHECK_USED_PCT=10 DISK_CHECK_AVAIL_GB=900 "$BR/deploy/pipeline" "$@" >"$SCRATCH/out" 2>"$SCRATCH/err"; code=$?; err=$(<"$SCRATCH/err"); }
+  STUB_FAKE_MENGER=$B/fake-menger STUB_MENGER_UP=$B/up STUB_MENGER_RAN=$B/menger.ran STUB_BUILD_SYNAPSE=$B/synapse.argv \
+  STUB_MENGER_PIDS=$B/menger.pids
+# the build's TMPDIR: where mktemp makes its scratch (UI-12: the binary's HOME and data directory)
+T5TMP=$SCRATCH/tmp5; mkdir -p "$T5TMP"
+bb() { : >"$STUB_CARGO_LOG"; : >"$STUB_BUILD_DOCKER"; : >"$B/browser.log"; : >"$STUB_UI_COMPILER_RAN"; : >"$STUB_MENGER_RAN"; : >"$STUB_BUILD_SYNAPSE"; : >"$STUB_MENGER_PIDS"
+  PATH=$B/bin:$PATH HOME=$H5 TMPDIR=$T5TMP DISK_CHECK_USED_PCT=10 DISK_CHECK_AVAIL_GB=900 "$BR/deploy/pipeline" "$@" >"$SCRATCH/out" 2>"$SCRATCH/err"; code=$?; err=$(<"$SCRATCH/err"); }
 field() { sed -n "s/^$1: *//p" "$2" 2>/dev/null; } # FIELD RELEASEFILE
 bb build --branch v2 --no-gate
 same "$T1: build --branch v2 exits 0" "$code" 0
@@ -1144,52 +1164,84 @@ has "$T1: suite: the release marked passed" "$(cat "$D5/releases/$SR5/SUITE" 2>/
 
 # ── UI-12 a_release_names_the_contract_it_was_built_against ────────────────
 # The build starts the menger it just built (the stand-in above: up on the port it is given,
-# no socket opened) on loopback with a scratch data directory, reads tickets.schema's hash from
-# it with synapse (the stand-in: CONTRACT_HASH while that menger is up), stops it, and builds the
-# bundle in the codegen container with --contract HASH — no socket from the container to this
-# machine. The fixture has no ui/ (the placeholder bundle): the stamp holds there too. A read
-# that fails is a failed build, said, and no release is made: no bundle saying `unknown` is
-# ever released. MENGER_CONTRACT_WAIT bounds how long the build waits for the binary to answer.
+# no socket opened) on loopback in local mode — no provider, so the binary makes its own admin
+# key in a scratch data directory and the build holds no key material — under a scratch HOME
+# and XDG_RUNTIME_DIR (mktemp's, under the build's TMPDIR); signs in with that key, reads
+# tickets.schema's hash with synapse (--no-hold: no connection holder outlives the build, and
+# the sign-in moves no default agent of this machine's), stops it, and builds the bundle in the
+# codegen container with --contract HASH — no socket from the container to this machine. The
+# fixture has no ui/ (the placeholder bundle): the stamp holds there too. A read that fails, a
+# binary that dies or never answers, is a failed build, said, within about MENGER_CONTRACT_WAIT
+# seconds, and no release is made: no bundle saying `unknown` is ever released.
 T6=a_release_names_the_contract_it_was_built_against
 # a release is named by its second and its commit: each build here starts in a second of its own
 next_second() { local s; s=$(date -u +%s); while [[ $(date -u +%s) == "$s" ]]; do sleep 0.05; done; }
+contract_of() { tar -xOf "$D5/releases/$1/dist/ui.tar" manifest.json 2>/dev/null | jq -r .contract 2>/dev/null; }
+# nothing it started is still running: every pid it started dead (a stand-in stops within 0.2 s of TERM)
+stopped() { local p left=""
+  sleep 0.3
+  while read -r p; do [[ -n $p ]] && kill -0 "$p" 2>/dev/null && left+=" $p"; done <"$STUB_MENGER_PIDS"
+  [[ -z $left ]] && ! grep -q 'never stopped' "$STUB_MENGER_RAN" && ok || bad "$1: the menger it started is still running:$left"; }
+# no release, no stage, nothing of the run's scratch left
+none_made() { same "$1: no release made" "$(ls "$D5/releases" | wc -l)" "$2"; same "$1: its scratch removed" "$(ls -A "$T5TMP")" ""; }
 next_second; bb build --branch v2 --no-gate
 [[ $code == 0 ]] && ok || bad "$T6: build exits 0, got $code: $(tail -n 3 <<<"$err")"
 CR=$(tail -n 1 "$SCRATCH/out")
-contract_of() { tar -xOf "$D5/releases/$1/dist/ui.tar" manifest.json 2>/dev/null | jq -r .contract 2>/dev/null; }
 same "$T6: the release's manifest names the tickets service's hash of the binary it carries" "$(contract_of "$CR")" "$CONTRACT_HASH"
 for r in "$VR" "$ER" "$MR"; do
   same "$T6: $r (built above): its manifest names the hash, never unknown" "$(contract_of "$r")" "$CONTRACT_HASH"
 done
 ran=$(head -n 1 "$STUB_MENGER_RAN")
+same "$T6: started once" "$(grep -c . "$STUB_MENGER_RAN")" 1
 [[ -n $ran ]] && cmp -s "${ran%% *}" "$D5/releases/$CR/bin/menger" && ok || bad "$T6: the menger it just built was not started to read the hash (started: ${ran:-nothing})"
-mport=$(sed -n 's/.* --port[ =]\([0-9]*\).*/\1/p' <<<"$ran")
-[[ -n $mport ]] && (( mport < 4450 || (mport > 4458 && mport != 4470 && mport != 4471) )) && ok || bad "$T6: started on no port, or on an environment's (4450–4458, 4470/4471): '${mport}'"
-mdata=$(sed -n 's/.* --data-dir[ =]\([^ ]*\).*/\1/p' <<<"$ran")
-[[ -n $mdata && $mdata != "$H5/.local/share/menger"* && ! -e $mdata ]] && ok || bad "$T6: started with no scratch --data-dir, or one left behind: '${mdata}'"
-stopped() { local f left=""
-  for f in "$STUB_MENGER_UP"/*; do [[ -f $f ]] && kill -0 "$(<"$f")" 2>/dev/null && left+=" :${f##*/}"; done
-  [[ -z $left ]] && ! grep -q 'never stopped' "$STUB_MENGER_RAN" && ok || bad "$1: the menger it started is still up:$left"; }
+argof() { sed -n "s/.* --$1[ =]\([^ ]*\).*/\1/p" <<<"$ran"; }
+mport=$(argof port) mshell=$(argof shell-port) mdata=$(argof data-dir)
+mhome=$(sed -n 's/^[^ ]* HOME=\([^ ]*\) .*/\1/p' <<<"$ran") mxdg=$(sed -n 's/.* XDG_RUNTIME_DIR=\([^ ]*\) .*/\1/p' <<<"$ran")
+okport() { [[ $1 =~ ^[1-9][0-9]*$ ]] && (( $1 < 4450 || ($1 > 4458 && $1 != 4470 && $1 != 4471) )); }
+okport "$mport" && okport "$mshell" && [[ $mport != "$mshell" ]] && ok || bad "$T6: --port and --shell-port two ports, neither 0 nor an environment's (4450–4458, 4470/4471): '$mport' '$mshell'"
+[[ " $ran " != *" --auth-provider"* && " $ran " != *" --admin"* && " $ran " != *" --bind"* ]] && ok || bad "$T6: local mode on loopback: no provider, no admin, no bind: $ran"
+[[ -n $mdata && $mdata == "$T5TMP"/* && ! -e $mdata ]] && ok || bad "$T6: --data-dir under the build's scratch ($T5TMP), gone after: '${mdata}'"
+[[ -n $mhome && $mhome != "$H5" && $mhome == "$T5TMP"/* && ! -e $mhome ]] && ok || bad "$T6: the binary's HOME a scratch under $T5TMP, gone after: '${mhome}'"
+[[ -n $mxdg && $mxdg == "$T5TMP"/* && ! -e $mxdg ]] && ok || bad "$T6: the binary's XDG_RUNTIME_DIR a scratch under $T5TMP, gone after: '${mxdg}'"
 stopped "$T6: after the build"
-has "$T6: the hash read from the port it started" "$(grep -- "-P $mport" "$STUB_BUILD_SYNAPSE" 2>/dev/null)" "menger tickets schema"
+syn=$(<"$STUB_BUILD_SYNAPSE")
+[[ -n $syn ]] && ok || bad "$T6: synapse never asked"
+same "$T6: every synapse call under the binary's HOME and XDG_RUNTIME_DIR" "$(sed -n 's/^\(HOME=[^ ]* XDG_RUNTIME_DIR=[^ ]*\) .*/\1/p' <<<"$syn" | sort -u)" "HOME=$mhome XDG_RUNTIME_DIR=$mxdg"
+same "$T6: every synapse call --no-hold" "$(grep -vc -- ' --no-hold ' <<<"$syn")" 0
+has "$T6: signed in with the binary's own key, on its port" "$(grep -- "-P $mport" <<<"$syn")" "_login menger --key menger-local"
+has "$T6: the hash read from the port it started" "$(grep -- "-P $mport" <<<"$syn")" "menger tickets schema"
 has "$T6: the container builds with --contract HASH" "$(grep -E 'plexus-codegen.*scripts/ui-build\.sh' "$STUB_BUILD_DOCKER")" "scripts/ui-build.sh --contract $CONTRACT_HASH"
 [[ $(grep -cE -- '--contract-from|--network' "$STUB_BUILD_DOCKER") == 0 ]] && ok || bad "$T6: the container asks a server (--contract-from, --network): $(<"$STUB_BUILD_DOCKER")"
 has "$T6: the build says the hash" "$err" "$CONTRACT_HASH"
+same "$T6: the build's scratch removed" "$(ls -A "$T5TMP")" ""
 for how in fail nohash; do
   n=$(ls "$D5/releases" | wc -l)
   next_second; STUB_SCHEMA=$how MENGER_CONTRACT_WAIT=2 bb build --branch v2 --no-gate
   same "$T6: the hash read fails ($how): exits 1" "$code" 1
   has "$T6: the hash read fails ($how): said, naming tickets.schema" "$err" "tickets.schema"
-  same "$T6: the hash read fails ($how): no release made" "$(ls "$D5/releases" | wc -l)" "$n"
+  none_made "$T6: the hash read fails ($how)" "$n"
   [[ $(grep -c 'scripts/ui-build\.sh' "$STUB_BUILD_DOCKER") == 0 ]] && ok || bad "$T6: the hash read fails ($how): the bundle built all the same"
   stopped "$T6: the hash read fails ($how)"
+done
+# the binary dies at once, or never answers: said (its start, or the wait), within about the wait
+for how in crash never-up; do
+  n=$(ls "$D5/releases" | wc -l)
+  next_second; t0=$SECONDS; STUB_MENGER=$how MENGER_CONTRACT_WAIT=2 bb build --branch v2 --no-gate; took=$((SECONDS - t0))
+  same "$T6: the binary $how: exits 1" "$code" 1
+  if [[ $how == crash ]]; then has "$T6: the binary crash: said, naming its exit" "$err" "exited"
+  else has "$T6: the binary never-up: said, naming the wait" "$err" "did not answer"; fi
+  (( took <= 8 )) && ok || bad "$T6: the binary $how: took ${took}s with MENGER_CONTRACT_WAIT=2"
+  [[ -s $STUB_MENGER_RAN ]] && ok || bad "$T6: the binary $how: (setup) nothing was started — the check proves nothing"
+  none_made "$T6: the binary $how" "$n"
+  [[ $(grep -c 'scripts/ui-build\.sh' "$STUB_BUILD_DOCKER") == 0 ]] && ok || bad "$T6: the binary $how: the bundle built all the same"
+  stopped "$T6: the binary $how"
 done
 
 # ── V2-7 the_image_carries_the_bundle_and_the_flags ────────────────────────
 T2=the_image_carries_the_bundle_and_the_flags
 H6=$SCRATCH/home6; D6=$H6/.local/share/menger-deploy; mkdir -p "$D6/releases"
-v2release() { # DIR N WASM(0/1) [BUNDLE] → a v2 release at IC[N], laid out as build makes one: bin/, dist/, RELEASE
-  local id=2026102${2}T100000Z-${IC[$2]:0:7} r
+v2release() { # DIR N WASM(0/1) [BUNDLE] [DAY] → a v2 release at IC[N], laid out as build makes one: bin/, dist/, RELEASE
+  local id=202610${5:-2$2}T100000Z-${IC[$2]:0:7} r
   r=$1/$id; mkdir -p "$r/bin" "$r/dist"
   printf 'release:   %s\ncommit:    %s\nbranch:    v2\nsubject:   v%s\nsteps:     cargo build, ui-build%s\n' "$id" "${IC[$2]}" "$2" "$([[ $3 == 1 ]] && echo ', ui-compiler-wasm')" >"$r/RELEASE"
   printf '#!/usr/bin/env bash\n[[ ${1:-} == --help-all || ${1:-} == --help ]] && echo "--bind <ADDR>"\nexit 0\n' >"$r/bin/menger"
@@ -1351,6 +1403,11 @@ unset STUB_UI_SIGNER
 T7=the_smoke_holds_the_push_to_its_contract
 export STUB_UI_SIGNER=$PUB2
 VU=$(v2release "$D4/releases" 0 1 "$UB/dist/ui.tar")
+# the ticket's third row: a tar stamped against another service, carried by a release of its own
+UBO=$V2/uibo; mkdir -p "$UBO/stage" "$UBO/dist"; tar -xf "$UB/dist/ui.tar" -C "$UBO/stage"
+jq -c '.contract = "0000000000000000"' "$UBO/stage/manifest.json" >"$UBO/m" && mv "$UBO/m" "$UBO/stage/manifest.json"
+tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --format=gnu -C "$UBO/stage" -cf "$UBO/dist/ui.tar" index.html manifest.json
+VO=$(v2release "$D4/releases" 1 1 "$UBO/dist/ui.tar" 28)
 same "$T7: (setup) the unstamped release's bundle says unknown" "$(tar -xOf "$D4/releases/$VU/dist/ui.tar" manifest.json | jq -r .contract)" "unknown"
 m=$(mark); v2run remote test --image "menger:$V4"
 same "$T7: remote test, the bundle's contract the service's: exits 0" "$code" 0
@@ -1359,17 +1416,18 @@ v2run local --image "menger:$V4"
 same "$T7: local, the bundle's contract the service's: exits 0" "$code" 0
 grep -E '^ok +pushed .*contract_matches: true' <<<"$err" >/dev/null && ok || bad "$T7: local: no push line saying contract_matches: true in: $err"
 for c in null false; do
-  if [[ $c == null ]]; then rel=$VU; else rel=$V4; fi
-  m=$(mark); STUB_UI_CONTRACT=$([[ $c == false ]] && echo 0000000000000000 || echo "$CONTRACT_HASH") v2run remote test --image "menger:$rel"
+  if [[ $c == null ]]; then rel=$VU; else rel=$VO; fi
+  m=$(mark); v2run remote test --image "menger:$rel"
   same "$T7: remote test, contract_matches $c: exits 1" "$code" 1
   has "$T7: remote test, contract_matches $c: said" "$err" "contract_matches: $c"
   same "$T7: remote test, contract_matches $c: recorded started, failed" "$(since "$m" '[.environment, .state]')" '["test","started"] ["test","failed"]'
   has "$T7: remote test, contract_matches $c: the log line names it" "$(tail -n 1 "$D4/deployments.log")" "contract_matches: $c"
-  STUB_UI_CONTRACT=$([[ $c == false ]] && echo 0000000000000000 || echo "$CONTRACT_HASH") v2run local --image "menger:$rel"
+  v2run local --image "menger:$rel"
   same "$T7: local, contract_matches $c: exits 1" "$code" 1
   has "$T7: local, contract_matches $c: said" "$err" "contract_matches: $c"
 done
 [[ ! -f $D4/releases/$VU/TESTED ]] && ok || bad "$T7: a release whose bundle says unknown is marked TESTED"
+[[ ! -f $D4/releases/$VO/TESTED ]] && ok || bad "$T7: a release whose bundle names another service is marked TESTED"
 unset STUB_UI_SIGNER
 
 # ── V2-7 the_runner_targets_the_branch (status: MENGER_RUNNER_BRANCH in deploy-runner.env, the one
