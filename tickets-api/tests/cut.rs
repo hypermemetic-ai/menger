@@ -269,11 +269,18 @@ const DEPLOY_GONE_WORDS: &[&str] = &["webhook", "webhooks", "#/deploy", "#/deplo
 /// The pipeline's doc, held to the rule from V2-10.
 const DEPLOY_README: &str = "deploy/README.md";
 
+/// The pipeline's log file, `~/.local/share/menger-deploy/deployments.log`:
+/// in [`DEPLOY_README`] the exact span is no word of what went.
+const DEPLOY_LOG: &str = "deployments.log";
+
 /// The words of what went that the doc `file` must not say: [`GONE_WORDS`],
-/// and for [`DEPLOY_README`] [`DEPLOY_GONE_WORDS`] too.
+/// and for [`DEPLOY_README`] [`DEPLOY_GONE_WORDS`] too — but not the
+/// singular `deployment`, an ordinary word of the pipeline's (a deploy is
+/// one; the activation is what went).
 fn gone_words(file: &str) -> Vec<&'static str> {
     let mut words = GONE_WORDS.to_vec();
     if file == DEPLOY_README {
+        words.retain(|w| *w != "deployment");
         words.extend_from_slice(DEPLOY_GONE_WORDS);
     }
     words
@@ -317,7 +324,8 @@ fn stale(file: &str, text: &str) -> Vec<String> {
             tag_seen = true;
             continue;
         }
-        if words.iter().any(|w| says(line, w)) {
+        let tested = if file == DEPLOY_README { line.replace(DEPLOY_LOG, "") } else { line.to_string() };
+        if words.iter().any(|w| says(&tested, w)) {
             out.push(format!("{file}:{}: {line}", n + 1));
         }
     }
@@ -452,12 +460,22 @@ fn the_pipeline_doc_has_words_of_its_own() {
     assert!(!says("deploy/pipeline landing", "landing-media"));
     let naming = format!("v0.0.1\n{NAMING_HEADING}\na hub\n");
     assert_eq!(stale(DEPLOY_README, &naming).len(), 2, "the naming allowance is AGENTS.md's alone");
+    // The singular is an ordinary word there, and the log file's exact span is exempt there alone.
+    assert!(stale(DEPLOY_README, "the test deployment\n").is_empty());
+    assert_eq!(stale("README.md", "the test deployment\n"), ["README.md:1: the test deployment"]);
+    assert!(stale(DEPLOY_README, "each run is a line in `~/.local/share/menger-deploy/deployments.log`\n").is_empty());
+    assert_eq!(
+        stale(DEPLOY_README, "deployments.log and deployments record\n"),
+        ["deploy/README.md:1: deployments.log and deployments record"]
+    );
+    assert_eq!(stale("README.md", "see deployments.log\n"), ["README.md:1: see deployments.log"]);
     assert_eq!(failures(DEPLOY_README, ""), ["deploy/README.md is empty", "deploy/README.md never names v0.0.1: say what went and where it lives"]);
 }
 
 /// The paths the doc `text` names that begin `deploy/` or `scripts/`, each
 /// `(line, path)`: in a backticked span or a bare word, starting the span or
-/// the word (after whitespace, a backtick, `(`, `[`, `"` or `'`), running to
+/// the word (after whitespace, a backtick, `(`, `[`, `"`, `'` or `=`;
+/// written `./deploy/…` it is taken without its `./`), running to
 /// whitespace, a backtick, `)` or `,` (and, as no path here holds one, `"`,
 /// `'`, `]`, `;` or `|`), a trailing `:` or `.` stripped. A placeholder —
 /// `<`…`>`, `…`, a glob `*`, a variable `$` or a brace `{` — is skipped:
@@ -468,8 +486,10 @@ fn doc_paths(text: &str) -> Vec<(usize, String)> {
     for (n, line) in text.lines().enumerate() {
         for prefix in ["deploy/", "scripts/"] {
             for (at, _) in line.match_indices(prefix) {
-                let before = line[..at].chars().next_back();
-                if before.is_some_and(|c| !(c.is_whitespace() || "`([\"'".contains(c))) {
+                let head = &line[..at];
+                let head = head.strip_suffix("./").unwrap_or(head);
+                let before = head.chars().next_back();
+                if before.is_some_and(|c| !(c.is_whitespace() || "`([\"'=".contains(c))) {
                     continue;
                 }
                 let rest = &line[at..];
@@ -493,7 +513,11 @@ fn the_pipeline_doc_names_what_exists() {
     let root = root();
     let text = std::fs::read_to_string(root.join(DEPLOY_README)).unwrap_or_else(|e| panic!("{DEPLOY_README}: {e}"));
     let paths = doc_paths(&text);
-    assert!(!paths.is_empty(), "{DEPLOY_README} names no deploy/ or scripts/ path: it cannot describe the pipeline");
+    let unnamed: Vec<&str> = ["deploy/pipeline", "deploy/record", "deploy/runner.mjs", "deploy/ui-sign.mjs"]
+        .into_iter()
+        .filter(|want| !paths.iter().any(|(_, p)| p == want))
+        .collect();
+    assert!(unnamed.is_empty(), "V2-10: {DEPLOY_README} never names {unnamed:?}: the pipeline, its record, its runner and the bundle's signer");
     let missing: Vec<String> =
         paths.iter().filter(|(_, p)| !root.join(p).exists()).map(|(n, p)| format!("{DEPLOY_README}:{n}: {p}")).collect();
     assert!(missing.is_empty(), "V2-10: {} path(s) {DEPLOY_README} names are not in the tree:\n  {}", missing.len(), missing.join("\n  "));
@@ -532,13 +556,24 @@ fn script_subcommands(text: &str) -> (Vec<String>, Vec<String>) {
 }
 
 /// The subcommands the doc `text` names, each `(line, word)`: the word after
-/// `deploy/pipeline ` at the start of a line inside a fenced block, or at the
-/// start of a backticked span outside one. A flag, a placeholder or nothing
-/// after it is no subcommand.
+/// `deploy/pipeline ` at the start of a line inside a fenced block (after
+/// any `NAME=value ` prefixes: `IMAGE_STORE=ghcr deploy/pipeline image`), or
+/// at the start of a backticked span outside one. A flag, a placeholder or
+/// nothing after it is no subcommand.
 fn doc_subcommands(text: &str) -> Vec<(usize, String)> {
     const CMD: &str = "deploy/pipeline ";
     let word = |s: &str| -> Option<String> {
-        let s = s.trim_start().strip_prefix(CMD)?;
+        let mut s = s.trim_start();
+        loop {
+            let first = s.split_whitespace().next()?;
+            let Some((name, _)) = first.split_once('=') else { break };
+            let mut chars = name.chars();
+            if !chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') || !chars.all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                break;
+            }
+            s = s[first.len()..].trim_start();
+        }
+        let s = s.strip_prefix(CMD)?;
         let w: String = s.trim_start().chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
         w.starts_with(|c: char| c.is_ascii_lowercase()).then_some(w)
     };
@@ -595,7 +630,8 @@ fn the_pipeline_doc_parsers_read_what_they_should() {
     let doc = "Run `deploy/pipeline build --branch v2` (see deploy/README.md).\n\
                The signer, deploy/ui-sign.mjs: and scripts/ui-build.sh, then deploy/env/.\n\
                Not menger-deploy/outbox, not ../deploy/x, not deploy/env/<env>.env nor deploy/… nor scripts/*.sh nor deploy/$X.\n\
-               \"deploy/record\", [scripts/sweep/install.sh]|x; deploy/a.b.\n";
+               \"deploy/record\", [scripts/sweep/install.sh]|x; deploy/a.b.\n\
+               MENGER_RUNNER=deploy/runner.mjs then ./scripts/disk-check.sh and `deploy/env/app-test.env`: there.\n";
     assert_eq!(
         doc_paths(doc),
         [
@@ -607,6 +643,9 @@ fn the_pipeline_doc_parsers_read_what_they_should() {
             (4, "deploy/record".to_string()),
             (4, "deploy/a.b".to_string()),
             (4, "scripts/sweep/install.sh".to_string()),
+            (5, "deploy/runner.mjs".to_string()),
+            (5, "deploy/env/app-test.env".to_string()),
+            (5, "scripts/disk-check.sh".to_string()),
         ]
     );
 
@@ -622,6 +661,12 @@ fn the_pipeline_doc_parsers_read_what_they_should() {
                ```\ndeploy/pipeline remote-secret test\n```\n";
     assert_eq!(
         doc_subcommands(doc),
-        [(3, "build".to_string()), (4, "remote".to_string()), (9, "suite".to_string()), (11, "remote-secret".to_string())]
+        [
+            (3, "build".to_string()),
+            (4, "remote".to_string()),
+            (6, "image".to_string()),
+            (9, "suite".to_string()),
+            (11, "remote-secret".to_string()),
+        ]
     );
 }
