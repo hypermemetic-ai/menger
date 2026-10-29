@@ -458,3 +458,25 @@ test("DEPLOY-52: one suite at a time — the newest waits, one passed over never
   delete process.env.FAKE_PIPELINE_RELEASE;
   assert.deepEqual(r.started, ["20261023T010000Z-aaaaaaa", "20261023T030000Z-ccccccc"], "b was passed over");
 });
+
+// ── V2-7: the runner on a branch — MENGER_RUNNER_BRANCH (v2) ────────────────
+test("V2-7 the_runner_targets_the_branch: MENGER_RUNNER_BRANCH=v2 — a V2 or UI ticket entering In Review files a request for v2's tip; auto.json says the branch", async () => {
+  assert.equal(options(["--watch"], { MENGER_RUNNER_BRANCH: "v2" }).branch, "v2", "the env file's branch");
+  assert.equal(options(["--watch"], {}).branch, "main", "absent: main, as before");
+  const r = autoRunner({ extra: { branch: "v2" } });
+  const v2 = triggerOf({ type: "status_changed", ticket: T("V2-7", "In Review", "hypermemetic:MENGER/V2-7"), previous: "Coding" }, "MENGER");
+  const ui = triggerOf({ type: "status_changed", ticket: T("UI-3", "In Review", "hypermemetic:MENGER/V2/UI-3"), previous: "Coding" }, "MENGER");
+  assert.deepEqual([v2, ui], [{ ticket: "V2-7", why: "entered In Review" }, { ticket: "UI-3", why: "entered In Review" }]);
+  r.trigger(v2);
+  r.trigger(ui);
+  await sleep(90);
+  assert.equal(r.requests().length, 1);
+  assert.equal(r.requests()[0].branch, "v2", "the request names v2, not main");
+  assert.deepEqual([r.queue[0].request, r.queue[0].branch, r.queue[0].revision], [101, "v2", ""], "taken for v2's tip");
+  const doc = JSON.parse(fs.readFileSync(path.join(r.o.stateDir, "auto.json"), "utf8"));
+  assert.equal(doc.branch, "v2", "what deploy/pipeline status reads");
+  // a webhook's request that names no branch is the runner's branch too
+  const w = runner({ branch: "v2" });
+  assert.equal(w.take({ request: 7, project: "menger", environment: "test" }), null);
+  assert.equal(w.queue[0].branch, "v2");
+});

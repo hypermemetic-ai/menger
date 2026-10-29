@@ -804,5 +804,360 @@ ci6 suite --status "$SR"; same "suite --status: failed" "$(<"$SCRATCH/out")" "su
 ci6 suite nonesuch
 same "suite: no such release" "$code" 1
 
+
+# ════ V2-7: the pipeline for v2 — its testing surface ═══════════════════════
+# Each block below is one test of V2-7's testing surface, its name on every
+# check. Nothing here is real either: cargo, docker, curl and the codegen
+# container are stand-ins, the releases sit in scratch homes, and the ui
+# service is fake-ui.mjs under a real node — its ui.push checks the signature
+# for real (Ed25519 over the bundle's sha256, by the signer the image was
+# started with: STUB_UI_SIGNER) and keeps the versions and the live pointer in
+# $STUB_UI_STATE; ui.versions answers them. The stand-in curl serves /app/ as
+# the live version's index.html (the placeholder while none is live, or with
+# STUB_UI_SERVE=placeholder). The bundle carried is the one scripts/ui-build.sh
+# makes (a stub until UI-6). A real image on 127.0.0.1:4470 is acceptance 2's
+# run, by hand: this harness opens no port.
+REALNODE=$(PATH=${PATH#"$SCRATCH/bin:"} command -v node) || { echo "V2-7's checks need node on PATH" >&2; exit 1; }
+export REALNODE
+V2=$SCRATCH/v2; mkdir -p "$V2/keys" "$V2/ui"
+newkey() { ( umask 077; "$REALNODE" -e 'process.stdout.write(require("crypto").randomBytes(32).toString("base64") + "\n")' >"$1" ); }
+pubof() { "$REALNODE" -e '
+  const c = require("crypto"), seed = Buffer.from(require("fs").readFileSync(process.argv[1], "utf8").trim(), "base64");
+  const k = c.createPrivateKey({ key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), seed]), format: "der", type: "pkcs8" });
+  process.stdout.write(c.createPublicKey(k).export({ format: "der", type: "spki" }).subarray(-32).toString("hex"));' "$1"; }
+K2=$V2/keys/pipeline.key KBAD=$V2/keys/other.key; newkey "$K2"; newkey "$KBAD"
+PUB2=$(pubof "$K2") PUBBAD=$(pubof "$KBAD")
+[[ $PUB2 =~ ^[0-9a-f]{64}$ && $PUBBAD =~ ^[0-9a-f]{64}$ ]] || { echo "V2-7: could not make the test keys" >&2; exit 1; }
+
+# the bundle the pipeline carries: scripts/ui-build.sh, run in a scratch copy of what it reads
+UB=$V2/uib; mkdir -p "$UB/scripts" "$UB/src"
+cp "$REPO/scripts/ui-build.sh" "$UB/scripts/" && cp "$REPO/src/shell.rs" "$UB/src/"
+"$UB/scripts/ui-build.sh" 2>/dev/null
+same "ui-build (stub): a tar holding index.html, nothing else" "$(tar -tf "$UB/dist/ui.tar" 2>/dev/null | paste -sd' ')" "index.html"
+BUNDLE_SHA=$(sha256sum "$UB/dist/ui.tar" | cut -d' ' -f1)
+"$UB/scripts/ui-build.sh" 2>/dev/null
+same "ui-build (stub): the same tree, the same bytes" "$(sha256sum "$UB/dist/ui.tar" | cut -d' ' -f1)" "$BUNDLE_SHA"
+export STUB_PLACEHOLDER='<!doctype html><title>menger</title><h1>menger v2</h1><p>No frontend yet</p>'
+
+# fake-ui.mjs: the ui service as menger-call.mjs meets it (its argv; params from --params or stdin)
+export FAKE_UI=$V2/fake-ui.mjs STUB_UI_STATE=$V2/ui/state
+cat >"$FAKE_UI" <<'JS'
+import crypto from "node:crypto"; import fs from "node:fs"; import path from "node:path";
+const argv = process.argv.slice(2);
+let url = "", agent = "", method = "", params = null;
+for (let i = 0; i < argv.length; i++) {
+  const a = argv[i];
+  if (a === "--url") url = argv[++i]; else if (a === "--agent") agent = argv[++i];
+  else if (a === "--timeout" || a === "--header") i++; else if (a === "--params") params = argv[++i];
+  else if (!a.startsWith("-") && !a.endsWith(".mjs") && !method) method = a;
+}
+const state = process.env.STUB_UI_STATE; fs.mkdirSync(state, { recursive: true });
+fs.appendFileSync(path.join(state, "calls"), `${method} ${url} ${agent}\n`);
+const out = (o) => process.stdout.write(JSON.stringify(o) + "\n");
+const text = process.env.MENGER_DEPLOY_KEY || (process.env.MENGER_DEPLOY_KEY_FILE ? fs.readFileSync(process.env.MENGER_DEPLOY_KEY_FILE, "utf8") : "");
+const seed = Buffer.from(String(text).trim(), "base64");
+if (seed.length !== 32) { out({ type: "error", error_kind: "unauthenticated", message: "sign in first" }); process.exit(3); }
+const priv = crypto.createPrivateKey({ key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), seed]), format: "der", type: "pkcs8" });
+const principal = "key:" + crypto.createPublicKey(priv).export({ format: "der", type: "spki" }).subarray(-32).toString("hex");
+const vf = path.join(state, "versions.json"), lf = path.join(state, "live");
+const versions = fs.existsSync(vf) ? JSON.parse(fs.readFileSync(vf, "utf8")) : [];
+const live = fs.existsSync(lf) ? fs.readFileSync(lf, "utf8").trim() : "";
+const raw = params !== null ? params : (fs.readFileSync(0, "utf8").split("\n").find((l) => l.trim()) || "{}");
+const p = JSON.parse(raw);
+function filesOf(buf) { // a tar's regular files, or null: no tar
+  const files = {}; let o = 0;
+  if (buf.length < 512 || buf.subarray(257, 262).toString() !== "ustar") return null;
+  while (o + 512 <= buf.length) {
+    const h = buf.subarray(o, o + 512); if (h.every((b) => b === 0)) break;
+    const name = h.subarray(0, 100).toString().replace(/\0[\s\S]*$/, "").replace(/^\.\//, "");
+    const size = parseInt(h.subarray(124, 136).toString().replace(/\0[\s\S]*$/, "").trim() || "0", 8);
+    if (Number.isNaN(size)) return null;
+    if ([48, 0].includes(h[156])) files[name] = buf.subarray(o + 512, o + 512 + size);
+    o += 512 + Math.ceil(size / 512) * 512;
+  }
+  return files;
+}
+const refuse = (reason, message) => { out({ type: "refused", reason, message }); process.exit(0); };
+if (method === "ui.push") {
+  const signer = process.env.STUB_UI_SIGNER || "";
+  if (!signer) refuse("no_signer", "no --ui-signer is configured on this server: every push is refused");
+  const bytes = Buffer.from(p.bundle || "", "base64");
+  const digest = crypto.createHash("sha256").update(bytes).digest();
+  const pub = crypto.createPublicKey({ key: Buffer.concat([Buffer.from("302a300506032b6570032100", "hex"), Buffer.from(signer, "hex")]), format: "der", type: "spki" });
+  let good = false; try { good = crypto.verify(null, digest, pub, Buffer.from(p.signature || "", "base64")); } catch {}
+  if (!good) refuse("bad_signature", "the signature does not verify: Ed25519 over the bundle's sha256 by a --ui-signer");
+  const files = filesOf(bytes);
+  if (!files || !files["index.html"]) refuse("bad_bundle", "the bundle is not a tar holding index.html");
+  const field = (k) => String(p.manifest || "").split("\n").map((l) => { const i = l.indexOf(":"); return i < 0 ? null : [l.slice(0, i).trim(), l.slice(i + 1).trim().replace(/^["']|["']$/g, "")]; })
+    .find((kv) => kv && kv[0] === k && kv[1])?.[1];
+  const contract = field("contract"), abi = field("abi");
+  if (!contract || !abi) refuse("bad_manifest", "the manifest names no contract or no abi");
+  const hash = digest.toString("hex"), fresh = !versions.some((v) => v.hash === hash);
+  if (fresh) versions.unshift({ hash, commit: p.commit ?? null, contract, abi, pushed_by: principal, pushed_at: Math.floor(Date.now() / 1000) });
+  fs.writeFileSync(vf, JSON.stringify(versions)); fs.writeFileSync(lf, hash + "\n");
+  fs.writeFileSync(path.join(state, `${hash}.html`), files["index.html"]);
+  out({ type: "pushed", version: hash, live: true, new: fresh });
+} else if (method === "ui.versions") {
+  for (const v of versions) out({ type: "version", ...v, live: v.hash === live });
+} else { out({ type: "error", message: `the stand-in ui service has no ${method}` }); process.exit(3); }
+JS
+# node: ui.* to the stand-in ui service; other menger calls to the stand-in tracker above; any
+# other script (a signer the pipeline may run) the real node
+cp "$SCRATCH/bin/node" "$SCRATCH/bin/node-base"
+stub node 'echo "node $*" >>"$STUB_ARGV"
+case " $* " in
+  *" ui.push "*|*" ui.versions "*|*" ui.rollback "*|*" ui.preview "*) exec "$REALNODE" "$FAKE_UI" "$@" ;;
+  *menger-call.mjs*) exec "$(dirname "$0")/node-base" "$@" ;;
+  *) exec "$REALNODE" "$@" ;;
+esac'
+# curl: /app/ (and /app/<hash>/index.html) as the shell serves it — the live version's page;
+# everything else as before
+cp "$SCRATCH/bin/curl" "$SCRATCH/bin/curl-base"
+stub curl 'url="" o="" w="" prev=""
+for a in "$@"; do [[ $a == http://* || $a == https://* ]] && url=$a; [[ $prev == -o ]] && o=$a; [[ $prev == -w ]] && w=$a; prev=$a; done
+rest=${url#*://}; if [[ $rest == */* ]]; then p=/${rest#*/}; else p=/; fi; p=${p%%\?*}
+live=$(cat "$STUB_UI_STATE/live" 2>/dev/null || true)
+case $p in
+  /app|/app/|/app/*/index.html)
+    echo "curl $*" >>"$STUB_ARGV"
+    h=$live; [[ $p == /app/*/index.html ]] && { h=${p#/app/}; h=${h%%/*}; }
+    if [[ ${STUB_UI_SERVE:-live} == live && -n $h && -f $STUB_UI_STATE/$h.html ]]; then body=$(cat "$STUB_UI_STATE/$h.html"); else body=$STUB_PLACEHOLDER; fi
+    [[ -n $o ]] || printf "%s" "$body"
+    [[ -n $w ]] && printf 200
+    exit 0 ;;
+esac
+exec "$(dirname "$0")/curl-base" "$@"'
+
+# ── V2-7 build_from_a_branch_has_no_frontend_steps ─────────────────────────
+# A fixture repository: main as today (frontend/), v2 without it, with
+# scripts/ui-build.sh (the stub) and a stand-in scripts/ui-compiler-build.sh
+# (UI-5's module, until it lands). The codegen container is a stand-in docker
+# that runs the command on the host with its mounts mapped; cargo writes the
+# binaries it is asked for; trunk and npm only say they ran.
+T1=build_from_a_branch_has_no_frontend_steps
+B=$SCRATCH/v2b; BR=$B/menger; H5=$SCRATCH/home5; D5=$H5/.local/share/menger-deploy
+mkdir -p "$BR/deploy/launch" "$BR/scripts" "$BR/frontend" "$B/bin" "$D5/releases"
+cp "$DEPLOY/pipeline" "$BR/deploy/pipeline"; cp "$REPO"/deploy/launch/* "$BR/deploy/launch/"; cp "$REPO/scripts/disk-check.sh" "$BR/scripts/"
+: >"$BR/frontend/.keep"
+gitf() { git -C "$BR" -c user.name=t -c user.email=t@t "$@"; }
+gitf init -q -b main && gitf add -A && gitf commit -qm "main: as today"
+gitf checkout -q -b v2 && gitf rm -rq frontend
+mkdir -p "$BR/src"; cp "$REPO/scripts/ui-build.sh" "$BR/scripts/"; cp "$REPO/src/shell.rs" "$BR/src/"
+printf '#!/usr/bin/env bash\n# a stand-in for UI-5'"'"'s compiler module build\nset -eu\ncd "$(dirname "$0")/.."\nmkdir -p dist\nprintf "\\0asm\\1\\0\\0\\0" >dist/ui-compiler.wasm\n' >"$BR/scripts/ui-compiler-build.sh"
+chmod +x "$BR/scripts/"*.sh
+gitf add -A && gitf commit -qm "v2: no frontend" && gitf checkout -q main
+MSHA=$(gitf rev-parse main) VSHA=$(gitf rev-parse v2)
+for t in trunk npm wasm-pack; do printf '#!/usr/bin/env bash\necho "%s $*" >>"%s"\nexit 99\n' "$t" "$B/browser.log" >"$B/bin/$t"; done
+printf '#!/usr/bin/env bash\necho "rustc 1.90.0 (stand-in)"\n' >"$B/bin/rustc"
+cat >"$B/bin/cargo" <<'CARGO'
+#!/usr/bin/env bash
+echo "$PWD: cargo $*" >>"$STUB_CARGO_LOG"
+case $1 in
+  build) prev=""; for a in "$@"; do
+           if [[ $prev == -p ]]; then mkdir -p "$CARGO_TARGET_DIR/release"
+             printf '#!/usr/bin/env bash\ncase ${1:-} in --help-all|--help) echo "--bind <ADDR>" ;; esac\n' >"$CARGO_TARGET_DIR/release/$a"
+             chmod +x "$CARGO_TARGET_DIR/release/$a"; fi; prev=$a; done; exit 0 ;;
+  test) echo "test result: ok. 3 passed; 0 failed"; exit 0 ;;
+esac
+exit 0
+CARGO
+# docker: the codegen container — `run … plexus-codegen… CMD`, CMD run on the host in the
+# mounted directory (-v HOST:CTR, -w CTR mapped back); everything else a no-op
+cat >"$B/bin/docker" <<'DOCKER'
+#!/usr/bin/env bash
+echo "docker $*" >>"$STUB_BUILD_DOCKER"
+[[ $1 == run ]] || exit 0
+shift; mounts=() wd="" img="" cmd=()
+while [[ $# -gt 0 ]]; do
+  if [[ -n $img ]]; then cmd+=("$1"); shift; continue; fi
+  case $1 in
+    -v|--volume) mounts+=("$2"); shift 2 ;;
+    --volume=*) mounts+=("${1#--volume=}"); shift ;;
+    -w|--workdir) wd=$2; shift 2 ;;
+    --workdir=*) wd=${1#--workdir=}; shift ;;
+    -e|--env|-u|--user|--security-opt|--network|--entrypoint|--name|--label|--platform|-p) shift 2 ;;
+    -*) shift ;;
+    *) img=$1; shift ;;
+  esac
+done
+[[ $img == plexus-codegen* || $img == */plexus-codegen* ]] || { echo "docker run $img: not the codegen image" >&2; exit 125; }
+map() { local s=$1 m h c; for m in "${mounts[@]}"; do h=${m%%:*}; c=${m#*:}; c=${c%%:*}; s=${s//$c/$h}; done; printf '%s' "$s"; }
+dir=$(map "${wd:-/}"); args=(); for a in "${cmd[@]}"; do args+=("$(map "$a")"); done
+[[ -d $dir ]] || { echo "docker run: no $dir" >&2; exit 125; }
+(cd "$dir" && IN_CODEGEN=1 "${args[@]}")
+DOCKER
+chmod +x "$B/bin/"*
+export STUB_CARGO_LOG=$B/cargo.log STUB_BUILD_DOCKER=$B/docker.argv
+bb() { : >"$STUB_CARGO_LOG"; : >"$STUB_BUILD_DOCKER"; : >"$B/browser.log"
+  PATH=$B/bin:$PATH HOME=$H5 DISK_CHECK_USED_PCT=10 DISK_CHECK_AVAIL_GB=900 "$BR/deploy/pipeline" "$@" >"$SCRATCH/out" 2>"$SCRATCH/err"; code=$?; err=$(<"$SCRATCH/err"); }
+bb build --branch v2 --no-gate
+same "$T1: build --branch v2 exits 0" "$code" 0
+VR=$(tail -n 1 "$SCRATCH/out"); RF=$D5/releases/$VR/RELEASE
+same "$T1: a release of v2's tip" "$(sed -n 's/^commit: *//p' "$RF" 2>/dev/null)" "$VSHA"
+same "$T1: the release names its branch" "$(sed -n 's/^branch: *//p' "$RF" 2>/dev/null)" "v2"
+steps=$(sed -n 's/^steps: *//p' "$RF" 2>/dev/null)
+for s in "cargo build" ui-build ui-compiler-wasm; do has "$T1: the release's steps hold $s" "$steps" "$s"; done
+[[ -n $steps && $steps != *trunk* && $steps != *npm* ]] && ok || bad "$T1: steps with trunk or npm (or none): '$steps'"
+same "$T1: no trunk, no npm ran" "$(<"$B/browser.log")" ""
+has "$T1: cargo build --release" "$(<"$STUB_CARGO_LOG")" "cargo build --release -p menger"
+has "$T1: the bundle built in the plexus-codegen container" "$(grep -E 'plexus-codegen.*ui-build\.sh' "$STUB_BUILD_DOCKER")" "scripts/ui-build.sh"
+has "$T1: the compiler module built in the plexus-codegen container" "$(grep -E 'plexus-codegen.*ui-compiler' "$STUB_BUILD_DOCKER")" "ui-compiler"
+same "$T1: the release's dist/ui.tar holds the page" "$(tar -tf "$D5/releases/$VR/dist/ui.tar" 2>/dev/null | paste -sd' ')" "index.html"
+[[ -s $D5/releases/$VR/dist/ui-compiler.wasm ]] && ok || bad "$T1: no dist/ui-compiler.wasm in the release"
+[[ -x $D5/releases/$VR/bin/menger && ! -e $D5/releases/$VR/app ]] && ok || bad "$T1: the release is bin/menger and dist/, no app/"
+# the suite of a v2 release: the workspace's alone (no frontend to test) — a release at v2's
+# tip made here, so the suite is checked whatever the build above did
+SR5=$(id=20261024T000000Z-${VSHA:0:7}; r=$D5/releases/$id; mkdir -p "$r/bin" "$r/dist"
+  printf 'release:   %s\ncommit:    %s\nbranch:    v2\nsubject:   v2\ngate:      none — the suite runs after the deploy\n' "$id" "$VSHA" >"$r/RELEASE"; chmod -R a-w "$r"; echo "$id")
+bb suite "$SR5"
+same "$T1: suite of a v2 release exits 0" "$code" 0
+same "$T1: suite: cargo test --workspace, nothing else" "$(sed -n 's/^.*: cargo \(test.*\)$/\1/p' "$STUB_CARGO_LOG" | paste -sd'|')" "test --workspace --no-fail-fast"
+has "$T1: suite: the release marked passed" "$(cat "$D5/releases/$SR5/SUITE" 2>/dev/null)" "passed "
+# --branch absent: main, as before
+bb build --no-gate
+has "$T1: no --branch builds main" "$err" "build ${MSHA:0:7}"
+
+# ── V2-7 the_image_carries_the_bundle_and_the_flags ────────────────────────
+T2=the_image_carries_the_bundle_and_the_flags
+H6=$SCRATCH/home6; D6=$H6/.local/share/menger-deploy; mkdir -p "$D6/releases"
+v2release() { # DIR N WASM(0/1) → a v2 release at IC[N], laid out as build makes one: bin/, dist/, RELEASE
+  local id=2026102${2}T100000Z-${IC[$2]:0:7} r
+  r=$1/$id; mkdir -p "$r/bin" "$r/dist"
+  printf 'release:   %s\ncommit:    %s\nbranch:    v2\nsubject:   v%s\nsteps:     cargo build, ui-build, ui-compiler-wasm\n' "$id" "${IC[$2]}" "$2" >"$r/RELEASE"
+  printf '#!/usr/bin/env bash\n[[ ${1:-} == --help-all || ${1:-} == --help ]] && echo "--bind <ADDR>"\nexit 0\n' >"$r/bin/menger"
+  cp "$REPO/deploy/launch/run-menger" "$r/bin/run-menger"; chmod +x "$r/bin/"*
+  cp "$UB/dist/ui.tar" "$r/dist/ui.tar"
+  [[ $3 == 1 ]] && printf '\0asm\1\0\0\0' >"$r/dist/ui-compiler.wasm"
+  chmod -R a-w "$r"; echo "$id"
+}
+V6=$(v2release "$D6/releases" 1 1) V6N=$(v2release "$D6/releases" 2 0)
+export STUB_CTX_COPY=$V2/ctx
+stub docker 'echo "docker $*" >>"$STUB_DOCKER"
+case $1 in
+  build) ctx=${*: -1}; (cd "$ctx" && find . -type f | LC_ALL=C sort | paste -sd" ") >"$STUB_CONTEXT"
+         n=$STUB_CTX_COPY.$(date +%s%N); cp -r "$ctx" "$n"; echo "$n" >"$STUB_CTX_COPY.last" ;;
+  image) echo "sha256:5ca1ab1e 123 bytes" ;;
+esac; exit 0'
+irun6() { : >"$STUB_DOCKER"; : >"$STUB_CONTEXT"; rm -f "$STUB_CTX_COPY.last"; HOME=$H6 TMPDIR=$SCRATCH/tmp run "$@"; }
+# the entrypoint as the image starts it: its run-menger, menger an echo of its arguments
+entry_args() { local c; c=$(cat "$STUB_CTX_COPY.last" 2>/dev/null) || return 0; [[ -f $c/release/bin/run-menger ]] || return 0
+  chmod -R u+w "$c"; printf '#!/bin/sh\necho "$*"\n' >"$c/release/bin/menger"; chmod +x "$c/release/bin/menger"
+  env -i PATH="$PATH" MENGER_WS_PORT=8080 MENGER_SHELL_PORT=8081 MENGER_DB_PATH=/data/tickets.db MENGER_UI_DB_PATH=/data/ui.db \
+    MENGER_UI_SIGNERS="$PUB2" sh "$c/release/bin/run-menger" 2>&1; }
+irun6 image "$V6"
+same "$T2: image of a v2 release exits 0" "$code" 0
+ctxl=$(<"$STUB_CONTEXT")
+has "$T2: the context holds dist/ui.tar" "$ctxl" "./release/dist/ui.tar"
+has "$T2: the context holds dist/ui-compiler.wasm" "$ctxl" "./release/dist/ui-compiler.wasm"
+[[ $ctxl != *./release/app/* ]] && ok || bad "$T2: an app/ in a v2 image: $ctxl"
+df=$(cat "$(cat "$STUB_CTX_COPY.last" 2>/dev/null)/Dockerfile" 2>/dev/null)
+has "$T2: the Dockerfile copies dist/ into the image" "$df" "release/dist"
+has "$T2: … at /opt/menger/dist" "$df" "/opt/menger/dist"
+has "$T2: the ui file in the data volume" "$df" "MENGER_UI_DB_PATH=/data/"
+has "$T2: run-menger is the entrypoint" "$df" "/opt/menger/bin/run-menger"
+a=$(entry_args)
+has "$T2: the entrypoint passes --ui-db-path" "$a" "--ui-db-path /data/ui.db"
+has "$T2: the entrypoint passes --ui-signer, the pipeline's public key" "$a" "--ui-signer $PUB2"
+[[ $a =~ --ui-compiler\ [^\ ]*/dist/ui-compiler\.wasm ]] && ok || bad "$T2: the entrypoint passes no --ui-compiler <…/dist/ui-compiler.wasm>: '$a'"
+# until UI-5 lands a release may hold no compiler module: imaged all the same, the flag omitted
+irun6 image "$V6N"
+same "$T2: a release with no compiler module: exits 0" "$code" 0
+a=$(entry_args)
+has "$T2: … the signer still passed" "$a" "--ui-signer $PUB2"
+[[ -n $a && $a != *--ui-compiler* ]] && ok || bad "$T2: --ui-compiler with no module (or no entrypoint ran): '$a'"
+# the pipeline's public key is what app-test runs with (infra's env file for the service)
+grep -qE '^MENGER_UI_SIGNERS=[0-9a-f]{64}$' "$REPO/deploy/env/app-test.env" && ok || bad "$T2: deploy/env/app-test.env names no MENGER_UI_SIGNERS=<64 hex>"
+
+# ── V2-7 a_deploy_pushes_the_bundle_and_the_smoke_sees_it ──────────────────
+# `local --image` against the stand-in docker (a container and a volume as
+# files) and the stand-in ui service: the image's bundle is read through
+# docker (cp, a one-shot cat, or exec) from the release it was built from, or
+# from the release itself.
+T3=a_deploy_pushes_the_bundle_and_the_smoke_sees_it
+H4=$SCRATCH/home4; D4=$H4/.local/share/menger-deploy; mkdir -p "$D4/releases"
+V4=$(v2release "$D4/releases" 1 1)
+export STUB_RELEASES=$D4/releases STUB_STATE4=$V2/dstate; mkdir -p "$STUB_STATE4"
+stub docker 'echo "docker $*" >>"$STUB_DOCKER"
+relof() { local i=${1##*:}; printf "%s" "$i"; }
+inside() { local f=$1 i=$2; f=${f#*:}; [[ $f == /opt/menger/dist/* ]] && cat "$STUB_RELEASES/$(relof "$i")/dist/${f#/opt/menger/dist/}"; }
+case "$1 $2" in
+  "image inspect") [[ " $* " == *" -f "* ]] && relof "${*: -1}"; exit 0 ;;
+  "container inspect") [[ -f $STUB_STATE4/container ]] || exit 1
+                       [[ " $* " == *Running* ]] && echo true; [[ " $* " == *Config.Image* ]] && cat "$STUB_STATE4/container"; exit 0 ;;
+  "volume inspect") [[ -f $STUB_STATE4/volume ]]; exit ;;
+  "volume create") touch "$STUB_STATE4/volume" ;;
+  "rm -f") rm -f "$STUB_STATE4/container" ;;
+  create\ *) echo "${*: -1}" >"$STUB_STATE4/created"; echo c4eafe ;;
+  cp\ *) src=$2 dst=$3; img=$(cat "$STUB_STATE4/container" 2>/dev/null); [[ ${src%%:*} == menger-app-local ]] || img=$(cat "$STUB_STATE4/created")
+         inside "$src" "$img" >"$dst" ;;
+  exec\ *) for a in "$@"; do [[ $a == /opt/menger/dist/* ]] && inside "$a" "$(cat "$STUB_STATE4/container")"; done ;;
+  run\ *) if [[ " $* " == *" -d "* ]]; then echo "${*: -1}" >"$STUB_STATE4/container"; echo c0ffee
+          else img=""; for a in "$@"; do [[ $a == menger:* || $a == ghcr.io/* ]] && img=$a; done
+               for a in "$@"; do [[ $a == /opt/menger/dist/* ]] && inside "$a" "$img"; done; fi ;;
+  logs\ *) echo "menger: a log line" ;;
+esac; exit 0'
+v2run() { : >"$STUB_DOCKER"; : >"$STUB_SYNAPSE_ARGV"; : >"$HF"; : >"$STUB_ARGV"
+  HOME=$H4 MENGER_DEPLOY_KEY_FILE=$K2 STUB_WS_PORT=4470 MENGER_LOCAL_WAIT=2 MENGER_INFRA_DIR=$SCRATCH/infra \
+    MENGER_APP_YML=$SCRATCH/app.yml HF_OUTPUTS=$HF run "$@"; }
+uivers() { jq -c "$1" "$STUB_UI_STATE/versions.json" 2>/dev/null; }
+export STUB_UI_SIGNER=$PUB2
+v2run local --image "menger:$V4"
+same "$T3: local --image exits 0" "$code" 0
+has "$T3: pushed to the local service, as the pipeline" "$(cat "$STUB_UI_STATE/calls" 2>/dev/null)" "ui.push ws://127.0.0.1:4470 pipeline"
+same "$T3: ui versions: one version, live, the image's bundle, pushed by the pipeline's key" \
+  "$(uivers '[length, .[0].hash, .[0].pushed_by]')" "[1,\"$BUNDLE_SHA\",\"key:$PUB2\"]"
+same "$T3: … live" "$(cat "$STUB_UI_STATE/live" 2>/dev/null)" "$BUNDLE_SHA"
+has "$T3: the smoke asks ui versions" "$(cat "$STUB_UI_STATE/calls" 2>/dev/null)" "ui.versions ws://127.0.0.1:4470"
+has "$T3: the smoke reads /app/" "$(<"$STUB_ARGV")" "http://127.0.0.1:4471/app/"
+grep -E '^ok +.*/app/' <<<"$err" >/dev/null && ok || bad "$T3: no ok line for /app/ in: $err"
+[[ $err != *FAIL* ]] && ok || bad "$T3: the smoke said FAIL: $err"
+same "$T3: url" "$(<"$SCRATCH/out")" "url=http://127.0.0.1:4471/"
+[[ $(<"$STUB_ARGV") != *"$(<"$K2")"* ]] && ok || bad "$T3: the pipeline's seed rode in argv"
+# a second deploy of the same image: the same version, not a second one
+v2run local --image "menger:$V4"
+same "$T3: again: exits 0" "$code" 0
+same "$T3: again: still one version" "$(uivers length)" 1
+# /app/ still the placeholder (the push did not take): the smoke fails
+STUB_UI_SERVE=placeholder v2run local --image "menger:$V4"
+same "$T3: /app/ the placeholder: exits 1" "$code" 1
+grep -E '^FAIL .*/app/' <<<"$err" >/dev/null && ok || bad "$T3: no FAIL line naming /app/ in: $err"
+# remote test pushes the same way, to app-test's socket, before its smoke reads /app/
+m=$(mark); v2run remote test --image "menger:$V4"
+same "$T3: remote test exits 0" "$code" 0
+has "$T3: remote test: pushed to app-test, as the pipeline" "$(cat "$STUB_UI_STATE/calls")" "ui.push wss://app-test.menger.sh/ws pipeline"
+grep -E '^ok +.*/app/' <<<"$err" >/dev/null && ok || bad "$T3: remote test: no ok line for /app/ in: $err"
+same "$T3: remote test: started, succeeded" "$(since "$m" .state)" '"started" "succeeded"'
+
+# ── V2-7 a_push_that_fails_fails_the_deploy ────────────────────────────────
+# The image's signer is another key: ui.push answers bad_signature. The
+# deploy fails, says why, and the version live before stays live.
+T4=a_push_that_fails_fails_the_deploy
+mkdir -p "$STUB_UI_STATE"; PREV=$(cat "$STUB_UI_STATE/live" 2>/dev/null); [[ -n $PREV ]] || { PREV=$(printf 'f%.0s' {1..64}); printf '[{"hash":"%s","commit":null,"contract":"c","abi":"a","pushed_by":"key:%s","pushed_at":1}]' "$PREV" "$PUB2" >"$STUB_UI_STATE/versions.json"; echo "$PREV" >"$STUB_UI_STATE/live"; }
+V4B=$(v2release "$D4/releases" 2 1)
+export STUB_UI_SIGNER=$PUBBAD
+m=$(mark); v2run remote test --image "menger:$V4B"
+same "$T4: remote test, a bad signer: exits 1" "$code" 1
+has "$T4: the push refused, said" "$err" "bad_signature"
+same "$T4: recorded started, failed" "$(since "$m" '[.environment, .state]')" '["test","started"] ["test","failed"]'
+has "$T4: the log line names bad_signature" "$(tail -n 1 "$D4/deployments.log" | cut -f2,3,5)" "bad_signature"
+same "$T4: the version live before stays live" "$(cat "$STUB_UI_STATE/live")" "$PREV"
+[[ ! -f $D4/releases/$V4B/TESTED ]] && ok || bad "$T4: a release whose push failed is marked TESTED"
+[[ $(cat "$STUB_UI_STATE/calls" 2>/dev/null | grep -c '^ui.rollback ') == 0 ]] && ok || bad "$T4: the pipeline moved the pointer itself"
+v2run local --image "menger:$V4B"
+same "$T4: local, a bad signer: exits 1" "$code" 1
+same "$T4: local: no url" "$(<"$SCRATCH/out")$(<"$HF")" ""
+has "$T4: local: the log line names bad_signature" "$(tail -n 1 "$D4/deployments.log" | cut -f2,3,5)" "bad_signature"
+same "$T4: local: the version live before stays live" "$(cat "$STUB_UI_STATE/live")" "$PREV"
+unset STUB_UI_SIGNER
+
+# ── V2-7 the_runner_targets_the_branch (status; the runner's half is deploy/tests/runner.test.mjs) ──
+T5=the_runner_targets_the_branch
+printf 'MENGER_RUNNER_MODE=--watch\nMENGER_RUNNER_BRANCH=v2\n' >"$HOME/.config/menger/deploy-runner.env"
+run status
+has "$T5: status says the runner's branch" "$(<"$SCRATCH/out")" "  branch    v2"
+printf 'MENGER_RUNNER_MODE=--watch\n' >"$HOME/.config/menger/deploy-runner.env"
+run status
+has "$T5: status, no branch set: main" "$(<"$SCRATCH/out")" "  branch    main"
+
 printf 'deploy/pipeline records: %d passed, %d failed\n' "$pass" "$fail"
 [[ $fail == 0 ]]

@@ -17,3 +17,5 @@
 /diagrams/node/node_modules
 # Python bytecode from scripts/ helpers.
 __pycache__/
+# V2-7: the UI bundle (scripts/ui-build.sh) and the compiler module the pipeline builds
+/dist
