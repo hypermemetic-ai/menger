@@ -25,10 +25,6 @@ license = "MIT"
 description = "menger's ticket vocabulary, activation and Plexus RPC client — one declaration, shared by the server and the browser"
 repository = "https://github.com/hypermemetic-ai/menger"
 # DIST-3: published, so a host can take menger from crates.io as a library.
-# The package is this crate's own sources: the wave3 example (below) lives
-# in ../spike, outside the crate, and cargo leaves it out of the package
-# (a target whose file is not packaged is dropped from the published
-# manifest) — in a checkout it builds as before.
 
 [features]
 default = ["server"]
@@ -58,14 +54,8 @@ server = [
 test-support = ["server"]
 # WAVE-3, measurement only: a build of the store without WAVE-6's
 # re-placement pass and its startup placement — the "without" half of the
-# spike's comparison (spike/WAVE-2/). Never enabled by anything that serves.
+# spike's comparison (spike/WAVE-2/ at v0.0.1). Never enabled by anything that serves.
 wave3-no-replace = []
-
-# WAVE-3: the spike's program (spike/WAVE-2/) — an example, so it builds
-# against the store as it is; `spike/WAVE-2/run.sh` runs it.
-[[example]]
-name = "wave3"
-path = "../spike/WAVE-2/wave3.rs"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

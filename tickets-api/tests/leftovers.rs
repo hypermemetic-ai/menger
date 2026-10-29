@@ -216,3 +216,52 @@ fn a_word_is_found_only_as_an_identifier_of_its_own_in_any_case() {
     assert!(!names("frontend/distribution", "frontend/dist"));
     assert!(!names("nothing here", "themes"));
 }
+
+/// V2-12: `cargo test --workspace` resolves every target of every member
+/// before it compiles anything, examples included — so a `path = "…"` in a
+/// manifest that names a file outside the tree is a red suite before a test
+/// runs (the release `20261029T173657Z-454cd56`: `tickets-api/Cargo.toml`'s
+/// example in `spike/`, removed by V2-9). Every `path` value in every
+/// manifest of the workspace, resolved beside that manifest, exists.
+fn manifest_paths(manifest: &Path) -> Vec<(usize, PathBuf)> {
+    let text = std::fs::read_to_string(manifest).unwrap_or_else(|e| panic!("{}: {e}", manifest.display()));
+    manifest_paths_in(&text, manifest)
+}
+
+#[test]
+fn every_manifest_path_exists() {
+    assert_eq!(manifest_paths_in("x = 1\npath = \"../a/b.rs\"\n# path = \"no\"\n  path=\"c\"\n", Path::new("/m/Cargo.toml")), [(2, PathBuf::from("/m/../a/b.rs")), (4, PathBuf::from("/m/c"))]);
+    let root = root();
+    let workspace = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    let mut manifests = vec![root.join("Cargo.toml")];
+    for member in workspace.lines().filter(|l| l.trim_start().starts_with("members")).flat_map(|l| l.split('"').skip(1).step_by(2)) {
+        manifests.push(root.join(member).join("Cargo.toml"));
+    }
+    let mut missing = Vec::new();
+    for manifest in &manifests {
+        for (line, path) in manifest_paths(manifest) {
+            if !path.exists() {
+                missing.push(format!("{}:{line}: {}", manifest.strip_prefix(&root).unwrap().display(), path.strip_prefix(&root).unwrap_or(&path).display()));
+            }
+        }
+    }
+    assert!(manifests.len() > 3, "the workspace's members were not read: {manifests:?}");
+    assert!(missing.is_empty(), "V2-12: {} manifest path(s) that do not exist:\n  {}", missing.len(), missing.join("\n  "));
+}
+
+/// The parser on a string, for the self-check above.
+fn manifest_paths_in(text: &str, manifest: &Path) -> Vec<(usize, PathBuf)> {
+    let dir = manifest.parent().unwrap();
+    text.lines()
+        .enumerate()
+        .filter_map(|(i, line)| {
+            let line = line.trim_start();
+            if line.starts_with('#') {
+                return None;
+            }
+            let rest = line.strip_prefix("path")?.trim_start().strip_prefix('=')?.trim_start();
+            let value = rest.strip_prefix('"')?.split('"').next()?;
+            Some((i + 1, dir.join(value)))
+        })
+        .collect()
+}
