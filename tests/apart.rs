@@ -15,6 +15,9 @@
 //! - FRAME-4 (wave 1): `plexus-shell` and `plexus-login`, repositories of
 //!   their own beside plexus-core (`../plexus-shell`, `../plexus-login`);
 //!   `tether/` apart — its `plexus-login` moves with substrate's (FRAME-9).
+//! - FRAME-9: `tether/` takes `plexus-login` from the sibling, as
+//!   plexus-substrate (which tether takes) does — one `plexus-login` in its
+//!   graph, never menger's tree's.
 //! - FRAME-5 (wave 2): the ui service, out to `../plexus-ui` as
 //!   `plexus-ui-service`, with no menger type in it; menger registers it
 //!   beside `tickets` and mounts its routes on its own shell.
@@ -409,6 +412,103 @@ fn nothing_reads_the_moved_paths() {
     assert!(!files.iter().any(|f| f.starts_with(root.join("deploy/tests/fixtures"))), "the walk read deploy/tests/fixtures");
     let read = lines_where(&root, &files, moved_paths);
     assert!(read.is_empty(), "FRAME-1: {} line(s) still read a path that moved to ../plexus-ui:\n  {}", read.len(), read.join("\n  "));
+}
+
+// ── tether (FRAME-9) ───────────────────────────────────────────────────────
+
+/// The `path` of dependency `dep` in `text` (a manifest in `dir`): each line
+/// whose key is `dep` (`dep = { path = … }`), as (line, the place it names).
+fn dep_paths(dir: &Path, text: &str, dep: &str) -> Vec<(usize, PathBuf)> {
+    let lines: Vec<&str> = text.lines().collect();
+    named_places(dir, text)
+        .into_iter()
+        .filter(|(n, _)| {
+            let key = lines[n - 1].trim_start();
+            key.strip_prefix(dep).is_some_and(|rest| rest.trim_start().starts_with('='))
+        })
+        .collect()
+}
+
+/// `cargo metadata` of tether's workspace (its own, beside menger's),
+/// locked and offline: the packages, or what cargo said.
+fn tether_metadata(root: &Path) -> Result<Value, String> {
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let out = Command::new(cargo)
+        .args(["metadata", "--format-version", "1", "--locked", "--offline", "--manifest-path"])
+        .arg(root.join("tether/Cargo.toml"))
+        .output()
+        .expect("cargo metadata runs");
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).lines().filter(|l| !l.trim().is_empty()).collect::<Vec<_>>().join(" / "));
+    }
+    serde_json::from_slice(&out.stdout).map_err(|e| format!("cargo metadata answered no JSON: {e}"))
+}
+
+/// What tether breaks of FRAME-9's rule: its manifest's `plexus-login`
+/// path is the sibling `login` (canonical), and its graph `pkgs` holds
+/// exactly one `plexus-login`, from there.
+fn tether_breaks(paths: &[(usize, PathBuf)], pkgs: Result<&[(String, PathBuf)], &str>, login: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    if paths.is_empty() {
+        out.push("tether/Cargo.toml: no `plexus-login = { path = … }`".to_string());
+    }
+    for (n, place) in paths {
+        if canonical(place) != login {
+            out.push(format!("tether/Cargo.toml:{n}: plexus-login from {}, not the sibling {}", place.display(), login.display()));
+        }
+    }
+    match pkgs {
+        Err(e) => out.push(format!("cd tether && cargo metadata --locked --offline failed: {e}")),
+        Ok(pkgs) => {
+            let found: Vec<&PathBuf> = pkgs.iter().filter(|(n, _)| n == "plexus-login").map(|(_, d)| d).collect();
+            if found.len() != 1 {
+                out.push(format!("tether's graph holds {} plexus-login(s), not one: {found:?}", found.len()));
+            }
+            for d in found {
+                if d != login {
+                    out.push(format!("tether's graph takes plexus-login from {}, not the sibling {}", d.display(), login.display()));
+                }
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn tether_takes_the_sibling_login() {
+    let root = root();
+    let login = canonical(&sibling("plexus-login"));
+    assert!(login.join("Cargo.toml").is_file(), "FRAME-9: no checkout at {} (clone plexus-login beside menger)", login.display());
+    let text = std::fs::read_to_string(root.join("tether/Cargo.toml")).expect("tether/Cargo.toml");
+    let paths = dep_paths(&root.join("tether"), &text, "plexus-login");
+    let meta = tether_metadata(&root);
+    let pkgs = meta.as_ref().map(packages);
+    let broken = tether_breaks(&paths, pkgs.as_deref().map_err(|e| e.as_str()), &login);
+    assert!(broken.is_empty(), "FRAME-9: tether does not take the sibling plexus-login, alone:\n  {}", broken.join("\n  "));
+}
+
+/// tether's check on what it must and must not see.
+#[test]
+fn tether_check_reads_what_it_is_given() {
+    let text = "# plexus-login = { path = \"../commented\" }\nplexus-login-extra = { path = \"../x\" }\n\
+                plexus-login = { path = \"../../plexus-login\", version = \"0.2\" }\nother = { path = \"../plexus-login\" }\n";
+    let paths = dep_paths(Path::new("/w/menger/tether"), text, "plexus-login");
+    assert_eq!(paths, [(3, PathBuf::from("/w/plexus-login"))]);
+
+    let login = Path::new("/w/plexus-login");
+    let one = [("plexus-login".to_string(), login.to_path_buf()), ("menger-tether".to_string(), "/w/menger/tether".into())];
+    assert!(tether_breaks(&paths, Ok(&one), login).is_empty(), "the sibling, once");
+    // menger's tree's copy, in the manifest and in the graph; two copies; none; no path; cargo refusing.
+    let old = [(47, PathBuf::from("/w/menger/plexus-login"))];
+    let menger = [("plexus-login".to_string(), PathBuf::from("/w/menger/plexus-login"))];
+    assert_eq!(tether_breaks(&old, Ok(&menger), login).len(), 2);
+    let two = [one[0].clone(), menger[0].clone()];
+    assert_eq!(tether_breaks(&paths, Ok(&two), login).len(), 2, "two copies: counted and the stray named");
+    assert_eq!(tether_breaks(&paths, Ok(&one[1..]), login).len(), 1, "none in the graph");
+    assert_eq!(tether_breaks(&[], Ok(&one), login).len(), 1, "no path in the manifest");
+    let registry = [("plexus-login".to_string(), PathBuf::from("/home/u/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/plexus-login-0.2.2"))];
+    assert_eq!(tether_breaks(&paths, Ok(&registry), login).len(), 1, "the registry's is not the sibling");
+    assert_eq!(tether_breaks(&paths, Err("no such file"), login).len(), 1);
 }
 
 // ── the checks check ──────────────────────────────────────────────────────
