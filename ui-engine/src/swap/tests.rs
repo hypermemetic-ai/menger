@@ -293,6 +293,25 @@ fn the_menu_lists_live_components_and_other_versions_newest_first() {
     assert_eq!(menu.versions, ["v2", "v1"], "only differing hashes, newest first, live excluded");
 }
 
+/// UI-8: a declared prop the mount does not pass is there as null — the
+/// route `#/` gives `board-layout` no `filter`, and its expressions read
+/// `filter == ()` rather than fail on a name not found.
+#[test]
+fn a_declared_prop_not_passed_is_null() {
+    let (r, app) = app();
+    let mut files = Files::default();
+    let t = tree("board-layout", &["filter"], json!({}), r#"if filter == () { "none" } else { filter }"#, NONE, &[]);
+    let m = manifest("v1", &[("board-layout", &t, NONE, &[])], &mut files);
+    app.provide(&files);
+    app.load("v1", m);
+    let root = r.root();
+    let id = app.mount(&root, "board-layout", Map::new()).expect("mounted");
+    assert_eq!(app.props_of(id), obj(json!({ "filter": null })));
+    assert!(r.html(root).contains("none"), "drawn as none: {}", r.html(root));
+    let id2 = app.mount(&root, "board-layout", obj(json!({ "filter": "status Ready" }))).expect("mounted");
+    assert_eq!(app.props_of(id2), obj(json!({ "filter": "status Ready" })));
+}
+
 /// A component whose `live` reads `state.q` with `debounce_ms: 80`, and a
 /// handler that sets `state.q`: typing runs the snapshot again once, 80 ms
 /// after, with the new params — through eval_params and the wiring.

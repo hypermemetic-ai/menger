@@ -1,1 +1,1 @@
-{ "#/": "page-shell" }
+{ "#/": "board-layout", "#/f/:filter": "board-layout", "#/ticket/:id": "ticket-page", "#/hello": "page-shell" }

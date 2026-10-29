@@ -21,7 +21,7 @@
 // each row (`li[data-id]`) as it appears — the timings are the page's own.
 //
 //   the_page_shows_rows_and_hears_a_create_and_a_push
-//     v1 pushed; after sign-in /app/ lists the seeded tickets
+//     v1 pushed; after sign-in /app/#/hello (UI-8 gave #/ to the board) lists the seeded tickets
 //     (tickets.list's first 200, in order); a ticket created over synapse
 //     appears without a reload, < 100 ms after its frame; the socket closed
 //     under the page: `resyncing`, then `live` within about a second, and a
@@ -336,7 +336,7 @@ async function main() {
 
       const { page, seen } = await openPage(browser, server, token);
       pages.push(seen);
-      await page.goto(`${server.origin}/app/`);
+      await page.goto(`${server.origin}/app/#/hello`);
       await eventually("the page lists the seeded tickets", async () => (await page.locator("li[data-id]").count()) === expected.length);
       const shown = await page.locator("li[data-id]").evaluateAll((els) => els.map((e) => e.getAttribute("data-id")));
       assert(JSON.stringify(shown) === JSON.stringify(expected), `the rows are tickets.list's, in order (shown ${shown.length}, expected ${expected.length})`);
@@ -394,7 +394,7 @@ async function main() {
       pushOnce(v2Tar, v2);
       const { page, seen } = await openPage(browser, server, token);
       pages.push(seen);
-      await page.goto(`${server.origin}/app/`);
+      await page.goto(`${server.origin}/app/#/hello`);
       await eventually("v2's hello before the right-click", async () => (await hello(page)) === HELLO_V2);
       const origin = await page.evaluate(() => ((window.__ui6_marker = "kept"), performance.timeOrigin));
       const slotsBefore = synapse(server, session, "ui", "slots", "list", "--layout", "page-shell");
@@ -423,7 +423,7 @@ async function main() {
       // A viewer's pick is refused in the menu; nothing is written.
       const viewer = await openPage(browser, server, viewerToken);
       pages.push(viewer.seen);
-      await viewer.page.goto(`${server.origin}/app/`);
+      await viewer.page.goto(`${server.origin}/app/#/hello`);
       await eventually("the viewer's page shows the section", async () => (await hello(viewer.page)) === HELLO_V1);
       await viewer.page.locator("[data-slot=main] .hello").click({ button: "right" });
       const vmenu = viewer.page.locator("[data-engine-menu]");
@@ -443,7 +443,7 @@ async function main() {
       pushOnce(v1Tar, v1);
       const { page, seen } = await openPage(browser, server, token);
       pages.push(seen);
-      await page.goto(`${server.origin}/app/`);
+      await page.goto(`${server.origin}/app/#/hello`);
       await eventually("the rows drawn", async () => (await page.locator("[data-slot=main] li[data-id]").count()) > 20);
       const said = () => page.locator("[data-slot=main] .seen").textContent({ timeout: 1000 });
 

@@ -1,0 +1,72 @@
+<script>
+  // UI-8: the board. Unfiltered: `nav extents` once — each shortcode's last
+  // sequence and holes — and the row a scroll lands on is an id by
+  // arithmetic over them; the window is one `list { after, limit: 200, summary: true }`
+  // page, re-asked only when a scroll leaves it, drawn at its offset. Filtered (the route's
+  // `filter`): the count is `nav counts { filter }`'s sum and the page is
+  // `list { filter, at }`. `created` moves the count (an extent's last
+  // sequence) and puts the row in; `status_changed` patches it in place.
+  prop("filter");
+  state(#{ first: 0, after: (), at: () });
+  let extents = live(#{ snapshot: "tickets.nav.extents", params: #{}, changes: "tickets.watch", key: "shortcode",
+                        on: #{ extent: "upsert:.", created: "upsert:ticket" } });
+  let counts = live(#{ snapshot: "tickets.nav.counts", params: #{ filter: filter }, key: "shortcode", on: #{ count: "upsert:." } });
+  let rows = live(#{ snapshot: "tickets.list",
+                     params: #{ summary: true, limit: 200, filter: filter, after: state.after, at: state.at },
+                     changes: "tickets.watch", changes_params: #{ filter: filter },
+                     key: "id", debounce_ms: 20,
+                     on: #{ created: "upsert:ticket", status_changed: "upsert:ticket", amended: "upsert:ticket",
+                            kind_changed: "upsert:ticket", labels_changed: "upsert:ticket", deleted: "remove:ids" } });
+  fn scrolled(state, ev) {
+    let top = (ev.scroll_top / 28.0).floor().to_int();
+    let seen = (ev.client_height / 28.0).ceiling().to_int() + 1;
+    if top >= state.first && top + seen <= state.first + 200 { return state; }
+    let start = if top < state.first { top + seen - 200 } else { top };
+    if start < 0 { start = 0; }
+    state.first = start;
+    if ev.props.filter != () { state.after = (); state.at = start; return state; }
+    if start == 0 { state.after = (); return state; }
+    let ext = ev.live.extents;
+    ext.sort(|a, b| if a.shortcode < b.shortcode { -1 } else if a.shortcode > b.shortcode { 1 } else { 0 });
+    let k = start - 1;
+    for e in ext {
+      let last = if e.last_seq == () { e.seq } else { e.last_seq };
+      let holes = if e.holes == () { [] } else { e.holes };
+      let n = last - holes.len();
+      if k >= n { k -= n; continue; }
+      let seq = 0;
+      loop {
+        seq += 1;
+        if !(seq in holes) {
+          if k == 0 { break; }
+          k -= 1;
+        }
+      }
+      state.after = e.epic + "-" + seq;
+      return state;
+    }
+    state
+  }
+</script>
+
+<section class="board" data-board>
+  <header class="board-head">
+    <span class="board-count">{if filter == () { extents.rows.reduce(|a, e| a + (if e.last_seq == () { e.seq } else { e.last_seq }) - (if e.holes == () { 0 } else { e.holes.len() }), 0) } else { counts.rows.reduce(|a, c| a + c.held, 0) }}</span>
+    <span class="board-count-label">tickets</span>
+    {#if rows.status != "live"}<span class="board-status" data-board-status={rows.status}>{rows.status}</span>{/if}
+  </header>
+  <div class="board-scroll" data-row-height="28" on:scroll={scrolled}>
+    <div class="board-space" style={"height:" + (28 * (if filter == () { extents.rows.reduce(|a, e| a + (if e.last_seq == () { e.seq } else { e.last_seq }) - (if e.holes == () { 0 } else { e.holes.len() }), 0) } else { counts.rows.reduce(|a, c| a + c.held, 0) })) + "px"}>
+      <div class="board-window" style={"transform:translateY(" + (28 * state.first) + "px)"}>
+      {#each rows as r (r.id)}
+        <a class="board-row" data-id={r.id} data-status={r.status} href={"#/ticket/" + r.id}>
+          <span class="row-id" data-field="id">{r.id}</span>
+          <span class="row-title" data-field="title">{r.title}</span>
+          <span class="row-kind" data-field="kind">{r.kind}</span>
+          <span class="row-status" data-field="status">{r.status}</span>
+        </a>
+      {/each}
+      </div>
+    </div>
+  </div>
+</section>

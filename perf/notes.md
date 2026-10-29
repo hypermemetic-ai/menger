@@ -440,3 +440,26 @@ interleave and the groups arrive later).
 **Opening the largest shortcode is up to twice as fast**: its top row is the
 root, so opening it is one page of the root's children; the shortcode row
 used to `get` the root first.
+
+## UI-8 — v2's first pages on the engine (2026-10-29)
+
+`node perf/pages-probe.mjs --seed N` (release, 1440×900, a warm-up load then
+five cold contexts): navigation start to the first `.board-row` showing its
+title from `list`, and the engine's wasm memory a second after. The pages
+are UI-8's components in the store, on UI-6/UI-10's engine; the bar is v1's
+board first rows at 10⁶ (0.22 s, above) and UI-8's budget, 0.3 s and 10 MB.
+
+| N | v2 · board first rows painted | wasm memory · rows held | v1 (MFE-12, above) |
+|---|---|---|---|
+| 10⁴ | 0.198 s (213, 198, 198, 190, 197 ms) | 5.9 MiB · 200 | 172–225 ms band |
+| 10⁵ | 0.243 s (248, 244, 243, 226, 232 ms) | 6.8 MiB · 200 | 172–225 ms band |
+| 10⁶ | 0.218 s (226, 208, 219, 215, 218 ms) | 9.3 MiB · 200 | 0.22 s · 5.0 MiB |
+
+The page asks the same few things at every N — `ui.watch`, `nav extents`,
+`nav groups`, `nav counts`, one `list` of 200, the palette's empty `find`
+and `search` — so the first rows hold flat across the decades. Two engine
+changes bought ~60 ms (287 → 224 ms at 10⁵): the components' files fetched
+at once (22 sequential requests before), and the route drawn before
+`ui.slots.list` answers. The rows held are 200 at every N (a window); what
+grows the memory with N is not measured apart here — the nav's shortcode
+rows and the extents grow with N (101 shortcodes at 10⁵).

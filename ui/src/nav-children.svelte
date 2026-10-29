@@ -1,0 +1,13 @@
+<script>
+  // UI-8: an open shortcode in the nav — one page of its root's children,
+  // asked once when it opens (its roll-up stays live on the row above).
+  prop("parent");
+  let kids = live(#{ snapshot: "tickets.list", params: #{ parent: parent, summary: true, limit: 200 }, key: "id" });
+</script>
+
+<ul class="nav-children" data-nav-children={parent}>
+  {#each kids as c (c.id)}
+    <li><a class="nav-row" data-nav-row={c.id} data-status={c.status} href={"#/ticket/" + c.id}><span class="row-id">{c.id}</span> <span class="row-title">{c.title}</span></a></li>
+  {/each}
+  {#if kids.status == "live" && kids.rows.len() == 0}<li class="empty">nothing under it</li>{/if}
+</ul>
