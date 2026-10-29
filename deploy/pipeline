@@ -513,18 +513,19 @@ build_v2() { # V2-7, FRAME-8: every step on this machine — the release, the to
   lr=$(log_path build-ui); say "log: $lr"
   (cd "$BUILD" && "$UI_TOOL" build "$BUILD/ui" --engine "$BUILD/dist/engine" --contract "$CONTRACT" --commit "menger@$short" -o "$BUILD/dist/ui.tar") >"$lr" 2>&1 \
     || { red_run; die "ui-build failed — $lr"; }
-  tar -tf "$BUILD/dist/ui.tar" 2>/dev/null | grep -qx 'index.html' || die "ui-build: $BUILD/dist/ui.tar is no tar holding index.html"
+  # DEPLOY-6: no -q under pipefail (b82f5bd's rule) — grep reads the whole listing, or tar dies of SIGPIPE
+  tar -tf "$BUILD/dist/ui.tar" 2>/dev/null | grep -x 'index.html' >/dev/null || die "ui-build: $BUILD/dist/ui.tar is no tar holding index.html"
   V2_STEPS+=", ui-build"
-  if [[ -f $BUILD/scripts/ui-compiler-wasm.sh ]]; then
-    # cargo's (wasm32-unknown-unknown), on this machine into the build's target
-    step "ui-compiler-wasm (scripts/ui-compiler-wasm.sh, on this machine)"
-    lr=$(log_path build-ui-compiler); say "log: $lr"
-    (cd "$BUILD" && scripts/ui-compiler-wasm.sh) >"$lr" 2>&1 || { red_run; die "ui-compiler-wasm failed — $lr"; }
-    [[ -s $BUILD/dist/ui-compiler.wasm ]] || die "ui-compiler-wasm: no $BUILD/dist/ui-compiler.wasm"
-    V2_STEPS+=", ui-compiler-wasm"
-  else
-    say "ui-compiler-wasm: no scripts/ui-compiler-wasm.sh at $short (UI-5) — the release holds no compiler module"
-  fi
+  # FRAME-7: the compiler module is the framework's script's — ../plexus-ui/scripts/ui-compiler-wasm.sh
+  # OUT, cargo's (wasm32-unknown-unknown), on this machine into the build's target. A release of v2
+  # always carries it: no script, a failed one, or no module after it fails the build, named.
+  step "ui-compiler-wasm (../plexus-ui/scripts/ui-compiler-wasm.sh, on this machine)"
+  lr=$(log_path build-ui-compiler); say "log: $lr"
+  local wasm_sh=$BUILD/../plexus-ui/scripts/ui-compiler-wasm.sh
+  [[ -f $wasm_sh ]] || { red_run; die "ui-compiler-wasm: no ../plexus-ui/scripts/ui-compiler-wasm.sh beside $BUILD (FRAME-7: the framework's) — no release without the compiler module"; }
+  (cd "$BUILD" && bash "$wasm_sh" "$BUILD/dist/ui-compiler.wasm") >"$lr" 2>&1 || { red_run; die "ui-compiler-wasm failed — $lr"; }
+  [[ -s $BUILD/dist/ui-compiler.wasm ]] || { red_run; die "ui-compiler-wasm: no $BUILD/dist/ui-compiler.wasm after ../plexus-ui/scripts/ui-compiler-wasm.sh — $lr"; }
+  V2_STEPS+=", ui-compiler-wasm"
   id=$(date -u +%Y%m%dT%H%M%SZ)-$short
   stage=$RELEASES/$id.tmp
   mkdir -p "$stage/bin" "$stage/dist"
@@ -533,7 +534,7 @@ build_v2() { # V2-7, FRAME-8: every step on this machine — the release, the to
   cp "$REPO/deploy/launch/run-menger" "$stage/bin/"
   chmod 0755 "$stage/bin/"*
   cp "$BUILD/dist/ui.tar" "$stage/dist/"
-  [[ -f $BUILD/dist/ui-compiler.wasm ]] && cp "$BUILD/dist/ui-compiler.wasm" "$stage/dist/"
+  cp "$BUILD/dist/ui-compiler.wasm" "$stage/dist/"
   return 0
 }
 cmd_build() {

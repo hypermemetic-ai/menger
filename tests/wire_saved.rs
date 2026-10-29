@@ -38,12 +38,12 @@ async fn start_server() -> u16 {
     let db_path = dir.path().join("tickets.db");
     let port = free_port().await;
     let login = support::Login::new();
-    let hub = support::hub(&db_path, &login).await;
+    let service = support::service(&db_path, &login).await;
     let gate = login.gate(port);
     let conv = |arc: Arc<DynamicHub>| menger::calls::rpc_module(arc, Default::default()).map_err(|e| anyhow::anyhow!("{e}"));
     tokio::spawn(async move {
         let _keep = dir;
-        TransportServer::builder(hub, conv)
+        TransportServer::builder(service, conv)
             .with_websocket(port)
             .with_session_validator(gate)
             .anonymous_view()

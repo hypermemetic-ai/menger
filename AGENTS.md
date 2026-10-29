@@ -61,6 +61,12 @@ edge. README "Run".
 
 ## What v2 is
 
+**menger is a tenant of the framework** (FRAME-7): the stored-UI framework
+is `../plexus-ui` — the ui service, the compiler, the engine, the routes a
+tenant mounts, the `plexus-ui` tool and the contract — and menger links it
+as any Plexus service may: its own code is `tickets-api/`, `src/` and the
+components in `ui/`, nothing of the framework's.
+
 **The services registered** (`src/builder.rs`, one process): `tickets`
 (children `commits`, `filters`, `nav`, `revisions`, `subtasks`, `work`),
 `members` (child `teams`), `orgs`, `epics`, `session`, `auth`, and `ui`
@@ -111,7 +117,7 @@ synapse -P 4460 menger ui watch          # open-ended
 ```
 
 **The UI's source** is `ui/` — `index.html`, `routes.json`, `slots.json`,
-`src/*.svelte`, `golden/` — compiled by `../plexus-ui`'s `plexus-ui-compiler`
+`src/*.svelte` — compiled by `../plexus-ui`'s `plexus-ui-compiler`
 (UI-5: the component subset of Svelte → a view tree and Rhai handlers;
 native and as a wasm module with no imports) and drawn by its
 `plexus-ui-engine` (UI-6, UI-10: signals,
@@ -120,24 +126,24 @@ sections, the sanitized `{@html markdown()}`). The contract between them is
 `../plexus-ui/CONTRACT.md` (it was ticket **UI-4** on the tracker); README
 "The component contract" has the bundle's layout. The two crates and the
 tool that builds, signs and pushes a bundle — `plexus-ui` (FRAME-8) — live
-in the sibling checkout `../plexus-ui` (FRAME-3); the scripts below build
-them from there by `--manifest-path` into this checkout's target.
+in the sibling checkout `../plexus-ui` (FRAME-3); the lines below build
+them from there into this checkout's target.
 
 ```sh
-scripts/ui-compiler-wasm.sh                          # dist/ui-compiler.wasm (rustup's wasm32-unknown-unknown)
+../plexus-ui/scripts/ui-compiler-wasm.sh dist/ui-compiler.wasm   # (rustup's wasm32-unknown-unknown)
 scripts/plexus-ui build ui -o dist/ui.tar            # the bundle a deploy pushes (scripts/plexus-ui --help)
 ```
 
 A change to `ui/src` is checked in Chromium by `tests/pages_browser.mjs`
-(through `scripts/ui-throwaway.mjs`); a change to the engine by
-`tests/engine_browser.mjs` (and in `../plexus-ui`, `npm test`: the engine
-alone on a stub socket); the compiler's golden pairs by `cargo test -p
+(through `scripts/ui-throwaway.mjs`); a change to the engine in
+`../plexus-ui`, by `npm test` there (the engine alone on a stub socket);
+the compiler's golden pairs by `cargo test -p
 plexus-ui-compiler --test golden` in `../plexus-ui`.
 
 ## Adding a component
 
 From an idea to a component on app-test, top to bottom. The subset is
-UI-4's (the contract, on the tracker): a `<script>` of Rhai — `prop()`,
+the framework's contract's, `../plexus-ui/CONTRACT.md` (it was UI-4): a `<script>` of Rhai — `prop()`,
 `state()`, `live()`, and handlers as folds `fn name(state, ev) { …; state }`
 — and a template of `{expr}`, `{#if}`, `{#each … as x (key)}`,
 `on:event={handler}`, another component as `<name prop={…}/>`, and in a
@@ -187,7 +193,7 @@ then the bundle, every time — the components compiled in-process, the
 manifest, the tar:
 
 ```sh
-scripts/ui-compiler-wasm.sh                                       # dist/ui-compiler.wasm
+../plexus-ui/scripts/ui-compiler-wasm.sh dist/ui-compiler.wasm   # dist/ui-compiler.wasm
 scripts/plexus-ui build --prebuild --engine dist/engine           # the engine (wasm32, wasm-bindgen)
 scripts/plexus-ui build ui --engine dist/engine -o dist/ui.tar    # the bundle; `--contract HASH` to stamp one
 ```
@@ -581,13 +587,14 @@ question.
   be beside it. Every activation is `impl FooActivation` (MACRO-13,
   MACRO-21): the stem names the namespace, the trait and the client.
 - **Workspace members** (`Cargo.toml`): `.`, `tickets-api`;
-  `tether/` is its own workspace. Four sibling repositories
-  hold what menger lifted out, each taken by path like `../plexus-core`:
-  `../plexus-shell` and `../plexus-login` (FRAME-4), and `../plexus-ui`'s
-  `plexus-ui-compiler`, `plexus-ui-engine` and `plexus-ui-service` (FRAME-3: the compiler a
-  dev-dependency, the engine built by the framework's `plexus-ui` tool,
-  FRAME-8, which `scripts/plexus-ui` and `deploy/pipeline` build from there;
-  FRAME-5: the service a dependency, its routes mounted on the shell).
+  `tether/` is its own workspace. Three sibling repositories
+  hold what menger lifted out: `../plexus-shell` and `../plexus-login`
+  (FRAME-4), each taken by path like `../plexus-core`, and `../plexus-ui`,
+  of which menger takes `plexus-ui-service` (FRAME-5: a dependency, its
+  routes mounted on the shell) and `plexus-ui-compiler` (FRAME-3: a
+  dev-dependency) by path. The engine, `plexus-ui-engine`, is in no graph of
+  menger's: the framework's `plexus-ui` tool builds it (FRAME-8), and
+  `scripts/plexus-ui` and `deploy/pipeline` build the tool from there.
 - The `tickets` activation lives ONCE, in `tickets-api/`
   (`menger-tickets-api`, MFE-11): the vocabulary, the store, and
   `activation/mod.rs`'s `#[activation]` on `impl TicketsActivation` (its
