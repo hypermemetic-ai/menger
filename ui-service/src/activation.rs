@@ -5,11 +5,11 @@
 //! (unlisted in `roles`, so only `admin`, which holds every grant, holds
 //! them); `versions` is a viewer's.
 
-use crate::events::UiEvent;
+use crate::events::{Reason, UiEvent};
 use crate::signers::Signers;
-use crate::store::UiStore;
+use crate::store::{digest_of, NewVersion, UiError, UiStore};
 use crate::vocab::{Bundle, Manifest, Signature, VersionHash};
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use menger_tickets_api::access::{Access, MengerRequest, VerifiedUser};
 use menger_tickets_api::vocab::CommitRef;
 use std::sync::Arc;
@@ -35,9 +35,46 @@ impl UiActivation {
     }
 }
 
-/// UI-3 phase 1: every method answers this until the build.
-fn unimplemented(method: &str) -> impl Stream<Item = UiEvent> + Send + 'static {
-    futures::stream::once(std::future::ready(UiEvent::Error { message: format!("ui.{method}: unimplemented (UI-3 phase 1)") }))
+/// One answer, computed off the async threads (the store is SQLite).
+fn answer(work: impl FnOnce() -> UiEvent + Send + 'static) -> impl Stream<Item = UiEvent> + Send + 'static {
+    futures::stream::once(async move {
+        tokio::task::spawn_blocking(work).await.unwrap_or_else(|e| UiEvent::Error { message: format!("the ui store failed: {e}") })
+    })
+}
+
+/// The store's refusal, in band: the caller's mistakes `refused`, the
+/// file's own failures `error`.
+fn refusal(e: UiError) -> UiEvent {
+    let reason = match &e {
+        UiError::BadBundle(_) => Reason::BadBundle,
+        UiError::BadManifest(_) => Reason::BadManifest,
+        UiError::UnknownVersion(_) => Reason::UnknownVersion,
+        UiError::Db(_) => return UiEvent::Error { message: e.to_string() },
+    };
+    UiEvent::Refused { reason, message: e.to_string() }
+}
+
+fn now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
+}
+
+/// `push`: a signer named, the signature over the bundle's digest by one of
+/// them, then the store's one transaction.
+fn push(store: &UiStore, signers: &Signers, by: String, bundle: Bundle, manifest: Manifest, signature: Signature, commit: Option<CommitRef>) -> UiEvent {
+    if signers.is_empty() {
+        let message = "no --ui-signer is configured on this server: every push is refused".to_string();
+        return UiEvent::Refused { reason: Reason::NoSigner, message };
+    }
+    let bytes = bundle.bytes();
+    if !signers.verify(&digest_of(&bytes), &signature.bytes()) {
+        let message = "the signature does not verify: Ed25519 over the bundle's sha256 by a --ui-signer".to_string();
+        return UiEvent::Refused { reason: Reason::BadSignature, message };
+    }
+    let v = NewVersion { bundle: bytes, manifest: manifest.into_string(), commit: commit.map(|c| c.to_string()), pushed_by: by, pushed_at: now() };
+    match store.push(v) {
+        Ok(p) => UiEvent::Pushed { version: p.version, live: p.live, new: p.new },
+        Err(e) => refusal(e),
+    }
 }
 
 /// The UI's versions by content hash and the live pointer — push one, roll back to one, list them, preview one.
@@ -73,8 +110,8 @@ impl UiActivation {
         /// The commit the bundle was built from, e.g. 77df9a0 (optional).
         commit: Option<CommitRef>,
     ) -> impl Stream<Item = UiEvent> + Send + 'static {
-        let _ = (user, bundle, manifest, signature, commit, &self.store, &self.signers);
-        unimplemented("push")
+        let (store, signers, by) = (self.store.clone(), self.signers.clone(), user.principal_text());
+        answer(move || push(&store, &signers, by, bundle, manifest, signature, commit))
     }
 
     /// Move the live pointer to a kept version; no other row changes; yields live { version }.
@@ -88,8 +125,12 @@ impl UiActivation {
         /// The version to make live: its hash, as push answered it.
         to: VersionHash,
     ) -> impl Stream<Item = UiEvent> + Send + 'static {
-        let _ = (user, to);
-        unimplemented("rollback")
+        let _ = user;
+        let store = self.store.clone();
+        answer(move || match store.rollback(to.as_str()) {
+            Ok(version) => UiEvent::Live { version },
+            Err(e) => refusal(e),
+        })
     }
 
     /// Every kept version, newest first; yields one version { hash, commit, contract, abi, pushed_by, pushed_at, live } each.
@@ -102,7 +143,19 @@ impl UiActivation {
         #[from_auth(self.access.verify)] user: VerifiedUser,
     ) -> impl Stream<Item = UiEvent> + Send + 'static {
         let _ = user;
-        unimplemented("versions")
+        let store = self.store.clone();
+        let listed = async move { tokio::task::spawn_blocking(move || store.versions()).await };
+        futures::stream::once(listed).flat_map(|r| {
+            let events: Vec<UiEvent> = match r {
+                Ok(Ok(rows)) => rows
+                    .into_iter()
+                    .map(|(v, live)| UiEvent::Version { hash: v.hash, commit: v.commit, contract: v.contract, abi: v.abi, pushed_by: v.pushed_by, pushed_at: v.pushed_at, live })
+                    .collect(),
+                Ok(Err(e)) => vec![refusal(e)],
+                Err(e) => vec![UiEvent::Error { message: format!("the ui store failed: {e}") }],
+            };
+            futures::stream::iter(events)
+        })
     }
 
     /// Preview a kept version as the caller: /app/ serves it to the caller's sessions alone; no version clears it; yields preview { principal, version }.
@@ -116,7 +169,10 @@ impl UiActivation {
         /// The version to preview, by hash (optional: none clears the caller's preview).
         version: Option<VersionHash>,
     ) -> impl Stream<Item = UiEvent> + Send + 'static {
-        let _ = (user, version);
-        unimplemented("preview")
+        let (store, principal) = (self.store.clone(), user.principal_text());
+        answer(move || match store.set_preview(&principal, version.as_ref().map(VersionHash::as_str)) {
+            Ok(version) => UiEvent::Preview { principal, version },
+            Err(e) => refusal(e),
+        })
     }
 }

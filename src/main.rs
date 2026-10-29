@@ -527,6 +527,9 @@ async fn run(args: Args) -> anyhow::Result<()> {
     // UI-3: the ui service's file (beside the tickets file unless named) and
     // its signers, shared by the `ui` activation and the shell's `/app/*`.
     let ui_db_path = args.ui_db_path.clone().unwrap_or_else(|| menger::default_ui_db_path(&db_path));
+    if ui_db_path == db_path {
+        anyhow::bail!("--ui-db-path {} is the database file: the ui service keeps a file of its own", ui_db_path.display());
+    }
     let ui = menger::UiSetup::open(&ui_db_path, menger_ui_service::Signers::parse(&args.ui_signer).map_err(anyhow::Error::msg)?)?;
     let ui_store = ui.store.clone();
     let hub = build_rpc_ui(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, args.chat_member.clone(), ui).await?;

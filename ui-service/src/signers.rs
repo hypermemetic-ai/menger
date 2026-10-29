@@ -45,8 +45,8 @@ impl Signers {
 
     /// Whether `signature` is one of them over `digest` (a bundle's sha256).
     pub fn verify(&self, digest: &[u8; 32], signature: &[u8; 64]) -> bool {
-        let _ = (digest, signature);
-        todo!("UI-3 phase 2: verify a push's signature")
+        let signature = ed25519_dalek::Signature::from_bytes(signature);
+        self.keys.iter().any(|k| k.verify_strict(digest, &signature).is_ok())
     }
 }
 

@@ -29,7 +29,12 @@ pub fn default_db_path() -> PathBuf {
 /// UI-3: the ui service's file when `--ui-db-path` names none — `ui.db`
 /// beside the tickets file `db_path`, never the same file.
 pub fn default_ui_db_path(db_path: &Path) -> PathBuf {
-    db_path.parent().map_or_else(|| PathBuf::from(UI_DB_FILE), |d| d.join(UI_DB_FILE))
+    let beside = |name: &str| db_path.parent().map_or_else(|| PathBuf::from(name), |d| d.join(name));
+    match beside(UI_DB_FILE) {
+        // A tickets file that is itself named ui.db: the ui file goes beside it under another name.
+        same if same == db_path => beside("ui-service.db"),
+        ui => ui,
+    }
 }
 
 /// UI-3: what the `ui` activation and the shell's `/app/*` are built over —

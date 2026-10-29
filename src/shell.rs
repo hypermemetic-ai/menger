@@ -267,12 +267,12 @@ async fn router(cfg: ShellConfig, at: std::net::SocketAddr) -> Router {
     // the WebSocket since MFE-9, and nothing else called it. IDENTITY-19:
     // behind a session when login is required — no anonymous view.
     let shell = app_shell_framed(cfg.env.as_deref(), cfg.app, &cfg.framing);
-    let stamps = shell.stamps_for(cfg.ws_port);
+    let (stamps, csp) = (shell.stamps_for(cfg.ws_port), shell.csp.clone());
     let mut app = plexus_shell::router(shell, cfg.ws_port).await;
     // UI-3: `/app/*` from the ui store — inside the session check (layered
     // first, so it runs after it).
     if let Some(store) = cfg.ui.clone() {
-        let ui = Arc::new(UiServe { store, login: cfg.login.clone(), stamps });
+        let ui = Arc::new(UiServe { store, login: cfg.login.clone(), stamps, csp, ws_port: cfg.ws_port });
         app = app.route_layer(axum::middleware::from_fn_with_state(ui, ui_app));
     }
     if let Some(login) = cfg.login.as_ref().filter(|l| l.require) {
@@ -323,6 +323,9 @@ struct UiServe {
     store: Arc<menger_ui_service::UiStore>,
     login: Option<Arc<crate::web_login::Login>>,
     stamps: Vec<(String, String)>,
+    /// The pages' policy template ([`page_csp`]), filled per page.
+    csp: String,
+    ws_port: u16,
 }
 
 /// UI-3: `/app/<hash>/<path>` — that file of that version's bundle,
@@ -330,9 +333,51 @@ struct UiServe {
 /// preview, else live), stamped, [`NO_STORE`]; with no version live,
 /// [`PLACEHOLDER`]. Anything else goes on to the shell's own routes.
 async fn ui_app(State(ui): State<Arc<UiServe>>, req: Request, next: axum::middleware::Next) -> Response {
-    // UI-3 phase 1: declared, not built — every request goes on as before.
-    let _ = (&ui.store, &ui.login, &ui.stamps);
-    next.run(req).await
+    let path = req.uri().path().to_string();
+    if path == "/app" || path == "/app/" {
+        let principal = ui.login.as_ref().and_then(|l| l.session(req.headers())).map(|ctx| ctx.principal().map(|p| p.to_string()).unwrap_or(ctx.user_id));
+        let store = ui.store.clone();
+        let entry = tokio::task::spawn_blocking(move || store.entry_for(principal.as_deref())).await;
+        let html = match entry {
+            Ok(Ok(Some((_, html)))) => String::from_utf8_lossy(&html).into_owned(),
+            Ok(Ok(None)) => PLACEHOLDER.to_string(),
+            Ok(Err(e)) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("the ui store: {e}")).into_response(),
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("the ui store: {e}")).into_response(),
+        };
+        return ui.page(plexus_shell::stamp(&html, &ui.stamps), req.headers());
+    }
+    let Some((hash, file)) = path.strip_prefix("/app/").and_then(|rest| rest.split_once('/')) else { return next.run(req).await };
+    if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) || file.is_empty() || file.split('/').any(|s| s == "..") {
+        return next.run(req).await;
+    }
+    let (store, hash, file) = (ui.store.clone(), hash.to_ascii_lowercase(), file.to_string());
+    let key = file.clone();
+    match tokio::task::spawn_blocking(move || store.file(&hash, &file)).await {
+        Ok(Ok(Some(bytes))) => {
+            let mut r = ([(header::CONTENT_TYPE, plexus_shell::mime_of(&key))], bytes).into_response();
+            r.headers_mut().insert(header::CACHE_CONTROL, header::HeaderValue::from_static(IMMUTABLE));
+            r
+        }
+        Ok(Ok(None)) => (StatusCode::NOT_FOUND, "no such file in that version").into_response(),
+        Ok(Err(e)) => (StatusCode::INTERNAL_SERVER_ERROR, format!("the ui store: {e}")).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("the ui store: {e}")).into_response(),
+    }
+}
+
+impl UiServe {
+    /// UI-3: the entrypoint (or the placeholder) as a page — under the
+    /// pages' policy (ACCESS-28), its own inline scripts hashed, never kept.
+    fn page(&self, html: String, headers: &axum::http::HeaderMap) -> Response {
+        let host = headers.get(header::HOST).and_then(|h| h.to_str().ok());
+        let policy = plexus_shell::page_policy(&self.csp, &plexus_shell::script_hashes(&html), host, self.ws_port);
+        let mut r = axum::response::Html(html).into_response();
+        let h = r.headers_mut();
+        h.insert(header::CACHE_CONTROL, header::HeaderValue::from_static(NO_STORE));
+        if let Ok(v) = header::HeaderValue::from_str(&policy) {
+            h.insert(header::CONTENT_SECURITY_POLICY, v);
+        }
+        r
+    }
 }
 
 /// ACCESS-30: [`HSTS`] on the answer.

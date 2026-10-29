@@ -10,7 +10,9 @@
 //! A push is one transaction: the row (when new) and the pointer moved, or
 //! neither. A rollback moves the pointer and touches no other row.
 
-use rusqlite::Connection;
+use rusqlite::{params, Connection, OptionalExtension};
+use sha2::{Digest, Sha256};
+use std::io::Read;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -104,8 +106,62 @@ pub struct UiStore {
 
 /// A bundle's name: the sha256 of its bytes, hex.
 pub fn hash_of(bundle: &[u8]) -> String {
-    let _ = bundle;
-    todo!("UI-3 phase 2: a bundle's sha256")
+    digest_of(bundle).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// A bundle's sha256 — what its signature is over.
+pub fn digest_of(bundle: &[u8]) -> [u8; 32] {
+    Sha256::digest(bundle).into()
+}
+
+/// A manifest's `key: value` line, as text (quotes around the value read
+/// past); not checked here — that is the compiler's and activation's.
+pub fn manifest_field(manifest: &str, key: &str) -> Option<String> {
+    manifest.lines().find_map(|line| {
+        let (k, v) = line.trim().split_once(':')?;
+        let v = v.trim().trim_matches(|c| c == '"' || c == '\'');
+        (k.trim() == key && !v.is_empty()).then(|| v.to_string())
+    })
+}
+
+/// The file `path` in a tar `bundle` (`./` before a name read past); `Err`
+/// when the bytes are no tar.
+fn file_in(bundle: &[u8], path: &str) -> Result<Option<Vec<u8>>, String> {
+    let want = path.trim_start_matches('/');
+    let mut archive = tar::Archive::new(bundle);
+    for entry in archive.entries().map_err(|e| e.to_string())? {
+        let mut entry = entry.map_err(|e| e.to_string())?;
+        if !entry.header().entry_type().is_file() {
+            continue;
+        }
+        let name = entry.path().map_err(|e| e.to_string())?.to_string_lossy().trim_start_matches("./").to_string();
+        if name == want {
+            let mut out = Vec::new();
+            entry.read_to_end(&mut out).map_err(|e| e.to_string())?;
+            return Ok(Some(out));
+        }
+    }
+    Ok(None)
+}
+
+/// A bundle is a tar holding `index.html`.
+pub fn check_bundle(bundle: &[u8]) -> Result<(), UiError> {
+    match file_in(bundle, "index.html") {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(UiError::BadBundle("no index.html".into())),
+        Err(e) => Err(UiError::BadBundle(e)),
+    }
+}
+
+/// Whether `hash` is a kept version.
+fn kept(c: &Connection, hash: &str) -> rusqlite::Result<bool> {
+    c.query_row("SELECT 1 FROM ui_versions WHERE hash = ?1", [hash], |_| Ok(())).optional().map(|r| r.is_some())
+}
+
+/// Points `name` at `hash`.
+fn point(c: &Connection, name: &str, hash: &str) -> rusqlite::Result<()> {
+    c.execute("INSERT INTO ui_pointer (name, hash) VALUES (?1, ?2) ON CONFLICT(name) DO UPDATE SET hash = excluded.hash", [name, hash])
+        .map(drop)
 }
 
 impl UiStore {
@@ -147,51 +203,110 @@ impl UiStore {
         v: NewVersion,
         after_insert: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<()>,
     ) -> Result<Pushed, UiError> {
-        let _ = (v, after_insert, &self.conn);
-        todo!("UI-3 phase 2: push as one transaction")
+        let hash = hash_of(&v.bundle);
+        check_bundle(&v.bundle)?;
+        let contract = manifest_field(&v.manifest, "contract").ok_or(UiError::BadManifest("contract"))?;
+        let abi = manifest_field(&v.manifest, "abi").ok_or(UiError::BadManifest("abi"))?;
+        let mut c = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+        let tx = c.transaction()?;
+        let new = !kept(&tx, &hash)?;
+        if new {
+            tx.execute(
+                "INSERT INTO ui_versions (hash, bundle, manifest, commit_hash, contract, abi, pushed_by, pushed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![hash, v.bundle, v.manifest, v.commit, contract, abi, v.pushed_by, v.pushed_at],
+            )?;
+        }
+        after_insert(&tx)?;
+        point(&tx, LIVE, &hash)?;
+        tx.commit()?;
+        Ok(Pushed { version: hash, live: true, new })
     }
 
     /// Moves the live pointer to `to`, a kept version; no other row changes.
     pub fn rollback(&self, to: &str) -> Result<String, UiError> {
-        let _ = to;
-        todo!("UI-3 phase 2: rollback")
+        let mut c = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+        let tx = c.transaction()?;
+        if !kept(&tx, to)? {
+            return Err(UiError::UnknownVersion(to.to_string()));
+        }
+        point(&tx, LIVE, to)?;
+        tx.commit()?;
+        Ok(to.to_string())
     }
 
     /// Every kept version, newest first, each with whether it is live.
     pub fn versions(&self) -> Result<Vec<(UiVersion, bool)>, UiError> {
-        todo!("UI-3 phase 2: versions")
+        let c = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+        let mut q = c.prepare(
+            "SELECT v.hash, v.commit_hash, v.contract, v.abi, v.pushed_by, v.pushed_at, p.hash IS NOT NULL \
+             FROM ui_versions v LEFT JOIN ui_pointer p ON p.name = ?1 AND p.hash = v.hash \
+             ORDER BY v.pushed_at DESC, v.rowid DESC",
+        )?;
+        let rows = q.query_map([LIVE], |r| {
+            Ok((
+                UiVersion { hash: r.get(0)?, commit: r.get(1)?, contract: r.get(2)?, abi: r.get(3)?, pushed_by: r.get(4)?, pushed_at: r.get(5)? },
+                r.get::<_, bool>(6)?,
+            ))
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
     }
 
     /// The live pointer, when any version is live.
     pub fn pointer(&self) -> Result<Option<Pointer>, UiError> {
-        todo!("UI-3 phase 2: the live pointer")
+        let c = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+        let hash: Option<String> = c.query_row("SELECT hash FROM ui_pointer WHERE name = ?1", [LIVE], |r| r.get(0)).optional()?;
+        Ok(hash.map(|hash| Pointer { name: LIVE.into(), hash }))
     }
 
     /// Sets (or, `None`, clears) `principal`'s preview; the version it
     /// names now.
     pub fn set_preview(&self, principal: &str, version: Option<&str>) -> Result<Option<String>, UiError> {
-        let _ = (principal, version);
-        todo!("UI-3 phase 2: set a preview")
+        let mut c = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+        let tx = c.transaction()?;
+        match version {
+            None => {
+                tx.execute("DELETE FROM ui_preview WHERE principal = ?1", [principal])?;
+            }
+            Some(h) if !kept(&tx, h)? => return Err(UiError::UnknownVersion(h.to_string())),
+            Some(h) => {
+                tx.execute(
+                    "INSERT INTO ui_preview (principal, hash) VALUES (?1, ?2) ON CONFLICT(principal) DO UPDATE SET hash = excluded.hash",
+                    [principal, h],
+                )?;
+            }
+        }
+        tx.commit()?;
+        Ok(version.map(str::to_string))
     }
 
     /// `principal`'s preview, when it holds one.
     pub fn preview_of(&self, principal: &str) -> Result<Option<String>, UiError> {
-        let _ = principal;
-        todo!("UI-3 phase 2: a principal's preview")
+        let c = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+        Ok(c.query_row("SELECT hash FROM ui_preview WHERE principal = ?1", [principal], |r| r.get(0)).optional()?)
     }
 
     /// The file at `path` inside version `hash`'s bundle.
     pub fn file(&self, hash: &str, path: &str) -> Result<Option<Vec<u8>>, UiError> {
-        let _ = (hash, path);
-        todo!("UI-3 phase 2: a version's file")
+        let bundle: Option<Vec<u8>> = {
+            let c = self.conn.lock().unwrap_or_else(|p| p.into_inner());
+            c.query_row("SELECT bundle FROM ui_versions WHERE hash = ?1", [hash], |r| r.get(0)).optional()?
+        };
+        match bundle {
+            None => Ok(None),
+            Some(b) => file_in(&b, path).map_err(UiError::BadBundle),
+        }
     }
 
     /// The entrypoint `/app/` serves to `principal` (none: anonymous) — its
     /// preview's `index.html`, else the live version's — with the version's
     /// hash; `None` when neither names one.
     pub fn entry_for(&self, principal: Option<&str>) -> Result<Option<(String, Vec<u8>)>, UiError> {
-        let _ = principal;
-        todo!("UI-3 phase 2: the entrypoint")
+        let preview = match principal {
+            Some(p) => self.preview_of(p)?,
+            None => None,
+        };
+        let Some(hash) = preview.or(self.pointer()?.map(|p| p.hash)) else { return Ok(None) };
+        Ok(self.file(&hash, "index.html")?.map(|html| (hash, html)))
     }
 }
 
