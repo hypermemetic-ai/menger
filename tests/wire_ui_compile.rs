@@ -6,10 +6,13 @@
 //! the bundle claims (or the tree filled in); each `uses` is checked against
 //! the running `tickets` service through the seam. What a source compiles
 //! to is known here from the compiler natively — the same bytes (UI-5).
-//! The last test registers a reduced `tickets` (a probe exposing `list`
-//! alone) in process, to show the lint reads the running service, never a
-//! copy. Servers on ports the OS hands out, their files under
-//! /tmp/claude-1000.
+//! In process (the builder main uses, `menger::build_rpc_ui_over`): a
+//! reduced `tickets` (a probe exposing `list` alone), to show the lint reads
+//! the running service, never a copy; and stub compiler modules — one that
+//! answers a fixed tree, one that never answers — to show the push compares
+//! against the sandbox's answer, never a native compile. One server runs
+//! with no `--ui-compiler`: the lint and the contract check still run.
+//! Servers on ports the OS hands out, their files under /tmp/claude-1000.
 
 mod support;
 
@@ -20,7 +23,7 @@ use plexus_transport::TransportServer;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Duration;
-use support::{call, compiled_push_params, connect, free_port, row_source, sha_hex, spawn_menger, ui_args, Component, Tree};
+use support::{call, compiled_push_params, compiled_push_params_with, connect, free_port, row_source, sha_hex, spawn_menger, ui_args, Component, Tree};
 
 /// The component every test pushes (a component's name holds a hyphen).
 const X: &str = "x-row";
@@ -37,9 +40,8 @@ fn scratch(prefix: &str) -> tempfile::TempDir {
     tempfile::Builder::new().prefix(prefix).tempdir_in(root).unwrap()
 }
 
-/// The binary with `--ui-compiler`, a shell when `shell`.
-async fn start_with(shell: bool) -> Server {
-    let wasm = support::ui_compiler_wasm();
+/// The binary with `--ui-compiler` (when `compiler`), a shell when `shell`.
+async fn spawn(compiler: bool, shell: bool) -> Server {
     let dir = scratch("menger-ui-compile-");
     let shell_port = if shell { Some(free_port().await) } else { None };
     let mut extra = match shell_port {
@@ -51,7 +53,9 @@ async fn start_with(shell: bool) -> Server {
         None => vec!["--no-shell".to_string()],
     };
     extra.extend(ui_args(&dir.path().join("ui.db")));
-    extra.extend(["--ui-compiler".to_string(), wasm.display().to_string()]);
+    if compiler {
+        extra.extend(["--ui-compiler".to_string(), support::ui_compiler_wasm().display().to_string()]);
+    }
     let s = spawn_menger(free_port().await, &dir.path().join("t.db"), &extra).await;
     if let Some(p) = shell_port {
         for _ in 0..100 {
@@ -64,8 +68,37 @@ async fn start_with(shell: bool) -> Server {
     Server { s, shell: shell_port, _dir: dir }
 }
 
+async fn start_with(shell: bool) -> Server {
+    spawn(true, shell).await
+}
+
 async fn start() -> Server {
     start_with(false).await
+}
+
+/// The versions as `versions` lists them: (hash, live) each.
+async fn listed(c: &WsClient) -> Vec<(String, bool)> {
+    versions(c).await.iter().map(|v| (v["hash"].as_str().unwrap_or_default().to_string(), v["live"] == true)).collect()
+}
+
+/// Pushes a good version first — `row_source` as `x-row`, the trees
+/// compiled — and answers what `versions` lists after it.
+async fn a_good_version(c: &WsClient) -> Vec<(String, bool)> {
+    let (params, _) = compiled_push_params(100, "c-good", &[Component::compiled(X, &row_source())]);
+    pushed(&call(c, "ui.push", params).await);
+    let l = listed(c).await;
+    assert_eq!(l.len(), 1, "{l:?}");
+    l
+}
+
+/// The shell's GET of `/app/<version>/components/<file>` as the admin: status and text.
+async fn served(m: &Server, version: &str, file: &str) -> (u16, String) {
+    let shell = m.shell.expect("a shell");
+    let token = support::mint_session(m.s.port).await;
+    let cookie = format!("{}={token}", menger::login_names().session_cookie_for(&format!("http://127.0.0.1:{shell}")));
+    let http = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+    let r = http.get(format!("http://127.0.0.1:{shell}/app/{version}/components/{file}")).header("cookie", cookie).send().await.unwrap();
+    (r.status().as_u16(), r.text().await.unwrap())
 }
 
 /// The `version` events `versions` answers.
@@ -112,11 +145,18 @@ async fn a_push_recompiles_and_the_trees_must_match() {
     refused(&evs, "compile_mismatch", X);
     assert!(versions(&admin).await.is_empty(), "nothing stored");
 
+    // The handlers edited by hand, the tree right: refused the same way.
+    let (params, _) = compiled_push_params(1, "c-other", &[Component::compiled(X, &row_source()).rhai("fn open(state, ev) { state }\n")]);
+    let evs = call(&admin, "ui.push", params).await;
+    refused(&evs, "compile_mismatch", X);
+    assert!(versions(&admin).await.is_empty(), "nothing stored");
+
     // The same bundle with the tree the source compiles to: pushed, as signed.
     let (params, bytes) = compiled_push_params(1, "c-other", &[Component::compiled(X, &row_source())]);
     let evs = call(&admin, "ui.push", params).await;
     let p = pushed(&evs);
     assert_eq!(p["version"], sha_hex(&bytes).as_str(), "a bundle whose trees match is stored as signed: {p}");
+    assert_eq!(p["uploaded"], p["version"], "the two hashes equal: {p}");
     assert_eq!((p["live"].as_bool(), p["new"].as_bool(), p["compiled"].as_bool()), (Some(true), Some(true), Some(true)), "{p}");
     assert_eq!(p["contract_matches"], false, "c-other is not the running tickets service's hash: {p}");
     assert_eq!(versions(&admin).await.len(), 1);
@@ -131,13 +171,12 @@ async fn a_source_that_fails_to_compile_refuses_the_push() {
     let native = menger_ui_compiler::compile(X, src).expect_err("{#await} is refused natively");
     assert!(native.line >= 1, "a line in the file: {native:?}");
 
-    let before = versions(&admin).await;
-    let x = Component { name: X.into(), src: src.into(), tree: Tree::Absent, uses: vec![] };
-    let (params, _) = compiled_push_params(1, "c1", &[x]);
+    let before = a_good_version(&admin).await;
+    let (params, _) = compiled_push_params(1, "c1", &[Component::source(X, src)]);
     let evs = call(&admin, "ui.push", params).await;
     let e = refused(&evs, "compile_failed", X);
     assert_eq!(e["line"], native.line, "the line the compiler names: {e}");
-    assert_eq!(versions(&admin).await, before, "versions unchanged");
+    assert_eq!(listed(&admin).await, before, "versions unchanged, the good one still live");
 }
 
 #[tokio::test]
@@ -147,10 +186,12 @@ async fn trees_are_filled_in_when_absent() {
     let native = support::compile(X, &row_source()).0;
     let contract = tickets_hash(&admin).await;
 
-    let (params, _) = compiled_push_params(1, &contract, &[Component::compiled(X, &row_source()).tree(Tree::Absent)]);
+    let (params, upload) = compiled_push_params(1, &contract, &[Component::compiled(X, &row_source()).tree(Tree::Absent)]);
     let evs = call(&admin, "ui.push", params).await;
     let p = pushed(&evs);
     assert_eq!(p["compiled"], true, "{p}");
+    assert_eq!(p["uploaded"], sha_hex(&upload).as_str(), "uploaded is the upload's sha256: {p}");
+    assert_ne!(p["version"], p["uploaded"], "the stored bytes hold the trees the upload did not: {p}");
     assert_eq!(p["contract_matches"], true, "the manifest names the running tickets service's hash: {p}");
     let version = p["version"].as_str().expect("the stored version").to_string();
     let listed = versions(&admin).await;
@@ -158,36 +199,150 @@ async fn trees_are_filled_in_when_absent() {
     assert_eq!((listed[0]["hash"].as_str(), listed[0]["live"].as_bool()), (Some(version.as_str()), Some(true)), "{listed:?}");
 
     // The stored bundle holds the trees the server wrote.
-    let shell = m.shell.unwrap();
-    let token = support::mint_session(m.s.port).await;
-    let cookie = format!("{}={token}", menger::login_names().session_cookie_for(&format!("http://127.0.0.1:{shell}")));
-    let http = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
-    let get = |file: &str| http.get(format!("http://127.0.0.1:{shell}/app/{version}/components/{file}")).header("cookie", cookie.clone()).send();
-    let tree = get(&format!("{X}.json")).await.unwrap();
-    assert_eq!(tree.status(), 200, "components/{X}.json is served");
-    assert_eq!(tree.text().await.unwrap(), native.tree, "the compiled tree");
-    let handlers = get(&format!("{X}.rhai")).await.unwrap();
-    assert_eq!(handlers.status(), 200, "components/{X}.rhai is served");
-    assert_eq!(handlers.text().await.unwrap(), native.handlers, "the compiled handlers");
+    assert_eq!(served(&m, &version, &format!("{X}.json")).await, (200, native.tree), "components/{X}.json: the compiled tree");
+    assert_eq!(served(&m, &version, &format!("{X}.rhai")).await, (200, native.handlers), "components/{X}.rhai: the compiled handlers");
 }
 
 #[tokio::test]
 async fn a_method_outside_the_tickets_service_is_refused() {
     let m = start().await;
     let admin = connect(m.s.port).await;
-    let frob = support::calling("tickets.frobnicate");
-    let x = Component::compiled(X, &frob);
-    assert_eq!(x.uses, ["tickets.frobnicate"], "the source's uses");
-    let (params, _) = compiled_push_params(1, "c1", &[x]);
-    let evs = call(&admin, "ui.push", params).await;
-    let e = refused(&evs, "unknown_method", X);
-    assert_eq!(e["method"], "tickets.frobnicate", "{e}");
-    assert!(versions(&admin).await.is_empty(), "nothing stored");
+    let before = a_good_version(&admin).await;
+    // Outside the service: a method it lacks, one its child lacks, another service's.
+    for method in ["tickets.frobnicate", "tickets.nav.frobnicate", "chats.post"] {
+        let x = Component::compiled(X, &support::calling(method));
+        assert_eq!(x.uses, [method], "the source's uses");
+        let (params, _) = compiled_push_params(1, "c1", &[x]);
+        let evs = call(&admin, "ui.push", params).await;
+        let e = refused(&evs, "unknown_method", X);
+        assert_eq!(e["method"], method, "{e}");
+        assert_eq!(listed(&admin).await, before, "versions unchanged after {method}");
+    }
+
+    // A method under a child of the service counts.
+    let x = Component::compiled(X, &support::calling("tickets.nav.tree"));
+    let (params, _) = compiled_push_params(2, "c1", &[x]);
+    pushed(&call(&admin, "ui.push", params).await);
 
     let x = Component::compiled(X, &row_source());
     assert_eq!(x.uses, ["tickets.list"], "the source's uses");
     let (params, _) = compiled_push_params(1, "c1", &[x]);
     pushed(&call(&admin, "ui.push", params).await);
+}
+
+#[tokio::test]
+async fn a_manifest_that_disagrees_with_the_compiled_tree_is_refused() {
+    let m = start().await;
+    let admin = connect(m.s.port).await;
+    let before = a_good_version(&admin).await;
+    let x = || Component::compiled(X, &row_source());
+    let entry = |m: &mut Value| m["components"][X].take();
+
+    // The param's uses differ from manifest.json's (which agrees with the tree).
+    let (params, _) = compiled_push_params_with(1, "c1", &[x()], |mut m| {
+        let mut e = entry(&mut m);
+        e["uses"] = json!(["tickets.get"]);
+        m["components"][X] = e;
+        m
+    });
+    refused(&call(&admin, "ui.push", params).await, "manifest_mismatch", X);
+    assert_eq!(listed(&admin).await, before, "versions unchanged");
+
+    // Both manifests agree, and both claim uses the compiled tree does not have.
+    let (params, _) = compiled_push_params(1, "c1", &[x().uses(&["tickets.get"])]);
+    refused(&call(&admin, "ui.push", params).await, "manifest_mismatch", X);
+    assert_eq!(listed(&admin).await, before, "versions unchanged");
+
+    // The param's tree hash, then its handlers hash, not the compiled files'.
+    for field in ["tree", "handlers"] {
+        let (params, _) = compiled_push_params_with(1, "c1", &[x()], |mut m| {
+            let mut e = entry(&mut m);
+            e[field] = json!("0".repeat(64));
+            m["components"][X] = e;
+            m
+        });
+        refused(&call(&admin, "ui.push", params).await, "manifest_mismatch", X);
+        assert_eq!(listed(&admin).await, before, "versions unchanged after the {field} hash");
+    }
+}
+
+#[tokio::test]
+async fn without_a_compiler_the_lint_and_the_contract_still_run() {
+    let m = spawn(false, true).await;
+    let admin = connect(m.s.port).await;
+    let contract = tickets_hash(&admin).await;
+
+    // The lint reads the manifest's uses.
+    let (params, _) = compiled_push_params(1, &contract, &[Component::compiled(X, &support::calling("tickets.frobnicate"))]);
+    let e = refused(&call(&admin, "ui.push", params).await, "unknown_method", X).clone();
+    assert_eq!(e["method"], "tickets.frobnicate", "{e}");
+    assert!(versions(&admin).await.is_empty(), "nothing stored");
+
+    // An edited tree is stored as given: nothing compiles it.
+    let right = support::compile(X, &row_source()).0.tree;
+    let edited = right.replacen("\"props\": [", "\"props\": [\n    \"extra\",", 1);
+    let (params, bytes) = compiled_push_params(1, &contract, &[Component::compiled(X, &row_source()).tree(Tree::Given(edited.clone()))]);
+    let evs = call(&admin, "ui.push", params).await;
+    let p = pushed(&evs);
+    assert_eq!((p["compiled"].as_bool(), p["contract_matches"].as_bool()), (Some(false), Some(true)), "{p}");
+    assert_eq!((p["version"].as_str(), p["uploaded"].as_str()), (Some(sha_hex(&bytes).as_str()), Some(sha_hex(&bytes).as_str())), "stored as signed: {p}");
+    let version = p["version"].as_str().unwrap().to_string();
+    assert_eq!(served(&m, &version, &format!("{X}.json")).await, (200, edited), "the tree as given");
+}
+
+// ── in process: the builder main uses, a module of the test's own ─────────
+
+/// UI-5's exports, `compile` answering `answer` whatever it is asked.
+fn answering(answer: &str) -> Vec<u8> {
+    let wat = format!(
+        r#"(module
+  (memory (export "memory") 1)
+  (data (i32.const 0) "{escaped}")
+  (func (export "alloc") (param i32) (result i32) (i32.const 4096))
+  (func (export "free") (param i32 i32))
+  (func (export "compile") (param i32 i32 i32 i32) (result i64) (i64.const {len})))"#,
+        escaped = answer.replace('\\', "\\\\").replace('"', "\\\""),
+        len = answer.len(),
+    );
+    wat::parse_str(&wat).expect("the answering module parses")
+}
+
+/// UI-5's exports, `compile` looping for ever.
+fn looping() -> Vec<u8> {
+    wat::parse_str(
+        r#"(module
+  (memory (export "memory") 1)
+  (func (export "alloc") (param i32) (result i32) (i32.const 4096))
+  (func (export "free") (param i32 i32))
+  (func (export "compile") (param i32 i32 i32 i32) (result i64) (loop $again (br $again)) (i64.const 0)))"#,
+    )
+    .expect("the looping module parses")
+}
+
+#[tokio::test]
+async fn the_push_compares_against_the_sandbox_never_a_native_compile() {
+    // A module whose every answer is one fixed tree: a bundle compiled natively disagrees.
+    let fixed = r#"{"ok":{"tree":"{}\n","handlers":""}}"#;
+    let dir = scratch("menger-ui-stub-");
+    let port = start_inproc(dir.path(), |store, access| menger::TicketsActivation::with_access(store, access), answering(fixed)).await;
+    let admin = connect(port).await;
+    let (params, _) = compiled_push_params(1, "c1", &[Component::compiled(X, &row_source())]);
+    refused(&call(&admin, "ui.push", params).await, "compile_mismatch", X);
+    assert!(versions(&admin).await.is_empty(), "nothing stored");
+}
+
+#[tokio::test]
+async fn a_compiler_that_never_answers_fails_the_push_within_2s() {
+    let dir = scratch("menger-ui-loop-");
+    let port = start_inproc(dir.path(), |store, access| menger::TicketsActivation::with_access(store, access), looping()).await;
+    let admin = connect(port).await;
+    let (params, _) = compiled_push_params(1, "c1", &[Component::compiled(X, &row_source())]);
+    let start = std::time::Instant::now();
+    let evs = call(&admin, "ui.push", params).await;
+    let took = start.elapsed();
+    refused(&evs, "compile_failed", X);
+    assert!(took < Duration::from_secs(2), "answered in {took:?}, not within 2 s");
+    assert!(versions(&admin).await.is_empty(), "the store unchanged");
 }
 
 // ── a reduced `tickets`: the probe exposes `list` and nothing else ────────
@@ -222,11 +377,22 @@ impl TicketsActivation {
 /// The server as main builds it — the gate, the ui service with the
 /// compiler — but `tickets` the probe; its port.
 async fn start_probe(dir: &std::path::Path) -> u16 {
+    let module = std::fs::read(support::ui_compiler_wasm()).expect("the module");
+    start_inproc(dir, |_, _| TicketsActivation, module).await
+}
+
+/// The server as main builds it — the gate, the ui service compiling in
+/// `module` — with `tickets` what `make` registers; its port.
+async fn start_inproc<T, F>(dir: &std::path::Path, make: F, module: Vec<u8>) -> u16
+where
+    T: plexus_core::plexus::Activation + plexus_core::plexus::ChildRouter + Clone + 'static,
+    F: FnOnce(Arc<menger::store::Store>, menger_tickets_api::access::Access) -> T,
+{
     let login = support::Login::new();
     let port = free_port().await;
     let backend = Arc::new(menger::auth_backend::MengerAuth::new(login.access.clone(), vec![], None, BRANDING.app));
     let signers = menger_ui_service::Signers::parse(&[support::public_hex(&support::UI_SIGNER)]).expect("the test signer");
-    let compiler = menger_ui_service::Compiler::open(&support::ui_compiler_wasm()).expect("the module is taken");
+    let compiler = menger_ui_service::Compiler::new(&module).expect("the module is taken");
     let ui = menger::UiSetup::open(&dir.join("ui.db"), signers).unwrap().compiling(Some(compiler));
     let hub = menger::build_rpc_ui_over(
         &dir.join("t.db"),
@@ -239,7 +405,7 @@ async fn start_probe(dir: &std::path::Path) -> u16 {
         menger::store::BODY_MAX_DEFAULT,
         vec![],
         ui,
-        |_, _| TicketsActivation,
+        make,
     )
     .await
     .expect("the probe's server builds");

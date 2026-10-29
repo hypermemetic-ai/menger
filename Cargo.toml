@@ -168,6 +168,8 @@ plexus-macros = { path = "../plexus-macros" }
 async-stream = "0.3"
 schemars = { version = "1.1", features = ["derive"] }
 uuid = { version = "1.6", features = ["v4", "serde"] }
+# UI-7: the in-process tests' stub compiler modules, written as text.
+wat = "1"
 
 # MNG-8's `[patch.crates-io]` on the plexus-transport-v0.2.3 tag went with
 # MFE-10: the REST bridge fixes it carried are on plexus-transport `main`

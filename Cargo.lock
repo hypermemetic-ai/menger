@@ -2092,6 +2092,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "wat",
 ]
 
 [[package]]

@@ -43,6 +43,18 @@ fn greedy(pages: u32) -> Vec<u8> {
     wat::parse_str(&wat).expect("the greedy module parses")
 }
 
+/// A module with UI-5's exports whose `compile` loops for ever.
+fn looping() -> Vec<u8> {
+    let wat = r#"(module
+  (memory (export "memory") 1)
+  (func (export "alloc") (param i32) (result i32) (i32.const 1024))
+  (func (export "free") (param i32 i32))
+  (func (export "compile") (param i32 i32 i32 i32) (result i64)
+    (loop $again (br $again))
+    (i64.const 0)))"#;
+    wat::parse_str(wat).expect("the looping module parses")
+}
+
 /// A module with UI-5's exports that also imports `env::clock`.
 fn importing() -> Vec<u8> {
     let wat = r#"(module
@@ -87,6 +99,18 @@ fn fuel_and_memory_are_bounded() {
         Ok(c) => panic!("a million nested {{#if}} must not compile: {} bytes of tree", c.tree.len()),
     }
     assert!(took < Duration::from_secs(2), "the answer took {took:?}, not within 2 s");
+
+    // A module that never stops: out of fuel, naming the component, within 2 s.
+    let spinner = Compiler::new(&looping()).expect("a module with no imports is taken");
+    let start = Instant::now();
+    match spinner.compile("spinner", "<p/>\n") {
+        Err(f) => {
+            assert_eq!(f.name, "spinner", "the failure names the component: {f:?}");
+            assert!(f.message.contains("fuel"), "it says the fuel ran out: {f:?}");
+        }
+        Ok(c) => panic!("a loop must not answer: {c:?}"),
+    }
+    assert!(start.elapsed() < Duration::from_secs(2), "the loop was stopped within 2 s, took {:?}", start.elapsed());
 
     // Under the limit a grow is allowed: 16 MiB more answers.
     let modest = Compiler::new(&greedy(256)).expect("a module with no imports is taken");
