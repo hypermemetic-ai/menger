@@ -21,8 +21,9 @@
 # v2: `diagrams/` (the mermaid check for bodies the app drew) is out of the
 # workspace with the frontend — its tests read the app's sources.
 # UI-3: `ui-service/` (`menger-ui-service`) — the ui activation and its own
-# file, `ui.db`.
-members = [".", "tickets-api", "ui-service", "plexus-shell", "plexus-shell/toy", "plexus-login"]
+# file, `ui.db`. UI-6: `ui-engine/` (`menger-ui-engine`) — the engine the
+# bundle carries (native here for its tests; wasm32 by scripts/ui-build.sh).
+members = [".", "tickets-api", "ui-service", "ui-engine", "plexus-shell", "plexus-shell/toy", "plexus-login"]
 # TETHER-7: `tether/` is a workspace of its own — substrate's sqlx and this
 # workspace's rusqlite link two libsqlite3-sys, which one resolve refuses.
 exclude = ["tether"]

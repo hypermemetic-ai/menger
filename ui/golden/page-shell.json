@@ -1,0 +1,1 @@
+{"name":"page-shell","abi":"engine/1","props":[],"state":{},"live":{},"uses":[],"handlers":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","tree":[{"el":"header","attrs":{"class":"shell"},"children":[{"el":"span","children":[{"text":"menger"}]}]},{"slot":"main","props":{}}]}

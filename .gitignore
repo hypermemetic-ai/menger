@@ -17,3 +17,5 @@
 /diagrams/node/node_modules
 # Python bytecode from scripts/ helpers.
 __pycache__/
+# UI-6: scripts/ui-build.sh's bundle and its staging directory
+/dist
