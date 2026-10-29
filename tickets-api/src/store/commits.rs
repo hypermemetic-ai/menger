@@ -20,9 +20,3 @@
 /// hundreds.
 pub const MAX_PER_TICKET: usize = 256;
 
-/// `entry` as a commit reference, in the form it is stored and compared in;
-/// `None` when it is not one — [`crate::vocab::CommitRef`]'s rule, the one
-/// (ACCESS-8 moved it to the wasm-safe half).
-pub(super) fn reference(entry: &str) -> Option<String> {
-    entry.parse::<crate::vocab::CommitRef>().ok().map(crate::vocab::CommitRef::into_string)
-}

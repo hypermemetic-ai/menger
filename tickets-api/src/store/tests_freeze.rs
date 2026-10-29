@@ -56,7 +56,7 @@ fn listed(store: &Store, filter: &str) -> Vec<String> {
 
 fn assert_derived(store: &Store, after: &str) {
     let cache = store.tickets.read().unwrap();
-    let scanned = Cache::new(cache.order.values().map(|t| (t.id.to_string(), t.clone())).collect(), cache.inputs.clone());
+    let scanned = Cache::new(cache.order.values().map(|t| (t.id.to_string(), t.clone())).collect());
     assert_eq!(stored::compare(&cache.form(), &scanned.form()), Vec::<String>::new(), "after {after}");
 }
 
@@ -98,10 +98,6 @@ async fn a_new_child_of_the_frozen_scope_is_refused_naming_how_to_unfreeze() {
     // A shortcode hosted under it.
     let e = store.create(SYS, new("NEW", "an area", Kind::Scope, Some("THEME-1"))).await.unwrap_err();
     assert_eq!(scope_of(&e), ("THEME-1", None));
-    // A note upgraded under it.
-    let n = store.add_note_as("more theme".into(), None, None).await.unwrap();
-    let e = store.upgrade_note(SYS, n.id.get(), new("THEME", "more", Kind::Build, Some("THEME-1"))).await.unwrap_err();
-    assert_eq!(scope_of(&e), ("THEME-1", None));
     assert_eq!(store.count(SYS), 6, "nothing was created");
 }
 
@@ -110,9 +106,6 @@ async fn the_frozen_shortcode_takes_no_new_numbers_whatever_the_parent() {
     let store = frozen().await;
     let e = store.create(SYS, new("THEME", "under four", Kind::Build, Some("THEME-4"))).await.unwrap_err();
     assert_eq!(e.to_string(), "THEME is frozen — no new THEME numbers (tickets unfreeze --id THEME-1) (nothing changed)");
-    assert_eq!(scope_of(&e), ("THEME-1", Some("THEME")));
-    let n = store.add_note_as("under four".into(), None, None).await.unwrap();
-    let e = store.upgrade_note(SYS, n.id.get(), new("THEME", "under four", Kind::Build, Some("THEME-4"))).await.unwrap_err();
     assert_eq!(scope_of(&e), ("THEME-1", Some("THEME")));
     // Nor by a reshortcode into THEME — under its root, or anywhere in it.
     let e = store.reshortcode(SYS, Reshortcode { ids: vec!["OTHER-2".into()], to: "THEME".into(), ..Reshortcode::default() }).await.unwrap_err();

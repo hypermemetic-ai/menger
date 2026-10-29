@@ -27,7 +27,7 @@ use futures::StreamExt;
 use jsonrpsee::core::client::{Subscription, SubscriptionClientT};
 use jsonrpsee::core::params::ObjectParams;
 use jsonrpsee::ws_client::{WsClient, WsClientBuilder};
-use menger_tickets_api::{CommentsEvent, DeploymentsEvent, MediaEvent, MembersEvent, NotesEvent, OrgsEvent, SessionEvent, ThemesEvent, TicketsEvent};
+use menger_tickets_api::{MembersEvent, OrgsEvent, SessionEvent, TicketsEvent};
 use plexus_core::plexus::DynamicHub;
 use plexus_transport::TransportServer;
 use serde_json::{json, Value};
@@ -109,14 +109,9 @@ fn again<T: serde::de::DeserializeOwned + serde::Serialize>(v: &Value) -> Value 
 fn round_trip(namespace: &str, v: &Value) {
     let back = match namespace {
         "tickets" => again::<TicketsEvent>(v),
-        "comments" => again::<CommentsEvent>(v),
-        "notes" => again::<NotesEvent>(v),
-        "media" => again::<MediaEvent>(v),
-        "themes" => again::<ThemesEvent>(v),
         "members" => again::<MembersEvent>(v),
         "orgs" => again::<OrgsEvent>(v),
         "session" => again::<SessionEvent>(v),
-        "deployments" => again::<DeploymentsEvent>(v),
         other => panic!("no event type for {other}"),
     };
     assert_eq!(
@@ -194,16 +189,6 @@ fn script() -> Vec<(&'static str, Value)> {
         ("tickets.label", json!({"id": "GOLD-3", "add": ["needs-you", "p1"]})),
         ("tickets.update", json!({"id": "GOLD-3", "severity": "none", "unblock": ["GOLD-2"], "block": ["PLAT-2"]})),
         ("tickets.update_many", json!({"ids": ["GOLD-3", "PLAT-2"], "label": ["swept"]})),
-        // ACCESS-14: the inputs at their paths under tickets.inputs — the
-        // JSON they answer unchanged (the fixture's call names moved with them).
-        ("tickets.inputs.answer", json!({"ticket": "GOLD-2", "input": "landing", "value": {"type": "choice", "option": "archive"}, "rationale": "holds"})),
-        ("tickets.inputs.clear", json!({"ticket": "GOLD-2", "input": "landing"})),
-        ("tickets.inputs.close", json!({"ticket": "GOLD-2", "input": "landing"})),
-        ("tickets.inputs.reopen", json!({"ticket": "GOLD-2", "input": "landing"})),
-        ("tickets.queue", json!({"id": "GOLD-2", "urgency": "blocking", "reason": "the import waits", "input": "landing"})),
-        ("tickets.snooze", json!({"id": "GOLD-2", "minutes": 10})),
-        ("tickets.queued", json!({})),
-        ("tickets.unqueue", json!({"id": "GOLD-2"})),
         ("tickets.create", json!({"epic": "GOLD", "title": "a mistake"})),
         ("tickets.delete", json!({"ids": ["GOLD-6"], "message": "filed twice"})),
         ("tickets.undelete", json!({"ids": ["GOLD-6"]})),
@@ -220,8 +205,6 @@ fn script() -> Vec<(&'static str, Value)> {
         ("tickets.search", json!({"query": "platform"})),
         ("tickets.nav.member", json!({"ids": ["GOLD-2", "NOPE-1"], "filter": "kind build"})),
         ("tickets.nav.groups", json!({})),
-        ("tickets.components.list", json!({})),
-        ("tickets.inputs.list", json!({})),
         ("tickets.nav.extents", json!({})),
         ("tickets.nav.counts", json!({"filter": "not kind doc"})),
         ("tickets.nav.facets", json!({"filter": "kind build"})),
@@ -235,37 +218,7 @@ fn script() -> Vec<(&'static str, Value)> {
         ("tickets.get", json!({"id": "GOLD-99"})),
         ("tickets.set_status", json!({"id": "GOLD-4", "status": "Ready"})),
         ("tickets.create", json!({"epic": "NEW", "title": "a build first"})),
-        // The other activations.
-        ("comments.add", json!({"anchor": {"route": "#/ticket/GOLD-2", "path": "main > h1", "label": "Title", "excerpt": "asks", "ticket": "GOLD-2"}, "body": "rename it"})),
-        ("comments.add", json!({"anchor": {"route": "#/", "path": "nav", "label": "Nav", "excerpt": ""}, "body": "slow"})),
-        ("comments.resolve", json!({"id": 1})),
-        ("comments.reopen", json!({"id": 1})),
-        ("comments.list", json!({})),
-        ("comments.list", json!({"under": "GOLD", "state": "open"})),
-        ("notes.add", json!({"body": "## watch drops events\nseen twice"})),
-        ("notes.list", json!({})),
-        ("notes.get", json!({"id": 1})),
-        ("notes.upgrade", json!({"id": 1, "epic": "GOLD"})),
-        ("themes.define", json!({"name": "ocean", "light": {"--accent": "#00796b"}, "dark": {"--accent": "#4db6ac"}})),
-        ("themes.list", json!({})),
-        ("themes.get", json!({"name": "ocean"})),
-        ("themes.set", json!({"scope": "GOLD", "theme": "ocean", "reach": "site"})),
-        ("themes.theme_for", json!({"id": "GOLD-2"})),
-        ("deployments.record", json!({
-            "project": "gold", "environment": "prod", "state": "succeeded", "revision": "4f7114a",
-            "commits": ["4f7114a"], "release": "r1", "at": "2026-10-12T22:04:19Z",
-            "source": {"system": "menger-pipeline", "run": "promote"}
-        })),
-        ("deployments.list", json!({})),
-        ("deployments.environments", json!({})),
-        ("deployments.for_ticket", json!({"id": "GOLD-2"})),
-        ("deployments.running", json!({})),
-        // COMMENT-5: an image put, put again, read back; refused; not there.
-        ("media.put", json!({"ticket": "GOLD-2", "mime": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEUlEQVR42mP8z8DwnwEJMAIAKQgD/2zM2wkAAAAASUVORK5CYII="})),
-        ("media.put", json!({"ticket": "GOLD-2", "mime": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEUlEQVR42mP8z8DwnwEJMAIAKQgD/2zM2wkAAAAASUVORK5CYII="})),
-        ("media.get", json!({"hash": "191a9e3df08408abb45c996790d3d22cd0287c1c9e1344671b2c97414dd5f2e4"})),
-        ("media.put", json!({"ticket": "GOLD-2", "mime": "image/svg+xml", "data": "PHN2Zy8+"})),
-        ("media.get", json!({"hash": "0000000000000000000000000000000000000000000000000000000000000000"})),
+        // The other activations — V2-4: the addresses and the grants.
         ("members.list", json!({})),
         ("orgs.list", json!({})),
         // ARCHIVE-2 (added deliberately, last, so nothing before it moves):
@@ -287,7 +240,6 @@ async fn every_item_round_trips_and_the_json_is_what_it_was() {
     let client = connect(port).await;
     let mut watch = call(&client, "tickets.watch", json!({})).await;
     let mut filtered = call(&client, "tickets.watch", json!({"filter": "not kind doc"})).await;
-    let mut comments = call(&client, "comments.watch", json!({})).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let mut golden = Vec::new();
@@ -300,11 +252,9 @@ async fn every_item_round_trips_and_the_json_is_what_it_was() {
         golden.push(json!({"call": method, "params": params, "items": items.iter().map(steady).collect::<Vec<_>>()}));
     }
     let marker: fn(&Value) -> bool = |ev| ev["type"] == "amended" && ev["ticket"]["id"] == "GOLD-1";
-    let reopened: fn(&Value) -> bool = |ev| ev["type"] == "reopened";
     for (name, sub, last, namespace) in [
         ("tickets.watch", &mut watch, marker, "tickets"),
         ("tickets.watch filtered", &mut filtered, marker, "tickets"),
-        ("comments.watch", &mut comments, reopened, "comments"),
     ] {
         let events = until(sub, last).await;
         for ev in &events {

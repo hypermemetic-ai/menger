@@ -56,7 +56,7 @@ fn refusal(store: &Store, text: &str) -> String {
 async fn a_saved_name_is_its_filter_and_two_join_by_or_and_and() {
     let store = Store::new();
     work(&store).await;
-    let (row, replaced) = save(&store, "Needs you", "(asking or label needs-you)").await.unwrap();
+    let (row, replaced) = save(&store, "Needs you", "(blocked or label needs-you)").await.unwrap();
     assert!(!replaced);
     assert_eq!((row.saved_by.as_str(), row.name.as_str()), ("key:test", "Needs you"));
     save(&store, "Plexus-Ready", "in PLEXUS and status Ready").await.unwrap();
@@ -151,7 +151,7 @@ async fn saved_filters_are_read_again_from_the_table_on_open() {
 async fn a_watch_naming_a_filter_hears_what_a_save_a_rename_and_a_delete_did() {
     let store = Store::new();
     work(&store).await;
-    save(&store, "Needs you", "(asking or label needs-you)").await.unwrap();
+    save(&store, "Needs you", "(blocked or label needs-you)").await.unwrap();
     save(&store, "Plexus-Ready", "in PLEXUS and status Ready").await.unwrap();
     let text = "saved \"Needs you\" or saved Plexus-Ready";
     let mut rx = store.subscribe();
@@ -184,7 +184,7 @@ async fn a_watch_naming_a_filter_hears_what_a_save_a_rename_and_a_delete_did() {
 async fn needs_you_means_the_apps_default_until_one_is_saved() {
     let store = Store::new();
     work(&store).await;
-    let default = "(queued or asking or asked or label needs-you)";
+    let default = "label needs-you";
     assert_eq!(store.resolved(Some(&Filter::parse("saved \"Needs you\"").unwrap())).unwrap().format(), default);
     assert_eq!(ids(&store, "saved \"needs you\""), ["PLEXUS-3", "PLEXUS-4"]);
     assert_eq!(store.saved_filter(&org(), "needs-you").unwrap().filter, default.trim_matches(['(', ')']));

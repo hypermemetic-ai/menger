@@ -57,7 +57,7 @@ fn a_reference_is_seven_to_sixty_four_hex_digits_after_an_optional_repository() 
         ("Plexus_Core.rs@0bb28b2", "Plexus_Core.rs@0bb28b2"),
         ("a@1234567", "a@1234567"),
     ] {
-        assert_eq!(commits::reference(entry).as_deref(), Some(kept), "{entry}");
+        assert_eq!(entry.parse::<crate::vocab::CommitRef>().ok().map(crate::vocab::CommitRef::into_string).as_deref(), Some(kept), "{entry}");
     }
     let too_long = "a".repeat(65);
     for not in [
@@ -77,7 +77,7 @@ fn a_reference_is_seven_to_sixty_four_hex_digits_after_an_optional_repository() 
         "plexus-macros@",
         "ünï@77df9a0",
     ] {
-        assert_eq!(commits::reference(not), None, "{not:?} is not a reference");
+        assert_eq!(not.parse::<crate::vocab::CommitRef>().ok().map(crate::vocab::CommitRef::into_string), None, "{not:?} is not a reference");
     }
 }
 

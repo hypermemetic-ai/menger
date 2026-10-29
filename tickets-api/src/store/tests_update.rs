@@ -68,8 +68,6 @@ fn types(changes: &[Change]) -> Vec<&'static str> {
             Change::SeverityChanged { .. } => "severity_changed",
             Change::GroupChanged { .. } => "group_changed",
             Change::PlacementsChanged { .. } => "placements_changed",
-            Change::ComponentChanged { .. } => "component_changed",
-            Change::InputChanged { .. } => "input_changed",
             Change::CellsMoved { .. } => "cells_moved",
             Change::UnderMoved { .. } => "under_moved",
             _ => "other",
@@ -85,7 +83,7 @@ pub(super) fn assert_kept(store: &Store, after: &str) {
     assert_eq!(store.groups(SYS), tests::nav(store), "the roll-ups the nav draws, after {after}");
     tests_placements::assert_kept_placements_are_the_rule(store, after);
     let cache = store.tickets.read().unwrap();
-    let scanned = Cache::new(cache.order.values().map(|t| (t.id.to_string(), t.clone())).collect(), cache.inputs.clone());
+    let scanned = Cache::new(cache.order.values().map(|t| (t.id.to_string(), t.clone())).collect());
     assert_eq!(stored::compare(&cache.form(), &scanned.form()), Vec::<String>::new(), "after {after}");
     // Every blocker that exists mirrors who names it.
     for t in cache.order.values() {
@@ -284,7 +282,6 @@ async fn every_refusal_writes_nothing() {
     let cases: Vec<Case> = vec![
         ("U-2", Update { title: title("  "), ..Update::default() }, |e| matches!(e, StoreError::EmptyTitle { .. })),
         ("U-2", Update { body: Some("x".repeat(65)), ..Update::default() }, |e| matches!(e, StoreError::BodyTooLarge { .. })),
-        ("U-2", Update { body: Some("```component nope_\n```".into()), ..Update::default() }, |e| matches!(e, StoreError::ComponentName { .. })),
         ("U-2", Update { kind: Some(Kind::Doc), ..Update::default() }, |e| matches!(e, StoreError::DocInGraph { .. })),
         ("U-1", Update { kind: Some(Kind::Build), ..Update::default() }, |e| matches!(e, StoreError::RootKind { .. })),
         ("U-2", Update { kind: Some(Kind::Gap), status: Some(Status::Doc), ..Update::default() }, |e| {

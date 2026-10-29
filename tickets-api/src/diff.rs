@@ -355,7 +355,7 @@ pub fn text(a: &str, b: &str) -> TextDiff {
 /// markdown markers at a line's start, no blank lines — what a diff "of the
 /// rendered text" compares.
 pub fn visible(body: &str) -> String {
-    let (_, rest) = crate::fields::split_frontmatter(body);
+    let (_, rest) = split_frontmatter(body);
     let mut out = String::with_capacity(rest.len() / 2);
     let mut skipping: Option<&'static str> = None;
     for line in rest.lines() {
@@ -411,7 +411,7 @@ pub fn visible(body: &str) -> String {
 /// A frontmatter's keys and their values, in order — a key's continuation
 /// lines (indented, or list items) with it.
 pub fn frontmatter(body: &str) -> Vec<(String, String)> {
-    let (Some(fm), _) = crate::fields::split_frontmatter(body) else { return Vec::new() };
+    let (Some(fm), _) = split_frontmatter(body) else { return Vec::new() };
     let mut out: Vec<(String, String)> = Vec::new();
     for line in fm.lines() {
         let continued = line.starts_with(' ') || line.starts_with('\t') || line.starts_with('-');
@@ -513,4 +513,30 @@ mod tests {
         assert_eq!(frontmatter(body), vec![("theme".into(), "ocean".into()), ("widths".into(), "  - 390\n  - 1440".into())]);
         assert!(frontmatter("no front").is_empty());
     }
+}
+
+/// A body's frontmatter split (V2-4: from `fields.rs`, which went with the
+/// body parsers): `(Some(frontmatter), rest)` when the body opens
+/// with a `---` line and a later line is `---` alone.
+pub(crate) fn split_frontmatter(body: &str) -> (Option<&str>, &str) {
+    let Some(after_open) = body.strip_prefix("---") else {
+        return (None, body);
+    };
+    // The opening fence must be a line of its own ("---not-a-fence" isn't one).
+    let Some(after_open) = after_open
+        .strip_prefix("\r\n")
+        .or_else(|| after_open.strip_prefix('\n'))
+    else {
+        return (None, body);
+    };
+    let mut offset = 0usize;
+    for line in after_open.split_inclusive('\n') {
+        if line.trim_end_matches(['\r', '\n']) == "---" {
+            let fm = &after_open[..offset];
+            let rest = &after_open[offset + line.len()..];
+            return (Some(fm), rest);
+        }
+        offset += line.len();
+    }
+    (None, body)
 }

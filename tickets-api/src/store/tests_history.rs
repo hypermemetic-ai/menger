@@ -9,7 +9,7 @@ use super::tests_filtered::holds_by_rule;
 use super::tests_ready::{Rng, Tally};
 use super::*;
 use crate::filter::{Field, Filter, History};
-use crate::types::{InputAction, Transition, TransitionField, TransitionSource, SYSTEM_ACTOR};
+use crate::types::{Transition, TransitionField, TransitionSource, SYSTEM_ACTOR};
 use roaring::RoaringBitmap;
 
 fn ticket(epic: &str, title: &str, kind: Kind, parent: Option<&str>, body: &str) -> NewTicket {
@@ -43,10 +43,6 @@ fn status(store: &Store, id: &str) -> Status {
 
 fn own(store: &Store, id: &str) -> Vec<Transition> {
     store.history(SYS, id).unwrap().own
-}
-
-fn input_state(store: &Store, ticket: &str, input: &str) -> InputState {
-    store.inputs(SYS, Some(ticket), None, None).unwrap().into_iter().find(|i| i.id == input).unwrap().state
 }
 
 /// A history predicate, as the language reads it.
@@ -125,23 +121,19 @@ async fn tree(store: &Store) {
     store.create(SYS, ticket("R", "dropped before", Kind::Spike, Some("R-2"), "")).await.unwrap();
     store.create(SYS, ticket("R", "elsewhere", Kind::Build, Some("R-1"), "")).await.unwrap();
     store.set_status(SYS.permit("R-4"), Status::Coding).await.unwrap();
-    store.answer(SYS.permit("R-4"), "done", InputValue::Choice { option: "yes".into() }, None, AnswerSource::Api).await.unwrap();
     store.set_status(SYS.permit("R-5"), Status::Complete).await.unwrap();
     store.set_status(SYS.permit("R-7"), Status::Canceled).await.unwrap();
 }
 
 /// Canceling a ticket cancels its open descendants in the same write: each
 /// a transition of the system's, from `cascade`, naming its cause and who,
-/// caused by the cancel; done work, docs and what was canceled already stay;
-/// each canceled ticket's open inputs are withdrawn (an answered one
-/// stays), out of `inputs { state: open }` and out of `asking`. The write's
-/// events: every ticket's change and transition, then its groups, then one
-/// `placements_changed`, then the inputs.
+/// caused by the cancel; done work, docs and what was canceled already stay.
+/// The write's events: every ticket's change and transition, then its
+/// groups, then one `placements_changed`.
 #[tokio::test]
 async fn canceling_cascades_through_the_open_work_below() {
     let store = Store::new();
     tree(&store).await;
-    assert_eq!(admitted(&store, "asking", Clock::default()), ["R-2", "R-3"]);
     let mut rx = store.subscribe();
     let ada = Act { name: Some("Ada".into()), message: Some("folded into R-8".into()), ..act("idp:ada", TransitionSource::App) };
     let answer = store.set_status_by(SYS.permit("R-2"), Status::Canceled, ada, false).await.unwrap();
@@ -173,20 +165,6 @@ async fn canceling_cascades_through_the_open_work_below() {
     assert_eq!(h.caused.iter().map(|t| t.ticket.as_str()).collect::<Vec<_>>(), ["R-3", "R-4"]);
     assert_eq!(h.restorable, ["R-3", "R-4"]);
 
-    // Inputs: the open ones withdrawn, with why; the answered one stays.
-    assert_eq!(input_state(&store, "R-2", "own"), InputState::Withdrawn);
-    assert_eq!(input_state(&store, "R-3", "ask"), InputState::Withdrawn);
-    assert_eq!(input_state(&store, "R-4", "done"), InputState::Answered);
-    let ask = store.inputs(SYS, Some("R-3"), None, None).unwrap().remove(0);
-    let last = ask.history.last().unwrap();
-    assert_eq!((last.action, last.source, last.rationale.as_deref()), (InputAction::Withdrawn, AnswerSource::System, Some("canceled because R-2 was canceled by Ada")));
-    assert!(store.inputs(SYS, None, None, Some(InputState::Open)).unwrap().is_empty(), "nothing waits");
-    assert!(admitted(&store, "asking", Clock::default()).is_empty(), "a withdrawn input asks no one");
-    assert!(matches!(
-        store.answer(SYS.permit("R-3"), "ask", InputValue::Choice { option: "yes".into() }, None, AnswerSource::Api).await,
-        Err(StoreError::InputWithdrawn { .. })
-    ));
-
     // The write's events, in one write's order.
     let mut said = Vec::new();
     while let Ok(c) = rx.try_recv() {
@@ -197,7 +175,6 @@ async fn canceling_cascades_through_the_open_work_below() {
         Change::Transition { transition, .. } => format!("transition {}", transition.ticket),
         Change::GroupChanged { group } => format!("group {}", group.epic),
         Change::PlacementsChanged { .. } => "placements".into(),
-        Change::InputChanged { input, .. } => format!("input {}", input.ticket),
         other => format!("{other:?}"),
     };
     let kinds: Vec<String> = said.iter().map(kind).collect();
@@ -207,16 +184,12 @@ async fn canceling_cascades_through_the_open_work_below() {
         "{kinds:?}"
     );
     assert!(kinds.iter().filter(|k| *k == "placements").count() <= 1, "{kinds:?}");
-    let inputs_at = kinds.iter().position(|k| k.starts_with("input")).unwrap();
-    assert!(kinds[inputs_at..].iter().all(|k| k.starts_with("input")), "inputs last: {kinds:?}");
-    assert_eq!(kinds[inputs_at..], ["input R-2", "input R-3"]);
 }
 
-/// Leaving `Canceled` restores the ticket's withdrawn inputs; with
-/// `restore_children`, exactly the descendants its cancel canceled and that
+/// Leaving `Canceled` with `restore_children` restores exactly the descendants its cancel canceled and that
 /// nothing moved since, to the statuses they had — each the system's,
 /// caused by the restore; one canceled on its own, or moved since, stays.
-/// Without it, only the ticket and its inputs come back.
+/// Without it, only the ticket comes back.
 #[tokio::test]
 async fn restoring_brings_back_exactly_what_the_cancel_canceled() {
     let store = Store::new();
@@ -234,28 +207,18 @@ async fn restoring_brings_back_exactly_what_the_cancel_canceled() {
     assert_eq!((back.from.as_deref(), back.to.as_str(), back.cause), (Some("Canceled"), "Draft", Some(restore.id)));
     assert_eq!((back.actor.as_str(), back.source), (SYSTEM_ACTOR, TransitionSource::Cascade));
     assert_eq!(back.message.as_deref(), Some("restored to Draft because R-2 was restored by idp:ada"));
-    assert_eq!(input_state(&store, "R-2", "own"), InputState::Open);
-    assert_eq!(input_state(&store, "R-3", "ask"), InputState::Open);
     assert!(store.history(SYS, "R-2").unwrap().restorable.is_empty());
-    assert_eq!(admitted(&store, "asking", Clock::default()), ["R-2", "R-3"]);
 
-    // Without restore_children: the ticket, its inputs, nothing below.
+    // Without restore_children: the ticket, nothing below.
     store.set_status(SYS.permit("R-2"), Status::Canceled).await.unwrap();
     store.set_status(SYS.permit("R-2"), Status::Pending).await.unwrap();
     assert_eq!((status(&store, "R-2"), status(&store, "R-3"), status(&store, "R-4")), (Status::Pending, Status::Canceled, Status::Canceled));
-    assert_eq!((input_state(&store, "R-2", "own"), input_state(&store, "R-3", "ask")), (InputState::Open, InputState::Withdrawn));
     assert!(store.history(SYS, "R-2").unwrap().restorable.is_empty(), "restorable only while canceled");
-
-    // A body written while canceled declares its new inputs withdrawn.
-    store.amend(SYS.permit("R-3"), None, Some(format!("{}{}", decision("ask"), decision("later")))).await.unwrap();
-    assert_eq!(input_state(&store, "R-3", "later"), InputState::Withdrawn);
-    store.set_status(SYS.permit("R-3"), Status::Ready).await.unwrap();
-    assert_eq!((input_state(&store, "R-3", "ask"), input_state(&store, "R-3", "later")), (InputState::Open, InputState::Open));
 }
 
 /// Cascades and restores among random writes: after each, every kept
-/// structure is a scan — the counts and the ready set, the cells (`asking`
-/// included), the kept tree, the placements, the stored form — and the
+/// structure is a scan — the counts and the ready set, the cells, the kept
+/// tree, the placements, the stored form — and the
 /// file's log agrees with its tickets (`--verify-derived`).
 #[tokio::test]
 async fn cascades_and_restores_keep_every_kept_structure_a_scan() {

@@ -281,14 +281,6 @@ fn nip98(keys: &Keys, port: u16) -> String {
     base64::engine::general_purpose::STANDARD.encode(serde_json::to_string(&event).unwrap())
 }
 
-fn comment_by(author: &str) -> Value {
-    json!({
-        "anchor": { "route": "#/comments", "path": "main", "label": "page", "excerpt": "" },
-        "body": "looks right",
-        "author": author,
-    })
-}
-
 #[tokio::test]
 async fn each_provider_becomes_the_same_kind_of_plexus_identity() {
     let p = providers().await;
@@ -318,21 +310,6 @@ async fn each_provider_becomes_the_same_kind_of_plexus_identity() {
     let anonymous = connect(p.port, &[]).await.unwrap();
     let me = whoami(&anonymous).await;
     assert_eq!((me["type"].as_str(), me["error_kind"].as_str()), (Some("error"), Some("unauthenticated")), "{me}");
-}
-
-#[tokio::test]
-async fn a_signed_in_comment_carries_its_identity() {
-    let p = providers().await;
-    let alice_principal = format!("idp:{ALICE}");
-    start_with(p.port, &p.list, &[&alice_principal]).await;
-    let alice = connect(p.port, &[("cookie", format!("access_token={}", idp_token(&p.idp, now() + 600)))]).await.unwrap();
-    let added = call(&alice, "comments.add", comment_by("mallory")).await;
-    assert_eq!(added[0]["author"], "alice", "the identity, not the claim: {added:?}");
-    assert_eq!(added[0]["principal"], alice_principal, "IDENTITY-21: signed by the principal");
-    // IDENTITY-21: with login on, an anonymous caller reaches nothing.
-    let anonymous = connect(p.port, &[]).await.unwrap();
-    let added = call(&anonymous, "comments.add", comment_by("mallory")).await;
-    assert_eq!(added[0]["type"], "error", "anonymous may not comment: {added:?}");
 }
 
 /// AUTH-6/AUTH-7: a credential presented (a bearer, the `access_token`

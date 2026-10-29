@@ -101,8 +101,6 @@ fn kinds(changes: &[Change]) -> Vec<&'static str> {
             Change::Undeleted { .. } => "undeleted",
             Change::GroupChanged { .. } => "group_changed",
             Change::PlacementsChanged { .. } => "placements_changed",
-            Change::InputChanged { .. } => "input_changed",
-            Change::ComponentChanged { .. } | Change::ComponentRemoved { .. } => "component",
             Change::CellsMoved { .. } => "cells_moved",
             Change::UnderMoved { .. } => "under_moved",
             _ => "other",
@@ -247,22 +245,6 @@ async fn the_number_is_never_reused() {
     assert!(refused.to_string().contains("can't wait on M-9: deleted"), "{refused}");
     let refused = store.update(SYS.updating("M-4"), Update { block: vec!["M-9".into()], ..Update::default() }).await.unwrap_err();
     assert!(refused.to_string().contains("can't wait on M-9: deleted"), "{refused}");
-}
-
-#[tokio::test]
-async fn an_owner_or_a_live_input_is_refused() {
-    let store = store().await;
-    let body = "```component m-thing\n<template>x</template>\n```\n\n```theme dusk\n:root { --accent: #123456; }\n```\n";
-    store.create(SYS, NewTicket { body: body.into(), ..new("M", "owner", Kind::Build, None) }).await.unwrap();
-    let asks = "<m-input id=\"notes\" kind=\"text\"><m-question>Anything?</m-question></m-input>\n";
-    store.create(SYS, NewTicket { body: asks.into(), ..new("M", "asks", Kind::Build, None) }).await.unwrap();
-    let why = refused(store.delete(SYS, ids(&["M-10", "M-11"]), Deletion::default(), None).await.unwrap_err());
-    assert!(why["M-10"].contains("the component <m-thing>") && why["M-10"].contains("the theme `dusk`"), "{why:?}");
-    assert!(why["M-11"].contains("an input (notes) — close it first"), "{why:?}");
-    store.close_input(SYS.permit("M-11"), "notes").await.unwrap();
-    store.delete(SYS, ids(&["M-11"]), Deletion::default(), None).await.unwrap();
-    assert!(store.inputs(SYS, None, Some("M"), None).unwrap().iter().all(|i| i.ticket != "M-11"), "its inputs out of every read");
-    assert_kept(&store, "a closed input's ticket deleted");
 }
 
 #[tokio::test]

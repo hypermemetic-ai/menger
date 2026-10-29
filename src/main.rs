@@ -19,7 +19,7 @@ const MAINTENANCE: &str = "Maintenance and testing";
 
 #[derive(Parser, Debug)]
 #[command(name = "menger", version)]
-#[command(about = "menger — a plan is a program whose leaves are prose. Tickets, chats and docs, served to your browser.")]
+#[command(about = "menger — a plan is a program whose leaves are prose. The tickets service.")]
 #[command(long_about = None)]
 #[command(disable_help_flag = true)]
 #[command(after_help = "Start it with `menger`: it prints a one-time sign-in link (`menger --open` opens it for you).\n`menger login` prints another. `menger --help-all` for every option.")]
@@ -104,13 +104,6 @@ struct Args {
     /// Serve no web app, only the WebSocket
     #[arg(long, help_heading = RUN, hide_short_help = true)]
     no_shell: bool,
-
-    // CHAT-13.
-    /// A member of every chat (repeatable; a principal, e.g. a chat bridge's
-    /// key): added to every chat opened, and to every open chat at startup.
-    /// In the env var, separated by `;`.
-    #[arg(long = "chat-member", env = "MENGER_CHAT_MEMBERS", value_name = "PRINCIPAL", value_delimiter = ';', help_heading = RUN, hide_short_help = true)]
-    chat_member: Vec<String>,
 
     // IDENTITY-14 / IDENTITY-42 / IDENTITY-30. ACCESS-24: menger has no open
     // mode; DIST-14: with none on loopback, the local admin signs in by a
@@ -267,12 +260,6 @@ struct Args {
     #[arg(long, env = "MENGER_SEED_SYNTHETIC", value_name = "N", help_heading = MAINTENANCE, hide_short_help = true)]
     seed_synthetic: Option<usize>,
 
-    // CHAT-8: the perf probe's chats, read by the first --admin.
-    /// Seed synthetic chats before serving: a comma list, each a count of
-    /// messages (`10000`) or one message's lines (`L5000`). Needs an --admin.
-    #[arg(long, env = "MENGER_SEED_SYNTHETIC_CHAT", value_name = "SPEC", value_delimiter = ',', help_heading = MAINTENANCE, hide_short_help = true)]
-    seed_synthetic_chat: Vec<menger_tickets_api::store::ChatSeed>,
-
     /// The seed of --seed-synthetic: the same value, the same tickets.
     #[arg(long, env = "MENGER_SEED_VALUE", default_value = "1", value_name = "U64", help_heading = MAINTENANCE, hide_short_help = true)]
     seed_value: u64,
@@ -414,11 +401,6 @@ async fn run(args: Args) -> anyhow::Result<()> {
         .map(|(_, what, from, to)| format!("port {from} was taken: the {what} is on {to}"))
         .collect();
 
-    // CHAT-8: the probe's chats, read by the first --admin (who signs in).
-    if !args.seed_synthetic_chat.is_empty() {
-        let reader = admins.first().cloned().ok_or_else(|| anyhow::anyhow!("--seed-synthetic-chat needs an --admin: the chats' reader"))?;
-        seed_chats(&db_path, &args.seed_synthetic_chat, &reader).await?;
-    }
     let seed = args.seed_synthetic.map(|count| SeedSpec {
         count,
         seed: args.seed_value,
@@ -512,7 +494,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
     let wired = wiring.finish(MengerAccess(access.clone()), dev)?;
     let offers = wired.offered().map(menger::offer).collect();
     let metadata = wired.metadata_url();
-    let hub = build_rpc_login(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, args.chat_member.clone()).await?;
+    let hub = build_rpc_login(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes).await?;
 
     local::log_activations(&hub);
 
@@ -548,6 +530,8 @@ async fn run(args: Args) -> anyhow::Result<()> {
             max_per_principal: args.max_connections_per_principal,
             max_anonymous: args.max_anonymous_connections,
             max_anonymous_per_ip: args.max_anonymous_connections_per_ip,
+            // BIDIR-8: the transport holds the calls a connection has open too.
+            max_calls_per_connection: args.max_calls_per_connection,
         })
         .with_allowed_hosts(hosts(ws_port));
     tracing::info!("WebSocket: ws://{}", std::net::SocketAddr::new(args.bind, ws_port));
@@ -655,7 +639,6 @@ async fn verify_derived(db_path: PathBuf) -> i32 {
             indexed,
             transitions,
             tombstones,
-            deployments,
             shortcodes,
             revisions,
         }) => {
@@ -679,7 +662,7 @@ async fn verify_derived(db_path: PathBuf) -> i32 {
             // MENGER-13: the transition log, when the file has one.
             match transitions {
                 Some(n) => println!(
-                    "{}: the transition log's {n} transitions agree with the tickets and with each other (MENGER-13), and so do the births and status-since kept from them (FILTER-27) and the last touches, with the comments and answers (FILTER-30)",
+                    "{}: the transition log's {n} transitions agree with the tickets and with each other (MENGER-13), and so do the births and status-since kept from them (FILTER-27) and the last touches (FILTER-30)",
                     db_path.display()
                 ),
                 None => println!("{}: no transition log yet (MENGER-13) — the next open begins it", db_path.display()),
@@ -687,13 +670,6 @@ async fn verify_derived(db_path: PathBuf) -> i32 {
             // ACT-5: the tombstones, none of them a ticket.
             if let Some(n) = tombstones {
                 println!("{}: {n} tombstone(s) of deleted tickets, none of them a ticket still (ACT-5)", db_path.display());
-            }
-            // DEPLOY-11: the environments and the deployed cells.
-            if let Some(n) = deployments {
-                println!(
-                    "{}: {n} deployment(s): every environment is what its deployments fold to, and every deployed cell what a scan of the tickets against them gives (DEPLOY-11)",
-                    db_path.display()
-                );
             }
             // ORG-3: the shortcodes and their namespaces.
             match shortcodes {
@@ -759,17 +735,3 @@ mod tests {
     }
 }
 
-/// CHAT-8: `--seed-synthetic-chat` — the chats seeded through the store,
-/// which is closed again before the server opens it.
-async fn seed_chats(db_path: &std::path::Path, seeds: &[menger_tickets_api::store::ChatSeed], reader: &str) -> anyhow::Result<()> {
-    let path = db_path.to_path_buf();
-    let started = std::time::Instant::now();
-    let store = tokio::task::spawn_blocking(move || menger_tickets_api::store::Store::open(&path)).await??;
-    let system = store.system().expect("a store just opened holds its System");
-    let made = store.seed_synthetic_chats(&system, seeds, reader).await.map_err(|e| anyhow::anyhow!("seeding chats failed: {e:?}"))?;
-    for (ticket, chat, n) in &made {
-        tracing::info!("seeded chat {chat} on {ticket}: {n} message(s)");
-    }
-    tracing::info!("seeded {} synthetic chat(s) in {:.1} ms", made.len(), started.elapsed().as_secs_f64() * 1000.0);
-    Ok(())
-}

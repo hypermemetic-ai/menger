@@ -62,14 +62,6 @@ pub(super) fn history_stream(store: Arc<Store>, caller: VerifiedUser, id: String
                 for transition in h.caused {
                     yield TicketsEvent::Transition { transition };
                 }
-                // MENGER-39: who queued it, why, at what urgency.
-                for record in store.queue_history(&caller, &id) {
-                    yield TicketsEvent::QueueRecord { record };
-                }
-                // TICKETS-9: who was assigned or unassigned, when, by whom.
-                for record in store.assign_history(&caller, &id) {
-                    yield TicketsEvent::AssignRecord { record };
-                }
                 let (status_since_unix, status_since_exact) = (h.since.map(|s| s.0), h.since.map(|s| s.1));
                 yield TicketsEvent::HistoryEnd { began_unix: h.began, restorable: h.restorable, status_since_unix, status_since_exact, deletions: h.deletions };
             }
@@ -311,34 +303,6 @@ pub(super) fn member_events(store: &Store, caller: &VerifiedUser, named: Vec<Tic
     };
     let matched = store.member(caller, &ids, &lens);
     named.into_iter().zip(matched).map(|(id, matched)| TicketsEvent::Member { id, matched }).collect()
-}
-
-/// `inputs` — INPUT-3's inputs in the caller's reach; FILTER-15: of the
-/// tickets a filter admits, by the cells.
-pub(super) fn inputs_events(
-    store: &Store,
-    caller: &VerifiedUser,
-    ticket: Option<TicketRef>,
-    epic: Option<ShortcodeRef>,
-    state: Option<InputState>,
-    filter: Option<FilterText>,
-    tz: Option<Zone>,
-) -> Vec<TicketsEvent> {
-    let filter = match asked(&store, &caller, filter.as_deref()) {
-        Ok(v) => v,
-        Err(message) => return vec![TicketsEvent::Error { message }],
-    };
-    let answer = match zoned_lens(store, caller, filter.as_ref(), tz.as_deref()) {
-        Err(e) => Err(e),
-        Ok(Some(lens)) => store.inputs_filtered(caller, ticket.as_deref(), epic.as_deref(), state, &lens),
-        Ok(None) => store.inputs(caller, ticket.as_deref(), epic.as_deref(), state),
-    };
-    match answer {
-        Ok(inputs) => inputs.into_iter().map(|input| TicketsEvent::Input { input }).collect(),
-        // ACCESS-10: a ticket out of reach is not found, as one not there.
-        Err(StoreError::NotFound(id)) => vec![TicketsEvent::NotFound { id: ticket.map_or_else(|| Asked::stored(id), Asked::from) }],
-        Err(e) => vec![veiled(caller, e)],
-    }
 }
 
 /// What a `tree` asks (FILTER-13, FILTER-23, FILTER-24).

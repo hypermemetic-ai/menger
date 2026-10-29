@@ -60,10 +60,6 @@ pub mod bind;
 /// and a connection idle with none closed.
 pub mod calls;
 
-/// DEPLOY-25: the webhook worker — each deploy request POSTed, signed, to
-/// its environment's CI, off the store's write path.
-pub mod webhooks;
-
 /// DIST-3: the whole server started from code, without login or REST —
 /// `LocalServer::start(LocalConfig)`.
 pub mod local;
@@ -74,6 +70,6 @@ pub mod first_run;
 /// The cache and its storage, re-exported from the activation crate so
 /// `menger::store::SeedSpec` and friends keep their paths.
 pub use menger_tickets_api::store;
-pub use menger_tickets_api::{ChatsActivation, ChatsClient, CommentsActivation, CommentsClient, MembersActivation, MembersClient, SessionActivation, SessionClient, TicketsActivation, TicketsClient};
+pub use menger_tickets_api::{EpicsActivation, MembersActivation, MembersClient, OrgsActivation, SessionActivation, SessionClient, TicketsActivation, TicketsClient};
 
 pub use builder::{build_rpc, build_rpc_login, build_rpc_offering, build_rpc_seeded, build_rpc_with, default_db_path, SIGNED_IN_GRANTS};

@@ -607,7 +607,6 @@ pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
                  path = excluded.path,
                  labels = excluded.labels,
                  archived = excluded.archived,
-                 assignees = excluded.assignees,
                  frozen = excluded.frozen,
                  hidden = excluded.hidden",
         params![
@@ -631,7 +630,9 @@ pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
             t.path,
             serde_json::to_string(&t.labels).expect("serialize labels"),
             archived_text(&t.archived),
-            serde_json::to_string(&t.assignees).expect("serialize assignees"),
+            // V2-4: assignments went with their service — a new row's column
+            // is empty, an old row's is left as it was (the upsert sets it not).
+            "[]".to_string(),
             t.frozen,
             t.hidden,
         ],
@@ -677,7 +678,8 @@ pub(super) fn insert_many(conn: &Connection, tickets: &[Ticket], open: &[u32]) -
             t.path,
             serde_json::to_string(&t.labels).expect("serialize labels"),
             archived_text(&t.archived),
-            serde_json::to_string(&t.assignees).expect("serialize assignees"),
+            // V2-4: assignments went with their service; the column stays, empty.
+            "[]".to_string(),
             t.frozen,
             t.hidden,
         ])?;
@@ -769,7 +771,6 @@ fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
         // MENGER-12: moved by `label` alone.
         labels: parse_ids(15, &row.get::<_, String>(15)?)?.into_iter().map(crate::vocab::Label::stored).collect(),
         // TICKETS-9: moved by `assign` alone.
-        assignees: parse_ids(17, &row.get::<_, String>(17)?)?,
         // TICKETS-6: moved by `freeze` / `unfreeze` alone.
         frozen: row.get(18)?,
         // TICKETS-27: moved by `update` alone.
@@ -853,7 +854,7 @@ pub(super) fn update_row(conn: &Connection, t: &Row) -> rusqlite::Result<()> {
         "UPDATE tickets SET
                  epic = ?2, seq = ?3, title = ?4, status = ?5, kind = ?6,
                  severity = ?7, blocked_by = ?8, unlocks = ?9, parent = ?10,
-                 created_unix = ?11, updated_unix = ?12, commits = ?13, labels = ?14, archived = ?15, assignees = ?16, frozen = ?17, hidden = ?18
+                 created_unix = ?11, updated_unix = ?12, commits = ?13, labels = ?14, archived = ?15, frozen = ?16, hidden = ?17
              WHERE id = ?1",
     )?
     .execute(params![
@@ -872,7 +873,6 @@ pub(super) fn update_row(conn: &Connection, t: &Row) -> rusqlite::Result<()> {
         serde_json::to_string(&t.commits).expect("serialize commits"),
         serde_json::to_string(&t.labels).expect("serialize labels"),
         archived_text(&t.archived),
-        serde_json::to_string(&t.assignees).expect("serialize assignees"),
         t.frozen,
         t.hidden,
     ])?;

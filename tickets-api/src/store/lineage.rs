@@ -364,7 +364,7 @@ impl<'c> Compiled<'c> {
         let hist = lens.has_history().then(|| {
             let clock = lens.clock();
             let mut keys: Vec<String> = lens.history().iter().map(crate::filter::History::format).collect();
-            let mut sets: Vec<BTreeMap<ShortcodeId, RoaringBitmap>> = lens.history().iter().map(|h| cache.holds(h, clock)).collect();
+            let mut sets: Vec<BTreeMap<ShortcodeId, RoaringBitmap>> = lens.history().iter().map(|h| cache.log.holds(h, clock)).collect();
             // ACCESS-21: `ticket <ID>` holds for the one ticket it names (any
             // address; one naming none or several holds for none).
             for name in lens.tickets() {
@@ -1826,61 +1826,6 @@ pub(super) fn under_before_with(unders: &UnderWatches, cache: &Cache, touched: i
 /// a write).
 pub(super) fn touch_before_with(unders: &UnderWatches, cache: &Cache, keys: &[(&ShortcodeId, u32)]) -> Option<UnderBefore> {
     let watches: Vec<Arc<UnderWatch>> = unders.live().into_iter().filter(|w| w.lens.asks_touched()).collect();
-    before_of(watches, cache, || {
-        let mut t = Touched::default();
-        for (e, s) in keys {
-            t.ticket(e, *s);
-        }
-        t
-    })
-}
-
-/// DEPLOY-11: what a recorded deployment does to the open watches whose
-/// filter asks `deployed`: the tickets at `keys` (each whose cell it moves),
-/// before it. `None` when no such watch is open.
-pub(super) fn deployed_before_with(unders: &UnderWatches, cache: &Cache, keys: &[(&ShortcodeId, u32)]) -> Option<UnderBefore> {
-    let watches: Vec<Arc<UnderWatch>> = unders.live().into_iter().filter(|w| w.lens.asks_deployed()).collect();
-    before_of(watches, cache, || {
-        let mut t = Touched::default();
-        for (e, s) in keys {
-            t.ticket(e, *s);
-        }
-        t
-    })
-}
-
-/// MENGER-39: what a queue write does to the open watches whose filter asks
-/// `queued`: the tickets at `keys`, before it. `None` when no such watch is
-/// open.
-pub(super) fn queued_before_with(unders: &UnderWatches, cache: &Cache, keys: &[(&ShortcodeId, u32)]) -> Option<UnderBefore> {
-    let watches: Vec<Arc<UnderWatch>> = unders.live().into_iter().filter(|w| w.lens.asks_queued()).collect();
-    before_of(watches, cache, || {
-        let mut t = Touched::default();
-        for (e, s) in keys {
-            t.ticket(e, *s);
-        }
-        t
-    })
-}
-
-/// CHAT-3: what a chat write does to the open watches whose filter asks
-/// `chatting` or `unread`: the tickets at `keys`, before it. `None` when no
-/// such watch is open.
-pub(super) fn chats_before_with(unders: &UnderWatches, cache: &Cache, keys: &[(&ShortcodeId, u32)]) -> Option<UnderBefore> {
-    let watches: Vec<Arc<UnderWatch>> = unders.live().into_iter().filter(|w| w.lens.asks_chats()).collect();
-    before_of(watches, cache, || {
-        let mut t = Touched::default();
-        for (e, s) in keys {
-            t.ticket(e, *s);
-        }
-        t
-    })
-}
-
-/// APP-23: one write that touches the tickets at `keys` and moves them out
-/// of the queue — the watches asking either, before it, once each.
-pub(super) fn touch_or_queued_before_with(unders: &UnderWatches, cache: &Cache, keys: &[(&ShortcodeId, u32)]) -> Option<UnderBefore> {
-    let watches: Vec<Arc<UnderWatch>> = unders.live().into_iter().filter(|w| w.lens.asks_touched() || w.lens.asks_queued()).collect();
     before_of(watches, cache, || {
         let mut t = Touched::default();
         for (e, s) in keys {

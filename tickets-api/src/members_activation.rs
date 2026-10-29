@@ -22,7 +22,7 @@
 //!
 //! ACCESS-22: `teams` is its child, `members_activation/teams.rs` —
 //! `members.teams.<method>` on the wire — and `grant` / `revoke` take a
-//! `team` in place of a `principal`. IDENTITY-46: `profiles` too.
+//! `team` in place of a `principal`.
 
 use crate::members::{MembersEvent, Role};
 // ACCESS-8: every parameter a type (MACRO-12's `typed_params` holds it).
@@ -45,8 +45,6 @@ mod streams;
 use streams::*;
 mod teams;
 pub use teams::TeamsClient;
-mod profiles;
-pub use profiles::ProfilesClient;
 #[cfg(feature = "server")]
 mod team_streams;
 
@@ -191,11 +189,5 @@ impl MembersActivation {
     #[plexus_macros::child]
     fn teams(&self) -> teams::TeamsActivation {
         teams::TeamsActivation { store: Arc::clone(&self.store), access: self.access.clone() }
-    }
-
-    /// Profiles — what each principal's sign-in said of them (IDENTITY-46): `members.profiles.*`.
-    #[plexus_macros::child]
-    fn profiles(&self) -> profiles::ProfilesActivation {
-        profiles::ProfilesActivation { store: Arc::clone(&self.store), access: self.access.clone() }
     }
 }

@@ -530,12 +530,12 @@ async fn verify_derived_names_an_altered_tally_and_holder_and_a_form_4_file_is_b
     drop(conn);
     let (code, out, _) = verify(&db);
     assert_eq!(code, Some(1), "{out}");
-    assert!(out.contains("stored in form 4; this build reads 15"), "{out}");
+    assert!(out.contains("stored in form 4; this build reads 16"), "{out}");
     let s = spawn_server(&db, dir.path(), "form4").await;
     let c = connect(s.port).await;
     one(&c, "tickets.health", json!({})).await.unwrap();
     let log = s.log();
-    assert!(log.contains("it was stored in form 4, this build writes 15"), "{log}");
+    assert!(log.contains("it was stored in form 4, this build writes 16"), "{log}");
     assert!(log.contains("kept the tree over 6000 tickets"), "{log}");
     drop(c);
     s.kill9();
@@ -657,13 +657,13 @@ async fn a_form_5_file_gains_form_6_once_and_answers_as_before() {
     drop(conn);
     let (code, out, _) = verify(&db);
     assert_eq!(code, Some(1), "{out}");
-    assert!(out.contains("stored in form 5; this build reads 15"), "{out}");
+    assert!(out.contains("stored in form 5; this build reads 16"), "{out}");
 
     // The first open gains form 6, once, and answers as before.
     let s = spawn_server(&db, dir.path(), "form5").await;
     let after = answers(connect(s.port).await).await;
     let log = s.log();
-    let built = log.lines().find(|l| l.contains("it was stored in form 5, this build writes 15")).unwrap_or_else(|| panic!("{log}"));
+    let built = log.lines().find(|l| l.contains("it was stored in form 5, this build writes 16")).unwrap_or_else(|| panic!("{log}"));
     eprintln!("form 5 → 8: {}", &built[built.find("built once").unwrap_or(0)..]);
     assert_eq!(after.len(), before.len());
     for (i, (a, b)) in after.iter().zip(&before).enumerate() {
@@ -674,7 +674,7 @@ async fn a_form_5_file_gains_form_6_once_and_answers_as_before() {
     assert_eq!(code, Some(0), "{out}\n{err}");
     let conn = rusqlite::Connection::open(&db).unwrap();
     let form: i64 = conn.query_row("SELECT form FROM derived_state", [], |r| r.get(0)).unwrap();
-    assert_eq!(form, 15, "TICKETS-27: a build writes form 15");
+    assert_eq!(form, 16, "V2-4: a build writes form 16");
     assert_eq!(docs_cells(&conn), 2, "the board notes' cell and the ordinary docs' apart");
     let menger: i64 = conn.query_row("SELECT count(*) FROM cells WHERE menger = 1", [], |r| r.get(0)).unwrap();
     assert!(menger >= 1);
@@ -683,94 +683,6 @@ async fn a_form_5_file_gains_form_6_once_and_answers_as_before() {
     let again = answers(connect(s.port).await).await;
     assert_eq!(again, before, "the next open reads what the upgrade stored");
     assert!(!s.log().contains("SCALE-28: stored"), "built once: {}", s.log());
-    s.kill9();
-}
-
-/// COMMENT-2, "a file in form 6 is opened", through the binary: a nested
-/// seed with a few tickets of its own, its answers taken over the wire; then
-/// the file as a form-6 build leaves it — no `comments` table, the derived
-/// state saying form 6. `--verify-derived` says it is not this build's form
-/// and that the next open builds it again (MENGER-12: form 10 moves the
-/// cells); the first open gains the table, empty, builds the derived state
-/// once — logged — and answers exactly what it answered before; a comment added then is
-/// kept; the file verifies; the next open reads it, upgrading nothing, the
-/// comment there.
-#[tokio::test]
-async fn a_form_6_file_gains_form_7_once_and_answers_as_before() {
-    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
-    let db = dir.path().join("tickets.db");
-    let s = spawn_with(&db, dir.path(), "seed", &["--seed-synthetic", "2000", "--seed-shape", "nested"]).await;
-    let c = connect(s.port).await;
-    for (epic, title, kind, parent) in [
-        ("DEMAND", "demands", "scope", None),
-        ("DEMAND", "the parent chip", "build", None),
-        ("SUBD", "a hosted shortcode", "scope", Some("DEMAND-2")),
-    ] {
-        let ev = one(&c, "tickets.create", json!({"epic": epic, "title": title, "kind": kind, "parent": parent})).await.unwrap();
-        assert_eq!(ev["type"], "created", "{ev}");
-    }
-    let answers = |c: WsClient| async move {
-        let mut out = Vec::new();
-        for filter in ["", "kind build", "under DEMAND", "status Pending and under DEMAND-2"] {
-            out.push(all(&c, "tickets.nav.counts", json!({"filter": filter})).await);
-            out.push(all(&c, "tickets.list", json!({"filter": filter, "summary": true, "limit": 40})).await);
-            out.push(all(&c, "tickets.nav.tree", json!({"epic": "DEMAND", "filter": filter})).await);
-        }
-        out.push(all(&c, "tickets.nav.groups", json!({})).await);
-        out.push(all(&c, "tickets.nav.extents", json!({})).await);
-        out.push(all(&c, "tickets.get", json!({"id": "SUBD-1"})).await);
-        out
-    };
-    let before = answers(c).await;
-    s.kill9();
-
-    let conn = rusqlite::Connection::open(&db).unwrap();
-    let tables = |conn: &rusqlite::Connection| -> i64 {
-        conn.query_row("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'comments'", [], |r| r.get(0)).unwrap()
-    };
-    assert_eq!(tables(&conn), 1, "a form-7 build's file holds the table");
-    conn.execute_batch("DROP TABLE comments; UPDATE derived_state SET form = 6;").unwrap();
-    drop(conn);
-    let (code, out, _) = verify(&db);
-    assert_eq!(code, Some(1), "{out}");
-    assert!(out.contains("stored in form 6; this build reads 15 (the next open builds it again)"), "{out}");
-
-    // The first open gains the table and — MENGER-12: form 10 moves the
-    // cells — builds the derived state again, once, and answers as before.
-    let s = spawn_server(&db, dir.path(), "form6").await;
-    let c = connect(s.port).await;
-    let after = answers(connect(s.port).await).await;
-    let log = s.log();
-    let built = log
-        .lines()
-        .find(|l| l.contains("SCALE-28: stored the derived state again: it was stored in form 6, this build writes 15"))
-        .unwrap_or_else(|| panic!("{log}"));
-    eprintln!("form 6 → 10: {}", &built[built.find("SCALE-28").unwrap_or(0)..]);
-    assert_eq!(after.len(), before.len());
-    for (i, (a, b)) in after.iter().zip(&before).enumerate() {
-        assert_eq!(a, b, "answer {i} after the upgrade");
-    }
-    assert_eq!(all(&c, "comments.list", json!({})).await, [json!({"type": "page", "next": null})], "the table starts empty");
-    let anchor = json!({"route": "#/ticket/DEMAND-2", "ticket": "DEMAND-2", "path": "main > h1", "label": "Title", "excerpt": "the parent chip"});
-    let kept = one(&c, "comments.add", json!({"anchor": anchor, "body": "after the upgrade"})).await.unwrap();
-    assert_eq!((kept["type"].as_str(), kept["id"].as_u64()), (Some("comment"), Some(1)), "{kept}");
-    drop(c);
-    s.kill9();
-    let (code, out, err) = verify(&db);
-    assert_eq!(code, Some(0), "{out}\n{err}");
-    let conn = rusqlite::Connection::open(&db).unwrap();
-    let form: i64 = conn.query_row("SELECT form FROM derived_state", [], |r| r.get(0)).unwrap();
-    assert_eq!((form, tables(&conn)), (15, 1));
-    drop(conn);
-
-    // The next open reads: nothing gained, nothing built; the comment kept.
-    let s = spawn_server(&db, dir.path(), "form7").await;
-    let c = connect(s.port).await;
-    assert_eq!(answers(connect(s.port).await).await, before, "the next open answers the same");
-    let listed = all(&c, "comments.list", json!({"under": "DEMAND"})).await;
-    assert_eq!(listed, [kept, json!({"type": "page", "next": null})]);
-    let log = s.log();
-    assert!(!log.contains("COMMENT-2: the file gained") && !log.contains("SCALE-28: stored"), "once: {log}");
     s.kill9();
 }
 
@@ -807,7 +719,7 @@ async fn the_derived_state_is_rebuilt_in_the_new_form_once() {
     // The first open builds it, once, and says so in one line.
     let s = spawn_server(&db, dir.path(), "first").await;
     let c = connect(s.port).await;
-    let ids = |evs: Vec<Value>| evs.into_iter().filter(|e| e["type"] != "page").map(|e| e["id"].as_str().unwrap_or_default().to_string()).collect::<Vec<_>>();
+    let ids = |evs: Vec<Value>| evs.into_iter().filter(|e| e["type"] != "page").map(|e| e["summary"]["id"].as_str().unwrap_or_default().to_string()).collect::<Vec<_>>();
     let answers = |c: WsClient| async move {
         let mut out = Vec::new();
         for filter in ["", "kind build", "under NF-2", "label stale", "status Complete", "in OF"] {

@@ -20,7 +20,7 @@
 //!   `status <name>` · `category <open|ready|active|review|done|dropped|static>`
 //!   · `kind <name>` · `severity <critical|high|medium|low|none>` ·
 //!   `blocked` · `ready` · `has commits` · `menger doc` (FILTER-21) ·
-//!   `asking` (MENGER-12: it has an open input) · `label <name>` (and
+//!   `label <name>` (and
 //!   `label in (a, b)`; MENGER-12) ·
 //!   `in <SHORTCODE>` (and `in (A, B)`, `not in (A, B)`) ·
 //!   `under <ID or SHORTCODE>` · `text "…"`, or a bare `"…"` · FILTER-36:
@@ -165,11 +165,6 @@ pub enum Field {
     /// starts with `_MENGER/` (WAVE-10), as each shortcode's board note's
     /// does.
     MengerDoc,
-    /// `asking` (MENGER-12): it has an input in the state `open` — a
-    /// question waiting on the owner (INPUT-1). An answer, a close or the
-    /// body dropping it takes the ticket out; a clear or a reopen with no
-    /// answer puts it back.
-    Asking,
     /// `label <name>` (MENGER-12): the ticket holds the label (lower case,
     /// [`crate::labels::normalize`]). A ticket holds many, so — as `under` —
     /// two inclusions never intersect.
@@ -271,7 +266,6 @@ impl Field {
             Field::Ready => "ready",
             Field::HasCommits => "has commits",
             Field::MengerDoc => "menger doc",
-            Field::Asking => "asking",
             Field::Label(_) => "label",
             Field::Archived => "archived",
             Field::Frozen => "frozen",
@@ -295,7 +289,7 @@ impl Field {
             Field::Category(c) => c.as_str().into(),
             Field::Kind(k) => k.as_str().into(),
             Field::Severity(s) => severity_name(*s).into(),
-            Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc | Field::Asking | Field::Archived | Field::Frozen | Field::Hidden => return None,
+            Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc | Field::Archived | Field::Frozen | Field::Hidden => return None,
             // ORG-13: an epic's `under` says its name back (`any` for `~*`).
             Field::Under(x) if x == EPIC_ANY => "any".into(),
             Field::Under(x) if is_epic_name(x) => x[EPIC_MARK.len_utf8()..].to_ascii_lowercase(),
@@ -347,7 +341,6 @@ impl Field {
             Field::Ready => category_of(c.status) == Category::Ready && !c.blocked,
             Field::HasCommits => c.commits,
             Field::MengerDoc => c.menger,
-            Field::Asking => c.asking,
             Field::In(_)
             | Field::Under(_)
             | Field::Ticket(_)
@@ -375,8 +368,6 @@ impl Field {
             Field::Archived => f.archived,
             Field::Frozen => f.frozen,
             Field::Hidden => f.hidden,
-            // TICKETS-9: `unassigned` is `assigned`'s truth, negated.
-            Field::History(h) if h.event == Event::Unassigned => !f.history.iter().any(|x| x == ASSIGNED),
             Field::History(h) => {
                 let key = h.format();
                 f.history.contains(&key)
@@ -389,9 +380,6 @@ impl Field {
         }
     }
 }
-
-/// TICKETS-9: the truth `unassigned` reads — `assigned`, anyone.
-pub const ASSIGNED: &str = "assigned";
 
 /// `not` (or not) before a field.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -420,7 +408,7 @@ impl Predicate {
     pub fn format(&self) -> String {
         let head = if self.not { "not " } else { "" };
         match &self.field {
-            Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc | Field::Asking | Field::Archived | Field::Frozen | Field::Hidden => {
+            Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc | Field::Archived | Field::Frozen | Field::Hidden => {
                 format!("{head}{}", self.field.name())
             }
             Field::Text(t) => format!("{head}text \"{t}\""),
@@ -783,8 +771,6 @@ pub struct Facts {
     /// FILTER-21: its path starts with `_MENGER/` — one of menger's own
     /// documents ([`crate::is_menger_doc`]).
     pub menger_doc: bool,
-    /// MENGER-12: it has an input in the state `open`.
-    pub asking: bool,
     /// MENGER-12: its labels, lower case.
     pub labels: Vec<String>,
     /// ARCHIVE-2: it carries the archive's mark.
@@ -811,7 +797,6 @@ impl Facts {
             blocked: self.blocked,
             commits: self.has_commits,
             menger: self.menger_doc,
-            asking: self.asking,
         }
     }
 }
@@ -1484,9 +1469,8 @@ const TEXT_ALONE: &str = "`text` is tested on rows, so it stands alone as a top-
 const MIXED: &str = "`or` and `and` do not mix inside one pair of parentheses: a group is all `or` or all `and`";
 const UNBALANCED: &str = "a group's parentheses close where they open: `(a or (b and c))`";
 const NOT_UNDERSTOOD: &str = "not understood: a predicate is `status`, `category`, `kind`, `severity`, `blocked`, \
-                              `ready`, `has commits`, `menger doc`, `asking`, `label`, `in`, `under`, `text`, \
-                              `entered`, `left`, `moved`, `changed`, `by`, `created`, `for`, `deployed`, `behind`, `waiting`, \
-                              `deploying`, `ready for`, `failed`, `requested`, `queued` or \
+                              `ready`, `has commits`, `menger doc`, `label`, `in`, `under`, `text`, \
+                              `entered`, `left`, `moved`, `changed`, `by`, `created`, `for` or \
                               `saved`, a group in parentheses, or a quoted text";
 const QUOTES: &str = "a quoted value is quoted whole — one `\"` before it and one after, none inside";
 
@@ -1697,7 +1681,6 @@ fn read_field(rest: &str) -> Result<Field, String> {
         "ready" => flag(Field::Ready),
         "has commits" => flag(Field::HasCommits),
         "menger doc" => flag(Field::MengerDoc),
-        "asking" => flag(Field::Asking),
         // TICKETS-6: the frozen mark (a cell).
         "frozen" => flag(Field::Frozen),
         // TICKETS-27: the hidden mark (a cell).
@@ -1731,11 +1714,9 @@ fn read_field(rest: &str) -> Result<Field, String> {
                 .map(Field::Severity)
                 .ok_or_else(|| format!("unknown severity `{v}` — the severities are critical, high, medium, low, none"))
         }
-        // CHAT-55: `in chat N` — a chat's tickets, before `in CODE`.
-        "in" if in_chat(tail).is_some() => Ok(Field::History(History { event: Event::InChat(in_chat(tail).unwrap_or_default()), window: None, by: None })),
-        "in" if tail.split_whitespace().next().is_some_and(|w| w.eq_ignore_ascii_case("chat")) && tail.split_whitespace().count() > 1 => {
-            Err(format!("`in chat` takes a chat's number, as `in chat 6` — not `{}`", tail.split_whitespace().skip(1).collect::<Vec<_>>().join(" ")))
-        }
+        // V2-4: `in chat N` was the chats' — refused by name; `in CHAT`
+        // (a shortcode) is `in`'s.
+        "in" if tail.split_whitespace().next().is_some_and(|w| w.eq_ignore_ascii_case("chat")) && tail.split_whitespace().count() > 1 => Err(gone("in chat")),
         "in" => {
             let v = value()?;
             // ACCESS-8: the one shortcode rule, `Code`'s.
@@ -1772,20 +1753,9 @@ fn read_field(rest: &str) -> Result<Field, String> {
         "created" => read_history(name, tail).map(Field::History),
         // FILTER-30: the last touch, over its own index.
         "touched" => read_history(name, tail).map(Field::History),
-        // DEPLOY-11: over the deployments' kept cells.
-        "deployed" => read_history(name, tail).map(Field::History),
-        // DEPLOY-20: over the deployments' kept behind.
-        "behind" => read_history(name, tail).map(Field::History),
-        // DEPLOY-21: over the deployments' kept stages.
-        "waiting" | "deploying" | "ready for" | "failed" => read_history(name, tail).map(Field::History),
-        // DEPLOY-25: over the pending requests.
-        "requested" => read_history(name, tail).map(Field::History),
-        // MENGER-39: over the queue's kept entries.
-        "queued" => read_history(name, tail).map(Field::History),
-        // TICKETS-9: over the kept assignments.
-        "assigned" | "unassigned" => read_history(name, tail).map(Field::History),
-        // CHAT-3: over the chats, for the reader.
-        "chatting" | "unread" | "asked" => read_history(name, tail).map(Field::History),
+        // V2-4: the cells of the services that are not the tickets
+        // service's — refused, naming the word, whatever follows it.
+        name if GONE.contains(&name) => Err(gone(name)),
         "for" => read_held("", &rest[name.len()..]).map(Field::History),
         // FILTER-36: a saved filter, by its name.
         "saved" => {
@@ -2081,54 +2051,6 @@ pub enum Event {
     /// comment left on it, or an answer to (or a clear of) one of its
     /// inputs. A roll-up or a count moving does not touch it.
     Touched,
-    /// DEPLOY-11: `deployed <env>` — the ticket's work runs in an
-    /// environment of that name (`prod`, of any project; `menger/prod`, of
-    /// one), since a moment in the window when one is given. Answered from
-    /// the deployments' kept cells, never from the transition log.
-    Deployed(String),
-    /// DEPLOY-20: `behind <env>` — the ticket runs in an environment of
-    /// that name, but an earlier version: a commit linked after the newest
-    /// one carried there is not. No window, no `by`; answered from the
-    /// deployments' kept behind.
-    Behind(String),
-    /// DEPLOY-21: `waiting <env>`, `deploying <env>`, `ready for <env>`,
-    /// `failed <env>` — the ticket's delivery stage in an environment of
-    /// that name ([`crate::deployments::DeliveryStage`]). No window, no
-    /// `by`; answered from the deployments' kept stages and cells.
-    Stage(crate::deployments::DeliveryStage, String),
-    /// DEPLOY-25: `requested <env>` — a pending request to an environment
-    /// of that name would carry the ticket: its current version runs where
-    /// the request's revision runs (or it links that revision), and not
-    /// there. No window, no `by`; answered from the pending requests and
-    /// the kept cells.
-    Requested(String),
-    /// MENGER-39: `queued` — the ticket is in the owner's queue; `queued
-    /// <urgency>`, at that urgency (a snooze does not take it out). Answered
-    /// from the queue's kept entries; no window, no `by`.
-    Queued(Option<crate::queue::Urgency>),
-    /// CHAT-3: `chatting` — the reader is in an open chat on the ticket.
-    /// Answered for the reader (the clock's `me`) from the chats' kept
-    /// participants; no window, no `by`.
-    Chatting,
-    /// CHAT-3: `unread` — the reader has unread messages in a chat on the
-    /// ticket. Answered for the reader from the chats' read marks; no
-    /// window, no `by`.
-    Unread,
-    /// CHAT-20: `asked` — a message in an open chat on the ticket, the
-    /// reader in it, asks an open input of someone else's. Answered for the
-    /// reader from the chats' kept inputs; no window, no `by`.
-    Asked,
-    /// CHAT-55: `in chat N` — chat N names the ticket (a message's code, or
-    /// filed or linked from it), for a reader in that chat. Answered from
-    /// the chats' kept mentions; no window, no `by`.
-    InChat(u64),
-    /// TICKETS-9: `assigned <who>` — the principal (`me`: the reader) is
-    /// among the ticket's assignees; `assigned` alone, anyone is. Answered
-    /// from the kept assignments; no window, no `by`.
-    Assigned(Option<Who>),
-    /// TICKETS-9: `unassigned` — the ticket has no assignee: `not
-    /// assigned`, read from the same truth.
-    Unassigned,
     /// ARCHIVE-2: `archived <window> [by who]` — the ticket is archived, and
     /// the write that archived it (its latest archive transition) was in
     /// the window, by that actor. Names the archive, as `archived` does.
@@ -2186,17 +2108,6 @@ impl Event {
             Event::Became(Became::Status(_)) => "status",
             Event::Became(Became::Kind(_)) => "kind",
             Event::Held(_) => "for",
-            Event::Deployed(_) => "deployed",
-            Event::Behind(_) => "behind",
-            Event::Stage(s, _) => s.as_str(),
-            Event::Requested(_) => "requested",
-            Event::Queued(_) => "queued",
-            Event::Chatting => "chatting",
-            Event::Unread => "unread",
-            Event::Asked => "asked",
-            Event::InChat(_) => "in chat",
-            Event::Assigned(_) => "assigned",
-            Event::Unassigned => "unassigned",
             Event::Archived => "archived",
             Event::Restored => "restored",
         }
@@ -2509,19 +2420,6 @@ impl History {
             Event::Created => "created".to_string(),
             Event::Touched => "changed".to_string(),
             Event::Became(b) => b.format(),
-            Event::Deployed(env) => format!("deployed {}", quoted(env)),
-            Event::Behind(env) => format!("behind {}", quoted(env)),
-            Event::Stage(s, env) => format!("{s} {}", quoted(env)),
-            Event::Requested(env) => format!("requested {}", quoted(env)),
-            Event::Queued(None) => "queued".to_string(),
-            Event::Queued(Some(u)) => format!("queued {u}"),
-            Event::Chatting => "chatting".to_string(),
-            Event::Unread => "unread".to_string(),
-            Event::Asked => "asked".to_string(),
-            Event::InChat(n) => format!("in chat {n}"),
-            Event::Assigned(None) => "assigned".to_string(),
-            Event::Assigned(Some(w)) => format!("assigned {}", w.format()),
-            Event::Unassigned => "unassigned".to_string(),
             Event::Archived => "archived".to_string(),
             Event::Restored => "restored".to_string(),
             Event::Held(h) => {
@@ -2578,7 +2476,7 @@ fn words(s: &str) -> Result<Vec<String>, String> {
 }
 
 const HISTORY_HELP: &str = "a time follows its rule — `status S`, `status in (…)`, `kind K`, `status left S`, `entered S`, \
-                            `moved`, `by <who>`, `created`, `changed` or `deployed <environment>` — as a window: `within 12h` (m, h, d, w, mo), \
+                            `moved`, `by <who>`, `created` or `changed` — as a window: `within 12h` (m, h, d, w, mo), \
                             `today`, `yesterday`, `this week`, `after 2026-10-10`, `before 2w ago`, `between … and …` — and (not for \
                             `created` or `changed`) `by me`, `by system` or `by <principal>`; or `[status S | category C] for over|under 2w`";
 
@@ -2614,64 +2512,6 @@ fn read_history(name: &str, tail: &str) -> Result<History, String> {
         "touched" => (Event::Touched, None),
         "archived" => (Event::Archived, None),
         "restored" => (Event::Restored, None),
-        "deployed" => {
-            let env = w.first().ok_or("`deployed` names an environment, as `deployed prod` or `deployed menger/prod`")?;
-            i = 1;
-            (Event::Deployed(deployed_env(env)?), None)
-        }
-        // DEPLOY-20: `behind <env>`, and nothing after it.
-        "behind" => {
-            let env = w.first().ok_or("`behind` names an environment, as `behind prod` or `behind menger/prod`")?;
-            if let Some(extra) = w.get(1) {
-                return Err(format!("`{extra}` is not understood here — `behind` takes an environment and nothing else: no window, no `by`"));
-            }
-            return Ok(History { event: Event::Behind(deployed_env(env)?), window: None, by: None });
-        }
-        // DEPLOY-21: `<stage> <env>`, and nothing after it.
-        "waiting" | "deploying" | "ready for" | "failed" => {
-            let stage = crate::deployments::DeliveryStage::of(name).expect("a stage's name");
-            let env = w.first().ok_or_else(|| format!("`{name}` names an environment, as `{name} prod` or `{name} menger/prod`"))?;
-            if let Some(extra) = w.get(1) {
-                return Err(format!("`{extra}` is not understood here — `{name}` takes an environment and nothing else: no window, no `by`"));
-            }
-            return Ok(History { event: Event::Stage(stage, deployed_env(env)?), window: None, by: None });
-        }
-        // DEPLOY-25: `requested <env>`, and nothing after it.
-        "requested" => {
-            let env = w.first().ok_or("`requested` names an environment, as `requested prod` or `requested menger/prod`")?;
-            if let Some(extra) = w.get(1) {
-                return Err(format!("`{extra}` is not understood here — `requested` takes an environment and nothing else: no window, no `by`"));
-            }
-            return Ok(History { event: Event::Requested(deployed_env(env)?), window: None, by: None });
-        }
-        // MENGER-39: `queued [urgency]`, and nothing after it.
-        "queued" => {
-            let u = w.first().map(|u| u.parse::<crate::queue::Urgency>()).transpose()?;
-            if let Some(extra) = w.get(usize::from(u.is_some())) {
-                return Err(format!("`{extra}` is not understood here — `queued` takes an urgency (whenever, today, now, blocking) and nothing else: no window, no `by`"));
-            }
-            return Ok(History { event: Event::Queued(u), window: None, by: None });
-        }
-        // TICKETS-9: `assigned [who]`, `unassigned`, and nothing after.
-        "assigned" | "unassigned" => {
-            let who = (name == "assigned").then(|| w.first().map(|x| Who::read(x))).flatten();
-            if let Some(extra) = w.get(usize::from(who.is_some())) {
-                return Err(format!("`{extra}` is not understood here — `{name}` takes {}nothing else: no window, no `by`", if name == "assigned" { "a principal or `me`, and " } else { "" }));
-            }
-            if who == Some(Who::System) {
-                return Err("`assigned` names a principal or `me` — the store itself is never an assignee".into());
-            }
-            let event = if name == "assigned" { Event::Assigned(who) } else { Event::Unassigned };
-            return Ok(History { event, window: None, by: None });
-        }
-        // CHAT-3: `chatting`, `unread`, and nothing after either.
-        "chatting" | "unread" | "asked" => {
-            if let Some(extra) = w.first() {
-                return Err(format!("`{extra}` is not understood here — `{name}` takes nothing after it: no window, no `by`"));
-            }
-            let event = match name { "chatting" => Event::Chatting, "unread" => Event::Unread, _ => Event::Asked };
-            return Ok(History { event, window: None, by: None });
-        }
         _ => {
             let who = w.first().ok_or("`by` names who: `me`, `system` or a principal")?;
             i = 1;
@@ -2689,9 +2529,6 @@ fn read_history(name: &str, tail: &str) -> Result<History, String> {
         if event == Event::Touched {
             return Err("`touched` takes no `by`: a ticket's last touch is kept without who made it".into());
         }
-        if matches!(event, Event::Deployed(_)) {
-            return Err("`deployed` takes no `by`: a deployment is a CI's, not a person's".into());
-        }
         let who = w.get(i + 1).ok_or("`by` names who: `me`, `system` or a principal")?;
         by = Some(Who::read(who));
         i += 2;
@@ -2707,12 +2544,6 @@ fn read_history(name: &str, tail: &str) -> Result<History, String> {
         _ => event,
     };
     Ok(History { event, window, by })
-}
-
-/// DEPLOY-11: `deployed`'s environment — a name (`prod`, `review/pr-412`),
-/// or a project's (`menger/prod`) — lower case, or why not.
-fn deployed_env(raw: &str) -> Result<String, String> {
-    crate::deployments::environment_of(raw)
 }
 
 /// A length at `w[*i]` — `2w`, `2 w`, `2 weeks`, `1mo` — as `(n, unit)`.
@@ -3018,8 +2849,6 @@ struct Cell {
     blocked: bool,
     commits: bool,
     menger: bool,
-    /// MENGER-12: it has an open input.
-    asking: bool,
 }
 
 const SEVERITIES: [Option<Severity>; 5] =
@@ -3028,10 +2857,9 @@ const SEVERITIES: [Option<Severity>; 5] =
 /// Every cell a ticket can be in: status × kind × severity-or-none ×
 /// blocked × has commits × menger doc, where a doc holds `Doc` and only a
 /// doc does (SDLC-11), and only a doc carries a path (WAVE-10), so only a
-/// doc is one of menger's own — 940 of them; MENGER-12: × asking, any
-/// ticket may ask (a doc's body may declare an input) — 1,880.
+/// doc is one of menger's own — 940 of them.
 fn cells() -> Vec<Cell> {
-    let mut out = Vec::with_capacity(1880);
+    let mut out = Vec::with_capacity(940);
     for status in Status::ALL {
         for kind in Kind::ALL {
             if (status == Status::Doc) != (kind == Kind::Doc) {
@@ -3042,9 +2870,7 @@ fn cells() -> Vec<Cell> {
                 for blocked in [false, true] {
                     for commits in [false, true] {
                         for &menger in mengers {
-                            for asking in [false, true] {
-                                out.push(Cell { status, kind, severity, blocked, commits, menger, asking });
-                            }
+                            out.push(Cell { status, kind, severity, blocked, commits, menger });
                         }
                     }
                 }
@@ -3065,8 +2891,6 @@ enum Dim {
     Blocked,
     Severity,
     Commits,
-    /// MENGER-12: whether it has an open input.
-    Asking,
     Epic,
     Under(String),
     Text(String),
@@ -3093,7 +2917,6 @@ fn dims(field: &Field) -> Vec<Dim> {
         Field::Blocked => vec![Dim::Blocked],
         Field::Severity(_) => vec![Dim::Severity],
         Field::HasCommits => vec![Dim::Commits],
-        Field::Asking => vec![Dim::Asking],
         Field::In(_) => vec![Dim::Epic],
         Field::Under(_) | Field::Ticket(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_) | Field::Archived | Field::Frozen | Field::Hidden => {
             var(field).into_iter().collect()
@@ -3208,7 +3031,6 @@ fn satisfiable(groups: &[&Group]) -> bool {
             blocked: false,
             commits: false,
             menger: false,
-            asking: false,
         }],
     };
     if vars.len() > 20 || cells.len().saturating_mul(epics.len() + 1).saturating_mul(1 << vars.len()) > WORLD_LIMIT {
@@ -3259,9 +3081,17 @@ fn satisfiable(groups: &[&Group]) -> bool {
 #[path = "filter_tests.rs"]
 mod tests;
 
-/// CHAT-55: `chat N` after `in` — the chat's number.
-fn in_chat(tail: &str) -> Option<u64> {
-    let mut w = tail.split_whitespace();
-    let (Some(c), Some(n), None) = (w.next(), w.next(), w.next()) else { return None };
-    (c.eq_ignore_ascii_case("chat") && !n.starts_with('0')).then(|| n.parse::<u64>().ok()).flatten().filter(|n| *n > 0)
+/// V2-4: the cells of the services that are not the tickets service's — the
+/// chats', the deployments', the queue's, the assignments', a message's
+/// questions'. Each is a word the language knows, so a filter naming one is
+/// refused by that name rather than read as another cell (`ready for prod`
+/// is not `ready`). When a service comes back, its words leave this list.
+pub const GONE: [&str; 15] = [
+    "chatting", "unread", "deployed", "deploying", "failed", "behind", "ready for", "requested", "waiting", "assigned",
+    "unassigned", "queued", "asked", "asking", "in chat",
+];
+
+/// V2-4: why a cell of [`GONE`] is refused — its word, named.
+fn gone(name: &str) -> String {
+    format!("`{name}` is refused: it is a cell of a service that is not the tickets service's, and none serves it here")
 }

@@ -75,7 +75,6 @@ pub(super) fn write_runs(path: &Path, rows: &[(&str, u32)]) {
                 frozen: false,
                 hidden: false,
                 labels: Vec::new(),
-                assignees: Vec::new(),
                 id: format!("{epic}-{seq}").into(),
                 epic: (*epic).into(),
                 shortcode: (*epic).into(),

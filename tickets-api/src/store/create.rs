@@ -1,16 +1,14 @@
 //! The create write (MNG-1 onward), out of `store/mod.rs` (MENGER-29's
 //! budget): one ticket born — its shortcode found or minted (ORG-3), its
-//! parent, blockers and path checked — and, NOTE-2, the note it came from
-//! marked in the same write.
+//! parent, blockers and path checked. V2-4: the body is text — nothing in
+//! it is read for components or inputs.
 
 use super::*;
 
 impl Store {
-    /// [`Store::create`], and — NOTE-2 — the note `from` (if any) marked as
-    /// the ticket it became, in the same write.
-    /// ACCESS-11: filed as `at` allows — checked under the write-serial
+    /// [`Store::create`]. ACCESS-11: filed as `at` allows — checked under the write-serial
     /// lock, once the parent (or root) and the blockers are resolved.
-    pub(super) async fn create_from(&self, at: Filing, new: NewTicket, from: Option<u64>, act: Act, sub: bool) -> Result<(Ticket, Option<crate::notes::Note>), StoreError> {
+    pub(super) async fn create_from(&self, at: Filing, new: NewTicket, act: Act, sub: bool) -> Result<Ticket, StoreError> {
         // ORG-3: the shortcode as the reader names it — its code, or any
         // short form of its address — parsed here; which shortcode it is (or
         // whether it mints one) is decided under the lock, the namespace
@@ -47,38 +45,8 @@ impl Store {
             .parent
             .map(|p| p.trim().to_string())
             .filter(|p| !p.is_empty());
-        // COMP-3: what the body defines and references — read here, from the
-        // body in hand, before the lock; a malformed ```component block is
-        // refused now. Whether a name it defines is another ticket's is the
-        // registry's to say, under the lock.
-        let (uses, problems) = components::read(&new.body);
-        if let Some(problem) = problems.into_iter().next() {
-            return Err(StoreError::component(None, problem));
-        }
-        // INPUT-3: and the inputs it declares — refused now, naming the input,
-        // when the markup is malformed or two share an id.
-        let (declared, problems) = crate::inputs::read(&new.body);
-        if let Some(problem) = problems.into_iter().next() {
-            return Err(StoreError::InputMarkup { id: None, problem });
-        }
 
         let serial = self.serial().await;
-        // NOTE-2: the note a ticket is made from — open, read under the lock
-        // so no other upgrade can take it first — or nothing happens.
-        let note = match from {
-            None => None,
-            Some(id) => {
-                let cache = self.tickets.read().expect("store lock poisoned");
-                let n = cache.notes.get(id).cloned().ok_or_else(|| StoreError::NoteNotFound {
-                    id,
-                    newest: cache.notes.next_id().checked_sub(1).filter(|n| *n > 0),
-                })?;
-                if let Some(ticket) = n.ticket {
-                    return Err(StoreError::NoteUpgraded { id, ticket });
-                }
-                Some(n)
-            }
-        };
         // Under the write-serial lock the cache mirrors the database
         // exactly, so the shortcode's highest seq + 1 is the next id —
         // monotonic across restarts (the cache was loaded from the
@@ -88,7 +56,7 @@ impl Store {
         // every ticket in the store. This read phase computes everything
         // and mutates nothing: a rejection leaves no trace, in the
         // tickets or in what is kept about them.
-        let (ticket, touched, unlocks_added, parent_epic, derived, registered, asked, under) = {
+        let (ticket, touched, unlocks_added, parent_epic, derived, under) = {
             let cache = self.tickets.read().expect("store lock poisoned");
             let tickets = &cache;
             // ORG-3: the parent by any short form — one naming several is
@@ -227,14 +195,6 @@ impl Store {
                 }
             }
 
-            // COMP-3: what the body does to the registry — refused, nothing
-            // stored and no id spent, when it defines a name another ticket
-            // owns. Last of the checks: a body without components is refused
-            // for nothing it was not refused for before.
-            let registered = tickets.plan_registry(&id, &uses, None)?;
-            // INPUT-3: the newborn's inputs, born open.
-            let asked = tickets.inputs.plan(&id, declared);
-
             // Dangling forward references to this id resolve now: their
             // owners are the newborn's `unlocks` from birth. SCALE-3: the
             // cache keeps them by the id they name, already in (epic, seq)
@@ -273,7 +233,6 @@ impl Store {
                 commits: Vec::new(),
                 // MENGER-12: labelled after birth, by `label`.
                 labels: Vec::new(),
-                assignees: Vec::new(),
                 // WAVE-10: checked above.
                 path: new.path,
                 // WAVE-6: placed below, with the derived state.
@@ -328,9 +287,8 @@ impl Store {
             // shortcode's run, the forward references, its parent's count,
             // the roll-ups — worked out now, while nothing has changed.
             let newborn = Row::from(&ticket);
-            // MENGER-12: an input born open makes the newborn `asking`. ORG-3:
-            // a minted shortcode joins the registry with it.
-            let derived = tickets.birth(&newborn, asked.list.as_deref().is_some_and(inputs::asking_in), minted.as_ref())?;
+            // ORG-3: a minted shortcode joins the registry with it.
+            let derived = tickets.birth(&newborn, minted.as_ref())?;
             {
                 let registry = derived.moved.namespaces.as_ref().map_or(&tickets.shortcodes, |m| &m.after);
                 ticket.epic = registry.code(&ticket.shortcode);
@@ -353,7 +311,7 @@ impl Store {
                 }
                 t
             });
-            (ticket, touched, unlocks_added, parent_epic, derived, registered, asked, under)
+            (ticket, touched, unlocks_added, parent_epic, derived, under)
         };
 
         // MENGER-13: its first status, a transition from nothing — recorded
@@ -392,37 +350,14 @@ impl Store {
         let Derived { stored, moved } = derived;
         // WAVE-6: the placements it moved, said last.
         let placed = moved.placed.as_ref().and_then(Change::placed);
-        // COMP-3: and the registry it moved — stored in the transaction,
-        // taken by the cache with the rows, said after everything else.
-        let mut registered = registered;
-        let registry_moves = std::mem::take(&mut registered.moves);
-        let registry_rows = registry_moves.clone();
-        // INPUT-3: and its inputs — stored, taken, said last of all.
-        let mut asked = asked;
-        let input_list = asked.list.take();
-        let input_rows = input_list.clone();
-        let born_id = ticket.id.clone();
-        // NOTE-2: and the note it was made from, pointing at it.
-        let upgraded = note.map(|n| crate::notes::Note {
-            ticket: Some(ticket.id.to_string()),
-            upgraded_at: Some(ticket.created_unix),
-            ..n
-        });
-        let (note_row, note_kept) = (upgraded.clone(), upgraded.clone());
         let cache = Arc::clone(&self.tickets);
         self.write(
             serial,
             move |tx| {
                 db::upsert(tx, &born)?;
                 history::record(tx, &logged)?;
-                if let Some(n) = &note_row {
-                    notes::store(tx, n)?;
-                }
                 // SEARCH-2: and its row in the search index.
                 search::put(tx, &born.id, &born.title, &born.body)?;
-                if let Some(list) = &input_rows {
-                    inputs::store(tx, &born.id, list)?;
-                }
                 let blockers = rows
                     .into_iter()
                     .map(|row| {
@@ -432,19 +367,11 @@ impl Store {
                     })
                     .collect::<Result<HashMap<String, Ticket>, StoreError>>()?;
                 stored.write(tx)?;
-                components::store(tx, &registry_rows)?;
                 Ok(blockers)
             },
             move |cache, _| {
                 let out = cache.created(newborn, touched.into_values(), moved);
                 cache.log.append(&appended, &born_key);
-                if let Some(n) = note_kept {
-                    cache.notes.put(n);
-                }
-                cache.take_registry(registry_moves);
-                if let Some(list) = input_list {
-                    cache.inputs.take(&born_id, list);
-                }
                 out
             },
             move |blockers, (groups, child_count), tx| {
@@ -472,19 +399,13 @@ impl Store {
                 if let Some(placed) = placed {
                     let _ = tx.send(placed);
                 }
-                for change in Change::components(registered) {
-                    let _ = tx.send(change);
-                }
-                for change in Change::inputs(&ticket.shortcode, asked) {
-                    let _ = tx.send(change);
-                }
                 if let Some(moves) = announced {
                     let _ = tx.send(Change::CellsMoved { moves });
                 }
                 if let Some(change) = under.and_then(|u| u.after(&cache)) {
                     let _ = tx.send(change);
                 }
-                (ticket, upgraded)
+                ticket
             },
         )
         .await
