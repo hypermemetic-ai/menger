@@ -1,18 +1,26 @@
 //! FRAME-1's acceptance 2, held line by line as FRAME-2's waves land: the
 //! stored-UI framework lives apart from menger. menger's tree holds no copy
-//! of it, its workspace takes the framework's crates by sibling path (MFE-10's
-//! way: `../plexus-ui`), and nothing in menger names the crates by their old
-//! names.
+//! of it, it takes the framework from the sibling checkout `../plexus-ui`
+//! (MFE-10's way), nothing in it reads a path that moved, and nothing names
+//! the crates by their old names.
 //!
-//! FRAME-3 (wave 1) moves `ui-compiler/` and `ui-engine/` out whole, as
-//! `plexus-ui-compiler` and `plexus-ui-engine`. FRAME-4 and FRAME-5 add their
-//! paths to [`GONE`] and their crates to [`SIBLINGS`].
+//! FRAME-3 (wave 1) moves the compiler and the engine out whole, as
+//! `plexus-ui-compiler` and `plexus-ui-engine`. menger depends on the
+//! compiler (its tests compile natively, a dev-dependency) and on the engine
+//! only through `scripts/ui-build.sh`, which builds it into the bundle.
+//! FRAME-4 and FRAME-5 add their paths to [`GONE`] and their names to
+//! [`old_packages`].
 
 use std::path::{Path, PathBuf};
 
 /// menger's root: this package's manifest directory.
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+/// The sibling checkout the framework lives in.
+fn framework() -> PathBuf {
+    root().parent().expect("menger has a parent").join("plexus-ui")
 }
 
 /// The paths that went, from menger's root — each a file or a directory.
@@ -22,21 +30,19 @@ const GONE: &[&str] = &[
     "ui-engine",
 ];
 
-/// The framework's packages menger's graph takes, each from `../plexus-ui`.
-const SIBLINGS: &[&str] = &["plexus-ui-compiler", "plexus-ui-engine"];
+/// The framework's packages in menger's cargo graph, each from `../plexus-ui`
+/// (the engine is not one: menger builds it by script, below).
+const SIBLINGS: &[&str] = &["plexus-ui-compiler"];
 
-/// The packages the graph may no longer hold: the crates' old names (the
-/// brief's "no `menger-ui-*`" holds once FRAME-5 adds `ui-service`'s here;
-/// until then menger's `ui-service` keeps its name). Spelled in two halves so
-/// this file does not name them itself.
+/// The packages the graph may no longer hold, and the names no file may
+/// carry: the crates' old names, as a manifest writes them and as Rust does.
+/// `ui-service`'s stays until FRAME-5. Spelled in two halves so this file
+/// does not name them itself.
 fn old_packages() -> Vec<String> {
     ["-ui-compiler", "-ui-engine"].map(|tail| format!("menger{tail}")).to_vec()
 }
-
-/// The old names, as written in a manifest and as written in Rust. Spelled
-/// in two halves so this file does not name them itself.
-fn old_names() -> [String; 4] {
-    ["-ui-compiler", "-ui-engine", "_ui_compiler", "_ui_engine"].map(|tail| format!("menger{tail}"))
+fn old_names() -> Vec<String> {
+    ["-ui-compiler", "-ui-engine", "_ui_compiler", "_ui_engine"].map(|tail| format!("menger{tail}")).to_vec()
 }
 
 #[test]
@@ -92,104 +98,177 @@ fn breaks(pkgs: &[(String, PathBuf)], framework: &Path, siblings: &[&str], old: 
     out
 }
 
+/// The line of `script` that builds the engine from the sibling: cargo with
+/// `--manifest-path` into `../plexus-ui/` and `-p plexus-ui-engine`.
+fn engine_build_line(script: &str) -> Option<(usize, &str)> {
+    script
+        .lines()
+        .enumerate()
+        .find(|(_, l)| l.contains("--manifest-path") && l.contains("../plexus-ui/") && l.contains("-p plexus-ui-engine"))
+        .map(|(n, l)| (n + 1, l))
+}
+
 #[test]
 fn the_framework_is_a_sibling() {
     let root = root();
+    let framework = framework();
+    assert!(framework.join("Cargo.toml").is_file(), "FRAME-1: no framework checkout at {} (clone plexus-ui beside menger)", framework.display());
+
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     let out = std::process::Command::new(cargo)
-        .args(["metadata", "--format-version", "1"])
+        .args(["metadata", "--format-version", "1", "--locked", "--offline"])
         .current_dir(&root)
         .output()
         .expect("cargo metadata runs");
-    assert!(out.status.success(), "cargo metadata failed:\n{}", String::from_utf8_lossy(&out.stderr));
-    let framework = root.parent().expect("menger has a parent").join("plexus-ui");
+    assert!(out.status.success(), "cargo metadata --locked --offline failed:\n{}", String::from_utf8_lossy(&out.stderr));
     let broken = breaks(&packages(&String::from_utf8_lossy(&out.stdout)), &framework, SIBLINGS, &old_packages());
     assert!(broken.is_empty(), "FRAME-1: the framework is not taken from ../plexus-ui:\n  {}", broken.join("\n  "));
+
+    let script = std::fs::read_to_string(root.join("scripts/ui-build.sh")).expect("scripts/ui-build.sh");
+    let engine = engine_build_line(&script);
+    let cargo_lines: Vec<String> =
+        script.lines().enumerate().filter(|(_, l)| l.contains("cargo build")).map(|(n, l)| format!("scripts/ui-build.sh:{}: {}", n + 1, l.trim())).collect();
+    assert!(
+        engine.is_some(),
+        "FRAME-1: scripts/ui-build.sh does not build the engine from ../plexus-ui (`--manifest-path …/../plexus-ui/… -p plexus-ui-engine`); its cargo lines:\n  {}",
+        cargo_lines.join("\n  ")
+    );
 }
 
-/// The check checks: the parser and the rule, on a graph written here.
-#[test]
-fn the_metadata_check_reads_a_graph() {
-    let fixture = r#"{"packages":[
-        {"name":"menger","version":"0.6.2","manifest_path":"/w/menger/Cargo.toml"},
-        {"name":"plexus-ui-compiler","manifest_path":"/w/plexus-ui/compiler/Cargo.toml"},
-        {"name":"plexus-ui-engine","manifest_path":"/w/menger/ui-engine/Cargo.toml"},
-        {"name":"menger-ui-service","manifest_path":"/w/menger/ui-service/Cargo.toml"},
-        {"name":"OLD_ENGINE","manifest_path":"/w/menger/ui-engine/Cargo.toml"}
-    ],"workspace_members":[]}"#;
-    let old_engine = &old_packages()[1];
-    let pkgs = packages(&fixture.replace("OLD_ENGINE", old_engine));
-    assert_eq!(pkgs.len(), 5);
-    assert_eq!(pkgs[1], ("plexus-ui-compiler".to_string(), PathBuf::from("/w/plexus-ui/compiler/Cargo.toml")));
-
-    let framework = Path::new("/w/plexus-ui");
-    let broken = breaks(&pkgs, framework, SIBLINGS, &old_packages());
-    assert_eq!(broken.len(), 2, "{broken:?}");
-    assert!(broken[0].starts_with("plexus-ui-engine: from /w/menger/ui-engine"), "{broken:?}");
-    assert!(broken[1].starts_with(&format!("{old_engine}: an old name")), "{broken:?}");
-    assert!(!broken.iter().any(|b| b.starts_with("menger-ui-service")), "ui-service stays until FRAME-5: {broken:?}");
-
-    // A missing crate is named; a sibling of a similar name is not the framework.
-    let broken = breaks(&pkgs[..1], framework, SIBLINGS, &old_packages());
-    assert_eq!(broken, ["plexus-ui-compiler: not in the graph", "plexus-ui-engine: not in the graph"]);
-    let near = [("plexus-ui-compiler".to_string(), PathBuf::from("/w/plexus-ui-old/compiler/Cargo.toml"))];
-    assert_eq!(breaks(&near, framework, &["plexus-ui-compiler"], &old_packages()).len(), 1);
-
-    // The graph as the rule wants it.
-    let good = [
-        ("menger".to_string(), PathBuf::from("/w/menger/Cargo.toml")),
-        ("plexus-ui-compiler".to_string(), PathBuf::from("/w/plexus-ui/compiler/Cargo.toml")),
-        ("plexus-ui-engine".to_string(), PathBuf::from("/w/plexus-ui/engine/Cargo.toml")),
-    ];
-    assert!(breaks(&good, framework, SIBLINGS, &old_packages()).is_empty());
+/// Every file under `dir`, but build output, dependencies, dot-directories
+/// and the paths in `skip`.
+fn walk(dir: &Path, skip: &[PathBuf], out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if skip.contains(&path) || name.starts_with('.') || name == "node_modules" || name == "target" {
+            continue;
+        }
+        if path.is_dir() {
+            walk(&path, skip, out);
+        } else {
+            out.push(path);
+        }
+    }
 }
 
-/// The files the name check reads: every file under `scripts/`, `deploy/`
-/// (but `deploy/tests/fixtures`) and `tests/`, and the top-level
-/// `Cargo.toml`, `README.md`, `AGENTS.md`.
-fn named_files(root: &Path) -> Vec<PathBuf> {
-    fn walk(dir: &Path, skip: &Path, out: &mut Vec<PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = entry.file_name();
-            if path == skip || name.to_string_lossy().starts_with('.') || name == "node_modules" || name == "target" {
-                continue;
-            }
-            if path.is_dir() {
-                walk(&path, skip, out);
-            } else {
-                out.push(path);
+/// What the name check reads: the whole tree, but `deploy/tests/fixtures`,
+/// `tether/` (a workspace of its own), the build's `dist/` (output, ignored
+/// by git) and this file.
+fn whole_tree(root: &Path) -> Vec<PathBuf> {
+    let skip = ["deploy/tests/fixtures", "tether", "dist", "tests/apart.rs"].map(|p| root.join(p));
+    let mut out = Vec::new();
+    walk(root, &skip, &mut out);
+    out
+}
+
+/// What the path check reads: `tests/`, `scripts/` and `deploy/`, but
+/// `deploy/tests/fixtures` and this file.
+fn readers(root: &Path) -> Vec<PathBuf> {
+    let skip = ["deploy/tests/fixtures", "tests/apart.rs"].map(|p| root.join(p));
+    let mut out = Vec::new();
+    for dir in ["tests", "scripts", "deploy"] {
+        walk(&root.join(dir), &skip, &mut out);
+    }
+    out
+}
+
+/// Each line of each file that `hit` finds something in, as `path:line: what`.
+fn lines_where(root: &Path, files: &[PathBuf], hit: impl Fn(&str) -> Vec<String>) -> Vec<String> {
+    let mut found = Vec::new();
+    for file in files {
+        let Ok(bytes) = std::fs::read(file) else { continue };
+        let text = String::from_utf8_lossy(&bytes);
+        for (n, line) in text.lines().enumerate() {
+            for what in hit(line) {
+                found.push(format!("{}:{}: {what}", file.strip_prefix(root).unwrap().display(), n + 1));
             }
         }
     }
-    let skip = root.join("deploy/tests/fixtures");
+    found
+}
+
+/// The moved directories `line` names as paths: `ui-compiler/` or
+/// `ui-engine/` at the start or after a character that is not `-` or a word
+/// character (`(^|[^-\w])ui-(compiler|engine)/`).
+fn moved_paths(line: &str) -> Vec<String> {
     let mut out = Vec::new();
-    for dir in ["scripts", "deploy", "tests"] {
-        walk(&root.join(dir), &skip, &mut out);
+    for dir in ["ui-compiler/", "ui-engine/"] {
+        for (at, _) in line.match_indices(dir) {
+            let before = line[..at].chars().next_back();
+            if !before.is_some_and(|c| c == '-' || c == '_' || c.is_alphanumeric()) {
+                out.push(dir.to_string());
+            }
+        }
     }
-    out.extend(["Cargo.toml", "README.md", "AGENTS.md"].map(|f| root.join(f)));
     out
 }
 
 #[test]
 fn nothing_names_the_old_crates() {
     let root = root();
-    let files = named_files(&root);
-    assert!(files.iter().any(|f| f.ends_with("scripts/ui-build.sh")), "the walk lost scripts/");
-    assert!(files.iter().any(|f| f.ends_with("deploy/pipeline")), "the walk lost deploy/");
-    assert!(!files.iter().any(|f| f.starts_with(root.join("deploy/tests/fixtures"))), "the walk read deploy/tests/fixtures");
-    let mut named = Vec::new();
-    for file in &files {
-        let Ok(text) = std::fs::read(file) else { continue };
-        let text = String::from_utf8_lossy(&text);
-        for (n, line) in text.lines().enumerate() {
-            for old in &old_names() {
-                if line.contains(old.as_str()) {
-                    named.push(format!("{}:{}: {old}", file.strip_prefix(&root).unwrap().display(), n + 1));
-                }
-            }
-        }
+    let files = whole_tree(&root);
+    for want in ["scripts/ui-build.sh", "deploy/pipeline", "tests/support/mod.rs", "Cargo.toml", "Cargo.lock", "README.md", "AGENTS.md"] {
+        assert!(files.contains(&root.join(want)), "the walk lost {want}");
     }
+    let old = old_names();
+    let named = lines_where(&root, &files, |line| old.iter().filter(|o| line.contains(o.as_str())).cloned().collect());
     assert!(named.is_empty(), "FRAME-1: {} line(s) still name the crates by their old names:\n  {}", named.len(), named.join("\n  "));
+}
+
+#[test]
+fn nothing_reads_the_moved_paths() {
+    let root = root();
+    let files = readers(&root);
+    assert!(files.contains(&root.join("tests/support/mod.rs")), "the walk lost tests/");
+    assert!(!files.iter().any(|f| f.starts_with(root.join("deploy/tests/fixtures"))), "the walk read deploy/tests/fixtures");
+    let read = lines_where(&root, &files, moved_paths);
+    assert!(read.is_empty(), "FRAME-1: {} line(s) still read a path that moved to ../plexus-ui:\n  {}", read.len(), read.join("\n  "));
+}
+
+/// The checks check: the parser and the rules, on what they must and must
+/// not see.
+#[test]
+fn the_checks_read_what_they_are_given() {
+    let fixture = r#"{"packages":[
+        {"name":"menger","version":"0.6.2","manifest_path":"/w/menger/Cargo.toml"},
+        {"name":"plexus-ui-compiler","manifest_path":"/w/plexus-ui/compiler/Cargo.toml"},
+        {"name":"menger-ui-service","manifest_path":"/w/menger/ui-service/Cargo.toml"},
+        {"name":"OLD_ENGINE","manifest_path":"/w/menger/ui-engine/Cargo.toml"}
+    ],"workspace_members":[]}"#;
+    let old_engine = &old_packages()[1];
+    let pkgs = packages(&fixture.replace("OLD_ENGINE", old_engine));
+    assert_eq!(pkgs.len(), 4);
+    assert_eq!(pkgs[1], ("plexus-ui-compiler".to_string(), PathBuf::from("/w/plexus-ui/compiler/Cargo.toml")));
+
+    let framework = Path::new("/w/plexus-ui");
+    let broken = breaks(&pkgs, framework, SIBLINGS, &old_packages());
+    assert_eq!(broken, [format!("{old_engine}: an old name, still in the graph (/w/menger/ui-engine/Cargo.toml)")]);
+    assert!(breaks(&pkgs[..3], framework, SIBLINGS, &old_packages()).is_empty(), "ui-service stays until FRAME-5");
+
+    // Missing is named; a near sibling, a copy in menger and the registry's are not the framework.
+    assert_eq!(breaks(&pkgs[..1], framework, SIBLINGS, &old_packages()), ["plexus-ui-compiler: not in the graph"]);
+    for elsewhere in [
+        "/w/plexus-ui-old/compiler/Cargo.toml",
+        "/w/menger/compiler/Cargo.toml",
+        "/home/u/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/plexus-ui-compiler-0.1.0/Cargo.toml",
+    ] {
+        let one = [("plexus-ui-compiler".to_string(), PathBuf::from(elsewhere))];
+        assert_eq!(breaks(&one, framework, SIBLINGS, &old_packages()).len(), 1, "{elsewhere} taken for the framework");
+    }
+
+    // The engine's build line.
+    let script = "x\n  (cd \"$root\" && cargo build --manifest-path \"$root/../plexus-ui/Cargo.toml\" -p plexus-ui-engine --lib)\n";
+    assert_eq!(engine_build_line(script).map(|(n, _)| n), Some(2));
+    assert!(engine_build_line("cargo build -p plexus-ui-engine --lib\n").is_none());
+    assert!(engine_build_line("cargo build --manifest-path ../plexus-ui/Cargo.toml -p plexus-ui-compiler\n").is_none());
+
+    // The moved paths: as a path, never inside a longer name.
+    assert_eq!(moved_paths("cat ui-compiler/tests/golden/x.svelte"), ["ui-compiler/"]);
+    assert_eq!(moved_paths("\"$root/ui-engine/Cargo.toml\""), ["ui-engine/"]);
+    assert_eq!(moved_paths("#   engine.js  (ui-engine/, abi engine/1)"), ["ui-engine/"]);
+    assert!(moved_paths("../plexus-ui/compiler/ and dist/ui-compiler.wasm").is_empty());
+    assert!(moved_paths("plexus-ui-compiler/ build-ui-compiler/ my_ui-engine/").is_empty());
 }
