@@ -97,3 +97,35 @@ fn a_refusal_in_wasm_is_the_native_one() {
         }
     }
 }
+
+/// Acceptance 4's measurement (not a gate: timings on a shared machine):
+/// a component of fifty nodes natively and in wasmtime.
+/// `cargo test -p menger-ui-compiler --release --test wasm -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn fifty_nodes_timings() {
+    let mut src = String::from(
+        "<script>\n  prop(\"id\");\n  state(#{ open: false });\n  fn toggle(state, ev) { state.open = !state.open; state }\n</script>\n<div class=\"list\" on:click={toggle}>\n",
+    );
+    // 1 div + 1 ul + 16 × (li, its text, span, its text) = 66 nodes, past fifty.
+    src.push_str("<ul>\n");
+    for i in 0..16 {
+        src.push_str(&format!("  <li data-i=\"{i}\">{{state.open}}<span>{i}</span></li>\n"));
+    }
+    src.push_str("</ul>\n</div>\n");
+    let tree = menger_ui_compiler::compile("fifty-nodes", &src).expect("compiles");
+    let nodes = tree.tree.matches("\"el\"").count() + tree.tree.matches("\"text\"").count();
+    let n = 200;
+    let t = std::time::Instant::now();
+    for _ in 0..n {
+        menger_ui_compiler::compile("fifty-nodes", &src).expect("compiles");
+    }
+    let native = t.elapsed() / n;
+    common::module();
+    let t = std::time::Instant::now();
+    for _ in 0..20 {
+        assert!(matches!(common::run("fifty-nodes", &src, common::FUEL), Outcome::Ok(_)));
+    }
+    let wasm = t.elapsed() / 20;
+    println!("{nodes} nodes: native {native:?} per compile, wasmtime {wasm:?} per run (fresh instance, 10^8 fuel)");
+}

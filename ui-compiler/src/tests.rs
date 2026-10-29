@@ -42,7 +42,7 @@ fn uses_are_the_calls_and_the_live_methods() {
     assert_eq!(t["uses"], json!(["tickets.list", "tickets.update", "tickets.watch"]), "sorted, deduplicated, no comment");
 
     // A method that is not a literal cannot be checked against `uses`.
-    let src = "<script>\n  fn go(state, ev) {\n    let m = \"tickets.list\";\n    call(m, #{});\n    state\n  }\n</script>\n<p/>\n";
+    let src = "<script>\n  fn fetch(state, ev) {\n    let m = \"tickets.list\";\n    call(m, #{});\n    state\n  }\n</script>\n<p/>\n";
     refused_at("a non-literal call", src, 4, "call");
 }
 

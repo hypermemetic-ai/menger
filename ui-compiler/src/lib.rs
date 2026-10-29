@@ -8,6 +8,12 @@
 //! (`--features wasm`, [`wasm`]), which imports nothing.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+mod json;
+mod lines;
+mod script;
+mod template;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;
@@ -51,8 +57,49 @@ impl From<Result<Compiled, Refusal>> for Answer {
 /// Compile one component's source; `name` is its file's stem and goes into
 /// the tree.
 pub fn compile(name: &str, src: &str) -> Result<Compiled, Refusal> {
-    let _ = (name, src);
-    todo!("UI-5: the compiler")
+    if name.is_empty() {
+        return Err(Refusal { line: 0, message: "a component has a name: its file's stem".into() });
+    }
+    let lines = lines::Lines::new(src);
+    let mut j = json::Arena::default();
+    let t = template::parse(src, &lines, &mut j)?;
+    let d = script::analyse(t.script.as_ref(), &lines, &mut j)?;
+    for (handler, line) in &t.handlers {
+        if !d.folds.contains(handler) {
+            return Err(Refusal {
+                line: *line,
+                message: format!("on: names `{handler}`, and the script has no fn {handler}(state, ev)"),
+            });
+        }
+    }
+    // A bare live in {#each} reads its rows.
+    for (id, expr) in &t.each_exprs {
+        if d.is_live(expr) {
+            j.set_str(*id, format!("{expr}.rows"));
+        }
+    }
+    let hash: String = Sha256::digest(d.handlers.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
+    let props = d.props.iter().map(|p| j.str(p.clone())).collect();
+    let props = j.arr(props);
+    let state = match d.state {
+        Some(s) => s,
+        None => j.obj(Vec::new()),
+    };
+    let live = j.obj(d.live.clone());
+    let uses = d.uses.iter().map(|u| j.str(u.clone())).collect();
+    let uses = j.arr(uses);
+    let (abi, name, handlers) = (j.str("engine/1"), j.str(name), j.str(hash));
+    let root = j.obj(vec![
+        ("abi".into(), abi),
+        ("name".into(), name),
+        ("props".into(), props),
+        ("state".into(), state),
+        ("live".into(), live),
+        ("uses".into(), uses),
+        ("handlers".into(), handlers),
+        ("tree".into(), t.tree),
+    ]);
+    Ok(Compiled { tree: j.pretty(root), handlers: d.handlers })
 }
 
 /// [`compile`], answered as the JSON the wasm module returns.
