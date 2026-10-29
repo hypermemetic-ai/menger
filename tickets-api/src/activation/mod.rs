@@ -223,7 +223,7 @@ impl TicketsActivation {
         futures::stream::once(async move { TicketsEvent::Health { version: env!("CARGO_PKG_VERSION").to_string(), unix_now: chrono::Utc::now().timestamp(), ticket_count, archived } })
     }
 
-    /// Create a ticket; allocates the next EPIC-N id, status starts Pending (a doc's: Doc, for good); the first ticket of a prefix must be a scope or a doc.
+    /// Create a ticket; allocates the next EPIC-N id, status starts Draft (TICKETS-13; a doc's: Doc, for good); the first ticket of a prefix must be a scope or a doc.
     ///
     /// Creates a ticket in an epic. The store allocates the next `EPIC-N`
     /// id; status starts at `Pending` (only a human promotes to `Ready`);
