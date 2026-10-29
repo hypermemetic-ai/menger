@@ -29,6 +29,11 @@
 //! - FRAME-6 (wave 4): the binary is the framework's — `plexus-ui` (its
 //!   `serve` beside `build`, `sign`, `push`) is built from `../plexus-ui`
 //!   and links the service; menger's tree builds no binary of that name.
+//! - FRAME-11: the dialect is named — rhx (Rhai in markup): `ui/src/*.rhx`,
+//!   profile `rhx/1`; no `.svelte` under `ui/` or `tests/`, every component
+//!   reached from `routes.json` or `slots.json` and every name there a
+//!   source, and README / AGENTS.md / deploy/README.md say Svelte only of
+//!   real Svelte (`svelte/1`, FRAME-13) or of what rhx borrowed.
 //! - FRAME-9: `tether/` takes `plexus-login` from the sibling, as
 //!   plexus-substrate (which tether takes) does — one `plexus-login` in its
 //!   graph, never menger's tree's.
@@ -693,7 +698,7 @@ fn the_checks_read_what_they_are_given() {
     assert_eq!(found, [(1, true), (3, false)]);
 
     // The moved paths: as a path, never inside a longer name.
-    assert_eq!(moved_paths("cat ui-compiler/tests/golden/x.svelte"), ["ui-compiler/"]);
+    assert_eq!(moved_paths("cat ui-compiler/tests/golden/x.rhx"), ["ui-compiler/"]);
     assert_eq!(moved_paths("\"$root/ui-engine/Cargo.toml\""), ["ui-engine/"]);
     assert_eq!(moved_paths("| `ui` | the UI's versions | `ui-service/` |"), ["ui-service/"]);
     assert_eq!(moved_paths("#   engine.js  (ui-engine/, abi engine/1)"), ["ui-engine/"]);
@@ -745,7 +750,7 @@ fn the_checks_read_what_they_are_given() {
     assert_eq!(bullet("a\n", "- **Workspace members**"), None);
 
     // golden/: menger's when not a framework's tests/golden/.
-    assert!(golden_as_ours("`src/*.svelte`, `golden/` — compiled by"));
+    assert!(golden_as_ours("`src/*.rhx`, `golden/` — compiled by"));
     assert!(golden_as_ours("ui/golden/ and compiler/tests/golden/"));
     assert!(!golden_as_ours("`../plexus-ui`'s (`compiler/tests/golden/`)"));
 }
@@ -968,4 +973,167 @@ fn menger_names_its_service_to_the_tool() {
 
     let old = lines_where(&root(), &readers(&root()), |l| if l.contains("--contract-method") { vec![l.trim().to_string()] } else { vec![] });
     assert!(old.is_empty(), "FRAME-6: --contract-method is gone from the tool:\n  {}", old.join("\n  "));
+}
+
+/// The `.svelte` files under `dirs` of `root`, relative, sorted.
+fn svelte_files(root: &Path, dirs: &[&str]) -> Vec<String> {
+    let mut files = Vec::new();
+    for d in dirs {
+        walk(&root.join(d), &[], &mut files);
+    }
+    let mut out: Vec<String> = files.iter().filter(|p| p.extension().is_some_and(|e| e == "svelte")).map(|p| p.strip_prefix(root).unwrap_or(p).display().to_string()).collect();
+    out.sort();
+    out
+}
+
+/// What FRAME-11 finds wrong with a UI — its components (name → source),
+/// `routes.json` and `slots.json` as text: a name the routes or slots give
+/// that is no component, and a component nothing reaches (a route, a slot's
+/// layout or default, or a `<name` tag in a reached component's source).
+fn ui_breaks(components: &[(String, String)], routes: &str, slots: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let routes: Value = serde_json::from_str(routes).unwrap_or_else(|e| panic!("routes.json: {e}"));
+    let slots: Value = serde_json::from_str(slots).unwrap_or_else(|e| panic!("slots.json: {e}"));
+    let mut named: Vec<(String, &str)> = routes.as_object().into_iter().flatten().filter_map(|(_, v)| v.as_str().map(|n| (n.to_string(), "routes.json"))).collect();
+    for (layout, sections) in slots.as_object().into_iter().flatten() {
+        named.push((layout.clone(), "slots.json"));
+        named.extend(sections.as_object().into_iter().flatten().filter_map(|(_, v)| v.as_str().map(|n| (n.to_string(), "slots.json"))));
+    }
+    let mut seen = Vec::new();
+    named.retain(|(n, _)| if seen.contains(n) { false } else { seen.push(n.clone()); true });
+    let have = |n: &str| components.iter().any(|(c, _)| c == n);
+    for (n, file) in &named {
+        if !have(n) {
+            out.push(format!("{file} names {n}, and ui/src holds no {n}.rhx"));
+        }
+    }
+    // Reached: what is named, then each tag of a reached source, to a fixpoint.
+    let mut reached: Vec<String> = named.into_iter().map(|(n, _)| n).collect();
+    let mut at = 0;
+    while at < reached.len() {
+        if let Some((_, src)) = components.iter().find(|(c, _)| *c == reached[at]) {
+            for (c, _) in components {
+                if !reached.contains(c) && src.contains(&format!("<{c}")) {
+                    reached.push(c.clone());
+                }
+            }
+        }
+        at += 1;
+    }
+    for (c, _) in components {
+        if !reached.contains(c) {
+            out.push(format!("ui/src/{c}.rhx: no route, slot or reached component uses it"));
+        }
+    }
+    out
+}
+
+/// The words a doc may say Svelte with: real Svelte — the profile
+/// `svelte/1`, FRAME-13 that brings it, "real Svelte" — and what rhx
+/// borrowed ("Svelte's template subset").
+const SVELTE_ALLOWED: [&str; 4] = ["svelte/1", "FRAME-13", "real Svelte", "Svelte's template subset"];
+
+/// A doc's units of prose, each with its first line: each sentence of a
+/// paragraph (a table row, a list item, a heading and a quote begin their
+/// own) and each line of a fenced block, its fence lines too.
+fn prose_units(text: &str) -> Vec<(usize, String)> {
+    fn flush(para: &mut Option<(usize, String)>, out: &mut Vec<(usize, String)>) {
+        if let Some((line, p)) = para.take() {
+            let mut rest = p.as_str();
+            while !rest.is_empty() {
+                let end = [". ", "? ", "! "].iter().filter_map(|t| rest.find(t)).min().map_or(rest.len(), |n| n + 1);
+                out.push((line, rest[..end].trim().to_string()));
+                rest = &rest[end..];
+            }
+        }
+    }
+    let (mut out, mut para, mut fenced) = (Vec::new(), None::<(usize, String)>, false);
+    for (i, l) in text.lines().enumerate() {
+        let t = l.trim_start();
+        if t.starts_with("```") {
+            flush(&mut para, &mut out);
+            out.push((i + 1, t.to_string()));
+            fenced = !fenced;
+            continue;
+        }
+        if fenced {
+            out.push((i + 1, l.to_string()));
+            continue;
+        }
+        if t.is_empty() || ["|", "- ", "* ", "#", ">"].iter().any(|s| t.starts_with(s)) {
+            flush(&mut para, &mut out);
+        }
+        if t.is_empty() {
+            continue;
+        }
+        match &mut para {
+            Some((_, p)) => {
+                p.push(' ');
+                p.push_str(t);
+            }
+            None => para = Some((i + 1, t.to_string())),
+        }
+    }
+    flush(&mut para, &mut out);
+    out
+}
+
+/// Each unit of `text` that says Svelte of what is not Svelte: one that
+/// names none of [`SVELTE_ALLOWED`], or calls the dialect by an old name
+/// (Svelte-like, a Svelte subset, a `svelte` code fence) whatever else it says.
+fn svelte_said(text: &str) -> Vec<(usize, String)> {
+    prose_units(text)
+        .into_iter()
+        .filter(|(_, s)| {
+            let lower = s.to_lowercase();
+            lower.contains("svelte")
+                && (["svelte-like", "svelte subset", "subset of svelte", "```svelte"].iter().any(|o| lower.contains(o)) || !SVELTE_ALLOWED.iter().any(|a| s.contains(a)))
+        })
+        .collect()
+}
+
+/// FRAME-11: the dialect is rhx — `ui/src/<name>.rhx`, profile `rhx/1` — and
+/// nothing of menger's calls it Svelte (the owner, 2026-10-29: "Don't put
+/// .svelte if it's not .svelte"); a `.svelte` is real Svelte's (FRAME-13).
+#[test]
+fn the_dialect_is_rhx() {
+    // The checks, on what they are given first.
+    let given = |c: &[(&str, &str)]| c.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect::<Vec<_>>();
+    let routes = r##"{ "#/": "a-layout", "#/x": "x-page" }"##;
+    let slots = r#"{ "a-layout": { "main": "b-rows" } }"#;
+    assert!(ui_breaks(&given(&[("a-layout", "<slot name=\"main\"/>"), ("b-rows", "<c-chip id={x}/>"), ("c-chip", "<p/>"), ("x-page", "<p/>")]), routes, slots).is_empty());
+    assert_eq!(
+        ui_breaks(&given(&[("a-layout", "<p/>"), ("b-rows", "<p/>"), ("d-lost", "<p/>")]), routes, slots),
+        ["routes.json names x-page, and ui/src holds no x-page.rhx", "ui/src/d-lost.rhx: no route, slot or reached component uses it"]
+    );
+    assert_eq!(svelte_said("rhx: Svelte's template subset with Rhai folds.\n\nA `.svelte` file is real Svelte (`svelte/1`, FRAME-13) or refused.\n"), []);
+    assert_eq!(
+        svelte_said("Components are a Svelte-like subset. Files are\n`ui/src/*.svelte`.\n\n```svelte\n<p/>\n```\n- the Svelte subset (real Svelte aside)\n"),
+        [(1, "Components are a Svelte-like subset.".to_string()), (1, "Files are `ui/src/*.svelte`.".to_string()), (4, "```svelte".to_string()), (7, "- the Svelte subset (real Svelte aside)".to_string())]
+    );
+
+    let root = root();
+    let mut broken: Vec<String> = svelte_files(&root, &["ui", "tests"]).into_iter().map(|f| format!("{f}: a source named .svelte that is rhx")).collect();
+
+    let src = root.join("ui/src");
+    let components: Vec<(String, String)> = names_in(&src)
+        .into_iter()
+        .filter_map(|f| f.strip_suffix(".rhx").map(str::to_string))
+        .map(|n| {
+            let text = std::fs::read_to_string(src.join(format!("{n}.rhx"))).unwrap();
+            (n, text)
+        })
+        .collect();
+    let read = |f: &str| std::fs::read_to_string(root.join(f)).unwrap_or_else(|e| panic!("{f}: {e}"));
+    broken.extend(ui_breaks(&components, &read("ui/routes.json"), &read("ui/slots.json")));
+
+    for doc in ["README.md", "AGENTS.md", "deploy/README.md"] {
+        broken.extend(svelte_said(&read(doc)).into_iter().map(|(n, s)| format!("{doc}:{n}: {s}")));
+    }
+    let (readme, agents) = (read("README.md"), read("AGENTS.md"));
+    broken.extend(doc_breaks(&[("README.md", readme.as_str()), ("AGENTS.md", agents.as_str())], &[("AGENTS.md", "Adding a component", &["rhx", "ui/src/*.rhx", "ui/src/<name>.rhx:LINE"])]));
+    if !readme.contains("rhx/1") && !readme.contains(".rhx") {
+        broken.push("README.md: names no rhx (rhx/1, <name>.rhx)".into());
+    }
+    assert!(broken.is_empty(), "FRAME-11: the dialect is rhx, and Svelte is said only of real Svelte:\n  {}", broken.join("\n  "));
 }
