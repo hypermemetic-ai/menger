@@ -1,68 +1,28 @@
-//! Day-one web shell, plus (MFE-2) the Leptos app and its data plane.
+//! The web shell: the login routes, and the app's build when there is one.
 //!
-//! menger's rule (since 0.04): frontend and backend are online from the
-//! first commit, so every noun is visible the day it is written. Three
-//! surfaces share this one listener, and nothing else is served on it
-//! (ACCESS-33):
+//! v2: the frontend is deleted (tag v0.0.1 holds v1's Leptos app, the
+//! `/vanilla` page and the body frame). Pages come back one at a time, from
+//! the mockups on their tickets. Until then:
 //!
-//! - `/` — **the Leptos app** (MFE-4). It is the frontend; a browser
-//!   pointed at the server gets it without being told a path. When there
-//!   is no build output the root *degrades to the vanilla page* rather
-//!   than to an error — the day-one property is that the binary alone
-//!   always serves something live, and that is what keeps it true.
-//! - `/vanilla` — the day-one page, embedded at compile time, speaking
-//!   the Plexus wire protocol over WebSocket. Unchanged since day one
-//!   and fully functional; it moved off `/` with MFE-4 and stays until an
-//!   epic retires it.
-//! - `/app/` — the Leptos CSR app (MFE-2), its build in `frontend/dist`
-//!   read into a table (ACCESS-33): a request path is a key into it, never
-//!   a path on disk. Still the app's own root: it is where its assets
-//!   live (`Trunk.toml`'s `public_url`, so a built `index.html` names
-//!   `/app/…` whichever URL served it) and it is the deep-link prefix
-//!   MFE-1 pinned (`/app/#/ticket/{id}`), which the vanilla page's rows
-//!   still link to. The frontend is deliberately not part of this
-//!   crate's build: assets are an input to *serving*, so `cargo build`
-//!   and `cargo test` never need the wasm toolchain. When the output is
-//!   missing **this** URL answers with a plain "frontend not built" page
-//!   (HTTP 200 — a deliberate state with build instructions, not an
-//!   error), never a crash or a 500; the root is the one that degrades
-//!   to something usable instead.
-//!
-//! DIST-3: where the table comes from is an [`AppSource`]. `Dir` is the
-//! above, unchanged — dist on disk, read again when its entrypoint's
-//! modification time changes. `Embedded` is the build compiled into the
-//! binary by `build.rs` under the `embedded-app` feature (off by default),
-//! for a menger with no checkout beside it (a published crate, a desktop
-//! host): the same table — the entrypoint stamped with `{{WS_PORT}}` and
-//! `{{TITLE}}`, the same MIME types, a request path a key and never a path —
-//! read once, since a binary's build never changes. The binary chooses:
-//! `--app-dist` given → that directory; else, with the build embedded →
-//! `Embedded`; else → [`default_app_dist`] ([`preferred_app`]).
+//! - `/` — [`PLACEHOLDER`], what is running and where its socket is;
+//! - `/app/` — the app's build in `frontend/dist` read into a table
+//!   (ACCESS-33: a request path is a key into it, never a path on disk), or
+//!   the "not built" page (200) while there is none;
+//! - the login routes (IDENTITY-19), unchanged — the auth surface is the
+//!   next thing v2 reworks.
 //!
 //! SCAFFOLD-5: the table, the stamping, the app's routes, the hardening
-//! (IDENTITY-38) and [`AppSource`] are `plexus-shell`'s. This module is
-//! menger's part: the `/vanilla` page (and `/` falling back to it), the
-//! favicon, the tab's title, the "not built" page's words, the embedded
-//! table, the pages' policy and the frame document (ACCESS-28), and the
-//! login routes and checks layered around the crate's router.
+//! (IDENTITY-38) and [`AppSource`] are `plexus-shell`'s; this module is
+//! menger's part around them.
 //!
-//! ACCESS-28: **every page goes out under a policy.** The app's pages
-//! (`/`, `/app/`, `/vanilla`, "not built") under [`PAGE_CSP`] — scripts
-//! only the app's own files, the wasm and the page's hashed inline blocks;
-//! connections only to itself and its hub; images only its own; nothing
-//! frames it. The sign-in pages under plexus-login's own (their blocks
-//! hashed, AUTH-22). A ticket body's frame is not a srcdoc any more — a
-//! srcdoc inherits its parent's policy, and a body's inline scripts and
-//! esm.sh imports are the product — but [`FRAME`], served at
-//! [`FRAME_PATH`] under [`FRAME_CSP`], which writes the body's document
-//! over itself (frontend/src/frame.rs).
+//! ACCESS-28: every page goes out under a policy — the app's under
+//! [`PAGE_CSP`], the sign-in pages under plexus-login's own.
 
 use axum::extract::{Request, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
-use plexus_shell::EmbeddedTable;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -113,13 +73,16 @@ pub fn tab_title(env: Option<&str>) -> &'static str {
     }
 }
 
-/// MFE-23: the tab's icon, a Menger-sponge face (the Sierpinski carpet,
-/// level 2), embedded so the binary alone always has it.
-const FAVICON: &str = include_str!("../web/favicon.svg");
 
-/// The day-one page, served at `/vanilla` and at `/` when there is no app
-/// build (MFE-4); stamped as the app's entrypoint is (MFE-9, MFE-23).
-const VANILLA: &str = include_str!("../web/index.html");
+/// v2: the page at `/` while there is no frontend — what is running and
+/// where its socket is, nothing else (stamped as the app's entrypoint is).
+pub const PLACEHOLDER: &str = concat!(
+    "<!doctype html><meta charset=\"utf-8\"><title>{{TITLE}}</title>",
+    "<body style=\"font: 14px/1.6 monospace; padding: 2rem; max-width: 46rem\">",
+    "<h1 style=\"font-size:1.1rem\">menger v2</h1>",
+    "<p>No frontend yet — each page is built from the mockups on its ticket.</p>",
+    "<p>The plexus is on port {{WS_PORT}}: <code>synapse -P {{WS_PORT}} menger tickets</code>.</p>",
+);
 
 /// APP-64: the app build's files served at the root too, public — what
 /// Add to Home Screen and an installed app ask the origin for (iOS takes
@@ -149,7 +112,7 @@ pub const SERVICE_WORKER: &str = "/sw.js";
 ///   app is refused, so a body cannot learn who reads it (ACCESS-4 M5);
 /// - connections: itself, its hub, and a WebSocket on loopback — MFE-21's
 ///   settings point the app at another menger on this machine;
-/// - frames: its own (the body frames, [`FRAME_PATH`]); nothing frames it.
+/// - frames: its own; nothing frames it.
 ///
 /// No `form-action`: the sign-out form's answer may go on to a provider's
 /// own sign-out page (IDENTITY-30), which the browser checks against it.
@@ -213,19 +176,6 @@ pub fn page_csp(framing: &Framing) -> String {
     csp
 }
 
-/// ACCESS-28: where a ticket body's frame starts ([`FRAME`]).
-pub const FRAME_PATH: &str = "/app/frame";
-
-/// ACCESS-28: the frame document — it asks the host for its document and
-/// writes it over itself (its header is the protocol's reference).
-const FRAME: &str = include_str!("../web/frame.html");
-
-/// ACCESS-28: the frame document's policy — IDENTITY-28's (no connection,
-/// no form; scripts, styles, images and fonts left alone: bodies import
-/// modules from esm.sh and show images from anywhere), and framed only by
-/// the app.
-pub const FRAME_CSP: &str = "connect-src 'none'; form-action 'none'; frame-ancestors 'self'";
-
 /// The degraded answer when `frontend/dist` holds no build. 200 on
 /// purpose: "not built yet" is a documented state of a fresh checkout,
 /// and the page itself is the clear indication MFE-2 requires.
@@ -233,12 +183,8 @@ const NOT_BUILT: &str = concat!(
     "<!doctype html><meta charset=\"utf-8\"><title>menger — frontend not built</title>",
     "<body style=\"font: 14px/1.6 monospace; padding: 2rem; max-width: 46rem\">",
     "<h1 style=\"font-size:1.1rem\">frontend not built</h1>",
-    "<p>The Leptos app's build output is missing. Build it once:</p>",
-    "<pre>cd frontend && trunk build --release</pre>",
-    "<p>then reload. Toolchain setup is in README.md → Frontend. ",
-    "The server itself is fine — the vanilla shell is at ",
-    "<a href=\"/vanilla\">/vanilla</a>, and <a href=\"/\">/</a> serves it ",
-    "until this build exists.</p>",
+    "<p>The app's build output is missing.</p>",
+    "<p>v2 has no frontend yet; the server itself is fine.</p>",
 );
 
 /// Where `trunk build` puts the app when run from a checkout. Overridable
@@ -247,29 +193,18 @@ pub fn default_app_dist() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("frontend/dist")
 }
 
-/// DIST-3: the app's build as build.rs found it (plexus-shell's embedding)
-/// — empty unless the `embedded-app` feature is on and frontend/dist held
-/// a build.
-static EMBEDDED_APP: EmbeddedTable = plexus_shell::embedded_app!();
-
-/// Whether this binary carries the app's build: the `embedded-app`
-/// feature was on and frontend/dist held a build when it compiled.
-pub fn embedded_available() -> bool {
-    plexus_shell::has_entrypoint(EMBEDDED_APP)
-}
-
-/// The source when none is named: the embedded build when there is one,
-/// else the checkout's `frontend/dist` ([`default_app_dist`]).
+/// The source when none is named: the checkout's `frontend/dist`
+/// ([`default_app_dist`]). v2: nothing is embedded (build.rs went with the
+/// frontend).
 pub fn preferred_app() -> AppSource {
-    AppSource::embedded_or(EMBEDDED_APP, default_app_dist())
+    AppSource::Dir(default_app_dist())
 }
 
 /// menger's shell as plexus-shell serves it: the app under `/app/` (where
 /// `Trunk.toml`'s `public_url` puts its assets, and MFE-1's deep links),
-/// titled for the environment (MFE-23), `/vanilla`, and `/` falling back
-/// to it when there is no build (MFE-4). No other routes: the favicon,
-/// the frame document and the login routes are added around it
-/// ([`favicon_routes`], [`frame_routes`], [`serve_on`]).
+/// titled for the environment (MFE-23), and `/` falling back to
+/// [`PLACEHOLDER`] when there is no build (MFE-4). No other routes: the
+/// login routes are added around it ([`serve_on`]).
 pub fn app_shell(env: Option<&str>, app: AppSource) -> plexus_shell::ShellConfig {
     app_shell_framed(env, app, &Framing::default())
 }
@@ -280,23 +215,11 @@ pub fn app_shell(env: Option<&str>, app: AppSource) -> plexus_shell::ShellConfig
 pub fn app_shell_framed(env: Option<&str>, app: AppSource, framing: &Framing) -> plexus_shell::ShellConfig {
     let mut cfg = plexus_shell::ShellConfig::new(tab_title(env), app);
     cfg.stamps.push(("{{LIVE_ORIGIN}}".into(), framing.live.clone().unwrap_or_default()));
-    cfg.pages.push(("/vanilla".into(), VANILLA.into()));
-    cfg.root_fallback = Some(VANILLA.into());
+    cfg.root_fallback = Some(PLACEHOLDER.into());
     cfg.not_built = Some(NOT_BUILT.into());
     cfg.csp = page_csp(framing);
     cfg.root_files = ROOT_FILES.iter().map(|f| f.to_string()).collect();
     cfg
-}
-
-/// ACCESS-28: the frame document, public — it holds no data, and the
-/// frame's first navigation is the app's.
-pub fn frame_routes() -> Router {
-    Router::new().route(FRAME_PATH, get(frame))
-}
-
-/// MFE-23: the tab's icon, for both pages — public, never behind a session.
-pub fn favicon_routes() -> Router {
-    Router::new().route("/favicon.svg", get(favicon))
 }
 
 pub async fn serve(cfg: ShellConfig) -> anyhow::Result<()> {
@@ -329,7 +252,6 @@ pub async fn serve_on(
 
 async fn router(cfg: ShellConfig, at: std::net::SocketAddr) -> Router {
     tracing::info!("App:       http://{at}/");
-    tracing::info!("Vanilla:   http://{at}/vanilla");
     // ACCESS-33: menger's own pages and the app's build — nothing else. The
     // `/rest/{*}` pass-through to the REST port went: the app has spoken
     // the WebSocket since MFE-9, and nothing else called it. IDENTITY-19:
@@ -338,7 +260,6 @@ async fn router(cfg: ShellConfig, at: std::net::SocketAddr) -> Router {
     if let Some(login) = cfg.login.as_ref().filter(|l| l.require) {
         app = app.route_layer(axum::middleware::from_fn_with_state(login.clone(), require_session));
     }
-    let mut app = app.merge(favicon_routes()).merge(frame_routes());
     if let Some(metadata) = cfg.metadata {
         app = app.merge(metadata);
     }
@@ -470,30 +391,6 @@ async fn host_is_ours(State(hosts): State<Arc<Vec<String>>>, req: Request, next:
     }
 }
 
-/// ACCESS-28: the frame document, under its own policy: framed by the app
-/// alone. Small and fixed per release: an hour in the cache.
-async fn frame() -> Response {
-    (
-        [
-            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
-            (header::CONTENT_SECURITY_POLICY, FRAME_CSP),
-            (header::X_FRAME_OPTIONS, "SAMEORIGIN"),
-            (header::CACHE_CONTROL, "public, max-age=3600"),
-        ],
-        FRAME,
-    )
-        .into_response()
-}
-
-/// MFE-23: the tab's icon, for both pages.
-async fn favicon() -> Response {
-    (
-        [(header::CONTENT_TYPE, "image/svg+xml"), (header::CACHE_CONTROL, "public, max-age=86400")],
-        FAVICON,
-    )
-        .into_response()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -505,29 +402,6 @@ mod tests {
         assert_eq!(tab_title(Some("prod")), "menger");
         assert_eq!(tab_title(Some("dev")), "menger");
         assert_eq!(tab_title(None), "menger");
-    }
-
-    /// DIST-3: without the feature (the default test build) nothing is
-    /// embedded, and the checkout's dist is preferred; with it and a build,
-    /// the embedded table is.
-    #[test]
-    fn the_embedded_build_is_preferred_only_when_there_is_one() {
-        if !cfg!(feature = "embedded-app") {
-            assert!(!embedded_available());
-            assert_eq!(preferred_app(), AppSource::Dir(default_app_dist()));
-        } else if embedded_available() {
-            assert!(matches!(preferred_app(), AppSource::Embedded(_)));
-        }
-    }
-
-    /// The vanilla page and the app's entrypoint are stamped with the
-    /// socket's port and the environment's title.
-    #[test]
-    fn the_vanilla_page_is_stamped_as_the_app_is() {
-        let cfg = app_shell(Some("test"), AppSource::Dir("/nowhere".into()));
-        let stamped = plexus_shell::stamp(VANILLA, &cfg.stamps_for(4450));
-        assert!(stamped.contains("<title>menger.test</title>") && !stamped.contains("{{WS_PORT}}"));
-        assert_eq!(cfg.pages[0].0, "/vanilla");
     }
 
     /// DESIGN-40: the faces and the vendored code are the public assets a
@@ -585,6 +459,17 @@ mod tests {
         assert_eq!(tracker.replace("frame-src 'self' https://app-test.menger.sh", "frame-src 'self'"), PAGE_CSP);
     }
 
+    /// v2: the placeholder is stamped as the app's entrypoint is, and is
+    /// what `/` answers with no build.
+    #[test]
+    fn the_placeholder_is_stamped_and_is_the_root_fallback() {
+        let cfg = app_shell(Some("test"), AppSource::Dir("/nowhere".into()));
+        let stamped = plexus_shell::stamp(PLACEHOLDER, &cfg.stamps_for(4450));
+        assert!(stamped.contains("<title>menger.test</title>") && stamped.contains("-P 4450") && !stamped.contains("{{"));
+        assert_eq!(cfg.root_fallback.as_deref(), Some(PLACEHOLDER));
+        assert!(cfg.pages.is_empty());
+    }
+
     /// APP-110: an origin is scheme, host and port — written canonically;
     /// a path, a wildcard, a credential or another scheme is refused.
     #[test]
@@ -603,19 +488,10 @@ mod tests {
     /// none — and the entrypoint carries its placeholder.
     #[test]
     fn the_app_is_told_the_live_origin() {
-        assert!(include_str!("../frontend/index.html").contains(r#"<meta name="menger-live-origin" content="{{LIVE_ORIGIN}}">"#));
         let on = app_shell_framed(None, AppSource::Dir("/nowhere".into()), &Framing { ancestors: vec![], live: Some("https://t.example".into()) });
         assert_eq!(plexus_shell::stamp("{{LIVE_ORIGIN}}", &on.stamps_for(4450)), "https://t.example");
         assert_eq!(plexus_shell::stamp("[{{LIVE_ORIGIN}}]", &app_shell(None, AppSource::Dir("/nowhere".into())).stamps_for(4450)), "[]");
         assert!(on.csp.contains("frame-src 'self' https://t.example"));
     }
 
-    #[test]
-    fn both_pages_carry_the_title_placeholder_and_the_icon() {
-        for page in [VANILLA, include_str!("../frontend/index.html")] {
-            assert!(page.contains("<title>{{TITLE}}</title>"));
-            assert!(page.contains(r#"<link rel="icon" type="image/svg+xml" href="/favicon.svg">"#));
-        }
-        assert!(FAVICON.starts_with("<svg") && FAVICON.contains("viewBox"));
-    }
 }

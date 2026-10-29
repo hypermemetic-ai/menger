@@ -127,9 +127,7 @@ impl LocalServer {
         let table = crate::session_table(&sessions);
         let access = Access::with_login(table.clone(), vec![owner.clone()]).minting(table);
         let hub = crate::build_rpc(&cfg.db_path, access.clone()).await?;
-        let mut app = shell::app_shell(cfg.env.as_deref(), cfg.app);
-        // ACCESS-28: and the document a ticket body's frame starts as.
-        app.routes = shell::favicon_routes().merge(shell::frame_routes());
+        let app = shell::app_shell(cfg.env.as_deref(), cfg.app);
         let local = plexus_shell::LocalConfig {
             ws_port: cfg.ws_port,
             shell_port: cfg.shell_port,

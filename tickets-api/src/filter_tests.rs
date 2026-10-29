@@ -595,8 +595,6 @@ fn palette_contains(haystack: &str, needle: &str) -> bool {
 /// `text` is find's rule, case for case.
 #[test]
 fn text_is_finds_rule() {
-    let keys = include_str!("../../frontend/src/keys.rs");
-    assert!(keys.contains("q.is_empty() || contains_ignore_ascii_case(code, q) || contains_ignore_ascii_case(title, q)"));
     let titles = ["Watch the store", "naïve CAFÉ", "", "x", "SCALE-13 again", "watch·dot"];
     let queries = ["watch", "WATCH", " the ", "", "   ", "café", "CAFÉ", "naï", "scale-1", "13", "·", "zzz", "x"];
     for title in titles {

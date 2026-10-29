@@ -1734,33 +1734,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "menger-diagrams"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-stream",
- "async-trait",
- "clap",
- "futures",
- "jsonrpsee",
- "libc",
- "menger-tickets-api",
- "plexus-client",
- "plexus-core",
- "plexus-macros",
- "plexus-transport",
- "pulldown-cmark",
- "schemars",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "menger-tickets-api"
 version = "0.6.2"
 dependencies = [

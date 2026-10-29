@@ -18,7 +18,9 @@
 #
 # SCAFFOLD-9: `plexus-login/` is menger's login lifted out the same way
 # (published as `plexus-login`).
-members = [".", "tickets-api", "diagrams", "plexus-shell", "plexus-shell/toy", "plexus-login"]
+# v2: `diagrams/` (the mermaid check for bodies the app drew) is out of the
+# workspace with the frontend — its tests read the app's sources.
+members = [".", "tickets-api", "plexus-shell", "plexus-shell/toy", "plexus-login"]
 # TETHER-7: `tether/` is a workspace of its own — substrate's sqlx and this
 # workspace's rusqlite link two libsqlite3-sys, which one resolve refuses.
 exclude = ["tether"]
@@ -36,28 +38,15 @@ repository = "https://github.com/hypermemetic-ai/menger"
 readme = "README.md"
 keywords = ["ticketing", "planning", "plexus", "rpc", "leptos"]
 categories = ["web-programming::http-server", "development-tools"]
-# DIST-3: what the published crate carries — the server's sources, the
-# day-one pages (web/, embedded with include_str!), the build script and the
-# app's build (frontend/dist, which `embedded-app` embeds). Cargo will not
-# package dist from the checkout — it is gitignored, and under the app's own
-# Cargo.toml — so `scripts/publish.sh` builds it and publishes from a stage
-# where neither holds. The tests, deploy/, perf/, diagrams/ and spike/ stay
-# in the repository.
+# DIST-3: what the published crate carries — the server's sources. v2: the
+# frontend (web/, frontend/, the embedding build script) is deleted; tag
+# v0.0.1 holds it. The tests, deploy/, perf/, diagrams/ and spike/ stay in
+# the repository.
 include = [
     "/src/**",
-    "/web/**",
-    "/build.rs",
     "/README.md",
     "/LICENSE",
-    "/frontend/dist/**",
 ]
-
-[features]
-# DIST-3: the app's build (frontend/dist) compiled into the binary by
-# build.rs, so a menger with no checkout beside it — a published crate, a
-# desktop host — serves the Leptos app. Off by default: a checkout serves a
-# fresh `trunk build` from disk without recompiling the server.
-embedded-app = []
 
 [lib]
 name = "menger"
@@ -136,10 +125,6 @@ dirs = "6"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
-[build-dependencies]
-# SCAFFOLD-5: build.rs embeds frontend/dist through plexus-shell's build
-# half — no dependencies of its own.
-plexus-shell = { path = "plexus-shell", version = "0.1.3", default-features = false, features = ["build"] }
 
 [dev-dependencies]
 # Wire-level tests speak the same protocol as web/index.html.

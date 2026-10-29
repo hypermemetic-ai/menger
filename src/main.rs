@@ -85,8 +85,7 @@ struct Args {
     )]
     no_rest: bool,
 
-    // DIST-3: without it, a binary built with `embedded-app` serves the build
-    // compiled into it, any other the checkout's frontend/dist.
+    // DIST-3: without it, the checkout's frontend/dist.
     /// Directory holding the web app's build (frontend/dist). A missing build
     /// shows a "frontend not built" page.
     #[arg(long, env = "MENGER_APP_DIST", value_name = "DIR", help_heading = RUN, hide_short_help = true)]
@@ -569,9 +568,8 @@ async fn run(args: Args) -> anyhow::Result<()> {
         let cfg = shell::ShellConfig {
             port: shell_port,
             ws_port,
-            // DIST-3: --app-dist given → that directory; else the build
-            // embedded in this binary (`embedded-app`), if any; else the
-            // checkout's frontend/dist.
+            // DIST-3: --app-dist given → that directory; else the
+            // checkout's frontend/dist (v2: nothing is embedded).
             app: args.app_dist.clone().map(shell::AppSource::Dir).unwrap_or_else(shell::preferred_app),
             env: args.env.clone(),
             login: wired.login.clone(),

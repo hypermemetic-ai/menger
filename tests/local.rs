@@ -61,11 +61,11 @@ async fn a_local_server_starts_on_free_ports_serves_both_and_releases_them() {
     assert_eq!(server.ws_url(), format!("ws://127.0.0.1:{ws}"));
     assert!(db.parent().unwrap().is_dir(), "the database's directory is made");
 
-    // The shell answers `/` at once — the app, stamped with the socket's port.
+    // The shell answers `/` at once — v2's placeholder, stamped with the
+    // socket's port.
     let page = get(shell, "/").await;
     assert!(page.starts_with("HTTP/1.1 200") || page.starts_with("HTTP/1.0 200"), "{page}");
-    assert!(page.contains(&format!("<title>menger</title><meta name=ws content=\"{ws}\">")), "{page}");
-    assert!(get(shell, "/vanilla").await.contains("menger.call"));
+    assert!(page.contains("<title>menger</title>") && page.contains(&format!("-P {ws}")), "{page}");
 
     // ACCESS-24: the owner's token answers, with no Origin (a CLI), the
     // shell's and Tauri's; no token reaches only the auth door.

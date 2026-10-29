@@ -4,10 +4,6 @@
 
 use super::*;
 
-/// The app's renderer, as text. The app is its own cargo unit; this reads
-/// it, it does not build it.
-const MD_RS: &str = include_str!("../../frontend/src/md.rs");
-const THIS_RS: &str = include_str!("fields.rs");
 
 /// The fields as a compact tree: `a b(c d(e))`.
 fn tree(fs: &[Field]) -> String {
@@ -581,39 +577,4 @@ fn a_body_with_neither_has_no_fields() {
     assert!(fields("").is_empty());
     assert!(fields("Just prose.\n\n## Unnamed heading\n").is_empty());
     assert!(fields("<div>html, but nothing marked</div>\n").is_empty());
-}
-
-// -- the app's reading, word for word ----------------------------------------------------
-
-/// The text of `fn <name>(` through its closing `}` line in `src`.
-fn item<'a>(src: &'a str, name: &str) -> &'a str {
-    let start = src.find(&format!("fn {name}(")).unwrap_or_else(|| panic!("{name} is defined"));
-    let end = start + src[start..].find("\n}\n").expect("it ends") + 3;
-    &src[start..end]
-}
-
-#[test]
-fn the_frontmatter_split_is_the_apps_word_for_word() {
-    assert_eq!(
-        item(THIS_RS, "split_frontmatter"),
-        item(MD_RS, "split_frontmatter"),
-        "md.rs's split_frontmatter changed — copy it here"
-    );
-}
-
-#[test]
-fn the_options_are_the_apps() {
-    let inserts = |src: &str, from: &str| -> Vec<String> {
-        let at = src.find(from).expect("the options");
-        src[at..]
-            .lines()
-            .take_while(|l| *l != "}")
-            .map(str::trim)
-            .filter(|l| l.starts_with("opts.insert("))
-            .map(str::to_string)
-            .collect()
-    };
-    let ours = inserts(THIS_RS, "fn options() -> Options {");
-    assert_eq!(ours.len(), 4, "{ours:?}");
-    assert_eq!(ours, inserts(MD_RS, "fn options() -> Options {"), "md.rs's options changed — copy them here");
 }

@@ -467,7 +467,7 @@ async fn anonymous(c: &WsClient) -> bool {
 #[tokio::test]
 async fn nobody_gets_in_anonymously() {
     let m = start().await;
-    for path in ["/", "/app/", "/vanilla"] {
+    for path in ["/", "/app/"] {
         let r = m.http.get(m.url(path)).send().await.unwrap();
         assert_eq!(r.status(), 303, "{path}");
         assert!(location(&r).starts_with("/login?next="), "{path}: {}", location(&r));
@@ -861,7 +861,7 @@ async fn the_home_screen_files_need_no_session() {
 async fn every_page_refuses_to_be_framed() {
     let m = start().await;
     let id = sign_in(&m).await;
-    for path in ["/", "/app/", "/vanilla", "/login", "/favicon.svg", "/login/me"] {
+    for path in ["/", "/app/", "/login", "/login/me"] {
         let r = m.http.get(m.url(path)).header("cookie", m.jar(&id)).send().await.unwrap();
         let h = r.headers();
         assert_eq!(h.get("x-frame-options").and_then(|v| v.to_str().ok()), Some("DENY"), "{path}");
@@ -870,12 +870,9 @@ async fn every_page_refuses_to_be_framed() {
         let csp = h.get("content-security-policy").and_then(|v| v.to_str().ok()).unwrap_or_default();
         assert!(csp.contains("frame-ancestors 'none'"), "{path}: {csp}");
         // ACCESS-28: a page's scripts are its own, never any inline one.
-        if ["/", "/app/", "/vanilla"].contains(&path) {
+        if ["/", "/app/"].contains(&path) {
             let scripts = csp.split(';').map(str::trim).find(|d| d.starts_with("script-src ")).unwrap_or_default();
             assert!(scripts.starts_with("script-src ") && !scripts.contains("'unsafe-inline'") && !scripts.contains("https:"), "{path}: {csp}");
-            // The vanilla page (and `/`, with no build here) holds an inline
-            // block: named by hash.
-            assert_eq!(scripts.contains("'sha256-"), path != "/app/", "{path}: {csp}");
         }
     }
     // The sign-in page (to the signed-out: the signed-in are sent on) names
@@ -883,12 +880,6 @@ async fn every_page_refuses_to_be_framed() {
     let r = m.http.get(m.url("/login")).send().await.unwrap();
     let csp = r.headers().get("content-security-policy").and_then(|v| v.to_str().ok()).unwrap_or_default();
     assert!(csp.contains("script-src 'sha256-") && !csp.contains("'unsafe-inline'") && csp.contains("frame-ancestors 'none'"), "{csp}");
-    // ACCESS-28: the frame document is public — it holds no data, and the
-    // frame's first navigation is the app's — and framed by the app alone.
-    let r = m.http.get(m.url("/app/frame")).send().await.unwrap();
-    assert_eq!(r.status(), 200, "no detour to the login page");
-    let csp = r.headers().get("content-security-policy").and_then(|v| v.to_str().ok()).unwrap_or_default();
-    assert_eq!(csp, "connect-src 'none'; form-action 'none'; frame-ancestors 'self'");
 }
 
 #[tokio::test]

@@ -1,9 +1,0 @@
-/** FILTER-46: a saved filter's name — trimmed, with a letter or a digit,
-at most [`crate::saved_filters::NAME_MAX`] characters. Matched by its
-slug (`Open Builds` is `open-builds`). */
-export type FilterName = string;
-/** FILTER-46: a filter's text, not yet read — at most
-[`crate::limits::FILTER_MAX`] bytes. What `filters save` and `check`
-take: the language's refusal comes back in band, naming the chunk and
-where it stands, where [`FilterText`] would refuse the parameter. */
-export type FilterSource = string;

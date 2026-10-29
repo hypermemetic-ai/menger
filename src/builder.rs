@@ -1,5 +1,7 @@
 use menger_tickets_api::access::Access;
-use menger_tickets_api::{ChatsActivation, CommentsActivation, DeploymentsActivation, EpicsActivation, MediaActivation, MembersActivation, NotesActivation, OrgsActivation, ProviderOffer, SessionActivation, ThemesActivation, TicketsActivation};
+// v2: only `tickets` is registered; the rest come back one at a time.
+// use menger_tickets_api::{ChatsActivation, CommentsActivation, DeploymentsActivation, EpicsActivation, MediaActivation, MembersActivation, NotesActivation, OrgsActivation, SessionActivation, ThemesActivation};
+use menger_tickets_api::{ProviderOffer, TicketsActivation};
 use menger_tickets_api::store::{OpenPurge, SeedShape, SeedSpec, Store, StoreError, System, PURGE_EVERY};
 use plexus_core::plexus::{AuthBackend, AuthSetup, DynamicHub, Provider as AuthProvider, ProviderKind as AuthKind};
 
@@ -185,40 +187,43 @@ pub async fn build_rpc_login(
     // ACCESS-24: grants planted while open, gone before anything is served.
     purge_planted(&store, &system, &access.admins()).await?;
     // DEPLOY-25: each deploy request POSTed to its environment's webhook.
-    crate::webhooks::spawn(Arc::clone(&store), Arc::clone(&system));
+    // v2: off with `deployments`.
+    // crate::webhooks::spawn(Arc::clone(&store), Arc::clone(&system));
     // IDENTITY-21: the members that decide, from the same store.
     let seating = Arc::clone(&system);
     access.attach_with(Arc::clone(&store), system);
     // CHAT-13: the standing chat members (`--chat-member`), in every chat
     // opened from now and seated in every open chat now — once: a chat
-    // that holds them is not written again.
-    if !chat_members.is_empty() {
-        store.set_chat_members(chat_members);
-        let reads = |p: &str, key: &str| access.reads_ticket(p, key, &store);
-        let seated = store.seat_chat_members(&seating, reads).await.map_err(|e| anyhow::anyhow!("seating the standing chat members failed: {e:?}"))?;
-        tracing::info!("CHAT-13: standing chat members {:?}; seated in {} open chat(s)", store.chat_members(), seated.len());
-    }
+    // that holds them is not written again. v2: off with `chats`.
+    // if !chat_members.is_empty() {
+    //     store.set_chat_members(chat_members);
+    //     let reads = |p: &str, key: &str| access.reads_ticket(p, key, &store);
+    //     let seated = store.seat_chat_members(&seating, reads).await.map_err(|e| anyhow::anyhow!("seating the standing chat members failed: {e:?}"))?;
+    //     tracing::info!("CHAT-13: standing chat members {:?}; seated in {} open chat(s)", store.chat_members(), seated.len());
+    // }
+    let _ = (seating, chat_members, offers);
     let tickets = TicketsActivation::with_access(Arc::clone(&store), access.clone());
-    let mut hub = DynamicHub::new("menger")
-        .register(tickets)
-        .register(CommentsActivation::with_access(Arc::clone(&store), access.clone()))
-        // CHAT-3: `chats` beside them — conversations inside tickets.
-        .register(ChatsActivation::with_access(Arc::clone(&store), access.clone()))
-        // COMMENT-5: `media` beside them — the images comments show.
-        .register(MediaActivation::with_access(Arc::clone(&store), access.clone()))
-        // NOTE-2: `notes` beside them, over the same store.
-        .register(NotesActivation::with_access(Arc::clone(&store), access.clone()))
-        // THEME-8: `themes` beside them — the themes and what each level adopts.
-        .register(ThemesActivation::with_access(Arc::clone(&store), access.clone()))
-        // DEPLOY-11: `deployments` beside them — every deploy, where tickets run.
-        .register(DeploymentsActivation::with_access(Arc::clone(&store), access.clone()))
-        // ORG-4: `orgs` beside `members` — the organizations, and their making.
-        .register(OrgsActivation::with_access(Arc::clone(&store), access.clone()))
-        // ORG-13: `epics` beside `orgs` — the level that holds shortcodes.
-        .register(EpicsActivation::with_access(Arc::clone(&store), access.clone()))
-        .register(MembersActivation::new(store, access.clone()))
-        // IDENTITY-37: a signed-out connection is `anonymous` to whoami too.
-        .register(SessionActivation::offering(offers, access.clone()));
+    // v2: `tickets` alone — its children (inputs, commits, nav, work,
+    // subtasks, …) with it; every other activation comes back one at a time.
+    let mut hub = DynamicHub::new("menger").register(tickets);
+    // .register(CommentsActivation::with_access(Arc::clone(&store), access.clone()))
+    // // CHAT-3: `chats` beside them — conversations inside tickets.
+    // .register(ChatsActivation::with_access(Arc::clone(&store), access.clone()))
+    // // COMMENT-5: `media` beside them — the images comments show.
+    // .register(MediaActivation::with_access(Arc::clone(&store), access.clone()))
+    // // NOTE-2: `notes` beside them, over the same store.
+    // .register(NotesActivation::with_access(Arc::clone(&store), access.clone()))
+    // // THEME-8: `themes` beside them — the themes and what each level adopts.
+    // .register(ThemesActivation::with_access(Arc::clone(&store), access.clone()))
+    // // DEPLOY-11: `deployments` beside them — every deploy, where tickets run.
+    // .register(DeploymentsActivation::with_access(Arc::clone(&store), access.clone()))
+    // // ORG-4: `orgs` beside `members` — the organizations, and their making.
+    // .register(OrgsActivation::with_access(Arc::clone(&store), access.clone()))
+    // // ORG-13: `epics` beside `orgs` — the level that holds shortcodes.
+    // .register(EpicsActivation::with_access(Arc::clone(&store), access.clone()))
+    // .register(MembersActivation::new(store, access.clone()))
+    // // IDENTITY-37: a signed-out connection is `anonymous` to whoami too.
+    // .register(SessionActivation::offering(offers, access.clone()));
     // AUTH-7: the gate reads the same book the methods ask; the roles the
     // activations declare are what a role holds until an admin edits it.
     let book = access.book();

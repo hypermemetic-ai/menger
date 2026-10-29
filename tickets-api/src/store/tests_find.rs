@@ -1,20 +1,12 @@
 //! SCALE-6: `find` — the jump palette's rule, answered by the store and
 //! paged by MNG-9's rules.
 //!
-//! The rule is not re-specified here. `frontend/src/keys.rs` is read as
-//! text: every case its own test names is run against the server's rule,
-//! and its two functions — copied below, as the oracle — are checked to be
-//! still word for word what the file holds, so the copy cannot drift from
-//! the palette without this failing.
+//! The oracle below is the v1 palette's rule (`frontend/src/keys.rs` at
+//! v0.0.1), copied; v2 has no frontend for it to be checked against.
 
 use super::*;
 
-/// The palette's file, as text. The app is its own cargo unit; this reads
-/// it, it does not build it.
-const KEYS_RS: &str = include_str!("../../../frontend/src/keys.rs");
-
-/// `palette_match` from `frontend/src/keys.rs`, verbatim (see
-/// [`the_oracle_is_the_palettes_code_word_for_word`]).
+/// `palette_match` from v1's `frontend/src/keys.rs`, verbatim.
 fn palette_match(code: &str, title: &str, query: &str) -> bool {
     let q = query.trim();
     q.is_empty() || contains_ignore_ascii_case(code, q) || contains_ignore_ascii_case(title, q)
@@ -81,100 +73,6 @@ fn write_titled(path: &Path, rows: &[(&str, &str)]) {
 
 fn found(page: &Page) -> Vec<&str> {
     page.tickets.iter().map(|t| t.id.as_str()).collect()
-}
-
-/// The string literals of one line of Rust source, unescaped (`\"`, `\\`,
-/// `\n`, `\t` — all a test line of the palette's uses or could).
-fn literals(line: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut chars = line.chars();
-    while let Some(c) = chars.next() {
-        if c != '"' {
-            continue;
-        }
-        let mut s = String::new();
-        loop {
-            match chars.next().expect("a closed literal") {
-                '"' => break,
-                '\\' => match chars.next().expect("an escape") {
-                    'n' => s.push('\n'),
-                    't' => s.push('\t'),
-                    other => s.push(other),
-                },
-                other => s.push(other),
-            }
-        }
-        out.push(s);
-    }
-    out
-}
-
-/// Every case the palette's own test names: `(expected, code, title,
-/// query)` from each `assert!(palette_match(..))` and
-/// `assert!(!palette_match(..))` in `keys.rs`'s tests.
-fn the_palettes_cases() -> Vec<(bool, String, String, String)> {
-    let tests = &KEYS_RS[KEYS_RS.find("#[cfg(test)]").expect("keys.rs has tests")..];
-    tests
-        .lines()
-        .map(str::trim)
-        .filter_map(|line| {
-            let expected = if line.starts_with("assert!(palette_match(") {
-                true
-            } else if line.starts_with("assert!(!palette_match(") {
-                false
-            } else {
-                return None;
-            };
-            let lits = literals(line);
-            assert_eq!(lits.len(), 3, "one code, one title, one query: {line}");
-            let [code, title, query] = <[String; 3]>::try_from(lits).unwrap();
-            Some((expected, code, title, query))
-        })
-        .collect()
-}
-
-/// The oracle above is the palette's code, word for word: each line of
-/// both functions' bodies is in `keys.rs` as written here.
-#[test]
-fn the_oracle_is_the_palettes_code_word_for_word() {
-    for line in [
-        "pub(crate) fn palette_match(code: &str, title: &str, query: &str) -> bool {",
-        "    let q = query.trim();",
-        "    q.is_empty() || contains_ignore_ascii_case(code, q) || contains_ignore_ascii_case(title, q)",
-        "fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {",
-        "    let (h, n) = (haystack.as_bytes(), needle.as_bytes());",
-        "    n.len() <= h.len() && h.windows(n.len()).any(|w| w.eq_ignore_ascii_case(n))",
-    ] {
-        assert!(KEYS_RS.contains(line), "keys.rs no longer reads {line:?} — re-copy the oracle");
-    }
-}
-
-/// AGS-18's rule as the palette's tests state it, case by case: the
-/// server's rule agrees with every one — on the rule itself, and through
-/// `find` over a store holding exactly those tickets (a lowercase id
-/// among them, which only a hand edit makes).
-#[test]
-fn the_server_agrees_with_every_case_the_palettes_tests_name() {
-    let cases = the_palettes_cases();
-    assert!(cases.len() >= 17, "read the palette's cases: {cases:?}");
-    for (expected, code, title, query) in &cases {
-        assert_eq!(palette_match(code, title, query), *expected, "the oracle: {code} {title:?} {query:?}");
-        assert_eq!(server_match(code, title, query), *expected, "the rule: {code} {title:?} {query:?}");
-    }
-
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("palette.db");
-    let mut tickets: BTreeMap<&str, &str> = BTreeMap::new();
-    for (_, code, title, _) in &cases {
-        let prior = tickets.insert(code.as_str(), title.as_str());
-        assert!(prior.is_none_or(|t| t == title.as_str()), "{code} has one title across the cases");
-    }
-    write_titled(&path, &tickets.into_iter().collect::<Vec<_>>());
-    let store = Store::open(&path).unwrap();
-    for (expected, code, title, query) in &cases {
-        let page = store.find_page(SYS, query, None, None).unwrap();
-        assert_eq!(found(&page).contains(&code.as_str()), *expected, "find {query:?} and {code} {title:?}");
-    }
 }
 
 /// The rule against the palette's code on what its cases do not name:
