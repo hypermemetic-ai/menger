@@ -168,7 +168,47 @@ http-body-util = "0.1"
 # UI-3: tests/wire_ui.rs and tests/ui_serve.rs build a bundle (a small tar)
 # and sign its sha256.
 tar = { version = "0.4", default-features = false }
+# UI-7: tests/wire_ui_compile.rs knows a source's tree from the compiler
+# natively (the same bytes as the module, UI-5), and registers a reduced
+# `tickets` — a probe activation (plexus-macros, schemars, async-stream:
+# V2-4's, above) — to show the lint reads the running service.
+menger-ui-compiler = { path = "ui-compiler" }
+# UI-7: the in-process tests' stub compiler modules, written as text.
+wat = "1"
 
 # MNG-8's `[patch.crates-io]` on the plexus-transport-v0.2.3 tag went with
 # MFE-10: the REST bridge fixes it carried are on plexus-transport `main`
 # (0.5.0), consumed by path above.
+
+# UI-7: the compiler module is compiled by cranelift when the server starts
+# with --ui-compiler; unoptimised (a dev or test build) that takes ~15 s for
+# UI-5's 1.2 MB module, optimised well under a second. The release build is
+# optimised whole; these keep the tests' servers starting promptly.
+[profile.dev.package.cranelift-codegen]
+opt-level = 3
+[profile.dev.package.cranelift-assembler-x64]
+opt-level = 3
+[profile.dev.package.cranelift-bforest]
+opt-level = 3
+[profile.dev.package.cranelift-bitset]
+opt-level = 3
+[profile.dev.package.cranelift-control]
+opt-level = 3
+[profile.dev.package.cranelift-entity]
+opt-level = 3
+[profile.dev.package.cranelift-frontend]
+opt-level = 3
+[profile.dev.package.cranelift-native]
+opt-level = 3
+[profile.dev.package.regalloc2]
+opt-level = 3
+[profile.dev.package.wasmparser]
+opt-level = 3
+[profile.dev.package.wasmtime]
+opt-level = 3
+[profile.dev.package.wasmtime-environ]
+opt-level = 3
+[profile.dev.package.wasmtime-internal-cranelift]
+opt-level = 3
+[profile.dev.package.wasmtime-internal-core]
+opt-level = 3

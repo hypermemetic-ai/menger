@@ -2,9 +2,9 @@ use menger_tickets_api::access::Access;
 // V2-4: `tickets`, and the addresses, the grants its reach reads and the
 // browser's sign-in — `members`, `orgs`, `epics`, `session`.
 use menger_tickets_api::{EpicsActivation, MembersActivation, OrgsActivation, ProviderOffer, SessionActivation, TicketsActivation};
-use menger_ui_service::{Signers, UiActivation, UiStore, UI_DB_FILE};
+use menger_ui_service::{Compiler, Signers, UiActivation, UiStore, UI_DB_FILE};
 use menger_tickets_api::store::{OpenPurge, SeedShape, SeedSpec, Store, StoreError, System, PURGE_EVERY};
-use plexus_core::plexus::{AuthBackend, AuthSetup, DynamicHub, Provider as AuthProvider, ProviderKind as AuthKind};
+use plexus_core::plexus::{Activation, AuthBackend, AuthSetup, ChildRouter, DynamicHub, Provider as AuthProvider, ProviderKind as AuthKind};
 
 use crate::auth_backend::MengerAuth;
 
@@ -43,6 +43,9 @@ pub fn default_ui_db_path(db_path: &Path) -> PathBuf {
 pub struct UiSetup {
     pub store: Arc<UiStore>,
     pub signers: Signers,
+    /// UI-7: the compiler module (`--ui-compiler`) every push compiles its
+    /// sources in; none: the trees are stored as given (`compiled: false`).
+    pub compiler: Option<Compiler>,
 }
 
 impl UiSetup {
@@ -56,7 +59,13 @@ impl UiSetup {
         }
         let store = UiStore::open(path).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
         tracing::info!("ui:        {}", path.display());
-        Ok(Self { store: Arc::new(store), signers })
+        Ok(Self { store: Arc::new(store), signers, compiler: None })
+    }
+
+    /// UI-7: pushes compile in `compiler` (`--ui-compiler`).
+    pub fn compiling(mut self, compiler: Option<Compiler>) -> Self {
+        self.compiler = compiler;
+        self
     }
 
     /// The store beside the tickets file ([`default_ui_db_path`]), with no
@@ -182,6 +191,34 @@ pub async fn build_rpc_ui(
     body_max: usize,
     ui: UiSetup,
 ) -> anyhow::Result<Arc<DynamicHub>> {
+    build_rpc_ui_over(db_path, seed, shape, offers, access, backend, resource_metadata, body_max, ui, |store, access| {
+        TicketsActivation::with_access(store, access)
+    })
+    .await
+}
+
+/// UI-7: [`build_rpc_ui`] with the activation registered as `tickets` made
+/// by `tickets` over the store and the rule — main's is
+/// [`TicketsActivation`]; a test's may be a reduced service, to show the
+/// ui service reads the running one through the seam, never a copy. The
+/// ui activation's seam is attached to the hub built here.
+#[allow(clippy::too_many_arguments)]
+pub async fn build_rpc_ui_over<T, F>(
+    db_path: &Path,
+    seed: Option<SeedSpec>,
+    shape: SeedShape,
+    offers: Vec<ProviderOffer>,
+    access: Access,
+    backend: Arc<dyn AuthBackend>,
+    resource_metadata: Option<String>,
+    body_max: usize,
+    ui: UiSetup,
+    tickets: F,
+) -> anyhow::Result<Arc<DynamicHub>>
+where
+    T: Activation + ChildRouter + Clone + 'static,
+    F: FnOnce(Arc<Store>, Access) -> T,
+{
     let path = db_path.to_path_buf();
     let started = Instant::now();
     // MENGER-15: and its cap on a body (`--max-body-bytes`).
@@ -246,12 +283,16 @@ pub async fn build_rpc_ui(
     purge_planted(&store, &system, &access.admins()).await?;
     // IDENTITY-21: the members that decide, from the same store.
     access.attach_with(Arc::clone(&store), system);
-    let tickets = TicketsActivation::with_access(Arc::clone(&store), access.clone());
+    // UI-7: the activation registered as `tickets` is the caller's to make
+    // (main's: TicketsActivation).
+    let tickets = tickets(Arc::clone(&store), access.clone());
     // V2-4: `tickets` — its children with it — and the addresses, the
     // grants its reach reads and the browser's sign-in, until the identity
     // service takes them. UI-3: `ui` beside them — the UI's versions, over
     // its own file.
-    let ui = UiActivation::new(ui.store, ui.signers, access.clone()).following(Arc::clone(&store));
+    // UI-7: and its pushes compiled in `--ui-compiler`'s module.
+    let ui = UiActivation::new(ui.store, ui.signers, access.clone()).following(Arc::clone(&store)).compiling(ui.compiler);
+    let seam = ui.seam().clone();
     let mut hub = DynamicHub::new("menger")
         .register(tickets)
         .register(ui)
@@ -274,7 +315,11 @@ pub async fn build_rpc_ui(
     // MACRO-20: `declared_roles` holds the children's too, each grant
     // under its path (`tickets.commits.link`).
     book.seed(hub.declared_roles());
-    Ok(Arc::new(hub))
+    let hub = Arc::new(hub);
+    // UI-7: the ui service calls the tickets service through this hub, as
+    // the server's own caller (its full view, whoever pushes).
+    seam.attach(&hub, access.system_caller());
+    Ok(hub)
 }
 
 /// ACCESS-24 (ACCESS-4 C2): the grants open mode planted — every stored
