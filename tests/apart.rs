@@ -26,6 +26,9 @@
 //!   and point a new component at the framework's tool and contract.
 //!
 //! One file since FRAME-5 (it folded FRAME-4's `tests/apart_shell_login.rs`).
+//! - FRAME-6 (wave 4): the binary is the framework's — `plexus-ui` (its
+//!   `serve` beside `build`, `sign`, `push`) is built from `../plexus-ui`
+//!   and links the service; menger's tree builds no binary of that name.
 //! - FRAME-9: `tether/` takes `plexus-login` from the sibling, as
 //!   plexus-substrate (which tether takes) does — one `plexus-login` in its
 //!   graph, never menger's tree's.
@@ -842,4 +845,97 @@ fn tether_check_reads_what_it_is_given() {
     let registry = [("plexus-login".to_string(), PathBuf::from("/home/u/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/plexus-login-0.2.2"))];
     assert_eq!(tether_breaks(&paths, Ok(&registry), login).len(), 1, "the registry's is not the sibling");
     assert_eq!(tether_breaks(&paths, Err("no such file"), login).len(), 1);
+}
+
+// ── FRAME-6: the binary ────────────────────────────────────────────────────
+
+/// `cargo metadata` of the sibling `../plexus-ui`'s workspace, its members
+/// alone (each with the dependencies its manifest declares), offline.
+fn framework_metadata() -> Result<Value, String> {
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let out = Command::new(cargo)
+        .args(["metadata", "--format-version", "1", "--no-deps", "--offline", "--manifest-path"])
+        .arg(sibling("plexus-ui").join("Cargo.toml"))
+        .output()
+        .map_err(|e| format!("cargo metadata: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("cargo metadata of ../plexus-ui failed:\n{}", String::from_utf8_lossy(&out.stderr)));
+    }
+    serde_json::from_slice(&out.stdout).map_err(|e| format!("cargo metadata answers JSON: {e}"))
+}
+
+/// The packages of `metadata` with a bin target named `bin`: each one's
+/// name, manifest directory and the dependencies it declares.
+fn with_bin(metadata: &Value, bin: &str) -> Vec<(String, PathBuf, Vec<String>)> {
+    metadata["packages"]
+        .as_array()
+        .map(|ps| {
+            ps.iter()
+                .filter(|p| p["targets"].as_array().is_some_and(|ts| ts.iter().any(|t| t["name"] == bin && t["kind"].as_array().is_some_and(|k| k.iter().any(|k| k == "bin")))))
+                .filter_map(|p| {
+                    let dir = canonical(Path::new(p["manifest_path"].as_str()?).parent()?);
+                    let deps = p["dependencies"].as_array().map(|ds| ds.iter().filter(|d| d["kind"].is_null()).filter_map(|d| d["name"].as_str().map(str::to_string)).collect()).unwrap_or_default();
+                    Some((p["name"].as_str()?.to_string(), dir, deps))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// What breaks FRAME-6's row: menger's graph (`ours`) builds a binary named
+/// `plexus-ui` from under `root`; the framework's (`theirs`) builds none
+/// from under `framework`, more than one, or one whose package does not
+/// link `plexus-ui-service` (the tool alone, no server).
+fn binary_breaks(ours: &Value, theirs: Result<&Value, &str>, root: &Path, framework: &Path) -> Vec<String> {
+    let mut out: Vec<String> = with_bin(ours, "plexus-ui")
+        .into_iter()
+        .filter(|(_, d, _)| d.starts_with(root))
+        .map(|(n, d, _)| format!("menger's tree builds a binary named plexus-ui: {n} ({})", d.display()))
+        .collect();
+    match theirs {
+        Err(e) => out.push(e.to_string()),
+        Ok(m) => {
+            let bins: Vec<_> = with_bin(m, "plexus-ui").into_iter().filter(|(_, d, _)| d.starts_with(framework)).collect();
+            match bins.as_slice() {
+                [] => out.push(format!("{} builds no binary named plexus-ui", framework.display())),
+                [(name, _, deps)] if !deps.iter().any(|d| d == "plexus-ui-service") => {
+                    out.push(format!("{name}'s plexus-ui does not link plexus-ui-service: the tool, not the server (`plexus-ui serve`)"))
+                }
+                [_] => {}
+                many => out.push(format!("{} binaries named plexus-ui: {:?}", many.len(), many.iter().map(|(n, _, _)| n).collect::<Vec<_>>())),
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn the_binary_is_the_frameworks() {
+    // The check first, on graphs it is handed.
+    let pkg = |name: &str, dir: &str, bin: &str, deps: &[&str]| {
+        serde_json::json!({ "name": name, "manifest_path": format!("{dir}/Cargo.toml"),
+            "targets": [{ "name": bin, "kind": ["bin"] }],
+            "dependencies": deps.iter().map(|d| serde_json::json!({ "name": d, "kind": null })).collect::<Vec<_>>() })
+    };
+    let graph = |ps: Vec<Value>| serde_json::json!({ "packages": ps });
+    let (r, f) = (Path::new("/w/menger"), Path::new("/w/plexus-ui"));
+    let server = graph(vec![pkg("plexus-ui-cli", "/w/plexus-ui/cli", "plexus-ui", &["plexus-ui-service", "clap"])]);
+    let mine = graph(vec![pkg("menger", "/w/menger", "menger", &[])]);
+    assert!(binary_breaks(&mine, Ok(&server), r, f).is_empty(), "the framework's, serving");
+    let tool = graph(vec![pkg("plexus-ui-cli", "/w/plexus-ui/cli", "plexus-ui", &["clap"])]);
+    assert_eq!(binary_breaks(&mine, Ok(&tool), r, f).len(), 1, "the tool alone");
+    let dev_only = graph(vec![serde_json::json!({ "name": "plexus-ui-cli", "manifest_path": "/w/plexus-ui/cli/Cargo.toml",
+        "targets": [{ "name": "plexus-ui", "kind": ["bin"] }], "dependencies": [{ "name": "plexus-ui-service", "kind": "dev" }] })]);
+    assert_eq!(binary_breaks(&mine, Ok(&dev_only), r, f).len(), 1, "a dev-dependency serves nothing");
+    let ours = graph(vec![pkg("menger", "/w/menger", "plexus-ui", &["plexus-ui-service"])]);
+    assert_eq!(binary_breaks(&ours, Ok(&server), r, f).len(), 1, "menger building one");
+    assert_eq!(binary_breaks(&mine, Ok(&graph(vec![])), r, f).len(), 1, "none built");
+    let lib_only = graph(vec![serde_json::json!({ "name": "x", "manifest_path": "/w/plexus-ui/x/Cargo.toml", "targets": [{ "name": "plexus-ui", "kind": ["lib"] }], "dependencies": [] })]);
+    assert_eq!(binary_breaks(&mine, Ok(&lib_only), r, f).len(), 1, "a library of that name is no binary");
+    assert_eq!(binary_breaks(&mine, Err("no checkout"), r, f).len(), 1);
+
+    // Then the real graphs.
+    let theirs = framework_metadata();
+    let broken = binary_breaks(&metadata(), theirs.as_ref().map_err(String::as_str), &root(), &canonical(&sibling("plexus-ui")));
+    assert!(broken.is_empty(), "FRAME-6: the plexus-ui binary is the framework's, and serves:\n  {}", broken.join("\n  "));
 }
