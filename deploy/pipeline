@@ -740,7 +740,9 @@ ui_push() { # WS REL → 0 and UI_PUSHED (the version) and UI_MATCHES (contract_
   UI_PUSHED="" UI_WHY="" UI_MATCHES=""
   [[ -n $DEPLOY_KEY_FILE ]] || { UI_WHY="no pipeline key (MENGER_DEPLOY_KEY_FILE) to sign the push"; return 1; }
   tool=$(ui_tool "$2"); [[ -n $tool ]] || { UI_WHY="no plexus-ui to push with (the release carries none; MENGER_PLEXUS_UI, or PATH)"; return 1; }
-  tar -tf "$r/dist/ui.tar" 2>/dev/null | grep -qx manifest.json || { UI_WHY="the bundle holds no manifest.json"; return 1; }
+  # DEPLOY-6: no -q under pipefail — grep reads the whole listing, else tar dies of SIGPIPE and the
+  # pipeline's status is tar's (the tenth deploy of v2 was refused this way with a whole bundle).
+  tar -tf "$r/dist/ui.tar" 2>/dev/null | grep -x manifest.json >/dev/null || { UI_WHY="the bundle holds no manifest.json"; return 1; }
   commit=$(sed -n 's/^commit: *//p' "$r/RELEASE" | head -n 1)
   out=$(env -u MENGER_DEPLOY_KEY timeout 70 "$tool" push --url "$ws" --service menger --key-file "$DEPLOY_KEY_FILE" --as pipeline \
           --timeout 50 --json ${commit:+--commit "$commit"} "$r/dist/ui.tar" 2>&1) || true
