@@ -32,7 +32,9 @@
 # Usage: scripts/ui-build.sh [--prebuild] [--ui DIR] [-o|--out FILE]
 #                            [--contract-from PORT] [--engine DIR]
 #   --engine DIR   take engine.js / engine.wasm from DIR (built already)
-#   --contract-from PORT   manifest.contract from the service on PORT (menger.hash)
+#   --contract-from PORT   manifest.contract from the service on PORT: the tickets
+#                          service's hash (tickets.schema's), what ui.push compares
+#                          (UI-11); without it, "unknown", which the push answers null
 # Everything cargo builds goes to $CARGO_TARGET_DIR (else ./target).
 set -euo pipefail
 
@@ -49,7 +51,7 @@ while [ $# -gt 0 ]; do
     -o|--out) out=$2; shift 2 ;;
     --contract-from) contract_from=$2; shift 2 ;;
     --engine) engine=$(cd "$2" && pwd); shift 2 ;;
-    -h|--help) sed -n '2,36p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,38p' "$0"; exit 0 ;;
     *) echo "ui-build: unknown argument $1" >&2; exit 2 ;;
   esac
 done
@@ -142,15 +144,14 @@ for name in "${names[@]}"; do cp "$ui/src/$name.svelte" "$stage/src/$name.svelte
 cp "$ui/index.html" "$stage/index.html"
 contract=unknown
 if [ -n "$contract_from" ]; then
-  contract=$(synapse -P "$contract_from" -j menger hash | node -e '
+  contract=$(synapse -P "$contract_from" -j menger tickets schema | node -e '
     let t = ""; process.stdin.on("data", (d) => (t += d)).on("end", () => {
       for (const l of t.split("\n").filter(Boolean)) {
-        const c = JSON.parse(l).content;
-        const h = typeof c === "string" ? c : c?.hash ?? c?.value;
+        const h = JSON.parse(l).content?.hash;
         if (h) { process.stdout.write(String(h)); return; }
       }
     });')
-  [ -n "$contract" ] || { echo "ui-build: no hash from the service on :$contract_from" >&2; exit 1; }
+  [ -n "$contract" ] || { echo "ui-build: no tickets.schema hash from the service on :$contract_from" >&2; exit 1; }
 fi
 commit="menger@$(git -C "$root" rev-parse --short HEAD 2>/dev/null || cat "$stage/commit" 2>/dev/null || echo unknown)"
 UI_DIR=$ui STAGE=$stage CONTRACT=$contract COMMIT=$commit NAMES="${names[*]}" node -e '

@@ -44,15 +44,17 @@ pub enum Reason {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UiEvent {
     /// `push`: the version kept (`new: false` when the same bytes were kept
-    /// already) and the pointer on it. UI-7: `contract_matches` — the
-    /// manifest's `contract` is the running tickets service's hash (a
-    /// difference is said, never refused: the support policy's, PLEXUS-1);
+    /// already) and the pointer on it. UI-7, UI-11: `contract_matches` —
+    /// whether the manifest's `contract` is the running tickets service's
+    /// hash (`tickets.schema`'s `hash`; a difference is said, never refused:
+    /// the support policy's, PLEXUS-1), `null` when the manifest says
+    /// `unknown` (built without `--contract-from`);
     /// `compiled` — the server compiled every source (`false`: no
     /// `--ui-compiler`, the trees stored as given).
     /// `uploaded` — the upload's sha256 (what the signature is over): the
     /// `version` when stored exactly as signed, another when the server
     /// filled in the trees.
-    Pushed { version: String, uploaded: String, live: bool, new: bool, contract_matches: bool, compiled: bool },
+    Pushed { version: String, uploaded: String, live: bool, new: bool, contract_matches: Option<bool>, compiled: bool },
     /// `rollback`: the version the pointer names now. UI-9: and on
     /// `ui.watch` — first, the pointer as it stands (`null` when nothing is
     /// live), then on every pointer move (a push, a rollback).
