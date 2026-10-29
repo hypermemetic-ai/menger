@@ -90,6 +90,7 @@ stub curl 'echo "curl $*" >>"$STUB_ARGV"
 url=""; for a in "$@"; do [[ $a == http://* || $a == https://* ]] && url=$a; done
 host=${url#*://}; host=${host%%/*}
 case $url in
+  http://127.0.0.1:*/login) [[ ${STUB_LOCAL_LOGIN:-ok} == ok ]] && echo "<h1>Sign in</h1>" || echo "<h1>Not found</h1>" ;;
   http://127.0.0.1:*) echo "<meta name=\"menger-ws-port\" content=\"${STUB_WS_PORT:-1}\">" ;;
   http://*) printf "308 https://%s/" "$host" ;;
   */.well-known/oauth-protected-resource/ws) printf "{\"resource\":\"https://%s/ws\"}" "$host" ;;
@@ -985,12 +986,17 @@ mkdir -p "$BR/deploy/launch" "$BR/scripts" "$BR/src" "$B/bin" "$D5/releases"
 cp "$DEPLOY/pipeline" "$BR/deploy/pipeline"; cp "$REPO"/deploy/launch/* "$BR/deploy/launch/"; cp "$REPO/scripts/disk-check.sh" "$BR/scripts/"
 cp "$REPO/scripts/ui-build.sh" "$BR/scripts/"; cp "$REPO/src/shell.rs" "$BR/src/"
 gitf() { git -C "$BR" -c user.name=t -c user.email=t@t "$@"; }
+printf '[workspace]\nmembers = ["."]\n' >"$BR/Cargo.toml"
 gitf init -q -b main && gitf add -A && gitf commit -qm "main: v2's shape, no compiler module"
 gitf checkout -q -b v2-early && gitf commit -q --allow-empty -m "v2 before UI-5"
 gitf checkout -q -b v2 main
-printf '#!/usr/bin/env bash\n# a stand-in for UI-5'"'"'s compiler module build\nset -eu\ncd "$(dirname "$0")/.."\nmkdir -p dist\nprintf "\\0asm\\1\\0\\0\\0" >dist/ui-compiler.wasm\n' >"$BR/scripts/ui-compiler-wasm.sh"
+printf '#!/usr/bin/env bash\n# a stand-in for UI-5'"'"'s compiler module build: says where it ran\nset -eu\ncd "$(dirname "$0")/.."\necho "${IN_CODEGEN:+codegen}${IN_CODEGEN:-host} CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-}" >>"$STUB_UI_COMPILER_RAN"\nmkdir -p dist\nprintf "\\0asm\\1\\0\\0\\0" >dist/ui-compiler.wasm\n' >"$BR/scripts/ui-compiler-wasm.sh"
 chmod +x "$BR/scripts/"*.sh
-gitf add -A && gitf commit -qm "v2: the compiler module" && gitf checkout -q main
+gitf add -A && gitf commit -qm "v2: the compiler module"
+# v2-diagrams: diagrams/ a member of the workspace (as main was before v2)
+gitf checkout -q -b v2-diagrams v2; mkdir -p "$BR/diagrams"
+printf '[package]\nname = "menger-diagrams"\n' >"$BR/diagrams/Cargo.toml"; printf '[workspace]\nmembers = [".", "diagrams"]\n' >"$BR/Cargo.toml"
+gitf add -A && gitf commit -qm "v2 with diagrams in the workspace" && gitf checkout -q main
 MSHA=$(gitf rev-parse main) VSHA=$(gitf rev-parse v2) ESHA=$(gitf rev-parse v2-early)
 for t in trunk npm wasm-pack; do printf '#!/usr/bin/env bash\necho "%s $*" >>"%s"\nexit 99\n' "$t" "$B/browser.log" >"$B/bin/$t"; done
 printf '#!/usr/bin/env bash\necho "rustc 1.90.0 (stand-in)"\n' >"$B/bin/rustc"
@@ -1003,6 +1009,9 @@ case $1 in
              printf '#!/usr/bin/env bash\ncase ${1:-} in --help-all|--help) echo "--bind <ADDR>" ;; esac\n' >"$CARGO_TARGET_DIR/release/$a"
              chmod +x "$CARGO_TARGET_DIR/release/$a"; fi; prev=$a; done; exit 0 ;;
   test) echo "test result: ok. 3 passed; 0 failed"; exit 0 ;;
+  # the workspace's packages: menger, and menger-diagrams when the workspace lists diagrams/
+  metadata) if grep -q '"diagrams"' Cargo.toml 2>/dev/null; then echo '{"packages":[{"name":"menger"},{"name":"menger-diagrams"}]}'
+            else echo '{"packages":[{"name":"menger"}]}'; fi; exit 0 ;;
 esac
 exit 0
 CARGO
@@ -1032,8 +1041,8 @@ dir=$(map "${wd:-/}"); args=(); for a in "${cmd[@]}"; do args+=("$(map "$a")"); 
 (cd "$dir" && IN_CODEGEN=1 "${args[@]}")
 DOCKER
 chmod +x "$B/bin/"*
-export STUB_CARGO_LOG=$B/cargo.log STUB_BUILD_DOCKER=$B/docker.argv
-bb() { : >"$STUB_CARGO_LOG"; : >"$STUB_BUILD_DOCKER"; : >"$B/browser.log"
+export STUB_CARGO_LOG=$B/cargo.log STUB_BUILD_DOCKER=$B/docker.argv STUB_UI_COMPILER_RAN=$B/ui-compiler.ran
+bb() { : >"$STUB_CARGO_LOG"; : >"$STUB_BUILD_DOCKER"; : >"$B/browser.log"; : >"$STUB_UI_COMPILER_RAN"
   PATH=$B/bin:$PATH HOME=$H5 DISK_CHECK_USED_PCT=10 DISK_CHECK_AVAIL_GB=900 "$BR/deploy/pipeline" "$@" >"$SCRATCH/out" 2>"$SCRATCH/err"; code=$?; err=$(<"$SCRATCH/err"); }
 field() { sed -n "s/^$1: *//p" "$2" 2>/dev/null; } # FIELD RELEASEFILE
 bb build --branch v2 --no-gate
@@ -1043,12 +1052,17 @@ same "$T1: a release of v2's tip" "$(field commit "$RF")" "$VSHA"
 same "$T1: the release names its branch" "$(field branch "$RF")" "v2"
 same "$T1: the release's steps" "$(field steps "$RF")" "cargo build, ui-build, ui-compiler-wasm"
 same "$T1: no trunk, no npm ran" "$(<"$B/browser.log")" ""
-has "$T1: cargo build --release" "$(<"$STUB_CARGO_LOG")" "cargo build --release -p menger"
+same "$T1: cargo build --release of the workspace's packages: menger alone" "$(grep -o 'cargo build --release.*' "$STUB_CARGO_LOG")" "cargo build --release -p menger"
 has "$T1: the bundle built in the plexus-codegen container" "$(grep -E 'plexus-codegen.*scripts/ui-build\.sh' "$STUB_BUILD_DOCKER")" "scripts/ui-build.sh"
-has "$T1: the compiler module built in the plexus-codegen container" "$(grep -E 'plexus-codegen.*scripts/ui-compiler-wasm\.sh' "$STUB_BUILD_DOCKER")" "scripts/ui-compiler-wasm.sh"
+# the compiler module is cargo's (wasm32): built on this machine, as UI-6's prebuild is — the
+# plexus-codegen image has no Rust toolchain (and does not build today: NAMING-4)
+[[ $(grep -c 'ui-compiler' "$STUB_BUILD_DOCKER") == 0 ]] && ok || bad "$T1: the compiler module sent to the codegen container, which has no cargo"
+has "$T1: the compiler module built on this machine, into the build's target" "$(cat "$B/ui-compiler.ran" 2>/dev/null)" "host CARGO_TARGET_DIR=$B/menger-build/target"
 same "$T1: the release's dist/ui.tar holds the page and its manifest" "$(tar -tf "$D5/releases/$VR/dist/ui.tar" 2>/dev/null | paste -sd' ')" "index.html manifest.json"
 [[ -s $D5/releases/$VR/dist/ui-compiler.wasm ]] && ok || bad "$T1: no dist/ui-compiler.wasm in the release"
 [[ -x $D5/releases/$VR/bin/menger && -f $D5/releases/$VR/bin/run-menger && ! -e $D5/releases/$VR/app ]] && ok || bad "$T1: the release is bin/menger, bin/run-menger and dist/, no app/"
+# a frontend/ the build checkout kept untracked (git clean keeps /frontend/target/) is no frontend
+mkdir -p "$B/menger-build/frontend/target/release" && : >"$B/menger-build/frontend/target/release/stale"
 # before UI-5: no compiler script, no step, no module
 bb build --branch v2-early --no-gate
 same "$T1: build --branch v2-early exits 0" "$code" 0
@@ -1057,6 +1071,14 @@ same "$T1: v2-early: its tip" "$(field commit "$D5/releases/$ER/RELEASE")" "$ESH
 same "$T1: v2-early: no compiler step" "$(field steps "$D5/releases/$ER/RELEASE")" "cargo build, ui-build"
 [[ -s $D5/releases/$ER/dist/ui.tar && ! -e $D5/releases/$ER/dist/ui-compiler.wasm ]] && ok || bad "$T1: v2-early: a bundle and no compiler module"
 [[ $(grep -c 'ui-compiler' "$STUB_BUILD_DOCKER") == 0 ]] && ok || bad "$T1: v2-early: the compiler built all the same"
+same "$T1: an untracked frontend/ left in the build checkout: no trunk, no npm" "$(<"$B/browser.log")" ""
+[[ -d $B/menger-build/frontend/target ]] && ok || bad "$T1: (setup) the untracked frontend/target is gone — the check above proves nothing"
+# diagrams/ in the workspace: both packages built, both binaries in the release
+bb build --branch v2-diagrams --no-gate
+same "$T1: v2-diagrams: exits 0" "$code" 0
+DR=$(tail -n 1 "$SCRATCH/out")
+same "$T1: v2-diagrams: both packages built" "$(grep -o 'cargo build --release.*' "$STUB_CARGO_LOG")" "cargo build --release -p menger -p menger-diagrams"
+[[ -x $D5/releases/$DR/bin/menger-diagrams && -f $D5/releases/$DR/bin/run-diagrams ]] && ok || bad "$T1: v2-diagrams: no bin/menger-diagrams or bin/run-diagrams in the release"
 # --branch absent: main, as before
 bb build --no-gate
 same "$T1: no --branch: exits 0" "$code" 0
@@ -1147,7 +1169,7 @@ case "$1 $2" in
   logs\ *) echo "menger: a log line" ;;
 esac; exit 0'
 v2run() { : >"$STUB_DOCKER"; : >"$STUB_SYNAPSE_ARGV"; : >"$HF"; : >"$STUB_ARGV"; : >"$STUB_ORDER"
-  HOME=$H4 MENGER_DEPLOY_KEY_FILE=$K2 STUB_WS_PORT=4470 MENGER_LOCAL_WAIT=30 MENGER_INFRA_DIR=$SCRATCH/infra \
+  HOME=$H4 MENGER_DEPLOY_KEY_FILE=$K2 STUB_WS_PORT=4470 MENGER_LOCAL_WAIT=${MENGER_LOCAL_WAIT:-30} MENGER_INFRA_DIR=$SCRATCH/infra \
     MENGER_APP_YML=$SCRATCH/app.yml HF_OUTPUTS=$HF run "$@"; }
 uivers() { jq -c "$1" "$STUB_UI_STATE/versions.json" 2>/dev/null; }
 export STUB_UI_SIGNER=$PUB2
@@ -1157,6 +1179,10 @@ r=$(grep '^docker run' "$STUB_DOCKER")
 has "$T3: the container signs keys in" "$r" "-e MENGER_AUTH_PROVIDERS=key=ws://127.0.0.1:4470 "
 has "$T3: the pipeline's key its admin" "$r" "-e MENGER_ADMINS=key:$PUB2 "
 has "$T3: the pipeline's key its signer" "$r" "-e MENGER_UI_SIGNERS=$PUB2 "
+# ACCESS-30 (src/bind.rs): --bind 0.0.0.0 needs a public URL; http on 127.0.0.1 is refused there
+# ("reached beyond this machine"), http on a LAN host — `localhost`, one label — served with a warning
+has "$T3: under login the shell's page is its sign-in page (/ is a 303 to it)" "$err" "ok   the shell on :4471 — its sign-in page at /login"
+has "$T3: its public URL, http on localhost (ACCESS-30: --bind 0.0.0.0 needs one)" "$r" "-e MENGER_PUBLIC_URL=http://localhost:4471 "
 has "$T3: pushed to the local service, as the pipeline, params on stdin" "$(cat "$STUB_UI_STATE/calls" 2>/dev/null)" "ui.push ws://127.0.0.1:4470 pipeline stdin"
 same "$T3: ui versions: one version, live, the image's bundle, pushed by the pipeline's key" \
   "$(uivers '[length, .[0].hash, .[0].pushed_by]')" "[1,\"$BUNDLE_SHA\",\"key:$PUB2\"]"
@@ -1180,6 +1206,11 @@ same "$T3: again: still one version" "$(uivers length)" 1
 STUB_UI_SERVE=placeholder v2run local --image "menger:$V4"
 same "$T3: /app/ the placeholder: exits 1" "$code" 1
 grep -E '^FAIL .*/app/' <<<"$err" >/dev/null && ok || bad "$T3: no FAIL line naming /app/ in: $err"
+# the shell answers no sign-in page: not healthy, nothing pushed
+: >"$STUB_UI_STATE/calls"; STUB_LOCAL_LOGIN=no MENGER_LOCAL_WAIT=2 v2run local --image "menger:$V4"
+same "$T3: no sign-in page on :4471: exits 1" "$code" 1
+has "$T3: no sign-in page on :4471: said" "$err" "no sign-in page at :4471/login"
+[[ $(grep -c '^ui.push ' "$STUB_UI_STATE/calls") == 0 ]] && ok || bad "$T3: pushed to a container whose shell never answered"
 # ui versions lists nothing live: the smoke fails
 STUB_UI_VERSIONS=none v2run local --image "menger:$V4"
 same "$T3: nothing live in ui versions: exits 1" "$code" 1
