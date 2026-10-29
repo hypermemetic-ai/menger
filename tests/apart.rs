@@ -37,7 +37,9 @@
 //! - FRAME-13: real Svelte (`svelte/1`) is the framework's tool's — it
 //!   compiles a `.svelte` in Node at build. menger has none until FRAME-14
 //!   (`ui/src` holds no `.svelte`), and `deploy/pipeline`'s `build_v2` checks
-//!   for `node` before it builds a UI that holds one, saying `svelte/1`.
+//!   for `node` and for svelte and esbuild in `../plexus-ui/node_modules`
+//!   (`npm ci` there) before it builds a UI that holds one, and names
+//!   `--node-modules` to the tool.
 //! - FRAME-9: `tether/` takes `plexus-login` from the sibling, as
 //!   plexus-substrate (which tether takes) does — one `plexus-login` in its
 //!   graph, never menger's tree's.
@@ -1166,38 +1168,69 @@ fn shell_fn<'a>(script: &'a str, name: &str) -> Vec<(usize, &'a str)> {
 }
 
 /// What a v2 build lacks to build a `svelte/1` component (FRAME-13: the tool
-/// compiles it with the real Svelte compiler in Node; `rhx/1` needs none):
-/// the line of `build_v2` that, when the UI holds a `.svelte`, checks for
-/// `node` and dies saying `svelte/1` — before the tool builds `$BUILD/ui` —
-/// or why there is none.
-fn node_check(body: &[(usize, &str)]) -> Result<usize, String> {
+/// compiles it with the real Svelte compiler in Node, svelte and esbuild
+/// from the framework's `package.json`; `rhx/1` needs neither), each line of
+/// `build_v2` before the tool builds `$BUILD/ui`: when the UI holds a
+/// `.svelte`, a check for `node` that dies saying `svelte/1`; a check that
+/// `node_modules/svelte` and `node_modules/esbuild` are there that dies
+/// naming `npm ci` (how they are installed: in `../plexus-ui`); and the
+/// build naming `--node-modules`. The checks' lines, or every reason.
+fn node_check(body: &[(usize, &str)]) -> Result<(usize, usize), String> {
     let code: Vec<&(usize, &str)> = body.iter().filter(|(_, l)| !l.trim_start().starts_with('#')).collect();
-    let build = code
+    let (build, line) = code
         .iter()
         .find(|(_, l)| l.contains("\"$UI_TOOL\" build \"$BUILD/ui\""))
-        .map(|(n, _)| *n)
+        .map(|(n, l)| (*n, *l))
         .ok_or_else(|| "build_v2 has no \"$UI_TOOL\" build \"$BUILD/ui\"".to_string())?;
-    let check = code.iter().find(|(_, l)| (l.contains("command -v node") || l.contains("need node")) && l.contains(".svelte") && l.contains("die") && l.contains("svelte/1"));
-    match check {
-        None => Err("build_v2 never checks for node when ui/src holds a .svelte, saying svelte/1 (a line with the .svelte test, command -v node, die and svelte/1)".into()),
-        Some((n, _)) if *n > build => Err(format!("build_v2 checks for node at line {n}, after the tool builds the UI at line {build}")),
-        Some((n, _)) => Ok(*n),
+    let mut why = Vec::new();
+    let mut find = |what: &str, hit: &dyn Fn(&str) -> bool| match code.iter().find(|(_, l)| hit(l)) {
+        None => {
+            why.push(format!("build_v2 never {what}"));
+            0
+        }
+        Some((n, _)) if *n > build => {
+            why.push(format!("build_v2 {what} at line {n}, after the tool builds the UI at line {build}"));
+            0
+        }
+        Some((n, _)) => *n,
+    };
+    let node = find(
+        "checks for node when ui/src holds a .svelte, saying svelte/1 (a line with the .svelte test, command -v node, die and svelte/1)",
+        &|l| (l.contains("command -v node") || l.contains("need node")) && l.contains(".svelte") && l.contains("die") && l.contains("svelte/1"),
+    );
+    let modules = find(
+        "checks node_modules/svelte and node_modules/esbuild when ui/src holds a .svelte, naming npm ci (a line with the .svelte test, both, die and npm ci)",
+        &|l| l.contains(".svelte") && l.contains("node_modules/svelte") && l.contains("node_modules/esbuild") && l.contains("die") && l.contains("npm ci"),
+    );
+    if !line.contains("--node-modules") {
+        why.push(format!("the tool's build at line {build} names no --node-modules"));
+    }
+    if why.is_empty() {
+        Ok((node, modules))
+    } else {
+        Err(why.join("; "))
     }
 }
 
 /// FRAME-13: the pipeline's build host has Node when it must — `build_v2`
-/// checks for `node` before the tool builds a UI holding a `.svelte` and
-/// says why (svelte/1); an rhx-only UI asks nothing of Node.
+/// checks for `node`, and for svelte and esbuild in `../plexus-ui`'s
+/// `node_modules` (installed by `npm ci` there), before the tool builds a UI
+/// holding a `.svelte`, and names `--node-modules` to the tool; an rhx-only
+/// UI asks nothing of Node.
 #[test]
 fn the_build_host_has_node() {
     // The check, on what it is given first.
     let given = |s: &'static str| s.lines().enumerate().map(|(n, l)| (n + 1, l)).collect::<Vec<_>>();
-    let good = "build_v2() {\n  if compgen -G \"$BUILD/ui/src/*.svelte\" >/dev/null; then command -v node >/dev/null || die \"ui-build: svelte/1 needs node\"; fi\n  (cd \"$BUILD\" && \"$UI_TOOL\" build \"$BUILD/ui\" -o x)\n";
-    assert_eq!(node_check(&given(good)), Ok(2));
-    let late = "build_v2() {\n  (cd \"$BUILD\" && \"$UI_TOOL\" build \"$BUILD/ui\" -o x)\n  if compgen -G \"$BUILD/ui/src/*.svelte\" >/dev/null; then command -v node >/dev/null || die \"svelte/1 needs node\"; fi\n";
-    assert_eq!(node_check(&given(late)), Err("build_v2 checks for node at line 3, after the tool builds the UI at line 2".to_string()));
+    let good = "build_v2() {\n  if compgen -G \"$BUILD/ui/src/*.svelte\" >/dev/null; then command -v node >/dev/null || die \"ui-build: svelte/1 needs node\"; fi\n  if compgen -G \"$BUILD/ui/src/*.svelte\" >/dev/null; then [[ -d $NM/node_modules/svelte && -d $NM/node_modules/esbuild ]] || die \"run npm ci in ../plexus-ui\"; fi\n  (cd \"$BUILD\" && \"$UI_TOOL\" build \"$BUILD/ui\" --node-modules \"$NM\" -o x)\n";
+    assert_eq!(node_check(&given(good)), Ok((2, 3)));
+    let late = "build_v2() {\n  (cd \"$BUILD\" && \"$UI_TOOL\" build \"$BUILD/ui\" --node-modules x -o x)\n  if compgen -G \"$BUILD/ui/src/*.svelte\" >/dev/null; then command -v node >/dev/null || die \"svelte/1 needs node\"; fi\n  if compgen -G \"$BUILD/ui/src/*.svelte\" >/dev/null; then [[ -d node_modules/svelte && -d node_modules/esbuild ]] || die \"npm ci\"; fi\n";
+    assert_eq!(
+        node_check(&given(late)),
+        Err("build_v2 checks for node when ui/src holds a .svelte, saying svelte/1 (a line with the .svelte test, command -v node, die and svelte/1) at line 3, after the tool builds the UI at line 2; build_v2 checks node_modules/svelte and node_modules/esbuild when ui/src holds a .svelte, naming npm ci (a line with the .svelte test, both, die and npm ci) at line 4, after the tool builds the UI at line 2".to_string())
+    );
     let mute = "build_v2() {\n  # command -v node .svelte die svelte/1\n  need node\n  (cd \"$BUILD\" && \"$UI_TOOL\" build \"$BUILD/ui\" -o x)\n";
-    assert!(node_check(&given(mute)).is_err(), "a comment, or a bare `need node`, is no check");
+    let why = node_check(&given(mute)).expect_err("a comment, or a bare `need node`, is no check");
+    assert!(why.contains("never checks for node") && why.contains("never checks node_modules") && why.contains("names no --node-modules"), "{why}");
     let script = "x() {\n  a\n}\nbuild_v2() {\n  b\n  c\n}\ny() {\n}\n";
     assert_eq!(shell_fn(script, "build_v2"), [(4, "build_v2() {"), (5, "  b"), (6, "  c")]);
 
