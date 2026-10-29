@@ -64,4 +64,31 @@ fn a_binding_re_evaluates_only_when_a_signal_it_read_changes() {
     x.set(4);
     assert_eq!(*ran.borrow(), ["c"], "a disposed: only c ran");
     assert_eq!(x.peek(), 4);
+
+    // A conditional read: `d` reads `y` only while `flag` holds. Each run
+    // tracks afresh, so `y` wakes it only then.
+    let flag = rt.signal(true);
+    let runs: Rc<RefCell<u32>> = Rc::default();
+    let (f, yd, n) = (flag.clone(), y.clone(), runs.clone());
+    let _d = rt.bind(move || {
+        *n.borrow_mut() += 1;
+        if f.get() {
+            let _ = yd.get();
+        }
+    });
+    assert_eq!(*runs.borrow(), 1);
+    y.set(31);
+    assert_eq!(*runs.borrow(), 2, "flag holds: y read, y woke d");
+    flag.set(false);
+    assert_eq!(*runs.borrow(), 3, "flag moved");
+    y.set(32);
+    assert_eq!(*runs.borrow(), 3, "flag false: y was not read on the last run, d did not run");
+    flag.set(true);
+    y.set(33);
+    assert_eq!(*runs.borrow(), 5, "flag again: y read again, so y wakes it");
+
+    // The evaluation counter counts every binding run.
+    let before = rt.runs();
+    x.set(5);
+    assert_eq!(rt.runs() - before, 1, "x is read by c alone now");
 }

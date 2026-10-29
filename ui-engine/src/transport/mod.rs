@@ -153,12 +153,5 @@ impl Wire for FakeWire {
     }
 }
 
-/// The page's socket (wasm32): v1's `WsTransport` (tag v0.0.1,
-/// `frontend/src/session.rs`) over plexus-client's `ws-web` — one socket,
-/// signed in by the session's cookie, reconnecting on a 1 s loop and
-/// re-opening every call the engine still holds.
-#[cfg(target_arch = "wasm32")]
-pub mod ws {
-    /// The service the socket speaks to (plexus-client's namespace argument).
-    pub const SERVICE: &str = "menger";
-}
+#[cfg(all(target_arch = "wasm32", feature = "dom"))]
+pub mod ws;

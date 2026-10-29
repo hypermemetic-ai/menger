@@ -7,5 +7,5 @@
 <h1 class="hello">Hello from v1</h1>
 <p class="status">{rows.status}</p>
 <ul class="rows">
-{#each rows.rows as r (r.id)}<li data-id={r.id}>{r.id + " " + r.title}</li>{/each}
+{#each rows as r (r.id)}<li data-id={r.id}>{r.id + " " + r.title}</li>{/each}
 </ul>

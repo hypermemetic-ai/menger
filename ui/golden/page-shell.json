@@ -1,1 +1,31 @@
-{"name":"page-shell","abi":"engine/1","props":[],"state":{},"live":{},"uses":[],"handlers":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","tree":[{"el":"header","attrs":{"class":"shell"},"children":[{"el":"span","children":[{"text":"menger"}]}]},{"slot":"main","props":{}}]}
+{
+  "abi": "engine/1",
+  "handlers": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "live": {},
+  "name": "page-shell",
+  "props": [],
+  "state": {},
+  "tree": [
+    {
+      "attrs": {
+        "class": "shell"
+      },
+      "children": [
+        {
+          "children": [
+            {
+              "text": "menger"
+            }
+          ],
+          "el": "span"
+        }
+      ],
+      "el": "header"
+    },
+    {
+      "props": {},
+      "slot": "main"
+    }
+  ],
+  "uses": []
+}
