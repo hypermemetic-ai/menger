@@ -989,7 +989,7 @@ printf '[workspace]\nmembers = ["."]\n' >"$BR/Cargo.toml"
 gitf init -q -b main && gitf add -A && gitf commit -qm "main: v2's shape, no compiler module"
 gitf checkout -q -b v2-early && gitf commit -q --allow-empty -m "v2 before UI-5"
 gitf checkout -q -b v2 main
-printf '#!/usr/bin/env bash\n# a stand-in for UI-5'"'"'s compiler module build\nset -eu\ncd "$(dirname "$0")/.."\nmkdir -p dist\nprintf "\\0asm\\1\\0\\0\\0" >dist/ui-compiler.wasm\n' >"$BR/scripts/ui-compiler-wasm.sh"
+printf '#!/usr/bin/env bash\n# a stand-in for UI-5'"'"'s compiler module build: says where it ran\nset -eu\ncd "$(dirname "$0")/.."\necho "${IN_CODEGEN:+codegen}${IN_CODEGEN:-host} CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-}" >>"$STUB_UI_COMPILER_RAN"\nmkdir -p dist\nprintf "\\0asm\\1\\0\\0\\0" >dist/ui-compiler.wasm\n' >"$BR/scripts/ui-compiler-wasm.sh"
 chmod +x "$BR/scripts/"*.sh
 gitf add -A && gitf commit -qm "v2: the compiler module"
 # v2-diagrams: diagrams/ a member of the workspace (as main was before v2)
@@ -1040,8 +1040,8 @@ dir=$(map "${wd:-/}"); args=(); for a in "${cmd[@]}"; do args+=("$(map "$a")"); 
 (cd "$dir" && IN_CODEGEN=1 "${args[@]}")
 DOCKER
 chmod +x "$B/bin/"*
-export STUB_CARGO_LOG=$B/cargo.log STUB_BUILD_DOCKER=$B/docker.argv
-bb() { : >"$STUB_CARGO_LOG"; : >"$STUB_BUILD_DOCKER"; : >"$B/browser.log"
+export STUB_CARGO_LOG=$B/cargo.log STUB_BUILD_DOCKER=$B/docker.argv STUB_UI_COMPILER_RAN=$B/ui-compiler.ran
+bb() { : >"$STUB_CARGO_LOG"; : >"$STUB_BUILD_DOCKER"; : >"$B/browser.log"; : >"$STUB_UI_COMPILER_RAN"
   PATH=$B/bin:$PATH HOME=$H5 DISK_CHECK_USED_PCT=10 DISK_CHECK_AVAIL_GB=900 "$BR/deploy/pipeline" "$@" >"$SCRATCH/out" 2>"$SCRATCH/err"; code=$?; err=$(<"$SCRATCH/err"); }
 field() { sed -n "s/^$1: *//p" "$2" 2>/dev/null; } # FIELD RELEASEFILE
 bb build --branch v2 --no-gate
@@ -1053,7 +1053,10 @@ same "$T1: the release's steps" "$(field steps "$RF")" "cargo build, ui-build, u
 same "$T1: no trunk, no npm ran" "$(<"$B/browser.log")" ""
 same "$T1: cargo build --release of the workspace's packages: menger alone" "$(grep -o 'cargo build --release.*' "$STUB_CARGO_LOG")" "cargo build --release -p menger"
 has "$T1: the bundle built in the plexus-codegen container" "$(grep -E 'plexus-codegen.*scripts/ui-build\.sh' "$STUB_BUILD_DOCKER")" "scripts/ui-build.sh"
-has "$T1: the compiler module built in the plexus-codegen container" "$(grep -E 'plexus-codegen.*scripts/ui-compiler-wasm\.sh' "$STUB_BUILD_DOCKER")" "scripts/ui-compiler-wasm.sh"
+# the compiler module is cargo's (wasm32): built on this machine, as UI-6's prebuild is — the
+# plexus-codegen image has no Rust toolchain (and does not build today: NAMING-4)
+[[ $(grep -c 'ui-compiler' "$STUB_BUILD_DOCKER") == 0 ]] && ok || bad "$T1: the compiler module sent to the codegen container, which has no cargo"
+has "$T1: the compiler module built on this machine, into the build's target" "$(cat "$B/ui-compiler.ran" 2>/dev/null)" "host CARGO_TARGET_DIR=$B/menger-build/target"
 same "$T1: the release's dist/ui.tar holds the page and its manifest" "$(tar -tf "$D5/releases/$VR/dist/ui.tar" 2>/dev/null | paste -sd' ')" "index.html manifest.json"
 [[ -s $D5/releases/$VR/dist/ui-compiler.wasm ]] && ok || bad "$T1: no dist/ui-compiler.wasm in the release"
 [[ -x $D5/releases/$VR/bin/menger && -f $D5/releases/$VR/bin/run-menger && ! -e $D5/releases/$VR/app ]] && ok || bad "$T1: the release is bin/menger, bin/run-menger and dist/, no app/"
