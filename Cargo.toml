@@ -34,7 +34,7 @@ license = "MIT"
 description = "A plan is a program whose leaves are prose — ticketing on Plexus RPC"
 repository = "https://github.com/hypermemetic-ai/menger"
 readme = "README.md"
-keywords = ["ticketing", "planning", "plexus", "rpc", "leptos"]
+keywords = ["ticketing", "planning", "plexus", "rpc"]
 categories = ["web-programming::http-server", "development-tools"]
 # DIST-3: what the published crate carries — the server's sources. v2: the
 # frontend (web/, frontend/, the embedding build script) is deleted; tag

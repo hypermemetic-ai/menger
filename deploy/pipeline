@@ -14,7 +14,8 @@
 #                                           its UI in the plexus-codegen container); --no-gate: the
 #                                           release alone, the suite to run after the deploy
 #                                           (DEPLOY-52); refused up front on a low disk (CI-2:
-#                                           scripts/disk-check.sh — under 50 GB free or 90% used)
+#                                           scripts/disk-check.sh — under 50 GB free or 90% used);
+#                                           V2-9: the release builds menger alone, v1 commits included
 #   deploy/pipeline suite RELEASE           DEPLOY-52: the full suite (cargo test --workspace +
 #                                           the frontend's) at RELEASE's commit, in its own
 #                                           checkout (../menger-suite); marks the release

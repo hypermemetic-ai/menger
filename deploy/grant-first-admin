@@ -2,7 +2,7 @@
 """RUN-11's bootstrap: grant admin on `*` to the owner's first sign-in, once.
 
   deploy/grant-first-admin --url wss://app.menger.sh/ws --name NAME [--name NAME…]
-      [--as operator] [--every 60] [--hours 12] [--allow FILE] [--ticket RUN-11] [--dry-run]
+      --allow FILE [--as operator] [--every 60] [--hours 12] [--ticket RUN-11] [--dry-run]
 
 menger has no admin-by-email setting, and a WorkOS environment the owner has
 never signed in to has no user id to name in MENGER_ADMINS. So: every
@@ -11,8 +11,8 @@ session from the key), read `members requests` — every sign-in without a
 grant: principal, the name the provider gave, provider, since — and when
 exactly one `oidc:workos/…` principal whose name is one of --name (exactly,
 case-insensitive) has signed in since this started, grant it admin on `*`,
-append it to --allow (0600, created if missing; the chat bridge's list,
-CHAT-11), record it on --ticket, and stop. Two or more such principals:
+append it to --allow (0600, created if missing; required, no default),
+record it on --ticket, and stop. Two or more such principals:
 grant nothing, record it, stop — that is for a person to sort out. Nothing
 for --hours: stop. menger's waiting list carries the name, not the email:
 WorkOS names a person by first/last name when it has them (GitHub's profile
@@ -26,7 +26,7 @@ ap.add_argument("--name", action="append", required=True)
 ap.add_argument("--as", dest="agent", default="operator")
 ap.add_argument("--every", type=int, default=60)
 ap.add_argument("--hours", type=float, default=12)
-ap.add_argument("--allow", default=os.path.expanduser("~/.config/menger/chat-bridge.allow"))
+ap.add_argument("--allow", required=True, help="the file the granted principal is appended to (required: no default)")
 ap.add_argument("--ticket", default="RUN-11")
 ap.add_argument("--dry-run", action="store_true")
 a = ap.parse_args()

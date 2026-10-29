@@ -88,8 +88,13 @@ const GOES: &[&str] = &[
     // The app's home-screen icons: drawn from web/favicon.svg into
     // frontend/icons/, both gone with v1 (the landing's icon is committed).
     "scripts/icons.sh",
-    // The diagrams service and the ACCESS-6 spike.
+    // ORG-5's one-off move of the tracker's ids: done, and nothing a
+    // throwaway holds for it to move.
+    "scripts/org-5-move.sh",
+    // The diagrams service — with its launcher and unit — and the ACCESS-6 spike.
     "diagrams",
+    "deploy/launch/run-diagrams",
+    "deploy/systemd/menger-diagrams@.service",
     "spike",
     // The probe of the chats activation, and the magnitude ladder (it
     // drives the app and builds it).
