@@ -1,14 +1,59 @@
 <script>
-  // UI-8: a ticket — `get`, its chips, its body drawn without scripts or
-  // styles, its children by `list { parent }`, `set_status` from a menu. A stub.
+  // UI-8: a ticket — `get` (live on its own status and amend), its title,
+  // status, kind, parent, blockers and unlocks as chips, the body as
+  // markdown drawn through the engine's sanitizer (no script, no style, no
+  // handler), its children by one `list { parent }`, `set_status` from a menu.
   prop("id");
-  state(#{ menu: false });
   let ticket = live(#{ snapshot: "tickets.get", params: #{ id: id }, changes: "tickets.watch", key: "id",
-                       on: #{ amended: "upsert:ticket", status_changed: "upsert:ticket" } });
+                       on: #{ amended: "upsert:ticket", status_changed: "upsert:ticket", kind_changed: "upsert:ticket" } });
   let children = live(#{ snapshot: "tickets.list", params: #{ parent: id, summary: true, limit: 200 }, changes: "tickets.watch", key: "id",
-                         on: #{ created: "upsert:ticket", amended: "upsert:ticket", deleted: "remove:ids" } });
+                         on: #{ created: "upsert:ticket", amended: "upsert:ticket", status_changed: "upsert:ticket", deleted: "remove:ids" } });
+  fn set_status(state, ev) {
+    if ev.value != "" { call("tickets.set_status", #{ id: ev.props.id, status: ev.value }); }
+    state
+  }
 </script>
 
-<article class="ticket-page">
-<h1 class="ticket-heading">{id}</h1>
+<article class="ticket-page" data-ticket={id}>
+  <nav class="crumbs"><a href="#/" data-back>← board</a></nav>
+  {#each ticket as t (t.id)}
+    <header class="ticket-head">
+      <p class="ticket-code"><span data-ticket-id>{t.id}</span></p>
+      <h1 class="ticket-title" data-ticket-title>{t.title}</h1>
+      <div class="ticket-meta">
+        <span class="tag status" data-ticket-status>{t.status}</span>
+        <span class="tag kind" data-ticket-kind>{t.kind}</span>
+        <label class="status-menu">set status
+          <select data-status-menu on:change={set_status}>
+            <option value="">…</option>
+            <option value="Draft">Draft</option>
+            <option value="Pending">Pending</option>
+            <option value="Ready">Ready</option>
+            <option value="Coding">Coding</option>
+            <option value="In Review">In Review</option>
+            <option value="Complete">Complete</option>
+            <option value="Blocked">Blocked</option>
+            <option value="Superseded">Superseded</option>
+            <option value="Canceled">Canceled</option>
+          </select>
+        </label>
+      </div>
+      <div class="chips">
+        {#if t.parent != ()}<ticket-chip id={t.parent} kind="parent"/>{/if}
+        {#each t.blocked_by as b (b)}<ticket-chip id={b} kind="blocker"/>{/each}
+        {#each t.unlocks as u (u)}<ticket-chip id={u} kind="unlocks"/>{/each}
+      </div>
+    </header>
+    <div class="ticket-body" data-ticket-body>{@html markdown(t.body)}</div>
+  {/each}
+  {#if ticket.status == "live" && ticket.rows.len() == 0}<p class="empty" data-not-found>No ticket {id} here.</p>{/if}
+  <section class="ticket-children">
+    <h2>Children</h2>
+    <ul>
+      {#each children as c (c.id)}
+        <li><a data-ticket-child={c.id} data-status={c.status} href={"#/ticket/" + c.id}><span class="row-id">{c.id}</span> <span class="row-title">{c.title}</span> <span class="tag">{c.status}</span></a></li>
+      {/each}
+    </ul>
+    {#if children.status == "live" && children.rows.len() == 0}<p class="empty">none</p>{/if}
+  </section>
 </article>

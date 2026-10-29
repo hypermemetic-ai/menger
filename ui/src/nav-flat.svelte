@@ -1,0 +1,12 @@
+<script>
+  // UI-8: the nav's Flat — one page of `list { filter, summary, limit: 200 }`
+  // in the store's order (v1's FILTER-20).
+  prop("filter");
+  let flat = live(#{ snapshot: "tickets.list", params: #{ filter: filter, summary: true, limit: 200 }, key: "id" });
+</script>
+
+<ul class="nav-flat" data-nav-flat>
+  {#each flat as t (t.id)}
+    <li><a class="nav-row" data-nav-flat-row={t.id} data-status={t.status} href={"#/ticket/" + t.id}><span class="row-id">{t.id}</span> <span class="row-title">{t.title}</span></a></li>
+  {/each}
+</ul>

@@ -1,10 +1,27 @@
 <script>
-  // UI-8: the filter line — one text field in FILTER-3's language, applied
-  // to `list --filter` and `nav counts`; a refused chunk shown under it. A stub.
+  // UI-8: the filter line — one field in FILTER-3's language. Enter (the
+  // field's change) moves the route to `#/f/<text>`, which the layout hands
+  // its sections; the refused chunk is what `nav counts` says of it, shown
+  // under the field. `nav counts { filter }` is the nav's and the board's
+  // own live too, so the three share one call.
   prop("filter");
-  state(#{ text: "", refused: "" });
+  let counts = live(#{ snapshot: "tickets.nav.counts", params: #{ filter: filter }, key: "shortcode", on: #{ count: "upsert:." } });
+  fn apply(state, ev) {
+    let t = ev.value;
+    t.trim();
+    t.replace("%", "%25");
+    t.replace("/", "%2F");
+    t.replace("#", "%23");
+    if t == "" { navigate("#/"); } else { navigate("#/f/" + t); }
+    state
+  }
 </script>
 
-<div class="filter-line">
-<h2 class="filter-heading">Filter</h2>
+<div class="filter-line" data-filter-line>
+  <input class="filter-input" data-filter-input type="search" spellcheck="false" autocomplete="off"
+         placeholder="filter — e.g. status Ready and kind build" aria-label="filter"
+         value={if filter == () { "" } else { filter }} on:change={apply}/>
+  {#if counts.status == "error" || counts.status == "refused"}
+    <p class="filter-refused" data-filter-refused role="alert">{if counts.message == () { "this filter is not taken" } else { counts.message }}</p>
+  {/if}
 </div>

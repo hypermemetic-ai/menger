@@ -1,9 +1,44 @@
 <script>
-  // UI-8: the jump palette — `/` opens it; `find` after 80 ms of quiet,
-  // the newest query only, `search`'s best hits below. A stub.
-  state(#{ open: false, query: "" });
+  // UI-8: the jump palette — `/` opens it; `find` after 80 ms of quiet, the
+  // newest query only, its hits first and `search`'s best below; Enter
+  // jumps to the first, Escape closes.
+  state(#{ open: false, q: "" });
+  let found = live(#{ snapshot: "tickets.find", params: #{ query: state.q, limit: 12 }, key: "id", debounce_ms: 80 });
+  let searched = live(#{ snapshot: "tickets.search", params: #{ query: state.q, limit: 8 }, key: "id", debounce_ms: 80 });
+  fn keyed(state, ev) {
+    if ev.key == "/" && !state.open && ev.target.tag != "input" && ev.target.tag != "textarea" && ev.target.tag != "select" { state.open = true; }
+    else if ev.key == "Escape" && state.open { state.open = false; state.q = ""; }
+    state
+  }
+  fn typed(state, ev) { state.q = ev.value; state }
+  fn entered(state, ev) {
+    if ev.key == "Enter" {
+      let f = ev.live.found;
+      if f.len() > 0 { navigate("#/ticket/" + f[0].id); state.open = false; state.q = ""; }
+    }
+    state
+  }
+  fn picked(state, ev) { state.open = false; state.q = ""; state }
 </script>
 
-<div class="jump-palette">
-<h2 class="palette-heading">Jump</h2>
+<div class="jump-palette" data-palette on:window-keydown={keyed}>
+  {#if state.open}
+    <div class="palette-sheet" role="dialog" aria-label="jump to a ticket">
+      <input class="palette-input" data-palette-input autofocus="" spellcheck="false" autocomplete="off"
+             placeholder="jump to a ticket — an id or words" value={state.q} on:input={typed} on:keydown={entered}/>
+      {#if state.q != ""}
+        <ul class="palette-hits" data-palette-hits>
+          {#each found as f (f.id)}
+            <li><a class="palette-hit" data-palette-hit={f.id} href={"#/ticket/" + f.id} on:click={picked}><span class="row-id">{f.id}</span> <span class="row-title">{f.title}</span></a></li>
+          {/each}
+        </ul>
+        <p class="palette-label">in titles and bodies</p>
+        <ul class="palette-hits search" data-search-hits>
+          {#each searched as h (h.id)}
+            <li><a class="palette-hit" data-search-hit={h.id} href={"#/ticket/" + h.id} on:click={picked}><span class="row-id">{h.id}</span> <span class="row-title">{h.title}</span></a></li>
+          {/each}
+        </ul>
+      {/if}
+    </div>
+  {/if}
 </div>
