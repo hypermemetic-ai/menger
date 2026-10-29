@@ -56,6 +56,19 @@ impl Store {
         self.tickets.read().expect("store lock poisoned").members.generation()
     }
 
+    /// BIDIR-8: the grants generation is `shared` — the gate's
+    /// ([`plexus_auth_core::grants::Gate::generation`]) — from now on: every
+    /// grant, revoke and team change written here moves it, and what moved
+    /// it before is carried over. [`crate::access::Access::attach`] hands it.
+    pub fn share_grants_generation(&self, shared: plexus_auth_core::grants::GrantsGeneration) {
+        let generation = {
+            let mut cache = self.tickets.write().expect("store lock poisoned");
+            cache.members.share_generation(shared);
+            cache.members.generation()
+        };
+        self.tx.grants_at(generation);
+    }
+
     /// ACCESS-9: the teams `principal` is in — the input a reach adds each
     /// team's grants from (`team:<name>`'s). From the cache (ACCESS-22
     /// keeps the teams).

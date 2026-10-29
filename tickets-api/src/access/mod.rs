@@ -494,6 +494,8 @@ impl Access {
         if let Some(system) = store.system() {
             let _ = self.book.system.set(Arc::new(system));
         }
+        // BIDIR-8: one grants generation — the gate's, counted by the store.
+        store.share_grants_generation(self.gate.generation().clone());
         let _ = self.book.store.set(store);
     }
 
@@ -504,6 +506,7 @@ impl Access {
     /// acting as it too.
     pub fn attach_with(&self, store: Arc<Store>, system: impl Into<Arc<System>>) {
         let _ = self.book.system.set(system.into());
+        store.share_grants_generation(self.gate.generation().clone());
         let _ = self.book.store.set(store);
     }
 

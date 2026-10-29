@@ -223,7 +223,9 @@ pub async fn build_rpc_login(
     // activations declare are what a role holds until an admin edits it.
     let book = access.book();
     hub = hub
-        .with_auth(AuthSetup::new(backend, book.clone(), book.clone(), book.clone()))
+        // BIDIR-8: the service's call gate counts in the access layer's generation —
+        // the one the store moves — so menger keeps one, not two.
+        .with_auth(AuthSetup::new(backend, book.clone(), book.clone(), book.clone()).with_generation(access.gate().generation().clone()))
         .with_signed_in_grants(SIGNED_IN_GRANTS);
     if let Some(url) = resource_metadata {
         hub = hub.with_resource_metadata(url);
