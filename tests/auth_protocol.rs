@@ -361,9 +361,12 @@ async fn the_roles_are_what_identity_21_asked_method_by_method() {
         }
     }
     assert_eq!(seen.len(), TODAY.len(), "every row is a method: {seen:?}");
-    // admin is built in, never declared; nothing else is. V2-4: DEPLOY-11's
-    // `deployer` and CHAT-16's `chatter` went with their services.
-    assert_eq!(declared.keys().cloned().collect::<BTreeSet<_>>(), names(&["editor", "member", "viewer"]));
+    // admin is built in, never declared; nothing else is. V2-4: CHAT-16's
+    // `chatter` went with chats; DEPLOY-11's `deployer` went with deployments
+    // and came back for one method, V2-7's `ui.push` — a deploy pushes the
+    // bundle as a deployer, never as an admin.
+    assert_eq!(declared.keys().cloned().collect::<BTreeSet<_>>(), names(&["deployer", "editor", "member", "viewer"]));
+    assert_eq!(declared["deployer"], vec!["ui.push".to_string()], "a deployer holds the push and nothing else");
 }
 
 // ── Over the wire, login on ──────────────────────────────────────────────
