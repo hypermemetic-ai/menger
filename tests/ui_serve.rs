@@ -140,6 +140,7 @@ async fn no_live_version_is_the_placeholder() {
     let body = r.text().await.unwrap();
     assert!(body.contains("menger v2") && body.contains("No frontend yet"), "the placeholder: {body}");
     assert!(body.contains(&format!("-P {}", m.ws)), "stamped as the placeholder is: {body}");
+    assert!(!body.contains("preload"), "FRAME-16: the placeholder preloads nothing — there is no version to boot: {body}");
     let admin = connect(m.ws).await;
     assert!(call(&admin, "ui.versions", json!({})).await.is_empty(), "versions answers none");
 }
@@ -197,10 +198,12 @@ fn link_attrs(tag: &str) -> Vec<(String, String)> {
 /// FRAME-16: menger's entrypoint (`ui/index.html`, as a push carries it)
 /// names what the boot needs before its script runs, stamped with the
 /// version it is served for — `<link rel="modulepreload">` of engine.js and
-/// `<link rel="preload" as="fetch" crossorigin>` of engine.wasm and
-/// components.json (`crossorigin`: a `fetch()` is a CORS request, and a
-/// preload without it is not the one the fetch takes) — each before the
-/// script, each a file of that version.
+/// host.js, `<link rel="preload" as="fetch" crossorigin>` (empty or
+/// `anonymous`) of engine.wasm, manifest.json and components.json
+/// (`crossorigin`: a `fetch()` is a CORS request, and a preload without it
+/// is not the one the fetch takes) — each before the script, each a file of
+/// that version; and the script boots through host.js's `start(version)`,
+/// not engine.js's `boot`.
 #[tokio::test]
 async fn the_entrypoint_preloads_the_boot() {
     let m = start().await;
@@ -233,7 +236,14 @@ async fn the_entrypoint_preloads_the_boot() {
     let links: Vec<(usize, Vec<(String, String)>)> = body.match_indices("<link").map(|(at, _)| (at, link_attrs(&body[at..at + body[at..].find('>').unwrap() + 1]))).collect();
     let attr = |l: &[(String, String)], k: &str| l.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
     let shown: Vec<String> = links.iter().map(|(_, l)| format!("{l:?}")).collect();
-    for (rel, as_, file) in [("modulepreload", None, "engine.js"), ("preload", Some("fetch"), "engine.wasm"), ("preload", Some("fetch"), "components.json")] {
+    let boot = [
+        ("modulepreload", None, "engine.js"),
+        ("modulepreload", None, "host.js"),
+        ("preload", Some("fetch"), "engine.wasm"),
+        ("preload", Some("fetch"), "manifest.json"),
+        ("preload", Some("fetch"), "components.json"),
+    ];
+    for (rel, as_, file) in boot {
         let href = format!("/app/{hash}/{file}");
         let Some((at, l)) = links.iter().find(|(_, l)| attr(l, "rel").as_deref() == Some(rel) && attr(l, "href").as_deref() == Some(href.as_str())) else {
             panic!("the entrypoint has no <link rel=\"{rel}\" href=\"{href}\">; its links: {shown:?}");
@@ -241,10 +251,13 @@ async fn the_entrypoint_preloads_the_boot() {
         assert!(*at < script, "the {file} link comes before the script");
         if let Some(a) = as_ {
             assert_eq!(attr(l, "as").as_deref(), Some(a), "{file}'s preload is as=\"{a}\": {l:?}");
-            assert!(attr(l, "crossorigin").is_some(), "{file}'s preload carries crossorigin, as fetch() asks: {l:?}");
+            assert!(matches!(attr(l, "crossorigin").as_deref(), Some("" | "anonymous")), "{file}'s preload carries crossorigin (empty or anonymous), as fetch() asks: {l:?}");
         }
         let r = m.get(&href, Some(&token)).await;
         assert_eq!(r.status(), 200, "{href} is a file of the version served");
     }
+    let code = &body[script..script + body[script..].find("</script>").expect("the script ends")];
+    assert!(code.contains("host.js") && code.contains("start("), "the script boots through host.js's start(version): {code}");
+    assert!(!code.contains(".boot("), "not through engine.js's boot: {code}");
     assert!(!body.contains("{{"), "every stamp filled: {body}");
 }
