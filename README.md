@@ -218,7 +218,7 @@ WebSocket answers the upgrade on any path, `/ws` included. With login on,
 | beyond loopback, any other `http://`, or none with a `--bind` off loopback | refused at startup |
 
 The page's policy lets it connect to its own origin over TLS (`wss://<host>`
-in `connect-src`, beside the hub's `ws:`/`wss:` at its port). RUN-9: RFC
+in `connect-src`, beside the service's `ws:`/`wss:` at its port). RUN-9: RFC
 9728's protected resource is then the public origin's socket,
 `https://<host>/ws` (§1.2's identifier is an https URL; the socket is
 `wss://` on the same origin and path), and its document
@@ -1962,7 +1962,7 @@ true in a cited window. Its types are
 
 **The typed SDK** (COMP-10, COMP-1 decision 7). `menger.tickets` is the
 client the house generator writes from the activation's schema —
-`synapse-cc` → `hub-codegen`'s TypeScript target, never a hand-written
+`synapse-cc` → `service-codegen`'s TypeScript target, never a hand-written
 mirror — over the same read-only bridge:
 
 ```js
@@ -1972,7 +1972,7 @@ for await (const ev of this.menger.tickets.work.waves(['RETURNS'])) {
 const all = await Array.fromAsync(menger.tickets.components.list());
 ```
 
-It is hub-codegen's surface as generated: every method of the activation,
+It is service-codegen's surface as generated: every method of the activation,
 camelCased (`setStatus`, `updateMany`), and each child its typed sub-client
 (`work`, `nav`, `inputs`, `components`, `commits` — `work.waves`,
 `commits.link`), with the activation's parameters positionally (required
@@ -2753,7 +2753,7 @@ impl TicketsActivation {
   --commits 77df9a0`), its Rust client `client.commits()` (`CommitsClient`),
   the SDK's `tickets/commits/` (`scripts/sdk-codegen.sh` generates a child
   beneath its parent and skips the mount itself). Its grants: its own
-  `roles(...)` say `commits.link`; the hub (MACRO-20) gates a child's call
+  `roles(...)` say `commits.link`; the service (MACRO-20) gates a child's call
   by its whole path — `tickets.commits.link`, on the method's own `target`
   — seeds the child's roles qualified the same way in `declared_roles`,
   and keeps the child's entry in a caller's view when the caller holds
@@ -5126,7 +5126,7 @@ No inline script runs but the page's own (hashed when the build is read),
 nothing executes from another origin, a remote image in a body shown in the
 app is refused (it would tell its host who reads it), styles and fonts may
 come over https (a theme's `@import`), and the app connects to itself, its
-hub and — for `#/settings`' other backend — loopback. The sign-in pages keep
+service and — for `#/settings`' other backend — loopback. The sign-in pages keep
 plexus-login's own policy (their blocks hashed, `default-src 'none'`). The
 frame document (`/app/frame`, public: it holds no data) goes out under
 `connect-src 'none'; form-action 'none'; frame-ancestors 'self'` and
@@ -5455,8 +5455,8 @@ grants**, and plexus-core's **gate** decides every call before it runs — the
 grant, held through a role on the scope the call's **target** lives in,
 within the session's ceiling. Default deny. menger supplies the gate its
 roles, memberships and scopes (`tickets-api/src/access/`, `Book`) and an
-`AuthBackend` (`src/auth_backend.rs`). ACCESS-24: every hub carries the
-gate and the `auth` activation — there is no hub without them.
+`AuthBackend` (`src/auth_backend.rs`). ACCESS-24: every service carries the
+gate and the `auth` activation — there is no service without them.
 
 | role | its grants (declared with `roles(...)` on each activation) |
 |---|---|
@@ -5554,7 +5554,7 @@ A second Plexus service beside menger, in `diagrams/` (`menger-diagrams`):
 mermaid diagrams checked by the very bundle the app draws them with
 (`frontend/vendor/mermaid/mermaid-11.17.2.min.js`), loaded into a jsdom
 window under Node — COMPILE-3 found it gives the browser's verdict on every
-live diagram. Its own binary, process and hub (`diagrams`, WebSocket
+live diagram. Its own binary, process and service (`diagrams`, WebSocket
 :4458): menger does not call it, does not need it, and `cargo build` /
 `cargo test` never need Node.
 
@@ -5691,7 +5691,7 @@ copy:
   the router and `serve_on(listener, router, shutdown)` serves it, hardened
   (IDENTITY-38's headers). Every page it serves goes out under `csp`
   (ACCESS-28; default `DEFAULT_CSP`), a template whose `{{SCRIPTS}}` is the
-  page's inline-script hashes and `{{HUB}}` the hub's WebSocket origins at
+  page's inline-script hashes and `{{SERVICE}}` the service's WebSocket origins at
   the name the page was asked for. The entrypoint and `pages` are stamped with
   `{{WS_PORT}}`, `{{TITLE}}` and any `(placeholder, value)` in `stamps`.
 - **The embedding.** The app crate's `build.rs` calls
@@ -5702,8 +5702,8 @@ copy:
   and hands it to `AppSource::Embedded(APP)`. It has to be the app's own
   build script, because `include_bytes!` resolves in the crate that
   compiles it.
-- **`LocalServer`.** `plexus_shell::LocalServer::start(hub, LocalConfig {
-  ws_port, shell_port, extra_origins, shell })` serves any `DynamicHub`'s
+- **`LocalServer`.** `plexus_shell::LocalServer::start(service, LocalConfig {
+  ws_port, shell_port, extra_origins, shell })` serves any `DynamicService`'s
   WebSocket and the shell on loopback. Ports 0 are bound for real before
   anything serves. It returns `ws_port`, `shell_port`, `shell_url`,
   `ws_url` and `shutdown`. `TAURI_ORIGINS` lives here.
@@ -5711,9 +5711,9 @@ copy:
 menger's part stays in `src/shell.rs`: `/vanilla` and `/` falling back to
 it, the favicon, the tab title rule (MFE-23), the "not built" page's words,
 the embedded table, and the login routes, session check and host check
-layered around the crate's router. `menger::local` builds menger's hub and
+layered around the crate's router. `menger::local` builds menger's service and
 calls the crate. Its API is DIST-3's, unchanged, and menger-desktop builds
-on it as is. `plexus-shell/toy/` is the worked example: a hub with one
+on it as is. `plexus-shell/toy/` is the worked example: a service with one
 activation and an embedded two-file app, started through `LocalServer`. Its
 test is in the workspace run.
 
@@ -5757,7 +5757,7 @@ its package (it still runs from a checkout, `spike/WAVE-2/run.sh`).
 ```
 src/
   main.rs              CLI args, transports, spawns the shell
-  builder.rs           build_rpc() → Arc<DynamicHub> ("menger")
+  builder.rs           build_rpc() → Arc<DynamicService> ("menger")
   shell.rs             menger's shell over plexus-shell: / (the Leptos app,
                        degrading to the vanilla page when unbuilt), /vanilla
                        (the embedded day-one page), the favicon, the tab
@@ -5765,7 +5765,7 @@ src/
                        checks around the crate's router (SCAFFOLD-5)
   local.rs             menger::local — LocalServer::start(LocalConfig), the
                        whole server without login or REST, as a library call
-                       (DIST-3); plexus-shell's LocalServer over menger's hub
+                       (DIST-3); plexus-shell's LocalServer over menger's service
 build.rs               `embedded-app`: frontend/dist compiled into the binary
                        by plexus-shell's build half (DIST-3); without it, an
                        empty table
@@ -5773,7 +5773,7 @@ plexus-shell/          the shell and LocalServer as a crate (SCAFFOLD-5):
                        AppSource, the app's table (ACCESS-33), stamping,
                        router/serve_on, the build-script embedding,
                        LocalServer, TAURI_ORIGINS; published as plexus-shell
-  toy/                 its worked example: a one-activation hub and an
+  toy/                 its worked example: a one-activation service and an
                        embedded two-file app, tested (never published)
 tickets-api/           the ticket vocabulary, the `tickets` activation and the
                        typed Plexus client it emits — ONE declaration, shared by
@@ -5928,7 +5928,7 @@ frontend/              the Leptos CSR app (own cargo unit; trunk build → dist/
                        #/inputs (INPUT-6), src/history.rs a ticket's
                        History section (MENGER-13)
 spike/WAVE-2/          WAVE-3's measurement of the kept placements (run.sh)
-diagrams/              the `diagrams` service (COMPILE-4): its own binary and hub
+diagrams/              the `diagrams` service (COMPILE-4): its own binary and service
                        (WS :4458); the `mermaid` activation and the client it
                        emits, the Node child it owns (src/node.rs), the app's
                        mermaid-block rule (src/blocks.rs: fences, and ART-5's

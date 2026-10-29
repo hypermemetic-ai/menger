@@ -1,6 +1,6 @@
 # plexus-shell
 
-A Plexus RPC app's frontend, served beside its hub — and the whole server
+A Plexus RPC app's frontend, served beside its service — and the whole server
 started as a library call.
 
 Lifted from [menger](https://github.com/hypermemetic-ai/menger), which
@@ -9,13 +9,13 @@ consumes it.
 - **The shell.** The frontend's build (a `trunk build` or `vite build`
   output) is read into a table and served at `/` and under `/app/`. A
   request path is a key into the table, never a path on disk. The
-  entrypoint is stamped as it is read: `{{WS_PORT}}` (the hub's WebSocket
+  entrypoint is stamped as it is read: `{{WS_PORT}}` (the service's WebSocket
   port), `{{TITLE}}`, and any placeholder the app adds. The build comes from
   an `AppSource`: `Dir(path)` (read again when `index.html` changes) or
   `Embedded(table)` (compiled into the binary).
 - **The embedding.** The app crate's build script writes the table; the
   app's code includes it.
-- **`LocalServer`.** Any `DynamicHub` on a Plexus WebSocket, plus the shell,
+- **`LocalServer`.** Any `DynamicService` on a Plexus WebSocket, plus the shell,
   on loopback. Port 0 picks a free port. Both listeners are bound before
   anything serves. Shut it down to release the ports. `TAURI_ORIGINS` are
   the origins to admit when the page opens in a Tauri webview.
@@ -45,10 +45,10 @@ use plexus_shell::{AppSource, EmbeddedTable, LocalConfig, LocalServer, ShellConf
 
 static APP: EmbeddedTable = plexus_shell::embedded_app!();
 
-async fn run(hub: std::sync::Arc<plexus_core::plexus::DynamicHub>) -> anyhow::Result<()> {
+async fn run(service: std::sync::Arc<plexus_core::plexus::DynamicService>) -> anyhow::Result<()> {
     // the embedded build when there is one, else the checkout's dist
     let app = AppSource::embedded_or(APP, concat!(env!("CARGO_MANIFEST_DIR"), "/frontend/dist"));
-    let server = LocalServer::start(hub, LocalConfig::new(ShellConfig::new("myapp", app))).await?;
+    let server = LocalServer::start(service, LocalConfig::new(ShellConfig::new("myapp", app))).await?;
     println!("{} over {}", server.shell_url(), server.ws_url());
     server.shutdown().await;
     Ok(())
@@ -64,10 +64,10 @@ To use your own listener, routes or layers, call `router(cfg, ws_port)` and
 Every answer is hardened (`nosniff`, `Referrer-Policy: same-origin`, no
 framing), and every page the shell serves goes out under `csp` (default
 `DEFAULT_CSP`), a template: `{{SCRIPTS}}` becomes the page's inline-script
-hashes (read when the build is), `{{HUB}}` the hub's WebSocket origins at the
+hashes (read when the build is), `{{SERVICE}}` the service's WebSocket origins at the
 name the page was asked for. The default allows scripts from the app's own
 files, the wasm and those hashes, and connections to the page's origin and
-its hub.
+its service.
 
 ## Features
 
@@ -77,7 +77,7 @@ its hub.
 | `serve` | `AppSource`, `ShellConfig`, `router`, `serve_on` | axum, tokio |
 | `local` (default) | `LocalServer`, `LocalConfig`, `rpc_module` | + plexus-core, plexus-transport, jsonrpsee |
 
-A worked example lives in the repository at `plexus-shell/toy/`. It is a hub
+A worked example lives in the repository at `plexus-shell/toy/`. It is a service
 with one activation and an embedded two-file app, and its test runs it.
 
 MIT.

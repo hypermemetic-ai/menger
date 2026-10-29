@@ -34,7 +34,7 @@ open (README "Login" → The purge).
 
 **tether** (`tether/`, TETHER-7) is menger's local side as a Plexus RPC
 tool of its own (`synapse tether sessions …`), with substrate imported as
-a crate and called in memory (plexus-core's `HubTransport`, LOCAL-6). It is
+a crate and called in memory (plexus-core's `ServiceTransport`, LOCAL-6). It is
 its **own cargo workspace** — substrate's sqlx and menger's rusqlite link
 two `libsqlite3-sys` — so `cargo test` here does not cover it: `cd tether
 && cargo test`. Its README has how to run and reach it.
@@ -173,7 +173,7 @@ retired: they say so and exit 2.
 
 ## Reaching the backend
 
-Everything menger does is a Plexus RPC method on the `menger` hub
+Everything menger does is a Plexus RPC method on the `menger` service
 (WebSocket :4455) — there is no side door, and nothing an agent needs is
 off the wire. The activation publishes its schema; every client below is
 derived from it or from the declaration that produces it. (Mermaid is
@@ -793,7 +793,7 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   renamed field or parameter fails its build. Nothing is generated or
   checked in.
 - **`synapse-cc`** (`../synapse-cc`) — the compiler collection for every
-  other language: schema → IR → `hub-codegen` → an installed, compiled,
+  other language: schema → IR → `service-codegen` → an installed, compiled,
   smoke-tested client. TypeScript and Rust targets today (`python` parses,
   no generator yet). `synapse-cc build typescript <backend> -o DIR`, or a
   `synapse.config.json` and plain `synapse-cc build`; `synapse-cc watch`
@@ -803,13 +803,13 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   container** (`../dockerfiles/plexus-codegen`, STARTER-2) rather than
   from a host install; `../plexus-starter`'s `scripts/codegen.sh` is the
   worked example of wiring that into `npm run build`, `cargo xtask` and
-  CI. `synapse-cc` 0.3.5 and `hub-codegen` 0.5.0 are also installed in
+  CI. `synapse-cc` 0.3.5 and `service-codegen` 0.5.0 are also installed in
   `~/.local/bin` (2026-10-16). menger's own use (COMP-10):
   `scripts/sdk-codegen.sh` generates the frames' typed SDK
   (`menger.tickets.*`) into `frontend/sdk/generated/` — rerun it whenever
   the activation's surface changes; `tickets-api/tests/sdk_manifest.rs`
   fails until it is.
-- **A new language target** is a new `hub-codegen` generator over the same
+- **A new language target** is a new `service-codegen` generator over the same
   IR — never a hand-written client that mirrors the wire.
 - **No REST** (ACCESS-24): the REST + SSE bridge could not carry an
   identity, and menger has no open mode, so it is not served. A script that
@@ -1073,7 +1073,7 @@ and `view: mockup` + `widths:` makes a whole body one.
   `src/shell.rs`'s `PAGE_CSP`; README "Security headers"): the app runs no
   inline script but its own blocks, hashed when the build is read, loads no
   script and no image from another origin, and connects only to itself, its
-  hub and loopback. Something the app needs from elsewhere is a change to
+  service and loopback. Something the app needs from elsewhere is a change to
   that policy, made deliberately. A ticket body's frame starts as
   `/app/frame` (`web/frame.html`), never a `srcdoc` — a srcdoc inherits the
   app's policy, and a body's own scripts are the product.
@@ -1303,3 +1303,15 @@ and `view: mockup` + `widths:` makes a whole body one.
   is still at 90% (once, until that ticket is done). `deploy/pipeline build`
   refuses up front under 50 GB free or at 90% used; `status` says the disk.
   Before a long gate of your own, `scripts/disk-check.sh` (exit 3: low).
+
+## Naming: a Plexus backend is a *service*, never a *hub*
+
+**Owner, 2026-10-29: "we don't call them hubs anymore. we call them services."** Every
+name says service: `DynamicService`, `PlexusService`, `ServiceTransport`,
+`service-codegen`, "the Rust service", "service to service", `--service`.
+Any remnant of *hub* found anywhere — an identifier, a flag, a crate or
+binary name, a doc, a skill, a ticket body, a commit message — is renamed to
+*service* the moment it is seen (the sweep is tracked under PLEXUS-1; a
+builder renames what is inside its own scope and never writes a new *hub*).
+The only *hub* that stays is a foreign name we do not own (GitHub, a
+third-party crate's API).
