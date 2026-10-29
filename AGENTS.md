@@ -105,13 +105,16 @@ synapse -P 4460 menger ui watch          # open-ended
 ```
 
 **The UI's source** is `ui/` — `index.html`, `routes.json`, `slots.json`,
-`src/*.svelte`, `golden/` — compiled by `ui-compiler/` (UI-5: the component
-subset of Svelte → a view tree and Rhai handlers; native and as a wasm
-module with no imports) and drawn by `ui-engine/` (UI-6, UI-10: signals,
+`src/*.svelte`, `golden/` — compiled by `../plexus-ui`'s `plexus-ui-compiler`
+(UI-5: the component subset of Svelte → a view tree and Rhai handlers;
+native and as a wasm module with no imports) and drawn by its
+`plexus-ui-engine` (UI-6, UI-10: signals,
 `live()`, the DOM renderer, the Rhai folds, hot-swap on `ui.watch`,
 sections, the sanitized `{@html markdown()}`). The contract between them is
 ticket **UI-4** ("The component contract, v1") on the tracker; README "The
-component contract" has the bundle's layout.
+component contract" has the bundle's layout. The two crates live in the
+sibling checkout `../plexus-ui` (FRAME-3) — the scripts below build them
+from there by `--manifest-path` into this checkout's target.
 
 ```sh
 scripts/ui-compiler-wasm.sh       # dist/ui-compiler.wasm (rustup's wasm32-unknown-unknown)
@@ -120,8 +123,9 @@ scripts/ui-build.sh               # dist/ui.tar, the bundle a deploy pushes
 
 A change to `ui/src` is checked in Chromium by `tests/pages_browser.mjs`
 (through `scripts/ui-throwaway.mjs`); a change to the engine by
-`tests/engine_browser.mjs`; the golden pairs by `cargo test -p
-menger-ui-compiler --test golden`.
+`tests/engine_browser.mjs` (and in `../plexus-ui`, `npm test`: the engine
+alone on a stub socket); the compiler's golden pairs by `cargo test -p
+plexus-ui-compiler --test golden` in `../plexus-ui`.
 
 ## Adding a component
 
@@ -560,8 +564,12 @@ question.
   each. A clone of menger alone does not build; the sibling checkouts must
   be beside it. Every activation is `impl FooActivation` (MACRO-13,
   MACRO-21): the stem names the namespace, the trait and the client.
-- **Workspace members** (`Cargo.toml`): `.`, `tickets-api`, `ui-service`,
-  `ui-compiler`, `ui-engine`; `tether/` is its own workspace.
+- **Workspace members** (`Cargo.toml`): `.`, `tickets-api`, `ui-service`;
+  `tether/` is its own workspace. Four sibling repositories
+  hold what menger lifted out, each taken by path like `../plexus-core`:
+  `../plexus-shell` and `../plexus-login` (FRAME-4), and `../plexus-ui`'s
+  `plexus-ui-compiler` and `plexus-ui-engine` (FRAME-3: the compiler a
+  dev-dependency, the engine built by `scripts/ui-build.sh`).
 - The `tickets` activation lives ONCE, in `tickets-api/`
   (`menger-tickets-api`, MFE-11): the vocabulary, the store, and
   `activation/mod.rs`'s `#[activation]` on `impl TicketsActivation` (its

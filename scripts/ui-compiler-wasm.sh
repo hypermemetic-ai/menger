@@ -5,15 +5,17 @@
 # cdylib is asked for here, so a native build makes no shared library.
 # `--stack-first` puts the stack below the data, so an overflow traps
 # instead of writing over it. The build fails if the module imports anything.
+# FRAME-3: the compiler is ../plexus-ui's (plexus-ui-compiler), built by
+# --manifest-path into this checkout's target ($CARGO_TARGET_DIR, else ./target).
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cargo="${CARGO:-cargo}"
 target_dir="${CARGO_TARGET_DIR:-$root/target}"
-"$cargo" rustc --manifest-path "$root/ui-compiler/Cargo.toml" --lib --release \
+"$cargo" rustc --manifest-path "$root/../plexus-ui/compiler/Cargo.toml" --target-dir "$target_dir" --lib --release \
   --target wasm32-unknown-unknown --features wasm --crate-type cdylib \
   -- -C link-arg=--stack-first
 mkdir -p "$root/dist"
-cp "$target_dir/wasm32-unknown-unknown/release/menger_ui_compiler.wasm" "$root/dist/ui-compiler.wasm"
+cp "$target_dir/wasm32-unknown-unknown/release/plexus_ui_compiler.wasm" "$root/dist/ui-compiler.wasm"
 python3 -I - "$root/dist/ui-compiler.wasm" <<'PY'
 import sys
 b = open(sys.argv[1], "rb").read()

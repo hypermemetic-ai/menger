@@ -168,7 +168,7 @@ async fn a_source_that_fails_to_compile_refuses_the_push() {
     let admin = connect(m.s.port).await;
     // `{#await}` is not in v1's subset (UI-4): refused at its line.
     let src = "<script>\n  prop(\"id\");\n</script>\n<div>\n{#await id}<p>{id}</p>{/await}\n</div>\n";
-    let native = menger_ui_compiler::compile(X, src).expect_err("{#await} is refused natively");
+    let native = plexus_ui_compiler::compile(X, src).expect_err("{#await} is refused natively");
     assert!(native.line >= 1, "a line in the file: {native:?}");
 
     let before = a_good_version(&admin).await;
@@ -456,7 +456,7 @@ async fn the_lint_reads_the_running_service_not_a_copy() {
 #[tokio::test]
 #[ignore]
 async fn ten_components_timing() {
-    let golden = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/ui-compiler/tests/golden/ticket-row.svelte")).expect("UI-5's golden");
+    let golden = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/ticket-row.svelte")).expect("UI-5's golden (a copy of ../plexus-ui's compiler/tests/golden/ticket-row.svelte)");
     let m = start().await;
     let admin = connect(m.s.port).await;
     let contract = tickets_hash(&admin).await;
