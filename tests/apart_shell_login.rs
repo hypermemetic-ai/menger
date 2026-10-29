@@ -3,7 +3,9 @@
 //! 2026-10-29: "it ships with menger, which I really don't want. I want
 //! this to be its own plexus service.").
 //!
-//! Held here: neither directory is in menger's tree, cargo resolves each
+//! Held here: neither directory is in menger's tree and no manifest names
+//! one under the root (a member or a `path`, by file and line; `tether/`
+//! apart — its `plexus-login` moves with substrate's, FRAME-9), cargo resolves each
 //! crate from the sibling checkout (`../plexus-shell`, `../plexus-login`),
 //! and `tickets-api/tests/sizes.rs` holds no file of theirs to a budget.
 //! FRAME-3's `tests/apart.rs` holds the compiler and the engine the same
@@ -64,20 +66,131 @@ fn metadata() -> Value {
     serde_json::from_slice(&out.stdout).expect("cargo metadata answers JSON")
 }
 
+/// `path` with `.` and `..` taken out by its text alone (the place it
+/// names may not exist, so it cannot be canonicalized).
+fn lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in path.components() {
+        match c {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Every `Cargo.toml` under `dir` but build output, git's, dependencies,
+/// the lifted directories themselves (the first check names them) and
+/// `tether/` (its `plexus-login` moves with substrate's, FRAME-9).
+fn manifests(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if path.is_dir() {
+            let skipped = matches!(name.as_str(), "target" | ".git" | "node_modules")
+                || (dir == root && (name == "tether" || LIFTED.iter().any(|(_, d)| *d == name)));
+            if !skipped {
+                manifests(root, &path, out);
+            }
+        } else if name == "Cargo.toml" {
+            out.push(path);
+        }
+    }
+}
+
+/// Each quoted string on `line`.
+fn quoted(line: &str) -> Vec<&str> {
+    line.split('"').skip(1).step_by(2).collect()
+}
+
+/// Each `members` entry and `path =` value in `text` (a manifest in
+/// `dir`), as (line, the place it resolves to) — `#` comments ignored.
+fn named_places(dir: &Path, text: &str) -> Vec<(usize, PathBuf)> {
+    let mut out = Vec::new();
+    let mut in_members = false;
+    for (i, raw) in text.lines().enumerate() {
+        let line = raw.split('#').next().unwrap_or("");
+        let key = line.trim_start();
+        let mut values = Vec::new();
+        if in_members || key.starts_with("members") {
+            let from = if in_members { line } else { line.split_once('=').map(|(_, v)| v).unwrap_or("") };
+            values.extend(quoted(from));
+            in_members = !from.contains(']');
+        }
+        for (at, _) in line.match_indices("path") {
+            let before = line[..at].chars().last();
+            let rest = line[at + 4..].trim_start();
+            if before.map_or(true, |c| !(c.is_alphanumeric() || c == '_' || c == '-')) && rest.starts_with('=') {
+                if let Some(v) = quoted(rest).first() {
+                    values.push(v);
+                }
+            }
+        }
+        out.extend(values.into_iter().map(|v| (i + 1, lexical(&dir.join(v)))));
+    }
+    out
+}
+
+/// The places in menger's manifests that name a lifted directory under
+/// the root: "file:line: value".
+fn leftovers(root: &Path) -> Vec<String> {
+    let mut files = Vec::new();
+    manifests(root, root, &mut files);
+    files.sort();
+    let mut out = Vec::new();
+    for file in files {
+        let text = std::fs::read_to_string(&file).unwrap();
+        let dir = file.parent().unwrap();
+        for (line, place) in named_places(dir, &text) {
+            if LIFTED.iter().any(|(_, d)| place.starts_with(root.join(d))) {
+                let rel = file.strip_prefix(root).unwrap().display();
+                out.push(format!("{rel}:{line}: names {} (under menger's root)", place.display()));
+            }
+        }
+    }
+    out
+}
+
 #[test]
 fn the_lifted_crates_are_not_here() {
     let root = root();
-    let here: Vec<String> = LIFTED
+    let mut here: Vec<String> = LIFTED
         .iter()
         .map(|(_, dir)| root.join(dir))
         .filter(|p| p.exists())
-        .map(|p| p.display().to_string())
+        .map(|p| format!("{} is in the tree", p.display()))
         .collect();
+    here.extend(leftovers(&root));
     assert!(
         here.is_empty(),
-        "still in menger's tree (FRAME-4: each is a repository of its own beside plexus-core): {}",
-        here.join(", ")
+        "still in menger's tree (FRAME-4: each is a repository of its own beside plexus-core):\n{}",
+        here.join("\n")
     );
+}
+
+#[test]
+fn the_manifest_reader_finds_members_and_paths() {
+    let dir = Path::new("/m");
+    let text = "[workspace]\n# members = [\"commented\"]\nmembers = [\".\", \"a\",\n  \"plexus-shell/toy\"]\n\
+                [dependencies]\nx = { path = \"plexus-login\", version = \"1\" }\n\
+                y = { path = \"../plexus-shell\" }\nz = { git = \"g\", subpath = \"q\" }\n";
+    let got = named_places(dir, text);
+    let want: Vec<(usize, PathBuf)> = vec![
+        (3, "/m".into()),
+        (3, "/m/a".into()),
+        (4, "/m/plexus-shell/toy".into()),
+        (6, "/m/plexus-login".into()),
+        (7, "/plexus-shell".into()),
+    ];
+    assert_eq!(got, want);
+    // And on the real tree it reads menger's own members.
+    let root = root();
+    let text = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    assert!(named_places(&root, &text).iter().any(|(_, p)| *p == root.join("tickets-api")));
 }
 
 #[test]
