@@ -613,27 +613,15 @@ fn renamed_texts(list: &[String], map: &HashMap<String, String>) -> Vec<String> 
 /// write's transaction. `renamed`: a whole shortcode's id, where a column
 /// names a shortcode.
 fn rekey(txn: &rusqlite::Transaction<'_>, map: &HashMap<String, String>, renamed: Option<&(ShortcodeId, ShortcodeId)>) -> Result<(), StoreError> {
-    // A column that names a ticket by its key.
+    // A column that names a ticket by its key. V2-4: the tables of the
+    // services that went stay in a file that has them, unread — and
+    // unrekeyed: a later service reads them through the old id's pin.
     const COLUMNS: &[(&str, &str)] = &[
         ("search_rows", "id"),
-        ("inputs", "ticket"),
-        ("answers", "ticket"),
-        ("comments", "ticket"),
         ("transitions", "ticket"),
-        ("notes", "ticket"),
-        ("themes", "owner"),
-        ("theme_refs", "ticket"),
-        ("components", "owner"),
-        ("queue", "ticket"),
-        ("queue_log", "ticket"),
-        // TICKETS-9: the assignment log.
-        ("assignment_log", "ticket"),
         ("tombstones", "parent"),
         ("members", "scope"),
-        ("theme_settings", "scope"),
         ("pins", "ticket"),
-        // DEPLOY-20: the commit-link record.
-        ("commit_links", "ticket"),
     ];
     let mut pairs: Vec<(&str, &str)> = map.iter().map(|(o, n)| (o.as_str(), n.as_str())).collect();
     pairs.sort();
@@ -644,25 +632,17 @@ fn rekey(txn: &rusqlite::Transaction<'_>, map: &HashMap<String, String>, renamed
             stmt.execute([old, new])?;
         }
     }
-    // A comment left on the ticket's own page follows it there.
     for (old, new) in &pairs {
-        txn.prepare_cached("UPDATE comments SET route = ?2 WHERE route = ?1")?.execute([format!("#/ticket/{old}"), format!("#/ticket/{new}")])?;
         // The old id names the new key from now on (ACT-6's alias).
         txn.prepare_cached("INSERT INTO pins (text, ticket) VALUES (?1, ?2) ON CONFLICT (text) DO UPDATE SET ticket = excluded.ticket")?
             .execute([old, new])?;
     }
     // A whole shortcode renamed: what names it by its id.
     if let Some((was, is)) = renamed {
-        for (table, column) in [("members", "scope"), ("theme_settings", "scope")] {
-            txn.execute(&format!("UPDATE {table} SET {column} = ?2 WHERE {column} = ?1"), [was.as_str(), is.as_str()])?;
-        }
+        txn.execute("UPDATE members SET scope = ?2 WHERE scope = ?1", [was.as_str(), is.as_str()])?;
     }
-    // Lists in a column: JSON lists, and a deployment's lines.
-    let json_lists: &[(&str, &str, &str)] = &[
-        ("components", "name", "\"references\""),
-        ("tombstones", "id", "reparented"),
-        ("tombstones", "id", "unblocked"),
-    ];
+    // Lists in a column: JSON lists.
+    let json_lists: &[(&str, &str, &str)] = &[("tombstones", "id", "reparented"), ("tombstones", "id", "unblocked")];
     for (table, key, column) in json_lists {
         let rows: Vec<(String, String)> = {
             let mut stmt = txn.prepare(&format!("SELECT {key}, {column} FROM {table}"))?;
@@ -675,17 +655,6 @@ fn rekey(txn: &rusqlite::Transaction<'_>, map: &HashMap<String, String>, renamed
                 let list = serde_json::to_string(&renamed_texts(&list, map)).expect("serialize ids");
                 txn.execute(&format!("UPDATE {table} SET {column} = ?2 WHERE {key} = ?1"), [k, list])?;
             }
-        }
-    }
-    let rows: Vec<(i64, String)> = {
-        let mut stmt = txn.prepare("SELECT id, tickets FROM deployments WHERE tickets <> ''")?;
-        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
-        rows.collect::<rusqlite::Result<_>>()?
-    };
-    for (id, text) in rows {
-        let lines: Vec<String> = text.split('\n').map(str::to_string).collect();
-        if lines.iter().any(|l| map.contains_key(l)) {
-            txn.execute("UPDATE deployments SET tickets = ?2 WHERE id = ?1", rusqlite::params![id, renamed_texts(&lines, map).join("\n")])?;
         }
     }
     Ok(())
@@ -816,7 +785,6 @@ impl Store {
                 path: None,
                 placement: None,
                 labels: Vec::new(),
-                assignees: Vec::new(),
                 body: String::new(),
                 created_unix: now,
                 updated_unix: now,
@@ -881,8 +849,7 @@ impl Store {
         // The derived state, built from the rows as the write leaves them;
         // the shortcodes with the one it mints, every namespace a moved root
         // changes checked.
-        let inputs = inputs::load(&txn)?;
-        let mut built = Cache::built(db::load_rows(&txn).map_err(|e| StoreError::Db(e.to_string()))?, inputs, cache.cells.keys());
+        let mut built = Cache::built(db::load_rows(&txn).map_err(|e| StoreError::Db(e.to_string()))?, cache.cells.keys());
         built.shortcodes = cache.shortcodes.clone();
         let first = p.steps.first().map(|s| s.row.id.to_string());
         if let Some(m) = cache.namespaces(built.rows(), &built.rollups, p.minted.as_ref(), first.as_deref())? {
@@ -901,11 +868,9 @@ impl Store {
         }
         super::revisions::commit(txn)?;
         // The cache, as an open of the file reads it: every record beside
-        // the tickets rekeyed with them. The themes' channel stays (its
-        // watchers hold it), and so does the count of writes.
+        // the tickets rekeyed with them. The count of writes stays.
         let mut fresh = Self::load_cache(conn).map_err(|e| StoreError::Db(format!("reading the moved file back: {e}")))?;
         fresh.written = cache.written;
-        fresh.themes.tx = cache.themes.tx.clone();
         *cache = fresh;
         let moves: Vec<ShortcodeMove> = p.steps.iter().map(|s| ShortcodeMove { from: s.row.id.to_string(), to: s.key.clone() }).collect();
         // Each moved ticket as the reader sees it now — its address dressed.

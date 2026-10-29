@@ -231,7 +231,6 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("tickets.search", Today::Viewer, None),
     ("tickets.nav.member", Today::Viewer, None),
     ("tickets.nav.groups", Today::Viewer, None),
-    ("tickets.components.list", Today::Viewer, None),
     ("tickets.nav.extents", Today::Viewer, None),
     ("tickets.nav.counts", Today::Viewer, None),
     ("tickets.nav.facets", Today::Viewer, None),
@@ -271,7 +270,6 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     // MENGER-12: an editor's, on the ticket it labels.
     ("tickets.label", Today::Editor, Some("id")),
     // TICKETS-9: an editor assigns.
-    ("tickets.assign", Today::Editor, Some("id")),
     // MENGER-30: any part of a ticket in one write — an editor's, on it.
     ("tickets.update", Today::Editor, Some("id")),
     ("tickets.update_many", Today::Editor, Some("ids")),
@@ -287,42 +285,6 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("tickets.freeze", Today::Admin, Some("id")),
     ("tickets.unfreeze", Today::Admin, Some("id")),
     ("tickets.undelete", Today::Admin, Some("ids")),
-    // ACCESS-14: tickets' inputs child, gated by its whole path.
-    ("tickets.inputs.list", Today::Viewer, None),
-    // APP-90: a question filed as a text input — an editor's, on the ticket.
-    ("tickets.inputs.ask", Today::Editor, Some("ticket")),
-    ("tickets.inputs.answer", Today::Editor, Some("ticket")),
-    ("tickets.inputs.clear", Today::Editor, Some("ticket")),
-    ("tickets.inputs.close", Today::Editor, Some("ticket")),
-    ("tickets.inputs.reopen", Today::Editor, Some("ticket")),
-    // MENGER-39: the owner's queue — a write an editor's, on the ticket; the
-    // queue itself a read.
-    ("tickets.queue", Today::Editor, Some("id")),
-    ("tickets.unqueue", Today::Editor, Some("id")),
-    ("tickets.snooze", Today::Editor, Some("id")),
-    // APP-23: a change request unqueues — an editor's, on the ticket.
-    ("tickets.request_changes", Today::Editor, Some("id")),
-    ("tickets.queued", Today::Viewer, None),
-    // APP-24: waiting on a ticket is a read.
-    ("tickets.await_reply", Today::Viewer, None),
-    ("comments.add", Today::Viewer, None),
-    ("comments.list", Today::Viewer, None),
-    ("comments.watch", Today::Viewer, None),
-    // COMMENT-9: the app reports a comment it could not keep; a reader reads
-    // the reports it would see.
-    ("comments.report", Today::Viewer, None),
-    ("comments.failures", Today::Viewer, None),
-    ("comments.resolve", Today::Editor, None),
-    ("comments.reopen", Today::Editor, None),
-    // NOTE-2: a note is on no shortcode — any member's; an upgrade an editor's.
-    ("notes.add", Today::Viewer, None),
-    ("notes.list", Today::Viewer, None),
-    ("notes.get", Today::Viewer, None),
-    ("notes.upgrade", Today::Editor, None),
-    // COMMENT-5: an image is put for a ticket — an editor's, on it; read by
-    // whoever sees a ticket it is for.
-    ("media.put", Today::Editor, Some("ticket")),
-    ("media.get", Today::Viewer, None),
     ("members.mine", Today::Anyone, None),
     ("members.list", Today::Admin, None),
     ("members.grant", Today::Admin, Some("scope")),
@@ -345,10 +307,6 @@ fn now_needs(today: Today, method: &str) -> Today {
         // Who am I, my grants, the providers: a signed-in caller's; an
         // anonymous one asks auth.providers / auth.login.
         (Today::Anyone, _) => Today::SignedIn,
-        // CHAT-14: a viewer chats, and pastes images there — `media.put` is
-        // a viewer's grant; a ticket's image still takes an editor's permit
-        // on it (answered `not_found` without one).
-        (Today::Editor, "media.put") => Today::Viewer,
         (t, _) => t,
     }
 }
@@ -377,7 +335,7 @@ async fn the_roles_are_what_identity_21_asked_method_by_method() {
         .map(|(path, s)| (format!("tickets.{path}"), s));
     let top = hub.list_plugin_schemas().into_iter().map(|s| (s.namespace.clone(), s));
     for (path, schema) in top.chain(children) {
-        if !["tickets", "comments", "notes", "media", "members", "session"].contains(&schema.namespace.as_str()) && !path.starts_with("tickets.") {
+        if !["tickets", "members", "session"].contains(&schema.namespace.as_str()) && !path.starts_with("tickets.") {
             continue;
         }
         for m in &schema.methods {
@@ -403,16 +361,9 @@ async fn the_roles_are_what_identity_21_asked_method_by_method() {
         }
     }
     assert_eq!(seen.len(), TODAY.len(), "every row is a method: {seen:?}");
-    // admin is built in, never declared; nothing else is — but DEPLOY-11's
-    // deployer: a CI's key, recording deployments and reading them.
-    // CHAT-16: and `chatter` — one granted a chat only: its chats, its images, nothing of the tickets.
-    assert_eq!(declared.keys().cloned().collect::<BTreeSet<_>>(), names(&["chatter", "deployer", "editor", "member", "viewer"]));
-    let chatter: BTreeSet<String> = declared["chatter"].iter().cloned().collect();
-    assert!(chatter.contains("chats.post") && chatter.contains("media.put") && !chatter.iter().any(|g| g.starts_with("tickets.")), "{chatter:?}");
-    assert!(!chatter.contains("chats.add") && !chatter.contains("chats.open"), "a chat-only seat adds no one: {chatter:?}");
-    let deployer: BTreeSet<String> = declared["deployer"].iter().cloned().collect();
-    assert!(deployer.contains("deployments.record") && deployer.contains("deployments.list"), "{deployer:?}");
-    assert!(!editor.contains("deployments.record") && !deployer.contains("tickets.create"), "record is its own grant");
+    // admin is built in, never declared; nothing else is. V2-4: DEPLOY-11's
+    // `deployer` and CHAT-16's `chatter` went with their services.
+    assert_eq!(declared.keys().cloned().collect::<BTreeSet<_>>(), names(&["editor", "member", "viewer"]));
 }
 
 // ── Over the wire, login on ──────────────────────────────────────────────
@@ -446,7 +397,6 @@ async fn an_anonymous_connection_sees_only_the_door_and_can_call_nothing_else() 
         ("tickets.list", json!({})),
         ("tickets.health", json!({})),
         ("tickets.set_status", json!({ "id": "A-1", "status": "Ready" })),
-        ("comments.list", json!({})),
         ("members.mine", json!({})),
         ("session.whoami", json!({})),
         ("auth.whoami", json!({})),
@@ -501,7 +451,6 @@ async fn a_caller_s_view_lists_only_what_it_holds_and_refusals_are_typed() {
     one(&boss, "members.grant", json!({ "principal": principal(&AGENT), "scope": "A", "role": "viewer" })).await;
     let v = view(&agent).await;
     assert!(v["tickets"].contains("list") && v["tickets"].contains("watch") && !v["tickets"].contains("set_status"), "{v:?}");
-    assert_eq!(v["comments"], names(&["add", "failures", "list", "report", "watch"]));
     assert_eq!(v["members"], names(&["mine"]), "no admin method");
     let schema = one(&agent, "tickets.schema", json!({})).await;
     let get = schema["methods"].as_array().unwrap().iter().find(|m| m["name"] == "list").unwrap();
@@ -621,45 +570,6 @@ async fn a_child_s_methods_are_held_by_their_path() {
     assert_eq!(gone["type"], "error", "{gone}");
 }
 
-/// ACCESS-14: the inputs child's methods (`tickets.inputs.*`) are gated by
-/// their whole path — the grant the hub checks, what the roles hold — and
-/// the ticket is asked by the method's permit: a viewer on A lists A's
-/// inputs and is refused an answer; an editor on A answers there (its
-/// source `api`, the server's word for an agent's key — ACCESS-3 #12), is
-/// refused on B; the old names are gone.
-#[tokio::test]
-async fn the_inputs_child_is_held_by_its_path() {
-    let dir = tmp();
-    let s = spawn(&dir.path().join("t.db")).await;
-    let boss = as_key(s.port, &BOSS, "boss").await;
-    tickets(&boss).await;
-    let body = "<m-input id=\"notes\" kind=\"text\"><m-question data-field=\"question\">Anything?</m-question></m-input>";
-    for id in ["A-2", "B-2"] {
-        assert_eq!(one(&boss, "tickets.amend", json!({ "id": id, "body": body })).await["type"], "amended");
-    }
-    let agent = as_key(s.port, &AGENT, "worker-1").await;
-    let answer = |id: &str| json!({ "ticket": id, "input": "notes", "value": { "type": "text", "text": "yes" } });
-
-    one(&boss, "members.grant", json!({ "principal": principal(&AGENT), "scope": "A", "role": "viewer" })).await;
-    let listed = call(&agent, "tickets.inputs.list", json!({})).await;
-    assert_eq!(listed.iter().map(|e| e["input"]["ticket"].as_str()).collect::<Vec<_>>(), vec![Some("A-2")], "{listed:?}");
-    let no = one(&agent, "tickets.inputs.answer", answer("A-2")).await;
-    assert_eq!((no["error_kind"].as_str(), no["grant"].as_str()), (Some("forbidden"), Some("tickets.inputs.answer")), "{no}");
-
-    one(&boss, "members.grant", json!({ "principal": principal(&AGENT), "scope": "A", "role": "editor" })).await;
-    let answered = one(&agent, "tickets.inputs.answer", answer("A-2")).await;
-    assert_eq!((answered["type"].as_str(), answered["input"]["answer"]["source"].as_str()), (Some("input_changed"), Some("api")), "{answered}");
-    for method in ["tickets.inputs.close", "tickets.inputs.reopen", "tickets.inputs.clear"] {
-        let ev = one(&agent, method, json!({ "ticket": "A-2", "input": "notes" })).await;
-        assert_eq!(ev["type"], "input_changed", "{method}: {ev}");
-    }
-    let no = one(&agent, "tickets.inputs.answer", answer("B-2")).await;
-    assert_ne!(no["type"], "input_changed", "not on B: {no}");
-    // The old names are gone.
-    let gone = one(&boss, "tickets.answer", answer("A-2")).await;
-    assert_eq!(gone["type"], "error", "{gone}");
-}
-
 /// ACCESS-17: `tickets work` under login — a viewer's view shows the child
 /// (MACRO-20: the caller holds something below it)
 /// and a grantless caller is refused naming the routed grant.
@@ -678,35 +588,6 @@ async fn tickets_work_is_held_by_its_path() {
     let work = one(&agent, "tickets.work.schema", json!({})).await;
     let methods: BTreeSet<String> = work["methods"].as_array().unwrap().iter().filter_map(|m| m["name"].as_str().map(str::to_string)).filter(|m| m != "schema").collect();
     assert_eq!(methods, names(&["ready", "waves", "waves_under", "waves_to", "blockers"]), "{work}");
-}
-
-/// ACCESS-18: `tickets components` under login — a grantless caller is
-/// refused naming the child's grant (`tickets.components.list`, held by
-/// viewer and editor, MACRO-20), a viewer on A is shown the child and lists
-/// the components it may read, and the old name is gone.
-#[tokio::test]
-async fn tickets_components_is_held_by_its_path() {
-    let dir = tmp();
-    let s = spawn(&dir.path().join("t.db")).await;
-    let boss = as_key(s.port, &BOSS, "boss").await;
-    tickets(&boss).await;
-    let a = one(&boss, "tickets.amend", json!({ "id": "A-2", "body": "```component m-a\n<b>a</b>\n```\n" })).await;
-    assert_eq!(a["type"], "amended", "{a}");
-    let b = one(&boss, "tickets.amend", json!({ "id": "B-2", "body": "```component m-b\n<b>b</b>\n```\n" })).await;
-    assert_eq!(b["type"], "amended", "{b}");
-    let agent = as_key(s.port, &AGENT, "worker-1").await;
-    let no = one(&agent, "tickets.components.list", json!({})).await;
-    assert_eq!((no["error_kind"].as_str(), no["grant"].as_str()), (Some("forbidden"), Some("tickets.components.list")), "{no}");
-    assert_eq!(no["roles"], json!(["editor", "viewer", "admin"]), "{no}");
-    one(&boss, "members.grant", json!({ "principal": principal(&AGENT), "scope": "A", "role": "viewer" })).await;
-    assert!(view(&agent).await["tickets"].contains("components"), "the child is in a viewer's view");
-    let listed = call(&agent, "tickets.components.list", json!({})).await;
-    let names: Vec<&str> = listed.iter().filter_map(|e| e["component"]["name"].as_str()).collect();
-    assert_eq!(names, ["m-a"], "only what A owns: {listed:?}");
-    let all = call(&boss, "tickets.components.list", json!({})).await;
-    assert_eq!(all.iter().filter_map(|e| e["component"]["name"].as_str()).collect::<Vec<_>>(), ["m-a", "m-b"], "{all:?}");
-    let gone = one(&boss, "tickets.components", json!({})).await;
-    assert_eq!(gone["type"], "error", "the old name is gone: {gone}");
 }
 
 /// ACCESS-17: a viewer calls `tickets work` and a blocker out of its reach
@@ -734,58 +615,6 @@ async fn tickets_work_answers_a_viewer_and_counts_what_it_hides() {
     assert!(!serde_json::to_string(&waves).unwrap().contains("B-2"), "{waves:?}");
     let ready = call(&agent, "tickets.work.ready", json!({ "summary": true })).await;
     assert_eq!(ready.last().map(|e| e["type"].clone()), Some(json!("page")), "{ready:?}");
-}
-
-/// COMMENT-5: an image is the ticket's it was put for — a reader without
-/// that ticket's reach is answered `not_found`, as for none; a viewer may not
-/// put one, an editor may, on its own tickets; one put on the app is its
-/// putter's and the admins'.
-#[tokio::test]
-async fn an_image_is_seen_through_its_tickets_reach() {
-    const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEUlEQVR42mP8z8DwnwEJMAIAKQgD/2zM2wkAAAAASUVORK5CYII=";
-    const GIF: &str = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
-    const GIF_2X1: &str = "R0lGODlhAgABAIAAAAAAAP///yH5BAEAAAAALAAAAAACAAEAAAICRAEAOw==";
-    let dir = tmp();
-    let s = spawn(&dir.path().join("t.db")).await;
-    let boss = as_key(s.port, &BOSS, "boss").await;
-    tickets(&boss).await;
-    let secret = one(&boss, "media.put", json!({ "ticket": "B-2", "mime": "image/png", "data": PNG })).await;
-    assert_eq!(secret["type"], "stored", "{secret}");
-    let secret = secret["hash"].as_str().unwrap().to_string();
-
-    one(&boss, "members.grant", json!({ "principal": principal(&AGENT), "scope": "A", "role": "viewer" })).await;
-    let agent = as_key(s.port, &AGENT, "worker-1").await;
-    assert_eq!(view(&agent).await["media"], names(&["get", "put"]), "a viewer reads images, and (CHAT-14) puts them in its chats");
-    let none = "0".repeat(64);
-    let hidden = one(&agent, "media.get", json!({ "hash": secret })).await;
-    assert_eq!(hidden, json!({ "type": "not_found", "hash": secret }), "B's image, to A's viewer: not found");
-    assert_eq!(one(&agent, "media.get", json!({ "hash": none })).await, json!({ "type": "not_found", "hash": none }), "as for none");
-    // A viewer's put for a ticket: no editor's permit on it — not found (CHAT-14: the gate admits a viewer, for its chats).
-    let no = one(&agent, "media.put", json!({ "ticket": "A-2", "mime": "image/gif", "data": GIF })).await;
-    assert_eq!((no["type"].as_str(), no["ticket"].as_str()), (Some("not_found"), Some("A-2")), "{no}");
-
-    one(&boss, "members.grant", json!({ "principal": principal(&AGENT), "scope": "A", "role": "editor" })).await;
-    let mine = one(&agent, "media.put", json!({ "ticket": "C-2", "mime": "image/gif", "data": GIF })).await;
-    assert_eq!((mine["type"].as_str(), mine["width"].as_u64()), (Some("stored"), Some(1)), "C is hosted under A: {mine}");
-    let mine = mine["hash"].as_str().unwrap().to_string();
-    assert_eq!(one(&agent, "media.get", json!({ "hash": mine })).await["data"], GIF);
-    assert_eq!(one(&boss, "media.get", json!({ "hash": mine })).await["type"], "media", "the admin's");
-    let no = one(&agent, "media.put", json!({ "ticket": "B-2", "mime": "image/png", "data": PNG })).await;
-    assert_eq!((no["error_kind"].as_str(), no["scope"].as_str()), (Some("forbidden"), Some("B-2")), "{no}");
-    // The same bytes, put for its own ticket: one image, now A's too.
-    let same = one(&agent, "media.put", json!({ "ticket": "A-2", "mime": "image/png", "data": PNG })).await;
-    assert_eq!((same["hash"].as_str(), same["duplicate"].as_bool()), (Some(secret.as_str()), Some(true)), "{same}");
-    assert_eq!(one(&agent, "media.get", json!({ "hash": secret })).await["type"], "media", "A-2's now too");
-
-    // On the app (no ticket): the putter's and the admins', no one else's.
-    let app = one(&agent, "media.put", json!({ "mime": "image/gif", "data": GIF_2X1 })).await;
-    assert_eq!(app["type"], "stored", "{app}");
-    let app = app["hash"].as_str().unwrap().to_string();
-    one(&boss, "members.grant", json!({ "principal": principal(&OTHER), "scope": "A", "role": "editor" })).await;
-    let other = as_key(s.port, &OTHER, "worker-2").await;
-    assert_eq!(one(&other, "media.get", json!({ "hash": app })).await["type"], "not_found");
-    assert_eq!(one(&agent, "media.get", json!({ "hash": app })).await["type"], "media");
-    assert_eq!(one(&boss, "media.get", json!({ "hash": app })).await["type"], "media");
 }
 
 /// FILTER-24: `keep` never answers a ticket outside the caller's reach — a
@@ -843,11 +672,10 @@ async fn an_admin_s_role_set_changes_a_caller_s_view_and_is_kept_across_a_restar
     let no = one(&agent, "auth.role_set", json!({ "role": "viewer", "grants": ["tickets.get"] })).await;
     assert_eq!((no["error_kind"].as_str(), no["grant"].as_str()), (Some("forbidden"), Some("auth.role_set")), "{no}");
 
-    let set = one(&boss, "auth.role_set", json!({ "role": "viewer", "grants": ["tickets.get", "comments.list"] })).await;
-    assert_eq!(set, json!({ "type": "role", "role": "viewer", "grants": ["comments.list", "tickets.get"] }));
+    let set = one(&boss, "auth.role_set", json!({ "role": "viewer", "grants": ["tickets.get", "tickets.history"] })).await;
+    assert_eq!(set, json!({ "type": "role", "role": "viewer", "grants": ["tickets.get", "tickets.history"] }));
     let v = view(&agent).await;
-    assert_eq!(v["tickets"], names(&["get"]), "{v:?}");
-    assert_eq!(v["comments"], names(&["list"]));
+    assert_eq!(v["tickets"], names(&["get", "history"]), "{v:?}");
     assert_ne!(info(&agent).await["view_hash"], before);
     assert_eq!(one(&agent, "tickets.list", json!({})).await["error_kind"], "forbidden");
     assert_eq!(one(&agent, "tickets.get", json!({ "id": "A-2" })).await["type"], "ticket");
@@ -861,11 +689,11 @@ async fn an_admin_s_role_set_changes_a_caller_s_view_and_is_kept_across_a_restar
     let boss = as_key(s.port, &BOSS, "boss").await;
     let roles = call(&boss, "auth.roles", json!({})).await;
     let viewer = roles.iter().find(|r| r["role"] == "viewer").unwrap();
-    assert_eq!(viewer["grants"], json!(["comments.list", "tickets.get"]), "{roles:?}");
+    assert_eq!(viewer["grants"], json!(["tickets.get", "tickets.history"]), "{roles:?}");
     let editor = roles.iter().find(|r| r["role"] == "editor").unwrap();
     assert!(editor["grants"].as_array().unwrap().iter().any(|g| g == "tickets.list"), "an edit of one role leaves the rest as declared");
     let agent = as_key(s.port, &AGENT, "worker-1").await;
-    assert_eq!(view(&agent).await["tickets"], names(&["get"]));
+    assert_eq!(view(&agent).await["tickets"], names(&["get", "history"]));
 }
 
 #[tokio::test]

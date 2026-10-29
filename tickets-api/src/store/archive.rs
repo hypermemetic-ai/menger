@@ -19,8 +19,7 @@
 //! whole subtree (the kept tree: children, theirs, and the shortcodes
 //! hosted under it), live work included — never refused for it: every
 //! ticket not in category done is named in the answer's `live`, the
-//! warning. A ticket already archived is no-op. A queued ticket leaves the
-//! queue (recorded as by the archive): an archived ticket asks nothing.
+//! warning. A ticket already archived is no-op.
 //!
 //! **Restore** takes ids or a filter (of archived tickets) and brings each
 //! back, with its archived ancestors — the chain, never their other
@@ -46,7 +45,6 @@ use super::history::Act;
 use super::update_many::{Selection, UPDATE_MANY_CEILING};
 use super::*;
 use crate::filter::{category_of, Category};
-use crate::queue::QueueAction;
 use crate::types::{Archived, LiveTicket, Transition, TransitionField, ARCHIVE_ARCHIVED, ARCHIVE_LIVE};
 
 /// ARCHIVE-2: what `archive` did (or, `dry_run`, would do).
@@ -56,8 +54,6 @@ pub struct ArchiveAnswer {
     pub ids: Vec<TicketId>,
     /// Those of them not in category done — the warning.
     pub live: Vec<LiveTicket>,
-    /// Those of them it took out of the queue.
-    pub unqueued: Vec<TicketId>,
     /// The mark each now carries (`write` 0 on a dry run).
     pub mark: Archived,
     pub dry_run: bool,
@@ -165,7 +161,7 @@ fn mark_step(
         let groups = rollups.archive_moved(rows, &row, &old);
         let derived = if groups.is_empty() { Derived::none() } else { Derived::rolled(cache, rollups, groups) };
         let count = cache.ready.count(&row.id);
-        let (cells, tree) = cache.recell(rows, &row, false, &[(&row, count, count)], None);
+        let (cells, tree) = cache.recell(rows, &row, false, &[(&row, count, count)]);
         derived.celled(cells).treed(tree)
     };
     let under = lineage::under_before_with(unders, cache, || lineage::Touched::of_moves(derived.announced().as_deref()).row(&row));
@@ -183,21 +179,6 @@ fn mark_step(
     out.groups(groups);
     out.filtered(announced, under.and_then(|u| u.after_in(cache)));
     Ok(())
-}
-
-/// `id` out of the queue because it was archived — its record, the entry
-/// gone, said on `watch` — when it is queued.
-fn unqueue_step(txn: &rusqlite::Transaction<'_>, cache: &mut Cache, unders: &lineage::UnderWatches, id: &str, act: &Act, now: i64, out: &mut Gathered) -> Result<bool, StoreError> {
-    let Some(entry) = cache.queue.get(id).cloned() else { return Ok(false) };
-    let row = cache.get(id).cloned().ok_or_else(|| StoreError::NotFound(id.to_string()))?;
-    let before = lineage::queued_before_with(unders, cache, &[(&row.shortcode, row.seq)]);
-    let record = queue::record_of(cache.queue.next_id(), &entry, QueueAction::Archived, act, now);
-    queue::store(txn, id, None, &record)?;
-    cache.queue.put(id, None, record);
-    let change = queue::QueueChange::Unqueued { id: id.to_string(), entry, action: QueueAction::Archived, by: act.actor.clone(), at_unix: now };
-    out.tickets.push(Change::Queue { shortcode: row.shortcode.clone(), change });
-    out.filtered(None, before.and_then(|u| u.after_in(cache)));
-    Ok(true)
 }
 
 /// What a restore of `named` (keys) brings back, as the cache stands: each
@@ -249,7 +230,7 @@ impl Store {
         let serial = self.serial().await;
         let now = chrono::Utc::now().timestamp();
         let named = self.selected(select)?;
-        let (ids, live, queued, write) = {
+        let (ids, live, write) = {
             let cache = self.tickets.read().expect("store lock poisoned");
             let mut all = Vec::new();
             for key in resolved(&cache, &named)? {
@@ -263,14 +244,13 @@ impl Store {
                 .filter(|t| !matches!(category_of(t.status), Category::Done | Category::Dropped | Category::Static))
                 .map(|t| LiveTicket { id: t.id.clone(), status: t.status })
                 .collect();
-            let queued: Vec<TicketId> = ids.iter().filter(|id| cache.queue.get(id).is_some()).map(TicketId::new).collect();
-            (ids, live, queued, cache.log.next_id())
+            (ids, live, cache.log.next_id())
         };
         if ids.len() > UPDATE_MANY_CEILING {
             return Err(StoreError::Invalid(format!("archive: {} tickets with their subtrees — one write takes at most {UPDATE_MANY_CEILING}; nothing written", ids.len())));
         }
         let mark = Archived { at_unix: now, by: act.actor.clone(), message: act.message.clone(), write: if dry_run || ids.is_empty() { 0 } else { write } };
-        let answer = ArchiveAnswer { ids: ids.iter().map(TicketId::new).collect(), live, unqueued: queued, mark: mark.clone(), dry_run };
+        let answer = ArchiveAnswer { ids: ids.iter().map(TicketId::new).collect(), live, mark: mark.clone(), dry_run };
         let proofs = may(&ids).map_err(StoreError::Invalid)?;
         {
             let cache = self.tickets.read().expect("store lock poisoned");
@@ -288,10 +268,9 @@ impl Store {
                 cause = cause.or(Some((next, id.clone())));
                 next += 1;
                 mark_step(&txn, cache, unders, id, Some(mark.clone()), t, &mut out)?;
-                unqueue_step(&txn, cache, unders, id, &act, now, &mut out)?;
             }
             super::revisions::commit(txn)?;
-            let last = Change::Archived { ids: answer.ids.clone(), live: answer.live.clone(), unqueued: answer.unqueued.clone(), mark };
+            let last = Change::Archived { ids: answer.ids.clone(), live: answer.live.clone(), mark };
             Ok((answer, out.finish_with(last)))
         })
         .await
@@ -407,10 +386,10 @@ pub(super) fn in_epic(change: Change, epic: &ShortcodeId) -> Option<Change> {
     let mine = |id: &TicketId| crate::address::split_key(id.as_str()).is_some_and(|(sc, _)| sc == epic.as_str());
     let keep = |v: Vec<TicketId>| v.into_iter().filter(|i| mine(i)).collect::<Vec<_>>();
     match change {
-        Change::Archived { ids, live, unqueued, mark } => {
+        Change::Archived { ids, live, mark } => {
             let ids = keep(ids);
             let live = live.into_iter().filter(|l| mine(&l.id)).collect();
-            (!ids.is_empty()).then(|| Change::Archived { ids, live, unqueued: keep(unqueued), mark })
+            (!ids.is_empty()).then(|| Change::Archived { ids, live, mark })
         }
         Change::Restored { ids, ancestors, still_archived, by } => {
             let ids = keep(ids);

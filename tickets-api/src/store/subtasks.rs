@@ -51,7 +51,7 @@ impl Store {
             return Err(StoreError::Invalid(format!("no ticket {} to hang a subtask under — nothing written", parent.trim())));
         };
         new.epic = code;
-        self.create_from(at.into(), new, None, act, true).await.map(|(ticket, _)| ticket)
+        self.create_from(at.into(), new, act, true).await
     }
 
     /// [`Store::create_subtask_by`] as nobody signed in.

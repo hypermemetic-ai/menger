@@ -73,7 +73,7 @@ pub struct UpdatedMany {
 }
 
 /// The aspects, in the order `changed` names them.
-const ASPECTS: [&str; 9] = ["title", "body", "kind", "status", "parent", "severity", "blocked_by", "labels", "assignees"];
+const ASPECTS: [&str; 8] = ["title", "body", "kind", "status", "parent", "severity", "blocked_by", "labels"];
 
 /// `changed` with `more` merged in, in [`ASPECTS`]' order.
 fn merged(changed: &[String], more: &[String]) -> Vec<String> {
@@ -183,7 +183,7 @@ impl Store {
                     (Some(u), Some(row)) => u.check(&cache, row, &update)?,
                     _ => return Err(StoreError::Invalid(format!("{}: the write was not given the proof it needs (nothing written)", current.id))),
                 }
-                plan(&cache, &current, update.clone(), None, None, &mut refused)
+                plan(&cache, &current, update.clone(), &mut refused)
             };
             if !refused.is_empty() {
                 refusals.push((String::from(current.id), refused));
@@ -341,12 +341,6 @@ impl Store {
                     continue;
                 }
                 row.updated_unix = now;
-                // DEPLOY-20: one call's commits are each ticket's next version.
-                if let Moved::Commits { added } = &moved {
-                    let version = cache.deploys.next_version(&row.id);
-                    super::versions::store(&txn, &row.id, added, version, now)?;
-                    cache.deploys.versioned(&row.id, added, version, now);
-                }
                 cell_step(&txn, cache, unders, row, &mut out, |t| moved.change(t))?;
                 answer.push(out.tickets.last().cloned().expect("the step's own change"));
             }

@@ -12,9 +12,9 @@ use super::*;
 #[tokio::test]
 async fn groups_yields_the_rows_and_watch_filters_group_changes_by_their_shortcode() {
     let hub = hub();
-    one(hub.create(operator(), "PLX".into(), "host".into(), Some("scope".into()), None, None, None, None, None, None, None).await).await;
-    one(hub.create(operator(), "SUB".into(), "hosted".into(), Some("scope".into()), None, None, None, Some("PLX-1".into()), None, None, None).await).await;
-    one(hub.create(operator(), "SUB".into(), "work".into(), None, None, None, None, None, None, None, None).await).await;
+    one(hub.create(operator(), "PLX".into(), "host".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    one(hub.create(operator(), "SUB".into(), "hosted".into(), Some("scope".into()), None, None, None, Some("PLX-1".into()), None, None).await).await;
+    one(hub.create(operator(), "SUB".into(), "work".into(), None, None, None, None, None, None, None).await).await;
 
     let evs: Vec<TicketsEvent> = Box::pin(hub.nav().groups(operator()).await).collect().await;
     let groups: Vec<crate::types::Group> = evs
@@ -48,10 +48,10 @@ async fn groups_yields_the_rows_and_watch_filters_group_changes_by_their_shortco
 async fn extents_yields_each_shortcodes_last_seq_in_shortcode_order() {
     let hub = hub();
     for (epic, kind) in [("ZED", "scope"), ("AB", "scope"), ("ZED", "build"), ("B", "scope"), ("ZED", "gap")] {
-        one(hub.create(operator(), epic.into(), "t".into(), Some(kind.into()), None, None, None, None, None, None, None).await).await;
+        one(hub.create(operator(), epic.into(), "t".into(), Some(kind.into()), None, None, None, None, None, None).await).await;
     }
     // Refused: AB-2 would be its own blocker. Nothing is allocated.
-    let refused = one(hub.create(operator(), "AB".into(), "t".into(), None, None, Some(vec!["AB-2".into()]), None, None, None, None, None).await).await;
+    let refused = one(hub.create(operator(), "AB".into(), "t".into(), None, None, Some(vec!["AB-2".into()]), None, None, None, None).await).await;
     assert!(matches!(refused, TicketsEvent::Error { .. }), "{refused:?}");
 
     let evs: Vec<TicketsEvent> = Box::pin(hub.nav().extents(operator()).await).collect().await;

@@ -13,7 +13,7 @@ use super::*;
 #[tokio::test]
 async fn link_yields_commits_linked_and_watch_carries_only_what_changed() {
     let hub = hub();
-    one(hub.create(operator(), "LC".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None, None).await).await;
+    one(hub.create(operator(), "LC".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     let mut watch = Box::pin(hub.watch(operator(), None, None, None, None, None).await);
     let commits = |v: &[&str]| v.iter().map(|s| (*s).into()).collect::<Vec<crate::vocab::CommitRef>>();
 

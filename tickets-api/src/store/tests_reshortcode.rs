@@ -194,36 +194,6 @@ async fn an_old_id_names_the_new_ticket_everywhere_and_get_says_moved_from() {
 }
 
 #[tokio::test]
-async fn commits_inputs_comments_history_and_the_queue_move_by_identity() {
-    let store = store().await;
-    store.link_commits(SYS.permit("M-4"), vec!["77df9a0".into()]).await.unwrap();
-    store.set_status(SYS.permit("M-4"), Status::Ready).await.unwrap();
-    let body = r#"<m-input id="notes" kind="text"><m-question data-field="question">Anything?</m-question></m-input>"#;
-    store.amend(SYS.permit("M-4"), None, Some(body.into())).await.unwrap();
-    let anchor = crate::comments::Anchor {
-        route: "#/ticket/M-4".into(),
-        path: "p".into(),
-        label: "l".into(),
-        excerpt: String::new(),
-        ticket: Some("M-4".into()),
-        version: None,
-    };
-    let c = store.add_comment(SYS, anchor, "a note".into(), None).await.unwrap();
-    store.queue_by(SYS.permit("M-4"), crate::queue::Urgency::Today, "look", None, Act::default()).await.unwrap();
-    store.reshortcode(SYS, ask(&["M-4"], "N")).await.unwrap();
-    let t = store.get(SYS, "N-3").await.unwrap();
-    assert_eq!(t.commits, ["77df9a0"]);
-    assert_eq!(store.inputs(SYS, Some("N-3"), None, None).unwrap().iter().map(|i| i.id.as_str()).collect::<Vec<_>>(), ["notes"]);
-    assert_eq!(store.inputs(SYS, Some("M-4"), None, None).unwrap().len(), 1, "by the old id too");
-    let c = store.comment(SYS, c.id.get()).unwrap();
-    assert_eq!((c.anchor.ticket.as_deref(), c.anchor.route.as_str()), (Some("N-3"), "#/ticket/N-3"));
-    let h = store.history(SYS, "N-3").unwrap();
-    assert_eq!(h.own.iter().map(|t| t.to.as_str()).collect::<Vec<_>>(), ["Draft", "Ready"], "its history, kept");
-    assert!(store.queued(SYS, true, 0).iter().any(|(e, _)| e.ticket == "N-3"), "still queued, as N-3");
-    assert_kept(&store, "the records");
-}
-
-#[tokio::test]
 async fn children_stay_in_their_shortcode_unless_with_children() {
     let store = store().await;
     // Without: M-8 and M-9 stay in M, under M-7's parent; H-1 (its own

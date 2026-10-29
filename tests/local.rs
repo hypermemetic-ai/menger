@@ -65,7 +65,7 @@ async fn a_local_server_starts_on_free_ports_serves_both_and_releases_them() {
     // socket's port.
     let page = get(shell, "/").await;
     assert!(page.starts_with("HTTP/1.1 200") || page.starts_with("HTTP/1.0 200"), "{page}");
-    assert!(page.contains("<title>menger</title>") && page.contains(&format!("-P {ws}")), "{page}");
+    assert!(page.contains("<title>menger</title>") && page.contains(&ws.to_string()), "{page}");
 
     // ACCESS-24: the owner's token answers, with no Origin (a CLI), the
     // shell's and Tauri's; no token reaches only the auth door.

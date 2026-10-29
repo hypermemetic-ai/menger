@@ -46,7 +46,7 @@ impl Store {
         }
         row.frozen = frozen;
         row.updated_unix = chrono::Utc::now().timestamp();
-        let (derived, under) = self.cell_derived(&row, None);
+        let (derived, under) = self.cell_derived(&row);
         let announced = derived.announced();
         let Derived { stored, moved } = derived;
         let commit = Self::row_commit(row);

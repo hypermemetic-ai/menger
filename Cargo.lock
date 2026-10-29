@@ -2055,6 +2055,7 @@ name = "menger"
 version = "0.6.2"
 dependencies = [
  "anyhow",
+ "async-stream",
  "async-trait",
  "axum",
  "base64",
@@ -2074,11 +2075,13 @@ dependencies = [
  "plexus-client",
  "plexus-core",
  "plexus-login",
+ "plexus-macros",
  "plexus-shell",
  "plexus-transport",
  "rand 0.8.8",
  "reqwest",
  "rusqlite",
+ "schemars",
  "serde",
  "serde_json",
  "sha2",
@@ -2088,6 +2091,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "uuid",
 ]
 
 [[package]]

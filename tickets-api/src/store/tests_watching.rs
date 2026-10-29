@@ -86,22 +86,6 @@ async fn a_row_event_of_a_visible_ticket_blocked_by_a_hidden_one_is_redacted() {
 }
 
 #[tokio::test]
-async fn a_component_of_a_hidden_owner_is_said_as_gone_and_references_are_cut() {
-    let s = tracker().await;
-    let sight = s.watch_sight(&viewer_of(&["OPEN"])).unwrap();
-    let mut rx = s.subscribe();
-    s.amend(SYS.permit("SECRET-2"), None, Some("```component m-secret\n<template>s2</template>\n```\n".into())).await.unwrap();
-    s.amend(SYS.permit("OPEN-2"), None, Some("```component m-open\n<template><m-secret></m-secret></template>\n```\n".into())).await.unwrap();
-    let got = heard(&s, &sight, &mut rx);
-    let t = text(&got);
-    assert!(!t.contains("s2") && !t.contains("SECRET-"), "{t}");
-    assert!(got.iter().any(|c| matches!(c, Change::ComponentRemoved { name } if name == "m-secret")), "{t}");
-    if let Some(Change::ComponentChanged { component }) = got.iter().find(|c| matches!(c, Change::ComponentChanged { component } if component.name == "m-open")) {
-        assert!(!component.references.iter().any(|r| r == "m-secret"), "{component:?}");
-    }
-}
-
-#[tokio::test]
 async fn several_ticket_changes_are_cut_to_the_reach() {
     let s = tracker().await;
     let sight = s.watch_sight(&viewer_of(&["OPEN"])).unwrap();

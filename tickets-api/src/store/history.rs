@@ -373,21 +373,6 @@ impl Log {
         }
     }
 
-    /// FILTER-30: activity on the ticket `(epic, seq)` at `at` — a comment
-    /// left on it, an answer to or a clear of one of its inputs.
-    pub(super) fn touch(&mut self, epic: &ShortcodeId, seq: u32, at: i64) {
-        let e = self.intern_shortcode(epic);
-        self.times.touch(e, seq, at);
-    }
-
-    /// FILTER-30: every ticket's activity, as the comments and the inputs
-    /// hold it ([`activity`]) — at open, and by `--verify-derived`.
-    pub(super) fn touch_all(&mut self, activity: impl IntoIterator<Item = (OrderKey, i64)>) {
-        for (key, at) in activity {
-            self.touch(&key.shortcode, key.seq, at);
-        }
-    }
-
     /// FILTER-27: `(epic, seq)`'s times.
     pub(crate) fn timed(&self, epic: &ShortcodeId, seq: u32) -> Option<times::Timed> {
         self.epic_ix.get(epic).and_then(|e| self.times.get(*e, seq))
@@ -510,23 +495,8 @@ impl Log {
             // ARCHIVE-2: the archive's own index, each way.
             Event::Archived => (&self.archive[1], actor.is_some()),
             Event::Restored => (&self.archive[0], actor.is_some()),
-            // Answered from the times, above. DEPLOY-11: `deployed` from the
-            // deployments' cells ([`Cache::holds`]), never here.
-            Event::Created
-            | Event::Touched
-            | Event::Held(_)
-            | Event::Deployed(_)
-            | Event::Behind(_)
-            | Event::Stage(..)
-            | Event::Requested(_)
-            | Event::Queued(_)
-            | Event::Chatting
-            | Event::Unread
-            | Event::Asked
-            | Event::InChat(_)
-            | Event::Assigned(_)
-            | Event::Unassigned
-            | Event::Became(_) => return out,
+            // Answered from the times, above.
+            Event::Created | Event::Touched | Event::Held(_) | Event::Became(_) => return out,
         };
         let mut by_epic: HashMap<u32, RoaringBitmap> = HashMap::new();
         for &p in range(list, &self.marks, lo, hi) {
@@ -625,7 +595,7 @@ impl Log {
             let list: &[u32] = match &pred.event {
                 Event::Created => return self.times.first_born_from(from),
                 Event::Touched => return self.times.first_touched_from(from),
-                Event::Held(_) | Event::Deployed(_) | Event::Behind(_) | Event::Stage(..) | Event::Requested(_) | Event::Queued(_) | Event::Chatting | Event::Unread | Event::Asked | Event::InChat(_) | Event::Assigned(_) | Event::Unassigned => return None,
+                Event::Held(_) => return None,
                 Event::Entered(s) => self.entered.get(status_ix(*s) as usize).unwrap_or(&none),
                 Event::Left(s) => self.left.get(status_ix(*s) as usize).unwrap_or(&none),
                 Event::Changed => &self.by_time,
@@ -783,20 +753,6 @@ pub fn zone(name: Option<&str>) -> Result<jiff::tz::TimeZone, String> {
         return Ok(jiff::tz::TimeZone::fixed(off));
     }
     jiff::tz::TimeZone::get(name).map_err(|_| format!("unknown time zone `{name}` — a name like Europe/Berlin, UTC, or an offset like +02:00"))
-}
-
-/// FILTER-30: each ticket's activity — the moment of every comment left on
-/// it and of every answer to or clear of one of its inputs, placed by `at`
-/// (a ticket it does not place — a deleted one's — left out).
-pub(super) fn activity(
-    at: &HashMap<String, OrderKey>,
-    comments: &super::comments::Comments,
-    inputs: &super::inputs::Inputs,
-) -> Vec<(OrderKey, i64)> {
-    let place = |id: &str| at.get(id).cloned();
-    let said = comments.activity().filter_map(|(id, t)| Some((place(id)?, t)));
-    let answered = inputs.activity().filter_map(|(id, t)| Some((place(id)?, t)));
-    said.chain(answered).collect()
 }
 
 /// Records `t` inside the caller's transaction.
@@ -979,17 +935,8 @@ pub(super) fn check(conn: &Connection, cache: &Cache) -> anyhow::Result<Option<(
         }
     }
     // FILTER-27: the times, as an open reads them, held to a fresh reading
-    // of every row and to themselves. FILTER-30: with the comments' and the
-    // answers' activity.
-    let mut log = load(conn, &cache.at, cache.order.values())?;
-    let has_comments: bool = conn.query_row(
-        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'comments'",
-        [],
-        |r| r.get::<_, i64>(0).map(|n| n > 0),
-    )?;
-    let comments = if has_comments { super::comments::load(conn)? } else { Default::default() };
-    let inputs = super::inputs::load_if_any(conn)?;
-    log.touch_all(activity(&cache.at, &comments, &inputs));
+    // of every row and to themselves.
+    let log = load(conn, &cache.at, cache.order.values())?;
     out.extend(log.check_times(cache.order.values()));
     out.sort();
     Ok(Some((all.len(), out)))

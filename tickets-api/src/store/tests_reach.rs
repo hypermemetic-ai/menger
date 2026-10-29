@@ -135,9 +135,8 @@ async fn hidden_is_not_found() {
     for id in ["SECRET-2", "SECRET-99"] {
         assert!(matches!(s.get(&v, id).await, Err(StoreError::NotFound(_))), "{id}");
         assert!(matches!(s.history(&v, id), Err(StoreError::NotFound(_))), "{id}");
-        assert!(matches!(s.inputs(&v, Some(id), None, None), Err(StoreError::NotFound(_))), "{id}");
         assert!(matches!(s.waves_to(&v, id, &[Kind::Build]), Err(StoreError::NotFound(_))), "{id}");
-        assert!(s.tombstone(&v, id).is_none() && s.queue_history(&v, id).is_empty());
+        assert!(s.tombstone(&v, id).is_none());
     }
     assert_eq!(s.member(&v, &["OPEN-2".into(), "SECRET-2".into(), "SECRET-99".into()], &Lens::all()), [true, false, false]);
     assert_eq!(s.count(&v), 4);
@@ -198,18 +197,6 @@ async fn tree_draws_no_row_out_of_reach() {
     assert_eq!(g.iter().map(|g| (g.shortcode.as_str(), g.root.as_deref(), g.total)).collect::<Vec<_>>(), [("OPEN", None, 2)]);
 }
 
-/// ACCESS-3 #4: the components are those owned by a ticket in reach.
-#[tokio::test]
-async fn components_are_those_owned_in_reach() {
-    let s = tracker().await;
-    let names = |c: Vec<Component>| c.into_iter().map(|c| c.name).collect::<Vec<_>>();
-    assert_eq!(names(s.components(SYS)), ["m-secret"]);
-    assert!(names(s.components(&viewer_of(&["OPEN"]))).is_empty(), "owned by SECRET-2, out of reach");
-    let both = viewer_of(&["SECRET"]);
-    let c = s.components(&both);
-    assert_eq!(c[0].references, ["OPEN-4"], "OPEN is hosted under SECRET: in reach");
-}
-
 /// ACCESS-3 #6: `waves` places only what is in reach, and names no hidden
 /// blocker — which still holds its waiter back (its wave is the store's).
 #[tokio::test]
@@ -225,22 +212,6 @@ async fn waves_follow_no_hidden_blocker_by_name() {
     assert!(to.waves.placed.iter().all(|p| p.summary.id.as_str().starts_with("OPEN-")), "{:?}", to.waves.placed);
     let all = s.waves_to(SYS, "OPEN-3", &[Kind::Build]).unwrap();
     assert!(all.waves.placed.iter().any(|p| p.summary.id.as_str() == "SECRET-2"));
-}
-
-/// ACCESS-3 #7: a comment out of reach is answered as no comment — its
-/// cursor none, its id not found beside the newest the reader sees.
-#[tokio::test]
-async fn a_comment_out_of_reach_is_no_comment() {
-    let s = tracker().await;
-    let anchor = |t: &str| crate::comments::Anchor { route: format!("#/ticket/{t}"), path: "p".into(), label: "l".into(), excerpt: "e".into(), ticket: Some(t.into()), version: None };
-    let open = s.add_comment(SYS, anchor("OPEN-2"), "seen".into(), None).await.unwrap();
-    let secret = s.add_comment(SYS, anchor("SECRET-2"), "unseen".into(), None).await.unwrap();
-    let v = viewer_of(&["OPEN"]);
-    let page = s.comments(&v, &Default::default(), None, None).unwrap();
-    assert_eq!(page.comments.iter().map(|c| c.id).collect::<Vec<_>>(), [open.id]);
-    assert!(matches!(s.comment(&v, secret.id.get()), Err(StoreError::CommentNotFound { newest: Some(n), .. }) if n == open.id.get()));
-    assert!(matches!(s.comments(&v, &Default::default(), Some(secret.id.get()), None), Err(StoreError::CommentCursor(_))));
-    assert_eq!(s.comments(SYS, &Default::default(), None, None).unwrap().comments.len(), 2);
 }
 
 /// ACCESS-21 (ACCESS-3 #15 before it, when one ticket alone was a reach no

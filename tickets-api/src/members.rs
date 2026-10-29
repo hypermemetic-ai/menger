@@ -291,39 +291,6 @@ pub struct TeamMember {
     pub at: i64,
 }
 
-/// IDENTITY-46: what a principal's sign-in told the server about them —
-/// kept per principal, the last sign-in's word on each field. A provider's
-/// fields are its own claims: shown to admins, never trusted for access.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct Profile {
-    pub principal: String,
-    /// The login provider (`workos`, `key`, `plexus-idp`, `nostr`, …).
-    pub provider: Option<String>,
-    /// The sign-in page's identity backend, when it signed them in.
-    pub backend: Option<String>,
-    /// How they signed in: the provider's method (`githuboauth`,
-    /// `googleoauth`, `email_code`, `password`, …), else the credential's
-    /// kind (`key`, `oidc`, `nip98`).
-    pub method: Option<String>,
-    /// The provider's own id for them.
-    pub subject: Option<String>,
-    pub email: Option<String>,
-    pub email_verified: Option<bool>,
-    pub name: Option<String>,
-    /// A picture's URL, as the provider gave it.
-    pub picture: Option<String>,
-    /// The provider's organization, when it named one.
-    pub org: Option<String>,
-    /// The last sign-in, unix seconds, when the identity says.
-    pub signed_in_at: Option<i64>,
-    /// First seen by this server, unix seconds.
-    pub first_seen: i64,
-    /// Last changed, unix seconds.
-    pub updated: i64,
-    /// Whether they hold a grant of their own — `false` is waiting for access.
-    pub holds_grant: bool,
-}
-
 /// What the `members` activation's methods yield.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -355,8 +322,6 @@ pub enum MembersEvent {
     /// ACCESS-22: `teams.delete`'s answer — the team, with every grant it
     /// held (`grants`, how many) and every member.
     TeamDeleted { team: TeamName, grants: u32, members: u32 },
-    /// IDENTITY-46: a principal's profile — `profiles.list`, `profiles.get`.
-    Profile { profile: Profile },
     /// A refusal, naming the problem; nothing was changed.
     Error { message: String },
 }

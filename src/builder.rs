@@ -1,7 +1,7 @@
 use menger_tickets_api::access::Access;
-// v2: only `tickets` is registered; the rest come back one at a time.
-// use menger_tickets_api::{ChatsActivation, CommentsActivation, DeploymentsActivation, EpicsActivation, MediaActivation, MembersActivation, NotesActivation, OrgsActivation, SessionActivation, ThemesActivation};
-use menger_tickets_api::{ProviderOffer, TicketsActivation};
+// V2-4: `tickets`, and the addresses, the grants its reach reads and the
+// browser's sign-in — `members`, `orgs`, `epics`, `session`.
+use menger_tickets_api::{EpicsActivation, MembersActivation, OrgsActivation, ProviderOffer, SessionActivation, TicketsActivation};
 use menger_ui_service::{Signers, UiActivation, UiStore, UI_DB_FILE};
 use menger_tickets_api::store::{OpenPurge, SeedShape, SeedSpec, Store, StoreError, System, PURGE_EVERY};
 use plexus_core::plexus::{AuthBackend, AuthSetup, DynamicHub, Provider as AuthProvider, ProviderKind as AuthKind};
@@ -49,6 +49,11 @@ impl UiSetup {
     /// The store at `path` (`--ui-db-path`), pushes signed by `signers`
     /// (`--ui-signer`).
     pub fn open(path: &Path, signers: Signers) -> anyhow::Result<Self> {
+        // The data directory may not exist yet on a first start (the
+        // tickets store makes it only when it opens, after this): make it.
+        if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+            std::fs::create_dir_all(dir).map_err(|e| anyhow::anyhow!("{}: {e}", dir.display()))?;
+        }
         let store = UiStore::open(path).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
         tracing::info!("ui:        {}", path.display());
         Ok(Self { store: Arc::new(store), signers })
@@ -138,7 +143,7 @@ pub async fn build_rpc_offering(
     let providers: Vec<AuthProvider> =
         offers.iter().map(|o| AuthProvider { name: o.name.clone(), kind: AuthKind::Browser, label: None }).collect();
     let backend = Arc::new(MengerAuth::new(access.clone(), providers, None, crate::login_access::BRANDING.app));
-    build_rpc_login(db_path, seed, shape, offers, access, backend, None, menger_tickets_api::store::BODY_MAX_DEFAULT, Vec::new()).await
+    build_rpc_login(db_path, seed, shape, offers, access, backend, None, menger_tickets_api::store::BODY_MAX_DEFAULT).await
 }
 
 /// AUTH-7: the hub, the protocol's gate in front of every call and its
@@ -158,10 +163,9 @@ pub async fn build_rpc_login(
     backend: Arc<dyn AuthBackend>,
     resource_metadata: Option<String>,
     body_max: usize,
-    chat_members: Vec<String>,
 ) -> anyhow::Result<Arc<DynamicHub>> {
     let ui = UiSetup::beside(db_path)?;
-    build_rpc_ui(db_path, seed, shape, offers, access, backend, resource_metadata, body_max, chat_members, ui).await
+    build_rpc_ui(db_path, seed, shape, offers, access, backend, resource_metadata, body_max, ui).await
 }
 
 /// UI-3: [`build_rpc_login`], the `ui` activation over `ui` (main's
@@ -176,7 +180,6 @@ pub async fn build_rpc_ui(
     backend: Arc<dyn AuthBackend>,
     resource_metadata: Option<String>,
     body_max: usize,
-    chat_members: Vec<String>,
     ui: UiSetup,
 ) -> anyhow::Result<Arc<DynamicHub>> {
     let path = db_path.to_path_buf();
@@ -241,46 +244,24 @@ pub async fn build_rpc_ui(
     purge_daily(Arc::clone(&store), Arc::clone(&system));
     // ACCESS-24: grants planted while open, gone before anything is served.
     purge_planted(&store, &system, &access.admins()).await?;
-    // DEPLOY-25: each deploy request POSTed to its environment's webhook.
-    // v2: off with `deployments`.
-    // crate::webhooks::spawn(Arc::clone(&store), Arc::clone(&system));
     // IDENTITY-21: the members that decide, from the same store.
-    let seating = Arc::clone(&system);
     access.attach_with(Arc::clone(&store), system);
-    // CHAT-13: the standing chat members (`--chat-member`), in every chat
-    // opened from now and seated in every open chat now — once: a chat
-    // that holds them is not written again. v2: off with `chats`.
-    // if !chat_members.is_empty() {
-    //     store.set_chat_members(chat_members);
-    //     let reads = |p: &str, key: &str| access.reads_ticket(p, key, &store);
-    //     let seated = store.seat_chat_members(&seating, reads).await.map_err(|e| anyhow::anyhow!("seating the standing chat members failed: {e:?}"))?;
-    //     tracing::info!("CHAT-13: standing chat members {:?}; seated in {} open chat(s)", store.chat_members(), seated.len());
-    // }
-    let _ = (seating, chat_members, offers);
     let tickets = TicketsActivation::with_access(Arc::clone(&store), access.clone());
-    // v2: `tickets` alone — its children (inputs, commits, nav, work,
-    // subtasks, …) with it; every other activation comes back one at a time.
-    // UI-3: `ui` beside it — the UI's versions, over its own file.
+    // V2-4: `tickets` — its children with it — and the addresses, the
+    // grants its reach reads and the browser's sign-in, until the identity
+    // service takes them. UI-3: `ui` beside them — the UI's versions, over
+    // its own file.
     let ui = UiActivation::new(ui.store, ui.signers, access.clone()).following(Arc::clone(&store));
-    let mut hub = DynamicHub::new("menger").register(tickets).register(ui);
-    // .register(CommentsActivation::with_access(Arc::clone(&store), access.clone()))
-    // // CHAT-3: `chats` beside them — conversations inside tickets.
-    // .register(ChatsActivation::with_access(Arc::clone(&store), access.clone()))
-    // // COMMENT-5: `media` beside them — the images comments show.
-    // .register(MediaActivation::with_access(Arc::clone(&store), access.clone()))
-    // // NOTE-2: `notes` beside them, over the same store.
-    // .register(NotesActivation::with_access(Arc::clone(&store), access.clone()))
-    // // THEME-8: `themes` beside them — the themes and what each level adopts.
-    // .register(ThemesActivation::with_access(Arc::clone(&store), access.clone()))
-    // // DEPLOY-11: `deployments` beside them — every deploy, where tickets run.
-    // .register(DeploymentsActivation::with_access(Arc::clone(&store), access.clone()))
-    // // ORG-4: `orgs` beside `members` — the organizations, and their making.
-    // .register(OrgsActivation::with_access(Arc::clone(&store), access.clone()))
-    // // ORG-13: `epics` beside `orgs` — the level that holds shortcodes.
-    // .register(EpicsActivation::with_access(Arc::clone(&store), access.clone()))
-    // .register(MembersActivation::new(store, access.clone()))
-    // // IDENTITY-37: a signed-out connection is `anonymous` to whoami too.
-    // .register(SessionActivation::offering(offers, access.clone()));
+    let mut hub = DynamicHub::new("menger")
+        .register(tickets)
+        .register(ui)
+        // ORG-4: `orgs` beside `members` — the organizations, and their making.
+        .register(OrgsActivation::with_access(Arc::clone(&store), access.clone()))
+        // ORG-13: `epics` beside `orgs` — the level that holds shortcodes.
+        .register(EpicsActivation::with_access(Arc::clone(&store), access.clone()))
+        .register(MembersActivation::new(store, access.clone()))
+        // IDENTITY-37: a signed-out connection is `anonymous` to whoami too.
+        .register(SessionActivation::offering(offers, access.clone()));
     // AUTH-7: the gate reads the same book the methods ask; the roles the
     // activations declare are what a role holds until an admin edits it.
     let book = access.book();

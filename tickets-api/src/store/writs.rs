@@ -162,81 +162,6 @@ impl Updating {
     }
 }
 
-/// COMMENT-5: what `media.put` takes — an editor's permit on the ticket the
-/// image is for (the system's, from `System::permit`, in tests and seeds),
-/// or, for an image on the app (put with no ticket, for a comment on the
-/// app), nothing more than the call's own grant ([`OnMedia::app`]).
-#[derive(Debug)]
-pub struct OnMedia(MediaBy);
-
-#[derive(Debug)]
-enum MediaBy {
-    Ticket(Permit<Editor>),
-    App,
-    /// CHAT-14: a chat its putter is in (checked again under the lock).
-    Chat(u64),
-}
-
-impl OnMedia {
-    /// An image on the app: its putter's.
-    pub fn app() -> Self {
-        Self(MediaBy::App)
-    }
-
-    /// CHAT-14: an image in chat `chat`, for a participant's seat in it.
-    pub fn chat(chat: u64, _seat: &super::Standing) -> Self {
-        Self(MediaBy::Chat(chat))
-    }
-
-    /// ACCESS-11: under the write lock, whose the image is — the permit's
-    /// ticket, by its key as the tree stands (a ticket gone since is
-    /// [`StoreError::NotFound`]), or the app putter `principal`.
-    pub(super) fn owner(&self, cache: &Cache, principal: Option<String>) -> Result<super::media::Owner, StoreError> {
-        match &self.0 {
-            MediaBy::Ticket(p) => key_of(cache, p.id()).map(super::media::Owner::Ticket).ok_or_else(|| StoreError::NotFound(p.id().to_string())),
-            MediaBy::App => Ok(super::media::Owner::App(principal)),
-            MediaBy::Chat(c) => match (cache.chats.by_id.get(c), principal.as_deref()) {
-                (Some(chat), Some(p)) if chat.has(p) => Ok(super::media::Owner::Chat(*c)),
-                _ => Err(StoreError::NotFound(format!("chat {c}"))),
-            },
-        }
-    }
-}
-
-impl From<Permit<Editor>> for OnMedia {
-    fn from(p: Permit<Editor>) -> Self {
-        Self(MediaBy::Ticket(p))
-    }
-}
-
-/// What a comment write takes: the system's word, a permit on the ticket
-/// its anchor names (viewer to add; editor to resolve or reopen — and on
-/// the ticket whose page its route is, when the caller names that too), or,
-/// for a comment on the app (no ticket), nothing more than the call's own
-/// grant.
-#[derive(Debug)]
-pub struct OnComment<R: RoleMark>(CommentBy<R>);
-
-#[derive(Debug)]
-enum CommentBy<R: RoleMark> {
-    System,
-    Tickets(Vec<Permit<R>>),
-}
-
-impl<R: RoleMark> OnComment<R> {
-    /// A user's: the permits for the tickets the comment names (none: on
-    /// the app).
-    pub fn new(tickets: Vec<Permit<R>>) -> Self {
-        Self(CommentBy::Tickets(tickets))
-    }
-}
-
-impl<R: RoleMark> From<&System> for OnComment<R> {
-    fn from(_: &System) -> Self {
-        Self(CommentBy::System)
-    }
-}
-
 /// What a write on a scope takes — a grant or a revoke, a role's edit, an
 /// organization's making, a theme, a deployment: the system's word, or a
 /// user's [`AdminOf`] or [`On`] that scope.
@@ -247,8 +172,6 @@ pub struct Authority(AuthorityBy);
 enum AuthorityBy {
     System,
     Admin(AdminOf),
-    Editor(On<Editor>),
-    Deployer(On<crate::access::Deployer>),
 }
 
 impl From<&System> for Authority {
@@ -260,18 +183,6 @@ impl From<&System> for Authority {
 impl From<AdminOf> for Authority {
     fn from(a: AdminOf) -> Self {
         Self(AuthorityBy::Admin(a))
-    }
-}
-
-impl From<On<Editor>> for Authority {
-    fn from(a: On<Editor>) -> Self {
-        Self(AuthorityBy::Editor(a))
-    }
-}
-
-impl From<On<crate::access::Deployer>> for Authority {
-    fn from(a: On<crate::access::Deployer>) -> Self {
-        Self(AuthorityBy::Deployer(a))
     }
 }
 
@@ -422,21 +333,6 @@ impl Updating {
     }
 }
 
-impl<R: RoleMark> OnComment<R> {
-    /// ACCESS-11: under the write lock, whether these proofs cover the
-    /// comment's ticket `ticket` (resolved; `None`: a comment on the app).
-    pub(super) fn check(&self, cache: &Cache, ticket: Option<&str>) -> Result<(), StoreError> {
-        let CommentBy::Tickets(permits) = &self.0 else { return Ok(()) };
-        match ticket {
-            // On the app, or on a ticket gone (deleted): nothing to hold.
-            None => Ok(()),
-            Some(t) if cache.get(t).is_none() => Ok(()),
-            Some(t) if permits.iter().any(|p| key_of(cache, p.id()).as_deref() == Some(t)) => Ok(()),
-            Some(_) => Err(mismatch("a comment on a ticket")),
-        }
-    }
-}
-
 impl Authority {
     /// ACCESS-11: whether it may grant or revoke on the stored scope
     /// `scope`: the system, or admin minted on exactly it.
@@ -451,10 +347,9 @@ impl Authority {
     /// ACCESS-22: whether it is admin on some scope, or the system — what
     /// making a team takes.
     pub(super) fn administers_somewhere(&self, what: &str) -> Result<(), StoreError> {
+        let _ = what;
         match &self.0 {
-            AuthorityBy::System => Ok(()),
-            AuthorityBy::Admin(_) => Ok(()),
-            _ => Err(mismatch(what)),
+            AuthorityBy::System | AuthorityBy::Admin(_) => Ok(()),
         }
     }
 
@@ -467,25 +362,7 @@ impl Authority {
         }
     }
 
-    /// Whether it is editor (or admin) on exactly `scope`, or the system.
-    pub(super) fn editor_on(&self, scope: &Scope, what: &str) -> Result<(), StoreError> {
-        match &self.0 {
-            AuthorityBy::System => Ok(()),
-            AuthorityBy::Editor(a) if a.scope() == scope => Ok(()),
-            AuthorityBy::Admin(a) if a.scope() == scope => Ok(()),
-            _ => Err(mismatch(what)),
-        }
-    }
 
-    /// Whether it is a deployer (or admin) on exactly `scope`, or the system.
-    pub(super) fn deployer_on(&self, scope: &Scope, what: &str) -> Result<(), StoreError> {
-        match &self.0 {
-            AuthorityBy::System => Ok(()),
-            AuthorityBy::Deployer(a) if a.scope() == scope => Ok(()),
-            AuthorityBy::Admin(a) if a.scope() == scope => Ok(()),
-            _ => Err(mismatch(what)),
-        }
-    }
 }
 
 /// ACCESS-11: of many permits, whether they are for exactly the tickets of

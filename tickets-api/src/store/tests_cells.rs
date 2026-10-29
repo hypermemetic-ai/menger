@@ -17,10 +17,8 @@ use std::collections::BTreeSet;
 /// The oracle: each ticket's cell from its row and the distinct ids it
 /// names that are not a `Complete` or `Superseded` ticket — written out
 /// here, owing the code under test nothing. FILTER-21: a menger doc is one
-/// whose path starts with `_MENGER/`. MENGER-12: a ticket is asking when
-/// `asking` (the inputs store's open inputs, [`asking`]) names it, and its
-/// labels are its row's.
-pub(super) fn scanned(rows: &[Row], asking: &BTreeSet<String>) -> BTreeMap<OrderKey, Key> {
+/// whose path starts with `_MENGER/`. MENGER-12: its labels are its row's.
+pub(super) fn scanned(rows: &[Row]) -> BTreeMap<OrderKey, Key> {
     let by_id: HashMap<&str, &Row> = rows.iter().map(|t| (t.id.as_str(), t)).collect();
     rows.iter()
         .map(|t| {
@@ -28,19 +26,11 @@ pub(super) fn scanned(rows: &[Row], asking: &BTreeSet<String>) -> BTreeMap<Order
             let blocked = named.iter().any(|b| !by_id.get(b).is_some_and(|bt| done(bt.status)));
             let menger = t.path.as_deref().is_some_and(|p| p.starts_with("_MENGER/"));
             let key = Key::new(t.status, t.kind, t.severity, blocked, !t.commits.is_empty(), menger)
-                .with(asking.contains(t.id.as_str()), cells::LabelSet::of(&t.labels))
+                .with(cells::LabelSet::of(&t.labels))
                 .archiving(t.archived.is_some());
             (OrderKey::of(t), key)
         })
         .collect()
-}
-
-/// MENGER-12: the tickets with an open input, by the inputs store's own
-/// answer (`inputs { state: open }`) — what the oracle's `asking` reads.
-pub(super) fn asking(store: &Store) -> BTreeSet<String> {
-    // ARCHIVE-2: of every ticket, the archived too (a list of inputs leaves
-    // theirs out).
-    store.tickets.read().unwrap().inputs.query(None, None, Some(InputState::Open)).into_iter().map(|i| i.ticket.into_string()).collect()
 }
 
 /// The cells a stored form holds, by ticket.
@@ -69,7 +59,7 @@ fn filed(path: &Path) -> (State, Vec<Row>, cells::Stored) {
 #[track_caller]
 pub(super) fn assert_cells_are_a_scan(store: &Store, path: Option<&Path>, after: &str) {
     let rows = rows(store);
-    let want = scanned(&rows, &asking(store));
+    let want = scanned(&rows);
     let cache = store.tickets.read().unwrap();
     assert_eq!(cache.cells.by_ticket(), want, "the cache's cells, after {after}");
     let kept = cache.cells.stored();
@@ -79,14 +69,13 @@ pub(super) fn assert_cells_are_a_scan(store: &Store, path: Option<&Path>, after:
         let members = kept.bits.range((epic.clone(), *cell, 0)..=(epic.clone(), *cell, u32::MAX)).map(|(_, (c, _))| c).sum::<u64>();
         assert_eq!(*n, members, "{epic} cell {cell}'s count is its members, after {after}");
     }
-    let inputs = cache.inputs.clone();
     drop(cache);
     if let Some(path) = path {
         let (state, stored_rows, file) = filed(path);
         assert_eq!(state, State::Current, "after {after}");
         assert_eq!(by_ticket(&file), want, "the file's cells, after {after}");
         assert_eq!(file, kept, "the cache's cells are the file's, ids and all, after {after}");
-        let scan = Cache::new(stored_rows.into_iter().map(|t| (t.id.to_string(), t)).collect(), inputs);
+        let scan = Cache::new(stored_rows.into_iter().map(|t| (t.id.to_string(), t)).collect());
         assert_eq!(stored::cell_differences(&file, &scan.cells.stored()), Vec::<String>::new(), "after {after}");
     }
 }
@@ -133,9 +122,9 @@ async fn walk(store: Store, path: &Path, seed: u64, writes: usize, epics: &[&str
     let mut rx = store.subscribe_filtered();
     let mut moved = 0;
     for step in 0..writes {
-        let before = scanned(&rows(&store), &asking(&store));
+        let before = scanned(&rows(&store));
         let what = random_write(&store, &mut rng, epics, &mut tally).await;
-        let after = scanned(&rows(&store), &asking(&store));
+        let after = scanned(&rows(&store));
         let said = announced(&mut rx, &store);
         assert_eq!(said, diff(&before, &after), "step {step}: {what}: the moves announced are the scan's");
         moved += said.len();
@@ -288,120 +277,6 @@ async fn exactly_the_writes_that_change_a_cell_move_one() {
     assert_cells_are_a_scan(&store, Some(&path), "the writes");
 }
 
-/// MENGER-12, "the cells", row by row: `asking` and the labels are in a
-/// ticket's cell. A body that declares an input is born asking; an answer
-/// takes it out, a clear puts it back, a close takes it out and a reopen
-/// with no answer puts it back; an amend that drops its last open input
-/// takes it out and one that declares a new one puts it back; a body
-/// re-declaring an input it holds moves nothing. A label added or removed
-/// moves the cell, a no-op label does not; two tickets holding the same set
-/// share one cell, whatever order it was named in. All of it durable, and
-/// `--verify-derived` consistent.
-#[tokio::test]
-async fn asking_and_labels_move_a_tickets_cell() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("asking.db");
-    let store = Store::open(&path).unwrap();
-    store.create(SYS, new_ticket("AS", Kind::Scope, None, vec![])).await.unwrap();
-    let mut rx = store.subscribe_filtered();
-    let ids = |moves: &BTreeSet<(OrderKey, Option<Key>, Key)>| moves.iter().map(|(k, _, _)| format!("{}-{}", k.shortcode, k.seq)).collect::<Vec<_>>();
-    let text = |id: &str| format!("<m-input id=\"{id}\" kind=\"text\"><m-question>Anything?</m-question></m-input>\n");
-    let asking = |store: &Store, id: &str| store.tickets.read().unwrap().cells.cell_of(&OrderKey { shortcode: ShortcodeId::from("AS"), seq: id[3..].parse().unwrap() }).unwrap().asking();
-
-    // Born asking.
-    let new = NewTicket { body: text("q"), ..new_ticket("AS", Kind::Build, None, vec![]) };
-    store.create(SYS, new).await.unwrap(); // AS-2
-    let born = announced(&mut rx, &store);
-    assert!(born.iter().all(|(_, from, to)| from.is_none() && to.asking()), "born asking: {born:?}");
-    assert!(born.iter().next().unwrap().2.to_string().ends_with(", asking)"));
-
-    // An answer takes it out, a clear puts it back, a close takes it out,
-    // a reopen (no answer) puts it back; a no-op moves nothing.
-    let src = crate::types::AnswerSource::Api;
-    store.answer(SYS.permit("AS-2"), "q", InputValue::Text { text: "yes".into() }, None, src).await.unwrap();
-    assert_eq!(ids(&announced(&mut rx, &store)), ["AS-2"]);
-    assert!(!asking(&store, "AS-2"));
-    store.clear_answer(SYS.permit("AS-2"), "q", src).await.unwrap();
-    assert_eq!(ids(&announced(&mut rx, &store)), ["AS-2"]);
-    assert!(asking(&store, "AS-2"));
-    store.close_input(SYS.permit("AS-2"), "q").await.unwrap();
-    assert_eq!(ids(&announced(&mut rx, &store)), ["AS-2"]);
-    assert!(!asking(&store, "AS-2"), "a closed input asks nothing");
-    store.close_input(SYS.permit("AS-2"), "q").await.unwrap();
-    assert!(announced(&mut rx, &store).is_empty(), "closing what is closed moves nothing");
-    store.reopen_input(SYS.permit("AS-2"), "q").await.unwrap();
-    assert_eq!(ids(&announced(&mut rx, &store)), ["AS-2"]);
-    assert!(asking(&store, "AS-2"));
-
-    // A body: re-declaring moves nothing; a second open input moves
-    // nothing (it asked already); dropping both takes it out; one more puts
-    // it back.
-    store.amend(SYS.permit("AS-2"), None, Some(format!("again\n\n{}", text("q")))).await.unwrap();
-    store.amend(SYS.permit("AS-2"), None, Some(format!("{}{}", text("q"), text("r")))).await.unwrap();
-    assert!(announced(&mut rx, &store).is_empty(), "still asking: no move");
-    store.amend(SYS.permit("AS-2"), None, Some("asks nothing".into())).await.unwrap();
-    assert_eq!(ids(&announced(&mut rx, &store)), ["AS-2"]);
-    assert!(!asking(&store, "AS-2"), "removed inputs ask nothing");
-    store.amend(SYS.permit("AS-2"), None, Some(text("s"))).await.unwrap();
-    assert_eq!(ids(&announced(&mut rx, &store)), ["AS-2"]);
-    assert!(asking(&store, "AS-2"));
-
-    // Labels: added, a no-op, removed; one set, one cell.
-    store.create(SYS, new_ticket("AS", Kind::Build, None, vec![])).await.unwrap(); // AS-3
-    store.create(SYS, new_ticket("AS", Kind::Build, None, vec![])).await.unwrap(); // AS-4
-    let _ = announced(&mut rx, &store);
-    store.label(SYS.permit("AS-3"), vec!["p1".into(), "needs-you".into()], vec![]).await.unwrap();
-    let moved = announced(&mut rx, &store);
-    assert_eq!(ids(&moved), ["AS-3"]);
-    let to = moved.iter().next().unwrap().2;
-    assert_eq!(&*to.labels().labels(), ["needs-you".to_string(), "p1".to_string()]);
-    assert!(to.to_string().ends_with(", labels needs-you p1)"), "{to}");
-    store.label(SYS.permit("AS-3"), vec!["P1".into()], vec!["later".into()]).await.unwrap();
-    assert!(announced(&mut rx, &store).is_empty(), "a label held, one not: no move");
-    store.label(SYS.permit("AS-4"), vec!["P1".into(), "Needs-You".into()], vec![]).await.unwrap();
-    let moved = announced(&mut rx, &store);
-    assert_eq!(moved.iter().next().unwrap().2, to, "the same set, the same cell");
-    // ACCESS-48: a bad label is no `Label` — refused where it is read.
-    assert!("no way".parse::<crate::vocab::Label>().is_err());
-    store.label(SYS.permit("AS-4"), vec![], vec!["needs-you".into(), "p1".into()]).await.unwrap();
-    assert!(announced(&mut rx, &store).iter().all(|(_, _, to)| to.labels().is_empty()));
-    assert_cells_are_a_scan(&store, Some(&path), "the writes");
-    drop(store);
-
-    // Durable: the next open reads what was kept; the file verifies.
-    let store = Store::open(&path).unwrap();
-    assert!(asking(&store, "AS-2") && !asking(&store, "AS-3"));
-    assert_eq!(store.get(SYS, "AS-3").await.unwrap().labels, ["needs-you", "p1"]);
-    assert_cells_are_a_scan(&store, Some(&path), "the reopen");
-    drop(store);
-    assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { tickets: 4, .. }));
-
-    // A file in form 9 — its cell table without `asking` and `labels`, so
-    // an asking or labelled ticket shares its quiet twin's cell — is built
-    // again on its first open, once, to form 10.
-    let conn = Connection::open(&path).unwrap();
-    conn.execute_batch(
-        "CREATE TABLE cells_form9 (id INTEGER PRIMARY KEY, state TEXT NOT NULL, kind TEXT NOT NULL, severity TEXT,
-                                   blocked INTEGER NOT NULL, commits INTEGER NOT NULL, menger INTEGER NOT NULL DEFAULT 0);
-         INSERT INTO cells_form9 SELECT id, state, kind, severity, blocked, commits, menger FROM cells;
-         DROP TABLE cells;
-         ALTER TABLE cells_form9 RENAME TO cells;
-         UPDATE derived_state SET form = 9;",
-    )
-    .unwrap();
-    drop(conn);
-    assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::NotStored(why) if why.contains("form 9; this build reads 15")));
-    let store = Store::open(&path).unwrap();
-    assert!(asking(&store, "AS-2"));
-    assert_cells_are_a_scan(&store, Some(&path), "the first open of a form-9 file");
-    drop(store);
-    let conn = Connection::open(&path).unwrap();
-    assert!(db::has_column(&conn, "cells", "asking").unwrap() && db::has_column(&conn, "cells", "labels").unwrap());
-    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 15);
-    drop(conn);
-    assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { tickets: 4, .. }));
-}
-
 /// A crossing that moves more than [`RECOUNT_OVER`] tickets carries the
 /// counts of every shortcode it moved, as the write leaves them — what a
 /// `recount` reads; one that moves fewer carries none.
@@ -453,7 +328,7 @@ async fn a_file_in_form_3_gains_the_cells_once_on_first_open() {
     let path = dir.path().join("form3.db");
     let store = Store::open(&path).unwrap();
     store.seed_synthetic(SYS, SeedSpec { count: 900, seed: 3, into_existing: false }).unwrap();
-    let want = scanned(&rows(&store), &asking(&store));
+    let want = scanned(&rows(&store));
     drop(store);
     Connection::open(&path)
         .unwrap()
@@ -504,7 +379,7 @@ async fn a_file_in_form_5_gains_the_menger_column_once_on_first_open() {
         store.create(SYS, NewTicket { path: Some("_MENGER/board".into()), ..new_ticket(epic, Kind::Doc, None, vec![]) }).await.unwrap();
         store.create(SYS, new_ticket(epic, Kind::Doc, Some(String::from(root)), vec![])).await.unwrap();
     }
-    let want = scanned(&rows(&store), &asking(&store));
+    let want = scanned(&rows(&store));
     assert_eq!(want.values().filter(|k| k.menger()).count(), 2);
     let filters = ["", "menger doc", "not menger doc", "kind doc", "not menger doc and kind doc", "(menger doc or ready)"];
     let answers = |store: &Store| -> Vec<(Vec<(String, u64)>, Vec<String>)> {
@@ -561,7 +436,7 @@ async fn a_file_in_form_5_gains_the_menger_column_once_on_first_open() {
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { tickets: 606, .. }));
     let conn = Connection::open(&path).unwrap();
     assert!(db::has_column(&conn, "cells", "menger").unwrap());
-    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 15, "TICKETS-27: built to form 15");
+    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 16, "V2-4: built to form 16");
     drop(conn);
     let store = Store::open(&path).unwrap();
     assert_eq!(answers(&store), before, "the next open reads what the first stored");
@@ -699,7 +574,7 @@ async fn fan_out_phases() {
         let (_ready, touched) = cache.ready.status_changed_touching(rows, &row, previous);
         let t_ready = t.elapsed();
         let t = std::time::Instant::now();
-        let (cells, _tree) = cache.recell(rows, &row, false, &touched, None);
+        let (cells, _tree) = cache.recell(rows, &row, false, &touched);
         let t_cells = t.elapsed();
         let t = std::time::Instant::now();
         let mut stored = stored::Changes::default();

@@ -136,30 +136,10 @@ fn query(text: &str) -> Result<String, String> {
 }
 
 text_type!(
-    /// What a reader looks for — `find`'s and `search`'s query, a comment's
-    /// or a note's `text` — as typed, at most [`QUERY_MAX`] bytes (blank:
+    /// What a reader looks for — `find`'s and `search`'s query — as typed, at most [`QUERY_MAX`] bytes (blank:
     /// `find`'s every ticket, as before).
     Query,
     query
-);
-
-fn author(text: &str) -> Result<String, String> {
-    let t = text.trim();
-    if t.is_empty() {
-        return Err("author is blank (leave it out for `owner`)".into());
-    }
-    match t.len() <= crate::comments::AUTHOR_MAX {
-        true => Ok(t.to_string()),
-        false => Err(format!("author is {} bytes, past the {} a comment or a note keeps", t.len(), crate::comments::AUTHOR_MAX)),
-    }
-}
-
-text_type!(
-    /// COMMENT-2, NOTE-2: who left a comment or a note — trimmed, not
-    /// blank, at most 256 bytes. A signed-in caller's is its identity's
-    /// name, whatever this says.
-    Author,
-    author
 );
 
 fn filter_text(text: &str) -> Result<String, String> {

@@ -17,7 +17,6 @@
 
 use super::seen::{Seen, Sees};
 use super::*;
-use crate::comments::Comment;
 use std::collections::BTreeSet;
 
 impl Store {
@@ -412,103 +411,6 @@ impl Store {
                 Ok(lens) => self.counts_unscoped(&lens).into_iter().map(|(_, n)| n).sum(),
                 Err(_) => 0,
             },
-        }
-    }
-
-    /// COMP-3: the component registry ([`Store::components_unscoped`]) — to
-    /// a restricted reader, the components owned by a ticket it sees (an
-    /// orphan is no one's to show), each with the references it sees: the
-    /// tickets in reach, and the components it is shown (ACCESS-3 #4).
-    pub fn components(&self, who: &(impl Reader + ?Sized)) -> Vec<Component> {
-        let Ok(seen) = Seen::of(who) else { return Vec::new() };
-        let components = self.components_unscoped();
-        if seen.all() {
-            return components;
-        }
-        let cache = self.tickets.read().expect("store lock poisoned");
-        let sees = seen.sees(&cache);
-        let shown = |owner: &Option<String>| owner.as_deref().is_some_and(|o| sees.id(o));
-        let owners: HashMap<String, bool> = components.iter().map(|c| (c.name.clone(), shown(&c.owner))).collect();
-        components
-            .into_iter()
-            .filter(|c| owners.get(&c.name).copied().unwrap_or(false))
-            .map(|mut c| {
-                c.references.retain(|r| match owners.get(r) {
-                    Some(seen) => *seen,
-                    None => sees.id(r),
-                });
-                c
-            })
-            .collect()
-    }
-
-    /// INPUT-3: every input of `ticket` (every ticket's, without one) in the
-    /// shortcode `epic` and in `state` — of the tickets `who` sees. A
-    /// `ticket` naming none it sees is [`StoreError::NotFound`]. From the
-    /// cache alone.
-    pub fn inputs(&self, who: &(impl Reader + ?Sized), ticket: Option<&str>, epic: Option<&str>, state: Option<InputState>) -> Result<Vec<Input>, StoreError> {
-        let seen = Seen::of(who)?;
-        let cache = self.tickets.read().expect("store lock poisoned");
-        let sees = seen.sees(&cache);
-        // ORG-3: the ticket by any address; the shortcode by its letters or
-        // address, one naming several refused.
-        let ticket = ticket.map(|t| sees.resolve(t)).transpose()?;
-        let epic = epic.map(|e| span_shortcode(&cache, Some(e))).transpose()?.flatten();
-        // ARCHIVE-2: an archived ticket's inputs are in no list — but its
-        // own page still reads them, by naming it.
-        let live = |id: &str| ticket.is_some() || cache.get(id).is_none_or(|r| r.archived.is_none());
-        Ok(match sees.all() && cache.cells.archived(None) == 0 {
-            true => cache.inputs.query(ticket.as_deref(), epic.as_ref(), state),
-            false => cache.inputs.query_where(ticket.as_deref(), epic.as_ref(), state, |id| sees.id(id) && live(id)),
-        })
-    }
-
-    /// FILTER-15: `inputs { …, filter }` ([`Store::inputs_filtered_unscoped`])
-    /// — `lens` within `who`'s reach, a `ticket` it may not see not found.
-    pub fn inputs_filtered(&self, who: &(impl Reader + ?Sized), ticket: Option<&str>, epic: Option<&str>, state: Option<InputState>, lens: &Lens) -> Result<Vec<Input>, StoreError> {
-        let seen = Seen::of(who)?;
-        let ticket = match ticket {
-            Some(t) if !seen.all() => {
-                let cache = self.tickets.read().expect("store lock poisoned");
-                Some(seen.sees(&cache).resolve(t)?)
-            }
-            t => t.map(str::to_string),
-        };
-        self.inputs_filtered_unscoped(ticket.as_deref(), epic, state, &seen.within(lens)?)
-    }
-
-    /// COMMENT-2: one page of the comments `q` admits, newest first
-    /// ([`comments::page`]) — of those `who` sees ([`Sees::comment`]),
-    /// judged as the page is cut: a short page never stands for a hidden
-    /// comment, and a cursor naming one is a cursor into nothing.
-    pub fn comments(&self, who: &(impl Reader + ?Sized), q: &CommentQuery, after: Option<u64>, limit: Option<u32>) -> Result<CommentPage, StoreError> {
-        let seen = Seen::of(who)?;
-        let cache = self.tickets.read().expect("store lock poisoned");
-        let sees = seen.sees(&cache);
-        comments::page(&cache, q, after, limit, &|c: &Comment| sees.comment(c))
-    }
-
-    /// ACCESS-19: whether `who` sees the comment `c` — a comments watch's
-    /// question at each change, as [`Store::comments`] asks it of a page.
-    pub fn sees_comment(&self, who: &(impl Reader + ?Sized), c: &Comment) -> bool {
-        let Ok(seen) = Seen::of(who) else { return false };
-        let cache = self.tickets.read().expect("store lock poisoned");
-        seen.sees(&cache).comment(c)
-    }
-
-    /// COMMENT-2: one comment as the cache holds it — when `who` sees it;
-    /// else [`StoreError::CommentNotFound`], the newest comment it sees
-    /// beside it, as for an id that names none (ACCESS-3 #7).
-    pub fn comment(&self, who: &(impl Reader + ?Sized), id: u64) -> Result<Comment, StoreError> {
-        let seen = Seen::of(who)?;
-        let cache = self.tickets.read().expect("store lock poisoned");
-        let sees = seen.sees(&cache);
-        match cache.comments.get(id) {
-            Some(c) if sees.comment(c) => Ok(c.clone()),
-            _ => {
-                let newest = cache.comments.newest_where(|c| sees.comment(c));
-                Err(StoreError::CommentNotFound { id, newest })
-            }
         }
     }
 

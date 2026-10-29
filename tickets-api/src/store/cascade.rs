@@ -6,12 +6,9 @@
 //! `Complete`, `Superseded` or `Canceled`; a doc has no lifecycle and keeps
 //! `Doc`. Each is a transition of its own: `system`'s, from `cascade`, its
 //! message naming its cause and who made it ("canceled because MENGER-7 was
-//! canceled by ada"), its `cause` the canceled ticket's transition. Each
-//! canceled ticket's open inputs are withdrawn with it (the ticket's own
-//! too, cascade or none).
+//! canceled by ada"), its `cause` the canceled ticket's transition.
 //!
-//! **Undo.** A ticket leaving `Canceled` gets its withdrawn inputs back; and,
-//! asked (`restore_children`), the descendants its latest cancel canceled —
+//! **Undo.** Asked (`restore_children`), the descendants its latest cancel canceled —
 //! found through `cause`, each still `Canceled` with nothing moved since —
 //! go back to the statuses they had, in the same write, each a transition of
 //! `system`'s caused by the restore. A descendant canceled on its own, or by
@@ -109,19 +106,17 @@ fn system(message: String) -> Act {
     Act { actor: SYSTEM_ACTOR.into(), name: None, source: TransitionSource::Cascade, message: Some(message), cause: None }
 }
 
-/// One step of a batch: a ticket's new status, the transition that records
-/// it (none when the status is the one it has), and its inputs' moves.
+/// One step of a batch: a ticket's new status and the transition that
+/// records it (none when the status is the one it has).
 pub(super) struct Step {
     pub(super) id: String,
     pub(super) to: Status,
     pub(super) transition: Option<Transition>,
-    pub(super) inputs: Vec<(Input, crate::types::InputHistoryEntry)>,
 }
 
 /// MENGER-13: the steps a change of `row`'s status to `status` by `act`
 /// makes, from the cache as it stands — its own (the transition, none when
-/// the status is the one it has; the inputs a crossing of `Canceled`
-/// moves), then, into `Canceled`, each open descendant's; out of it, with
+/// the status is the one it has), then, into `Canceled`, each open descendant's; out of it, with
 /// `restore_children`, each one its cancel canceled. MENGER-30: shared by
 /// `set_status` and `update`.
 pub(super) fn status_steps(cache: &Cache, row: &Row, status: Status, act: &Act, restore_children: bool, now: i64) -> Vec<Step> {
@@ -137,31 +132,20 @@ pub(super) fn status_steps(cache: &Cache, row: &Row, status: Status, act: &Act, 
     let cause = own.as_ref().map(|t| (t.id, row.id.as_str()));
     let who = act.who().to_string();
     let mut steps = Vec::new();
-    let own_inputs = if canceling {
-        let reason = format!("{} was canceled by {who}", row.id);
-        cache.inputs.withdrawing(&row.id, &reason, now)
-    } else if uncanceling {
-        let reason = format!("{} is {} again (by {who})", row.id, status.as_str());
-        cache.inputs.restoring(&row.id, &reason, now)
-    } else {
-        Vec::new()
-    };
-    steps.push(Step { id: row.id.to_string(), to: status, transition: own, inputs: own_inputs });
+    steps.push(Step { id: row.id.to_string(), to: status, transition: own });
     if canceling {
         for t in to_cancel(cache, row) {
             let message = format!("canceled because {} was canceled by {who}", row.id);
             let tr = status_transition(next, &t.id, t.status, Status::Canceled, now, &system(message.clone()), cause);
             next += 1;
-            let inputs = cache.inputs.withdrawing(&t.id, &message, now);
-            steps.push(Step { id: t.id.to_string(), to: Status::Canceled, transition: Some(tr), inputs });
+            steps.push(Step { id: t.id.to_string(), to: Status::Canceled, transition: Some(tr) });
         }
     } else if uncanceling && restore_children {
         for (t, from) in restorable(cache, row) {
             let message = format!("restored to {} because {} was restored by {who}", from.as_str(), row.id);
             let tr = status_transition(next, &t.id, Status::Canceled, from, now, &system(message.clone()), cause);
             next += 1;
-            let inputs = cache.inputs.restoring(&t.id, &message, now);
-            steps.push(Step { id: t.id.to_string(), to: from, transition: Some(tr), inputs });
+            steps.push(Step { id: t.id.to_string(), to: from, transition: Some(tr) });
         }
     }
     steps
@@ -276,14 +260,14 @@ impl Store {
         if steps.len() > 1 {
             return self.batch(serial, steps).await;
         }
-        let Step { transition, inputs: moved_inputs, .. } = steps.pop().expect("the ticket's own step");
+        let Step { transition, .. } = steps.pop().expect("the ticket's own step");
         row.status = status;
         row.updated_unix = now;
         // SCALE-28: the roll-ups it moves, stored with the row. FILTER-13:
         // and what an open `watch { filter }` asking `under` sees of it.
         let (derived, under) = {
             let cache = self.tickets.read().expect("store lock poisoned");
-            let derived = cache.status_change_asking(&row, previous, cache.inputs.asking_after(&row.id, &moved_inputs));
+            let derived = cache.status_change(&row, previous);
             let under = self.under_before(&cache, || lineage::Touched::of_moves(derived.announced().as_deref()).row(&row));
             (derived, under)
         };
@@ -302,7 +286,7 @@ impl Store {
         let epic = row.shortcode.clone();
         let commit = Self::row_commit(row);
         let cache = Arc::clone(&self.tickets);
-        let (logged, kept_inputs) = (transition.clone(), moved_inputs.clone());
+        let logged = transition.clone();
         self.write(
             serial,
             move |tx| {
@@ -311,9 +295,6 @@ impl Store {
                 if let Some(t) = &logged {
                     history::record(tx, t)?;
                 }
-                for (input, entry) in &moved_inputs {
-                    inputs::record(tx, input, entry)?;
-                }
                 Ok(out)
             },
             move |cache, (row, _)| {
@@ -321,12 +302,9 @@ impl Store {
                 if let Some(t) = &transition {
                     cache.log.append(t, &key);
                 }
-                for (input, _) in &kept_inputs {
-                    cache.inputs.put(input.clone());
-                }
-                (groups, transition, kept_inputs)
+                (groups, transition)
             },
-            move |(row, body), (groups, transition, kept_inputs), tx| {
+            move |(row, body), (groups, transition), tx| {
                 let change = Change::StatusChanged {
                     ticket: whole(row, body),
                     previous,
@@ -338,9 +316,6 @@ impl Store {
                 broadcast_groups(tx, groups);
                 if let Some(placed) = placed {
                     tx.send(placed);
-                }
-                for (input, _) in kept_inputs {
-                    tx.send(Change::InputChanged { shortcode: epic.clone(), input });
                 }
                 if let Some(moves) = announced {
                     tx.send(Change::CellsMoved { moves });
@@ -459,7 +434,7 @@ pub(super) fn status_step(
     let previous = row.status;
     row.status = step.to;
     row.updated_unix = now;
-    let derived = cache.status_change_asking(&row, previous, cache.inputs.asking_after(&row.id, &step.inputs));
+    let derived = cache.status_change(&row, previous);
     let under = lineage::under_before_with(unders, cache, || lineage::Touched::of_moves(derived.announced().as_deref()).row(&row));
     let announced = derived.announced();
     let Derived { stored, moved } = derived;
@@ -472,9 +447,6 @@ pub(super) fn status_step(
     if let Some(t) = &step.transition {
         history::record(txn, t)?;
     }
-    for (input, entry) in &step.inputs {
-        inputs::record(txn, input, entry)?;
-    }
     let body = db::body(txn, &row.id)?.ok_or_else(|| missing(&row.id))?;
     let key = OrderKey::of(&row);
     let epic = row.shortcode.clone();
@@ -482,16 +454,12 @@ pub(super) fn status_step(
     if let Some(t) = &step.transition {
         cache.log.append(t, &key);
     }
-    for (input, _) in &step.inputs {
-        cache.inputs.put(input.clone());
-    }
     out.tickets.push(Change::StatusChanged { ticket: whole(row, body), previous });
     if let Some(transition) = step.transition {
         out.tickets.push(Change::Transition { shortcode: epic.clone(), transition });
     }
     out.groups(moved_groups);
     out.placed(placed);
-    out.inputs.extend(step.inputs.into_iter().map(|(input, _)| Change::InputChanged { shortcode: epic.clone(), input }));
     out.filtered(announced, under.and_then(|u| u.after_in(cache)));
     Ok(())
 }
@@ -499,16 +467,13 @@ pub(super) fn status_step(
 /// MENGER-13: the events of a write made of several steps, as one write's
 /// are: every ticket's, in the order made; then each group that moved (once,
 /// as the write leaves it); then one `placements_changed` (each ticket once,
-/// as the write leaves it); then — MENGER-30 — the components a body moved;
-/// then the inputs; then, for `watch { filter }`, each step's cell and
+/// as the write leaves it); then, for `watch { filter }`, each step's cell and
 /// lineage moves, in the order made.
 #[derive(Default)]
 pub(super) struct Gathered {
     pub(super) tickets: Vec<Change>,
     groups: Vec<Group>,
     placements: Vec<(ShortcodeId, crate::types::PlacementChange)>,
-    pub(super) components: Vec<Change>,
-    pub(super) inputs: Vec<Change>,
     filtered: Vec<Change>,
 }
 
@@ -553,7 +518,7 @@ impl Gathered {
     }
 
     /// ACT-2: [`Gathered::finish`] with `last` after every ticket's events,
-    /// the groups, the placements, the components and the inputs — and
+    /// the groups and the placements — and
     /// before the filtered moves, which are a write's last.
     pub(super) fn finish_with(mut self, last: Change) -> Vec<Change> {
         let filtered = std::mem::take(&mut self.filtered);
@@ -570,8 +535,6 @@ impl Gathered {
         if !self.placements.is_empty() {
             changes.push(Change::PlacementsChanged { changes: self.placements });
         }
-        changes.extend(self.components);
-        changes.extend(self.inputs);
         changes.extend(self.filtered);
         changes
     }

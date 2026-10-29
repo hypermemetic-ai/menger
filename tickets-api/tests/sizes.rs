@@ -21,12 +21,8 @@ const BUDGETS: &[(&str, usize)] = &[
     // all of them the methods' and parameters' docs (the schema's
     // descriptions); every body a few lines. ACCESS-14..18 take methods out.
     ("tickets-api/src/activation/mod.rs", 1750),
-    // ACCESS-19: comments, members and session on the frame — their logic
-    // beside each, in comments_activation/ and members_activation/.
-    // COMMENT-9: report and failures — two methods' docs; their logic is in
-    // comments_activation/failures.rs and streams.rs.
-    ("tickets-api/src/comments_activation.rs", 270),
-    ("tickets-api/src/notes_activation.rs", 330),
+    // ACCESS-19: members and session on the frame — their logic beside
+    // each, in members_activation/.
     // TETHER-12: members.pairing — one method's docs; its logic in streams.rs.
     ("tickets-api/src/members_activation.rs", 206),
     ("tickets-api/src/orgs_activation.rs", 240),
@@ -173,11 +169,11 @@ fn the_tickets_activation_is_declarations() {
     assert!(found.is_empty(), "tickets-api/src/activation/mod.rs is off the frame (ACCESS-13): {}\n{}", advice("activation/mod.rs"), found.join("\n"));
 }
 
-/// ACCESS-19: `comments`, `members` and `session` take the same frame.
+/// ACCESS-19: `members` and `session` take the same frame (V2-4: the
+/// comments', chats' and media's went with their services).
 #[test]
-fn comments_members_and_session_are_declarations() {
-    // CHAT-3: and chats. COMMENT-5: and `media`, born on it.
-    for file in ["tickets-api/src/comments_activation.rs", "tickets-api/src/chats_activation.rs", "tickets-api/src/members_activation.rs", "tickets-api/src/session_activation.rs", "tickets-api/src/media_activation.rs"] {
+fn members_and_session_are_declarations() {
+    for file in ["tickets-api/src/members_activation.rs", "tickets-api/src/session_activation.rs"] {
         let text = std::fs::read_to_string(root().join(file)).unwrap();
         let found = off_the_frame(&text);
         assert!(found.is_empty(), "{file} is off the frame (ACCESS-19): {}\n{}", advice(file), found.join("\n"));
