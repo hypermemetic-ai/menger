@@ -412,7 +412,7 @@ impl<R: Renderer, W: Wire + Clone + 'static, C: Clock + Clone + 'static> App<R, 
             let on: Vec<(&str, &str)> = d.on.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
             let params = crate::live::resolve(&d.params, &props);
             let changes_params = crate::live::resolve(&d.changes_params, &props);
-            let spec = LiveSpec::new(&d.snapshot, params, &d.changes, changes_params, &d.key, &on)
+            let spec = LiveSpec::new(&d.snapshot, params, d.changes.as_deref(), changes_params, &d.key, &on)
                 .map_err(|message| SwapError::Failed { component: p.tree.name.clone(), message })?;
             let r = self.cache.acquire(&spec);
             live.insert(name.clone(), r.signal());

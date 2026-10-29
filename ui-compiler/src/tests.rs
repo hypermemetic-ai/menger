@@ -171,3 +171,49 @@ fn a_live_carries_its_changes_params() {
     assert!(r.message.contains("filter"), "a sixth field is refused, naming it: {}", r.message);
     assert_eq!(r.line, 2);
 }
+
+// ── UI-10: the second cut ─────────────────────────────────────────────────
+
+/// `{@html expr}` → an `html` node holding the expression.
+#[test]
+fn html_is_a_node_of_its_own() {
+    let t = tree("<script>\n  prop(\"body\");\n</script>\n<article>{@html markdown(body)}</article>\n");
+    assert_eq!(t["tree"], json!([{ "children": [{ "html": { "expr": "markdown(body)" } }], "el": "article" }]));
+    refused_at("an empty {@html}", "<p>{@html }</p>\n", 1, "@html");
+    refused_at("another {@…}", "<p>{@debug x}</p>\n", 1, "@debug");
+}
+
+/// A `live` without `changes` is a one-shot read: no `changes` in the
+/// tree, and only its snapshot in `uses`; `debounce_ms` is written when
+/// given, a whole number of milliseconds.
+#[test]
+fn a_live_may_have_no_changes_and_a_debounce() {
+    let src = r#"<script>
+  state(#{ q: "" });
+  let ext = live(#{ snapshot: "tickets.nav.extents", key: "epic", on: #{ extent: "upsert:." } });
+  let found = live(#{ snapshot: "tickets.find", params: #{ query: state.q }, key: "id", debounce_ms: 80 });
+</script>
+<p>{ext.status} {found.status}</p>
+"#;
+    let t = tree(src);
+    assert_eq!(t["live"]["ext"], json!({ "changes_params": {}, "key": "epic", "on": { "extent": "upsert:." }, "params": {}, "snapshot": "tickets.nav.extents" }), "no changes key at all");
+    assert_eq!(t["live"]["found"]["debounce_ms"], json!(80));
+    assert_eq!(t["live"]["found"]["params"], json!({ "query": { "expr": "state.q" } }), "a param reads the scope");
+    assert!(t["live"]["ext"].get("debounce_ms").is_none(), "no debounce_ms unless given");
+    assert_eq!(t["uses"], json!(["tickets.find", "tickets.nav.extents"]), "the snapshots alone");
+
+    let bad = "<script>\n  let x = live(#{ snapshot: \"tickets.find\", key: \"id\", debounce_ms: \"80\" });\n</script>\n<p/>\n";
+    refused_at("a debounce that is no number", bad, 2, "debounce_ms");
+    let bad = "<script>\n  let x = live(#{ snapshot: \"tickets.find\", key: \"id\", debounce_ms: -1 });\n</script>\n<p/>\n";
+    refused_at("a negative debounce", bad, 2, "debounce_ms");
+}
+
+/// `on:window-keydown={h}` → the event kind `window-keydown` on the
+/// element, its handler checked as any other's.
+#[test]
+fn a_window_event_is_an_event_kind() {
+    let src = "<script>\n  fn keyed(state, ev) { state }\n</script>\n<div on:window-keydown={keyed}><p>x</p></div>\n";
+    let t = tree(src);
+    assert_eq!(t["tree"][0]["on"], json!({ "window-keydown": "keyed" }));
+    refused_at("a window event naming no fn", "<div on:window-keydown={nothing}></div>\n", 1, "nothing");
+}

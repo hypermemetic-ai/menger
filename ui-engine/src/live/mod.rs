@@ -90,7 +90,8 @@ impl Live {
 pub struct LiveSpec {
     pub snapshot: String,
     pub params: Value,
-    pub changes: String,
+    /// UI-10: none — a one-shot read, no watch opened.
+    pub changes: Option<String>,
     pub changes_params: Value,
     pub key: String,
     pub on: BTreeMap<String, FoldRule>,
@@ -98,14 +99,14 @@ pub struct LiveSpec {
 
 impl LiveSpec {
     /// From its parts; an `on` rule that is no `upsert:`/`remove:` is refused.
-    pub fn new(snapshot: &str, params: Value, changes: &str, changes_params: Value, key: &str, on: &[(&str, &str)]) -> Result<Self, String> {
+    pub fn new(snapshot: &str, params: Value, changes: Option<&str>, changes_params: Value, key: &str, on: &[(&str, &str)]) -> Result<Self, String> {
         let on = on.iter().map(|(t, r)| Ok((t.to_string(), r.parse()?))).collect::<Result<_, String>>()?;
         let obj = |v: Value| if v.is_null() { json!({}) } else { v };
-        Ok(Self { snapshot: snapshot.into(), params: obj(params), changes: changes.into(), changes_params: obj(changes_params), key: key.into(), on })
+        Ok(Self { snapshot: snapshot.into(), params: obj(params), changes: changes.map(str::to_string), changes_params: obj(changes_params), key: key.into(), on })
     }
 
     fn cache_key(&self) -> String {
-        format!("{}\u{0}{}\u{0}{}\u{0}{}", self.snapshot, self.params, self.changes, self.changes_params)
+        format!("{}\u{0}{}\u{0}{}\u{0}{}", self.snapshot, self.params, self.changes.as_deref().unwrap_or(""), self.changes_params)
     }
 
     /// Whether `item` matches every snapshot param that names a field of it.
@@ -115,27 +116,63 @@ impl LiveSpec {
     }
 }
 
-/// The clock the cache keeps time by.
+/// The clock the cache keeps time by, and its timers (UI-10: a `live`'s
+/// `debounce_ms`).
 pub trait Clock {
     fn now_ms(&self) -> u64;
+    /// Runs `f` once, `after_ms` from now.
+    fn schedule(&self, after_ms: u64, f: Box<dyn FnOnce()>);
 }
 
-/// The tests' clock: moves only when told.
-#[derive(Debug, Clone, Default)]
-pub struct ManualClock(Rc<Cell<u64>>);
+/// A timer of [`ManualClock`]: when it is due, its order, what it runs.
+type Timer = (u64, u64, Box<dyn FnOnce()>);
+
+/// The tests' clock: moves only when told, running each timer that comes
+/// due on the way, in order.
+#[derive(Clone, Default)]
+pub struct ManualClock {
+    now: Rc<Cell<u64>>,
+    timers: Rc<RefCell<Vec<Timer>>>,
+    seq: Rc<Cell<u64>>,
+}
+
+impl std::fmt::Debug for ManualClock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ManualClock({} ms, {} timers)", self.now.get(), self.timers.borrow().len())
+    }
+}
 
 impl ManualClock {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Moves `ms` on, running the timers that come due (a timer set by one
+    /// that runs is run too, when due by the end).
     pub fn advance(&self, ms: u64) {
-        self.0.set(self.0.get() + ms);
+        let end = self.now.get() + ms;
+        loop {
+            let next = {
+                let mut t = self.timers.borrow_mut();
+                let i = t.iter().enumerate().filter(|(_, (due, _, _))| *due <= end).min_by_key(|(_, (due, seq, _))| (*due, *seq)).map(|(i, _)| i);
+                i.map(|i| t.remove(i))
+            };
+            let Some((due, _, f)) = next else { break };
+            self.now.set(due.max(self.now.get()));
+            f();
+        }
+        self.now.set(end);
     }
 }
 
 impl Clock for ManualClock {
     fn now_ms(&self) -> u64 {
-        self.0.get()
+        self.now.get()
+    }
+    fn schedule(&self, after_ms: u64, f: Box<dyn FnOnce()>) {
+        let seq = self.seq.get() + 1;
+        self.seq.set(seq);
+        self.timers.borrow_mut().push((self.now.get() + after_ms, seq, f));
     }
 }
 
@@ -290,6 +327,7 @@ impl<W: Wire + Clone + 'static, C: Clock + Clone + 'static> LiveCache<W, C> {
             let s = sub.borrow();
             (s.spec.changes.clone(), s.spec.changes_params.clone())
         };
+        let Some(method) = method else { todo!("UI-10: a live without changes") };
         let (me, k) = (self.me.clone(), key.to_string());
         let id = self.wire.open(&method, params, Box::new(move |item| {
             if let Some(cache) = me.upgrade() {
@@ -425,6 +463,57 @@ impl<W: Wire + Clone + 'static, C: Clock + Clone + 'static> LiveCache<W, C> {
     /// How many subscriptions are kept (read or waiting out their 5 s).
     pub fn kept(&self) -> usize {
         self.subs.borrow().len()
+    }
+}
+
+/// UI-10: a `live` as declared, before its params are known: the methods,
+/// the key, the folds, and how long its params must be quiet before it
+/// runs again.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveQuery {
+    pub snapshot: String,
+    pub changes: Option<String>,
+    pub key: String,
+    pub on: Vec<(String, String)>,
+    pub debounce_ms: Option<u64>,
+}
+
+impl<W: Wire + Clone + 'static, C: Clock + Clone + 'static> LiveCache<W, C> {
+    /// UI-10: a collection whose params are `params()` — `(params,
+    /// changes_params)`, read in a binding: when a signal it read changes,
+    /// the snapshot runs again (after `debounce_ms` of quiet when given),
+    /// the old rows kept, `resyncing`, until the new snapshot lands.
+    pub fn follow(self: &Rc<Self>, query: LiveQuery, params: impl FnMut() -> (Value, Value) + 'static) -> Follow {
+        let _ = (query, params);
+        todo!("UI-10: LiveCache::follow")
+    }
+}
+
+/// UI-10: a collection that follows its params; dropping it stops that and
+/// releases its reader.
+pub struct Follow {
+    signal: Signal<Value>,
+    stop: Option<Box<dyn FnOnce()>>,
+}
+
+impl Follow {
+    /// The collection as a signal of `{ rows, status }` — the same signal
+    /// whatever the params become.
+    pub fn signal(&self) -> Signal<Value> {
+        self.signal.clone()
+    }
+
+    /// The collection now, untracked.
+    pub fn live(&self) -> Live {
+        Live::from_value(&self.signal.peek()).expect("a live collection's value")
+    }
+}
+
+impl Drop for Follow {
+    fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            stop();
+        }
     }
 }
 

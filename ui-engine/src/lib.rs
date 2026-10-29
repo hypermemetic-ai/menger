@@ -11,6 +11,7 @@
 //! | [`live`] | `live()`: a collection `{ rows, status }` folded from a snapshot and a changes stream, shared by method and params, kept 5 s past its last reader |
 //! | [`folds`] | a component's handlers in Rhai — `(state, event) → state`, only `call` and `navigate` registered, `call` held to the component's `uses` |
 //! | [`swap`] | the bundle's manifest, the module registry (name → hashes), mounting, hot-swap, and the sections (slots and their assignments) |
+//! | [`html`] | UI-10: `{@html}` and `markdown()` — an allow-list sanitizer to a tree the renderer draws |
 //! | [`router`] | `manifest.routes`: a hash route to a component, its `:name` segments the props |
 //! | [`transport`] | the wire seam ([`transport::Wire`]): the one socket on wasm32, a fake for the tests |
 //!
@@ -22,6 +23,7 @@ pub mod live;
 pub mod folds;
 pub mod swap;
 pub mod router;
+pub mod html;
 pub mod transport;
 
 #[cfg(all(target_arch = "wasm32", feature = "dom"))]

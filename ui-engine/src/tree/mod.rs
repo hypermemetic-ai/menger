@@ -48,6 +48,9 @@ pub enum Node {
     Each { expr: String, as_: String, key: String, body: Vec<Node> },
     Component { name: String, props: BTreeMap<String, Attr> },
     Slot { name: String, props: BTreeMap<String, Attr> },
+    /// UI-10: `{@html expr}` — the expression's text as HTML, through the
+    /// sanitizer ([`crate::html`]).
+    Html(String),
 }
 
 /// A `live` declaration: the snapshot method and its params, the changes
@@ -57,10 +60,13 @@ pub enum Node {
 pub struct LiveDecl {
     pub snapshot: String,
     pub params: BTreeMap<String, Value>,
-    pub changes: String,
+    /// UI-10: none — a one-shot read.
+    pub changes: Option<String>,
     pub changes_params: BTreeMap<String, Value>,
     pub key: String,
     pub on: BTreeMap<String, String>,
+    /// UI-10: how long the params must be quiet before it runs again.
+    pub debounce_ms: Option<u64>,
 }
 
 /// A component's compiled tree — `components/<name>.json`.
@@ -180,6 +186,9 @@ fn node(v: &Value, at: &str) -> Result<Node, TreeError> {
         let name = c.as_str().ok_or_else(|| bad(at, "component is a name"))?;
         return Ok(Node::Component { name: name.to_string(), props: attrs(o.get("props"), &format!("{at}.props"))? });
     }
+    if o.contains_key("html") {
+        return Ok(Node::Html(expr_of(o.get("html"), &format!("{at}.html"))?));
+    }
     if let Some(sl) = o.get("slot") {
         let name = sl.as_str().ok_or_else(|| bad(at, "slot is a name"))?;
         return Ok(Node::Slot { name: name.to_string(), props: attrs(o.get("props"), &format!("{at}.props"))? });
@@ -220,10 +229,11 @@ impl ComponentTree {
                     LiveDecl {
                         snapshot: ds("snapshot")?,
                         params: params(d.get("params"), &at)?,
-                        changes: ds("changes")?,
+                        changes: d.get("changes").and_then(Value::as_str).map(str::to_string),
                         changes_params: params(d.get("changes_params"), &at)?,
                         key: ds("key")?,
                         on: strings(d.get("on"), &format!("{at}.on"))?,
+                        debounce_ms: d.get("debounce_ms").and_then(Value::as_u64),
                     },
                 );
             }
@@ -271,6 +281,7 @@ impl ComponentTree {
                     Node::Component { props, .. } | Node::Slot { props, .. } => {
                         out.extend(props.values().filter_map(|a| if let Attr::Expr(e) = a { Some(e.clone()) } else { None }));
                     }
+                    Node::Html(e) => out.push(e.clone()),
                 }
             }
         }
@@ -606,6 +617,7 @@ fn build_node<R: Renderer>(ctx: &Rc<Ctx<R>>, env: &Env, node: &Node, parent: &R:
             block.hosts.push(e.clone());
             place(ctx, parent, &e, before, block, top);
         }
+        Node::Html(_) => todo!("UI-10: an html node"),
         Node::Slot { name, props } => {
             let e = r.create_element("div");
             r.set_attr(&e, "data-layout", &ctx.layout);

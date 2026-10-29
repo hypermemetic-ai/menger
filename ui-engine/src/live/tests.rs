@@ -10,7 +10,7 @@ fn spec(params: Value) -> LiveSpec {
     LiveSpec::new(
         "tickets.list",
         params,
-        "tickets.watch",
+        Some("tickets.watch"),
         json!({}),
         "id",
         &[("created", "upsert:ticket"), ("amended", "upsert:ticket"), ("deleted", "remove:ids")],
@@ -159,7 +159,7 @@ fn live_keeps_only_what_matches_its_filter() {
     let spec = LiveSpec::new(
         "tickets.list",
         params.clone(),
-        "tickets.watch",
+        Some("tickets.watch"),
         json!({ "epic": "KILN" }),
         "id",
         &[("created", "upsert:ticket"), ("amended", "upsert:ticket"), ("deleted", "remove:ids")],
@@ -179,4 +179,127 @@ fn live_keeps_only_what_matches_its_filter() {
     assert_eq!(ids(&reader.live()), ["T-2"], "amended out of the filter: removed");
     wire.feed(watch, WireItem::Data(json!({ "type": "amended", "ticket": { "id": "T-7", "parent": "T-2", "title": "still elsewhere" }, "changed": ["title"] })));
     assert_eq!(ids(&reader.live()), ["T-2"], "amended, never its own: nothing");
+}
+
+// ── UI-10: the second cut ─────────────────────────────────────────────────
+
+fn query(changes: Option<&str>, debounce_ms: Option<u64>) -> LiveQuery {
+    LiveQuery {
+        snapshot: "tickets.list".into(),
+        changes: changes.map(str::to_string),
+        key: "id".into(),
+        on: vec![("created".into(), "upsert:ticket".into())],
+        debounce_ms,
+    }
+}
+
+/// A `live` without `changes` is a one-shot read: the snapshot alone, no
+/// watch opened; `pending → live`.
+#[test]
+fn a_live_without_changes_opens_no_watch() {
+    let (wire, _clock, cache) = setup();
+    let spec = LiveSpec::new("tickets.list", json!({ "limit": 5 }), None, json!({}), "id", &[]).expect("a spec");
+    let reader = cache.acquire(&spec);
+    assert_eq!(wire.opened_of("tickets.list").len(), 1, "one snapshot call");
+    assert!(wire.opened_of("tickets.watch").is_empty(), "no watch");
+    assert_eq!(wire.opened().len(), 1, "nothing else opened");
+    assert_eq!(reader.live().status, Status::Pending);
+    wire.answer(wire.last_of("tickets.list"), [summary("T-1", "a")]);
+    assert_eq!(reader.live().status, Status::Live);
+    assert_eq!(ids(&reader.live()), ["T-1"]);
+
+    // Followed the same way: one snapshot, no watch.
+    let rt = Runtime::new();
+    let (wire, clock) = (FakeWire::new(), ManualClock::new());
+    let cache = LiveCache::new(&rt, wire.clone(), clock);
+    let follow = cache.follow(query(None, None), || (json!({ "limit": 5 }), json!({})));
+    assert_eq!(wire.opened_of("tickets.list").len(), 1);
+    assert!(wire.opened_of("tickets.watch").is_empty(), "a followed live without changes opens no watch either");
+    wire.answer(wire.last_of("tickets.list"), [summary("T-1", "a")]);
+    assert_eq!(follow.live().status, Status::Live);
+}
+
+/// A param's signal changes: the snapshot runs again, once, with the new
+/// params (the changes stream reopened with the new changes params); the
+/// old rows stay, `resyncing`, until the new snapshot lands; the follow's
+/// signal is the same one throughout.
+#[test]
+fn a_live_re_runs_when_a_param_signal_changes() {
+    let rt = Runtime::new();
+    let (wire, clock) = (FakeWire::new(), ManualClock::new());
+    let cache = LiveCache::new(&rt, wire.clone(), clock);
+    let parent = rt.signal("T-1".to_string());
+    let p = parent.clone();
+    let follow = cache.follow(query(Some("tickets.watch"), None), move || (json!({ "parent": p.get() }), json!({ "parent": p.get() })));
+    let signal = follow.signal();
+    assert_eq!(wire.opened_of("tickets.list")[0].params, json!({ "parent": "T-1" }));
+    assert_eq!(wire.opened_of("tickets.watch")[0].params, json!({ "parent": "T-1" }));
+    wire.answer(wire.last_of("tickets.list"), [summary("T-2", "a")]);
+    assert_eq!(ids(&follow.live()), ["T-2"]);
+
+    parent.set("T-9".into());
+    assert_eq!(wire.opened_of("tickets.list").len(), 2, "the snapshot ran again, once");
+    assert_eq!(wire.opened_of("tickets.list")[1].params, json!({ "parent": "T-9" }), "with the new params");
+    assert_eq!(wire.opened_of("tickets.watch").last().map(|o| o.params.clone()), Some(json!({ "parent": "T-9" })), "the changes reopened with the new changes params");
+    let mid = follow.live();
+    assert_eq!((ids(&mid), mid.status), (vec!["T-2".to_string()], Status::Resyncing), "the old rows kept, resyncing");
+    wire.answer(wire.last_of("tickets.list"), [summary("T-10", "b"), summary("T-11", "c")]);
+    let now = follow.live();
+    assert_eq!((ids(&now), now.status), (vec!["T-10".to_string(), "T-11".to_string()], Status::Live), "the new snapshot's rows");
+    assert_eq!(Live::from_value(&signal.peek()).map(|l| l.rows.len()), Some(2), "the same signal carries them");
+
+    parent.set("T-9".into());
+    assert_eq!(wire.opened_of("tickets.list").len(), 2, "the same value: nothing ran");
+    drop(follow);
+}
+
+/// With `debounce_ms: 80`, two changes 30 ms apart run the snapshot once,
+/// 80 ms after the second, with the last params.
+#[test]
+fn a_live_re_runs_when_a_param_signal_changes_and_waits_debounce_ms() {
+    let rt = Runtime::new();
+    let (wire, clock) = (FakeWire::new(), ManualClock::new());
+    let cache = LiveCache::new(&rt, wire.clone(), clock.clone());
+    let q = rt.signal("a".to_string());
+    let p = q.clone();
+    let follow = cache.follow(query(None, Some(80)), move || (json!({ "query": p.get() }), json!({})));
+    assert_eq!(wire.opened_of("tickets.list").len(), 1, "the first snapshot at once");
+    wire.answer(wire.last_of("tickets.list"), [summary("T-1", "a")]);
+
+    q.set("ab".into());
+    clock.advance(30);
+    q.set("abc".into());
+    clock.advance(79);
+    assert_eq!(wire.opened_of("tickets.list").len(), 1, "79 ms after the second change: not yet");
+    assert_eq!(follow.live().status, Status::Live, "nothing asked yet: the rows as they are");
+    clock.advance(1);
+    assert_eq!(wire.opened_of("tickets.list").len(), 2, "80 ms after the second change: once");
+    assert_eq!(wire.opened_of("tickets.list")[1].params, json!({ "query": "abc" }), "with the last params");
+    clock.advance(500);
+    assert_eq!(wire.opened_of("tickets.list").len(), 2, "and only once");
+}
+
+/// `upsert:.` takes the event itself, less `type`, as the row: `extent`
+/// events, from the snapshot and the changes, keyed by `epic`.
+#[test]
+fn a_flat_event_is_its_own_row() {
+    let (wire, _clock, cache) = setup();
+    let spec = LiveSpec::new("tickets.nav.extents", json!({}), Some("tickets.watch"), json!({}), "epic", &[("extent", "upsert:.")]).expect("a spec");
+    let reader = cache.acquire(&spec);
+    wire.answer(
+        wire.last_of("tickets.nav.extents"),
+        [
+            json!({ "type": "extent", "epic": "KILN", "first": 1, "last": 9 }),
+            json!({ "type": "extent", "epic": "GLAZE", "first": 1, "last": 4 }),
+        ],
+    );
+    let live = reader.live();
+    assert_eq!(live.rows, vec![json!({ "epic": "KILN", "first": 1, "last": 9 }), json!({ "epic": "GLAZE", "first": 1, "last": 4 })], "the events, less type");
+    wire.feed(wire.last_of("tickets.watch"), WireItem::Data(json!({ "type": "extent", "epic": "KILN", "first": 1, "last": 12 })));
+    wire.feed(wire.last_of("tickets.watch"), WireItem::Data(json!({ "type": "extent", "epic": "SLIP", "first": 1, "last": 1 })));
+    let live = reader.live();
+    let epics: Vec<&str> = live.rows.iter().map(|r| r["epic"].as_str().unwrap()).collect();
+    assert_eq!(epics, ["KILN", "GLAZE", "SLIP"], "replaced by epic in place; a new one appended");
+    assert_eq!(live.rows[0]["last"], 12);
+    assert!(live.rows.iter().all(|r| r.get("type").is_none()), "no row keeps its type");
 }
