@@ -1178,7 +1178,9 @@ r=$(grep '^docker run' "$STUB_DOCKER")
 has "$T3: the container signs keys in" "$r" "-e MENGER_AUTH_PROVIDERS=key=ws://127.0.0.1:4470 "
 has "$T3: the pipeline's key its admin" "$r" "-e MENGER_ADMINS=key:$PUB2 "
 has "$T3: the pipeline's key its signer" "$r" "-e MENGER_UI_SIGNERS=$PUB2 "
-has "$T3: its public URL, loopback http (ACCESS-30: --bind 0.0.0.0 needs one)" "$r" "-e MENGER_PUBLIC_URL=http://127.0.0.1:4471 "
+# ACCESS-30 (src/bind.rs): --bind 0.0.0.0 needs a public URL; http on 127.0.0.1 is refused there
+# ("reached beyond this machine"), http on a LAN host — `localhost`, one label — served with a warning
+has "$T3: its public URL, http on localhost (ACCESS-30: --bind 0.0.0.0 needs one)" "$r" "-e MENGER_PUBLIC_URL=http://localhost:4471 "
 has "$T3: pushed to the local service, as the pipeline, params on stdin" "$(cat "$STUB_UI_STATE/calls" 2>/dev/null)" "ui.push ws://127.0.0.1:4470 pipeline stdin"
 same "$T3: ui versions: one version, live, the image's bundle, pushed by the pipeline's key" \
   "$(uivers '[length, .[0].hash, .[0].pushed_by]')" "[1,\"$BUNDLE_SHA\",\"key:$PUB2\"]"
