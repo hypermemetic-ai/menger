@@ -16,3 +16,16 @@
   </div>
   <slot name="palette"/>
 </div>
+
+<style>
+  :scope { display: block; }
+  .board-layout { display: flex; flex-direction: column; height: 100vh; height: 100dvh; background: var(--bg); color: var(--ink); font-family: var(--font-text); font-size: var(--text-size); }
+  .board-body { flex: 1; min-height: 0; display: flex; }
+  .board-body > [data-slot=nav] { width: 260px; flex: none; border-right: var(--border) solid var(--line); overflow: auto; background: var(--panel); }
+  .board-body > [data-slot=main] { flex: 1; min-width: 0; display: flex; }
+  .board-body > [data-slot=main] > * { flex: 1; min-width: 0; display: flex; }
+  [data-slot=top] > * { display: block; }
+  @media (max-width: 720px) {
+    .board-body > [data-slot=nav] { display: none; }
+  }
+</style>

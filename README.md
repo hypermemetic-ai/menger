@@ -783,6 +783,8 @@ engine.js  engine.wasm     the engine, abi engine/1
 manifest.json              abi, contract, commit, routes, slots, components (profile rhx/1, hashes, uses)
 components/<name>.json     each component's view tree
 components/<name>.rhai     its handlers
+components/<name>.css      FRAME-30: its sheet, its <style> scoped to its element
+theme.css                  FRAME-30: the tokens, ui/theme.toml compiled
 src/<name>.rhx             the sources (rhx), kept
 ```
 
@@ -834,7 +836,10 @@ with the stamped version.
 
 ### The bundle in the repository
 
-`ui/` is the UI's source: `index.html`, `routes.json` (`#/` and `#/f/:filter`
+`ui/` is the UI's source: `index.html` (FRAME-30: the page's frame alone,
+`theme.css` loaded first), `theme.toml` (the tokens, light and dark —
+`[colour.paper]` `"--bg" = [light, dark, "what it paints"]`, …; every
+component's `<style>` paints with them, never a literal), `routes.json` (`#/` and `#/f/:filter`
 → `board-layout`, `#/ticket/:id` → `ticket-page`), `slots.json` (the
 layouts' default sections), `src/*.rhx` (`board-layout`, `board-rows`,
 `filter-line`, `jump-palette`, `nav-tree`, `nav-flat`, `nav-children`,

@@ -25,3 +25,11 @@
     <p class="filter-refused" data-filter-refused role="alert">{if counts.message == () { "this filter is not taken" } else { counts.message }}</p>
   {/if}
 </div>
+
+<style>
+  :scope { display: block; flex: 1; min-width: 0; }
+  .filter-input { width: 100%; max-width: 640px; padding: 5px 10px; color: var(--ink); background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius); transition: border-color var(--motion-fast) var(--ease); }
+  .filter-input:hover { border-color: var(--muted); }
+  .filter-input:focus-visible { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px var(--sel); }
+  .filter-refused { margin: 4px 0 0; color: var(--warn); font-size: 11px; }
+</style>

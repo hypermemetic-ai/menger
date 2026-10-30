@@ -200,7 +200,12 @@ async function main() {
     edit: (ui) => {
       for (const f of ["board-rows.rhx", "board-rows-sv.svelte"]) {
         const at = path.join(ui, "src", f);
-        if (fs.existsSync(at)) fs.appendFileSync(at, '<p class="board-newer">the newer board</p>\n');
+        if (!fs.existsSync(at)) continue;
+        // FRAME-30: and its count in another token — a sheet that moves with its version.
+        const src = fs.readFileSync(at, "utf8");
+        if (!src.includes(".board-count { color: var(--ink);")) throw new Error(`${f}: its sheet's board-count rule moved; the v2 edit needs it`);
+        fs.writeFileSync(at, src.replace(".board-count { color: var(--ink);", ".board-count { color: var(--accent);"));
+        fs.appendFileSync(at, '<p class="board-newer">the newer board</p>\n');
       }
     },
   });
@@ -320,6 +325,45 @@ async function main() {
           await context.close();
         }
         pages.pop();
+      });
+
+      // FRAME-30: the board wears its components' sheets on the theme's
+      // tokens: theme.css from the entrypoint, every component's sheet
+      // adopted (no <link> but the theme's), the rows drawn by their own
+      // rules, light and dark both from theme.css — each screenshotted.
+      await onBoard(B, "the_board_wears_its_sheets_on_the_theme", async () => {
+        const { page, seen } = await openPage(B.route);
+        await boardUp(page, B);
+        const paths = seen.requests.map((u) => new URL(u).pathname);
+        assert(paths.some((p) => /^\/app\/[0-9a-f]{64}\/theme\.css$/.test(p)), `theme.css loaded: ${paths.filter((p) => p.endsWith(".css")).join(", ")}`);
+        assert(!paths.some((p) => /\/components\/[^/]+\.css$/.test(p)), `no component's sheet fetched (adopted from components.json and the modules): ${paths.filter((p) => p.endsWith(".css")).join(", ")}`);
+        const looks = (theme) => page.evaluate(([sel, theme]) => {
+          if (theme) document.documentElement.dataset.theme = theme;
+          const m = document.querySelector(sel);
+          const css = (q, k) => { const e = m.querySelector(q); return e ? getComputedStyle(e)[k] : null; };
+          return {
+            links: [...document.querySelectorAll("link[rel=stylesheet]")].map((l) => new URL(l.href).pathname.replace(/^\/app\/[0-9a-f]+\//, "")),
+            adopted: document.adoptedStyleSheets.length,
+            head: css(".board-head", "backgroundColor"),
+            row: css(".board-row", "height"),
+            grid: css(".board-row", "display"),
+            id: css(".row-id", "color"),
+            page: getComputedStyle(document.body).backgroundColor,
+            status: [...m.querySelectorAll(".board-row[data-status=Ready] .row-status, .board-row[data-status=Pending] .row-status")].slice(0, 1).map((e) => getComputedStyle(e).backgroundColor)[0] ?? null,
+          };
+        }, [`[data-layout=${B.layout}][data-slot=main] ${B.main}`, theme]);
+        const light = await looks("light");
+        assert(JSON.stringify(light.links) === '["theme.css"]', `one <link>, the theme's: ${JSON.stringify(light.links)}`);
+        assert(light.adopted >= 4, `the board's components' sheets adopted: ${light.adopted}`);
+        assert(light.grid === "grid" && light.row === "28px", `a row drawn by board-rows' own sheet (grid, the pitch): ${JSON.stringify(light)}`);
+        assert(light.page === "rgb(251, 250, 247)" && light.head === "rgb(255, 255, 255)" && light.id === "rgb(59, 91, 219)", `light: --bg, --panel, --accent from theme.css: ${JSON.stringify(light)}`);
+        const shots = process.env.PAGES_SHOTS;
+        if (shots) await page.screenshot({ path: path.join(shots, `board-${B.name}-light.png`) });
+        const dark = await looks("dark");
+        assert(dark.page === "rgb(20, 20, 18)" && dark.head === "rgb(28, 27, 25)" && dark.id === "rgb(142, 166, 255)", `dark: --bg, --panel, --accent from theme.css: ${JSON.stringify(dark)}`);
+        assert(dark.status !== light.status || dark.status === null, `a status chip's ground moves with the theme: ${light.status} → ${dark.status}`);
+        if (shots) await page.screenshot({ path: path.join(shots, `board-${B.name}-dark.png`) });
+        console.log(`     ${B.name}: ${light.adopted} sheets adopted; light ${light.head}/${light.status}, dark ${dark.head}/${dark.status}`);
       });
 
       await onBoard(B, "the_board_asks_extents_then_one_page", async () => {
@@ -756,6 +800,9 @@ async function main() {
         const { page, seen } = await openPage(B.route);
         await eventually("v2's board draws", async () => (await main(page, B).locator(".board-newer").count()) === 1);
         await boardUp(page, B);
+        // FRAME-30: a sheet is its version's — v2's count in --accent, v1's in --ink.
+        const countColour = () => main(page, B).locator(".board-count").evaluate((e) => getComputedStyle(e).color);
+        assert((await countColour()) === "rgb(59, 91, 219)", `v2's sheet: the count in --accent (${await countColour()})`);
         await eventually("the nav's rows", async () => (await nav(page, B).locator("[data-nav-group]").count()) > 0);
         const origin = await marked(page);
         const navSel = `[data-layout=${B.layout}][data-slot=nav] ${B.nav}`;
@@ -771,6 +818,7 @@ async function main() {
         await menu.locator(`[data-version="${v1.version}"]`).click();
         await eventually("the older board draws", async () => (await main(page, B).locator(".board-newer").count()) === 0 && (await main(page, B).locator(B.main).count()) === 1);
         await boardUp(page, B);
+        await eventually("v1's sheet swapped in without a reload: the count in --ink", async () => (await countColour()) === "rgb(29, 28, 26)", 3_000);
         const fetched = seen.requests.slice(fetchedBefore);
         assert(fetched.some((u) => u.endsWith(`/app/${v1.version}/components/${B.module}`)), `v1's ${B.module} was fetched: ${fetched.join(" ")}`);
         const kept = await page.evaluate((s) => document.querySelector(s)?.__kept === true, navSel);

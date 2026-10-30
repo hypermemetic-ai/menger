@@ -43,3 +43,17 @@
     </div>
   {/if}
 </div>
+
+<style>
+  :scope { display: block; }
+  .palette-sheet { position: fixed; z-index: 10; top: 12vh; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; width: min(640px, calc(100vw - 32px)); max-height: 70vh; overflow: hidden; background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-xl); box-shadow: 0 10px 30px var(--shadow); }
+  .palette-input { padding: 12px 14px; font-size: 14px; color: var(--ink); background: none; border: 0; border-bottom: var(--border) solid var(--line); outline: none; }
+  .palette-input:focus-visible { box-shadow: inset 0 -2px 0 var(--focus); }
+  .palette-hits { list-style: none; margin: 0; padding: 4px; overflow: auto; }
+  .palette-hit { display: flex; gap: 10px; align-items: center; height: var(--pitch); padding: 0 10px; overflow: hidden; white-space: nowrap; color: var(--ink); text-decoration: none; border-radius: var(--radius); transition: background-color var(--motion-fast) var(--ease); }
+  .palette-hit:hover { background: var(--hover); }
+  .palette-hit:focus-visible { outline: none; background: var(--row-sel); box-shadow: inset 0 0 0 2px var(--focus); }
+  .row-id { flex: none; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .row-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .palette-label { margin: 6px 14px 2px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+</style>
