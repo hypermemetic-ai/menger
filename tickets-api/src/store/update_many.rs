@@ -81,9 +81,11 @@ fn merged(changed: &[String], more: &[String]) -> Vec<String> {
 }
 
 /// Ids as a write names them — trimmed, upper-cased, blanks dropped, each
-/// once, in the order given.
-fn named(ids: &[String]) -> Vec<String> {
-    let ids: Vec<String> = ids.iter().map(|i| i.trim().to_ascii_uppercase()).filter(|i| !i.is_empty()).collect();
+/// once, in the order given. TICKETS-35: a uid (bare or in a link) as the
+/// key of the ticket it names, live or deleted.
+fn named(cache: &Cache, ids: &[String]) -> Vec<String> {
+    let ids: Vec<String> =
+        ids.iter().map(|i| cache.uid_key(i).map_or_else(|| i.trim().to_ascii_uppercase(), str::to_string)).filter(|i| !i.is_empty()).collect();
     rules::distinct(&ids)
 }
 
@@ -236,7 +238,7 @@ impl Store {
     pub(super) fn selected(&self, select: Selection) -> Result<Vec<String>, StoreError> {
         match select {
             Selection::Ids(ids) => {
-                let ids = named(&ids);
+                let ids = named(&self.tickets.read().expect("store lock poisoned"), &ids);
                 if ids.len() > UPDATE_MANY_CEILING {
                     return Err(StoreError::Invalid(format!(
                         "{} ids named — one write takes at most {UPDATE_MANY_CEILING}; nothing written",
@@ -303,7 +305,7 @@ impl Store {
     /// cell — `what` of it, as the cache stands — checked for every ticket
     /// first, then one write.
     async fn cells_many(&self, ids: &[String], what: impl Fn(&Row) -> Result<(Row, Moved), StoreError>) -> Result<Vec<Change>, StoreError> {
-        let ids = named(ids);
+        let ids = named(&self.tickets.read().expect("store lock poisoned"), ids);
         if ids.is_empty() || ids.len() > UPDATE_MANY_CEILING {
             return Err(StoreError::Invalid(format!("name 1 to {UPDATE_MANY_CEILING} tickets")));
         }

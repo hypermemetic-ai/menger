@@ -486,7 +486,7 @@ impl Store {
     /// answers the entry with its row and what the write was.
     pub async fn queue_with(&self, on: Permit<Editor>, ask: QueueAsk, act: Act) -> Result<QueueChange, StoreError> {
         // ORG-3: the ticket by any short form of its address.
-        let id = self.resolve(on.id())?;
+        let id = self.keyed(on.id())?;
         let QueueAsk { urgency, reason, inputs, blocking, mockups } = ask;
         let reason = reason.trim().to_string();
         if reason.is_empty() {
@@ -633,7 +633,7 @@ impl Store {
     /// written.
     pub async fn unqueue_by(&self, on: Permit<Editor>, act: Act) -> Result<Option<QueueChange>, StoreError> {
         // ORG-3: the ticket by any short form of its address.
-        let id = self.resolve(on.id())?;
+        let id = self.keyed(on.id())?;
         let serial = self.serial().await;
         let now = chrono::Utc::now().timestamp();
         let (row, entry, record, under) = {
@@ -652,7 +652,7 @@ impl Store {
     /// week); still queued. Refused when it is not queued.
     pub async fn snooze_by(&self, on: Permit<Editor>, minutes: u32, act: Act) -> Result<QueueChange, StoreError> {
         // ORG-3: the ticket by any short form of its address.
-        let id = self.resolve(on.id())?;
+        let id = self.keyed(on.id())?;
         if minutes == 0 || minutes > SNOOZE_MAX_MINUTES {
             return Err(StoreError::Invalid(format!("`minutes` is 1 to {SNOOZE_MAX_MINUTES} (a week) — not {minutes}")));
         }

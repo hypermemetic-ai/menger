@@ -1098,7 +1098,10 @@ Filter, Annotate, View, Menus & dialogs, Forms and Help.
 ## Surface
 
 menger is DB-first: the database is the system of record, and the service
-is CRUD over tickets plus a live subscription. Two activations: `tickets`,
+is CRUD over tickets plus a live subscription. Every ticket and every
+summary carries its `uid` (TICKETS-35: the name nothing changes; every
+parameter that names a ticket takes it) and `uid_of`, the uids of the
+tickets it names ("Addresses and namespaces" → A ticket's uid). Two activations: `tickets`,
 and (COMMENT-2) `comments` — below, after `tickets`. Statuses use the house ticketing vocabulary; every ticket also
 carries a **kind** — `scope | execution | build | gap | spike` (AGS-13, the
 owner's closed set: a scope decomposes into children, a build produces
@@ -2435,7 +2438,7 @@ for await (const ev of this.menger.tickets.inputs.list(undefined, undefined, und
 |---|---|
 | `tickets.health` | `health { version, unix_now, ticket_count }` |
 | `tickets.create { epic, title, kind?, severity?, blocked_by?, body?, parent?, path? }` | `created { ticket }` — id is the next `EPIC-N`, status starts `Draft` (TICKETS-13; a scope too — only a doc is born otherwise); `kind` defaults to `build`, one outside the six is an in-band `error` naming them; a `parent` that does not exist (or would make the ticket its own ancestor) is an in-band `error` naming the reason; **every shortcode starts with a scope** (MNG-12) **or a doc** (SDLC-11): the first ticket of a prefix must be `kind: scope` or `kind: doc`, anything else is an in-band `error` naming the rule and nothing is allocated; a `doc` starts — and stays — in `Doc`, and a doc with a `blocked_by`, a `blocked_by` naming a doc, or a doc born as an id a `blocked_by` already names is an in-band `error` (SDLC-11); **`parent` defaults to the shortcode's scope root and must stay inside the shortcode** (MNG-14): omitted, a non-root hangs under its prefix's root; named, it must be in the same prefix, else an in-band `error` — the scope root itself is the exception, its parent (if any) is the shortcode it hangs under, a sub-shortcode; **`path`** (WAVE-10) gives the ticket a path address in its shortcode — only `_MENGER/…` with something after it, only on a `doc`, only with the shortcode's scope root as `parent` (the default); one another ticket of the shortcode holds is an in-band `error` naming it, as is each other refusal, and nothing is allocated; COMP-3: the body's ` ```component ` blocks register components — a block whose tag is not a component name, a name defined twice, or a name another ticket defines is an in-band `error` (the last naming that ticket) and nothing is allocated; COMP-8: so is a malformed `<docs>`, naming the problem; MENGER-15: a body past the cap (`--max-body-bytes`, 8 MiB by default) is the typed `body_too_large { id: null, bytes, max, message }` and nothing is allocated |
-| `tickets.get { id }` | `ticket` or `not_found` (ACT-6: a ticket an old id names carries `moved_from`, every id it had) — `id` is an `EPIC-N`, or (WAVE-10) a path address `SHORTCODE/path` (`PLEXUS/_MENGER/board`; the shortcode case-insensitive, the path exact), and `not_found` carries the id or address as given; ACT-5: a deleted ticket's id answers `deleted { ids: [id], tombstones: [tombstone] }` |
+| `tickets.get { id }` | `ticket` or `not_found` (ACT-6: a ticket an old id names carries `moved_from`, every id it had) — `id` is an `EPIC-N`, or (WAVE-10) a path address `SHORTCODE/path` (`PLEXUS/_MENGER/board`; the shortcode case-insensitive, the path exact), or (TICKETS-35) its uid — bare, `/t/<uid>/…`, or the whole link — and `not_found` carries the id or address as given; ACT-5: a deleted ticket's id (or uid) answers `deleted { ids: [id], tombstones: [tombstone] }`; ORG-3: a name that fits several answers `ambiguous { id, candidates, choices }` — TICKETS-35: a choice per candidate (uid, id, address, org, epic, kind, status, title, parent), "Addresses and namespaces" |
 | `tickets.list { epic?, status?, parent?, after?, limit?, summary? }` | one `ticket` per match, ordered (epic, seq), then one `page { next, remaining }`; `parent` yields exactly that ticket's children — the one way to read them (SCALE-4), from an index the store keeps, so a page of a root's 163,530 children costs the page (1.3 ms at 10⁶ over REST, first page or deep) and its `remaining` is arithmetic; `summary` swaps the rows for `summary { summary }` (every field but the body); `after` is the exclusive cursor and `limit` caps the page (ACCESS-29: 1,000 rows unless given, never more than 10,000 — page with `next`) — `after` naming no ticket is one in-band `error` |
 | `tickets.work.ready { epic?, after?, limit?, summary? }` | one row per member of the ready set (Ready, every blocker Complete, Superseded or Canceled — never a doc), ordered (epic, seq), then one `page { next, remaining }` |
 | `tickets.find { query, after?, limit? }` | one `summary` row per ticket whose id or title contains `query`, case-insensitively (ASCII folding) — the jump palette's rule (AGS-18), on the server (SCALE-6) — ordered (epic, seq), at most `limit` (default 50), then one `page { next, remaining }`: `remaining` plus the rows is the total. `query` is trimmed; empty or blank matches every ticket. `after` is `list`'s cursor (a position — it need not match); one naming no ticket is one in-band `error`. Ids and titles only, never bodies. A blank query's page costs the page; any other query's exact `remaining` scans every id and title after the cursor (~145 ms at 10⁶) |
@@ -2913,6 +2916,83 @@ hangs; every id and tombstone pinned. `--verify-derived` checks the index:
 every ticket's shortcode registered, no two of one code in one namespace,
 each stored host where its root hangs, every full address distinct, every
 pin a ticket or a tombstone.
+
+#### A ticket's uid (TICKETS-35)
+
+Owner, 2026-10-30: *"update prod menger to properly handle mulitple
+shortcodes of the same name. that means rewiring the urls too. urls should
+be uuid based not shortcode based. and a collision in a url like
+/&lt;COLLISION-1&gt; should show all the collisions and their parents"*.
+Every ticket has a **uid** — the one name nothing changes: **8 characters
+of Crockford's base32, lower case** (`7k3mq2xa`; digits and the letters but
+`i`, `l`, `o`, `u`), read case-blind — TICKETS-11's `uid-slug` form, a
+short opaque id first in a link (`/t/7k3mq2xa/PERF-19-…`).
+
+- **Minted** at `create` (and for a subtask, a seed's tickets and a scope
+  `reshortcode --new-scope` makes): random, never another ticket's (live or
+  deleted), never a shortcode's code (case-blind); a clash is drawn again.
+  `created`, and every `ticket` and `summary`, carry it as `uid`.
+- **Kept** through every move: `reshortcode` and `rename` rewrite the key
+  (`id`), never the uid; `set_parent`, an archive and its restore, an epic's
+  move keep it; a `delete` keeps it on the tombstone (`deleted`'s
+  `tombstones[].uid`) and `undelete` gives it back.
+- **Names its ticket** wherever a ticket is named — every `--id`, `--ids`,
+  `--parent`, `--blocked-by`, `--block`, `--unblock`, `--ticket`, `--keep`
+  takes it bare, as the app's path to it (`/t/7k3mq2xa/…`, `#/t/7k3mq2xa/…`)
+  or as the whole link (`https://app.menger.sh/t/7k3mq2xa/…`); what follows
+  the uid is ignored. A deleted ticket's uid answers its tombstone; another
+  organization's is `not_found` (ORG-4). A uid is never a forward reference.
+  The filter words take one too: `under 7k3mq2xa` (the ticket and its
+  descendants) and `ticket 7k3mq2xa`; one that is also a shortcode's code in
+  `under` names both and is refused, naming each. `in` names letters, as
+  before.
+- **One resolver, writes as reads** (TICKETS-32's fix). A name is resolved
+  once, where the call names it — the full address, any short form that
+  fits one ticket, the uid, the key — and from there the store holds the
+  key and reads it as the key: `amend --id hypermemetic:MENGER/STORE/PERF-19`
+  lands, where it answered `ambiguous` because the original's key, `PERF-19`,
+  is also the bare id of PLEXUS's namesake (`PERF.115-19`). The bare id that
+  fits several stays ambiguous: that is the collision.
+- **`uid_of`**: a ticket or a summary that names others — its `parent`, each
+  of `blocked_by` and `unlocks` — carries each one's uid, keyed as the row
+  names it (`{"PERF-1": "m4c8tz1e"}`); a forward reference has none, and an
+  empty one is omitted. Filled as the row goes out, from the names the
+  reader is given (a read and a watch cut the hidden away first).
+- **`choices`**: `ambiguous` says, beside `candidates` (unchanged: each by
+  its full address), one choice per candidate in the same order — its
+  `uid`, `id`, `address`, `org`, `epic` (the organization's epic, ORG-13 —
+  not the letters), `kind`, `status`, `title` and its `parent { uid, id,
+  address, title }`. Only the caller's organizations are listed (ORG-4); a
+  candidate the caller may not read — or a shortcode, for an `--epic` that
+  fits several — carries its address alone:
+
+```json
+{"type": "ambiguous", "id": "PERF-19",
+ "candidates": ["hypermemetic:MENGER/STORE/PERF-19", "hypermemetic:PLEXUS/PERF-19"],
+ "choices": [
+  {"uid": "7k3mq2xa", "id": "PERF-19", "address": "hypermemetic:MENGER/STORE/PERF-19",
+   "org": "hypermemetic", "epic": "genesis", "kind": "build", "status": "Draft",
+   "title": "Compression on the WebSocket …",
+   "parent": {"uid": "m4c8tz1e", "id": "PERF-1", "address": "hypermemetic:MENGER/STORE/PERF-1", "title": "Magnitude …"}},
+  {"address": "hypermemetic:PLEXUS/PERF-19"}]}
+```
+
+**Stored.** A column, not derived state — the stored form stays 15: `uid`
+on the tickets and on the tombstones, each under a unique index. A file
+without it — every file before TICKETS-35 — gains it at its first open: one
+uid for every ticket and every tombstone, in one transaction, the count in
+the log (`TICKETS-35: minted N uid(s) — T ticket(s) and D tombstone(s)`);
+every later open mints none, and a row a release before TICKETS-35 wrote
+since (it names its own columns, so it leaves the uid of every row it
+rewrites alone, and writes none) is given one at the next open. A release
+before it reads the file as before. `--verify-derived` holds them: a ticket
+or a tombstone without a uid, or two with one, is a difference.
+
+```sh
+synapse -P 4455 menger tickets get --id 7k3mq2xa
+synapse -P 4455 menger tickets amend --id hypermemetic:MENGER/STORE/PERF-19 --body @b.md
+synapse -P 4455 menger tickets list --filter 'under 7k3mq2xa' --summary true
+```
 
 ### Organizations (ORG-4)
 

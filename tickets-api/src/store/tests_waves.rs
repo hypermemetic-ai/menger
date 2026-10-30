@@ -386,6 +386,8 @@ fn a_chain_longer_than_any_call_stack_is_placed() {
     let row = |seq: u32| Row {
         hidden_blocked_by: 0,
         hidden_unlocks: 0,
+        uid: Default::default(),
+        uid_of: Default::default(),
         parent_hidden: false,
         archived: None,
         frozen: false,

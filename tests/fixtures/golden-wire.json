@@ -91,6 +91,7 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "the root",
+          "uid": "<uid>",
           "unlocks": [],
           "updated_unix": 0
         },
@@ -127,6 +128,10 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -166,6 +171,11 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a gap",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>",
+            "GOLD-2": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -203,6 +213,10 @@
           "shortcode": "GOLD",
           "status": "Doc",
           "title": "the board",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -240,6 +254,10 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "defines",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -275,6 +293,7 @@
           "shortcode": "PLAT",
           "status": "Draft",
           "title": "the platform",
+          "uid": "<uid>",
           "unlocks": [],
           "updated_unix": 0
         },
@@ -311,6 +330,10 @@
           "shortcode": "PLAT",
           "status": "Draft",
           "title": "work",
+          "uid": "<uid>",
+          "uid_of": {
+            "PLAT-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -347,6 +370,11 @@
           "shortcode": "GOLD",
           "status": "Ready",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>",
+            "GOLD-3": "<uid>"
+          },
           "unlocks": [
             "GOLD-3"
           ],
@@ -385,6 +413,11 @@
           "shortcode": "GOLD",
           "status": "Coding",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>",
+            "GOLD-3": "<uid>"
+          },
           "unlocks": [
             "GOLD-3"
           ],
@@ -424,6 +457,10 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "defines",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -463,6 +500,10 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a gap",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-2": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -504,6 +545,10 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a gap, retitled",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-2": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -546,6 +591,11 @@
           "shortcode": "GOLD",
           "status": "Coding",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>",
+            "GOLD-3": "<uid>"
+          },
           "unlocks": [
             "GOLD-3"
           ],
@@ -591,6 +641,11 @@
           "shortcode": "GOLD",
           "status": "Coding",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>",
+            "GOLD-3": "<uid>"
+          },
           "unlocks": [
             "GOLD-3"
           ],
@@ -641,6 +696,10 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a gap, retitled",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-2": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -688,6 +747,11 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a gap, retitled",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-2": "<uid>",
+            "PLAT-2": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -743,6 +807,11 @@
             "shortcode": "GOLD",
             "status": "Draft",
             "title": "a gap, retitled",
+            "uid": "<uid>",
+            "uid_of": {
+              "GOLD-2": "<uid>",
+              "PLAT-2": "<uid>"
+            },
             "unlocks": [],
             "updated_unix": 0
           },
@@ -768,6 +837,11 @@
             "shortcode": "PLAT",
             "status": "Draft",
             "title": "work",
+            "uid": "<uid>",
+            "uid_of": {
+              "GOLD-3": "<uid>",
+              "PLAT-1": "<uid>"
+            },
             "unlocks": [
               "GOLD-3"
             ],
@@ -1087,6 +1161,10 @@
           "shortcode": "GOLD",
           "status": "Coding",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -1138,6 +1216,10 @@
           "shortcode": "GOLD",
           "status": "Coding",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -1187,6 +1269,10 @@
           "shortcode": "GOLD",
           "status": "Coding",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -1252,6 +1338,10 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a mistake",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -1279,7 +1369,8 @@
             "name": "test",
             "parent": "GOLD-1",
             "restorable_until_unix": 0,
-            "title": "a mistake"
+            "title": "a mistake",
+            "uid": "<uid>"
           }
         ],
         "type": "deleted"
@@ -1316,6 +1407,10 @@
             "shortcode": "GOLD",
             "status": "Draft",
             "title": "a mistake",
+            "uid": "<uid>",
+            "uid_of": {
+              "GOLD-1": "<uid>"
+            },
             "unlocks": [],
             "updated_unix": 0
           }
@@ -1360,6 +1455,10 @@
             "shortcode": "PLAT",
             "status": "Draft",
             "title": "a mistake",
+            "uid": "<uid>",
+            "uid_of": {
+              "PLAT-1": "<uid>"
+            },
             "unlocks": [],
             "updated_unix": 0
           }
@@ -1400,6 +1499,10 @@
           "shortcode": "GOLD",
           "status": "Coding",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -1431,6 +1534,10 @@
           "shortcode": "GOLD",
           "status": "Doc",
           "title": "the board",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -1468,6 +1575,10 @@
           "shortcode": "PLAT",
           "status": "Draft",
           "title": "a mistake",
+          "uid": "<uid>",
+          "uid_of": {
+            "PLAT-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -1501,6 +1612,7 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "the root",
+          "uid": "<uid>",
           "unlocks": [],
           "updated_unix": 0
         },
@@ -1529,6 +1641,10 @@
           "shortcode": "GOLD",
           "status": "Coding",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -1561,6 +1677,11 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a gap, retitled",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-2": "<uid>",
+            "PLAT-2": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -1584,6 +1705,10 @@
           "shortcode": "GOLD",
           "status": "Doc",
           "title": "the board",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -1610,6 +1735,10 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "defines",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -1649,6 +1778,7 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "the root",
+          "uid": "<uid>",
           "unlocks": [],
           "updated_unix": 0
         },
@@ -1677,6 +1807,10 @@
           "shortcode": "GOLD",
           "status": "Coding",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -1709,6 +1843,11 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a gap, retitled",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-2": "<uid>",
+            "PLAT-2": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -1751,6 +1890,10 @@
           "shortcode": "GOLD",
           "status": "Coding",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -1783,6 +1926,11 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a gap, retitled",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-2": "<uid>",
+            "PLAT-2": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -1809,6 +1957,10 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "defines",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -1835,6 +1987,7 @@
           "shortcode": "PLAT",
           "status": "Draft",
           "title": "the platform",
+          "uid": "<uid>",
           "unlocks": [],
           "updated_unix": 0
         },
@@ -1863,6 +2016,11 @@
           "shortcode": "PLAT",
           "status": "Draft",
           "title": "work",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-3": "<uid>",
+            "PLAT-1": "<uid>"
+          },
           "unlocks": [
             "GOLD-3"
           ],
@@ -1891,6 +2049,10 @@
           "shortcode": "PLAT",
           "status": "Draft",
           "title": "a mistake",
+          "uid": "<uid>",
+          "uid_of": {
+            "PLAT-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -1952,6 +2114,11 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a gap, retitled",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-2": "<uid>",
+            "PLAT-2": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -1993,6 +2160,7 @@
           "shortcode": "PLAT",
           "status": "Draft",
           "title": "the platform",
+          "uid": "<uid>",
           "unlocks": [],
           "updated_unix": 0
         },
@@ -2369,6 +2537,7 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "the root",
+          "uid": "<uid>",
           "unlocks": [],
           "updated_unix": 0
         },
@@ -2415,6 +2584,10 @@
           "shortcode": "GOLD",
           "status": "Coding",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -2446,6 +2619,10 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "defines",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -2479,6 +2656,11 @@
           "shortcode": "PLAT",
           "status": "Draft",
           "title": "work",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-3": "<uid>",
+            "PLAT-1": "<uid>"
+          },
           "unlocks": [
             "GOLD-3"
           ],
@@ -2512,6 +2694,10 @@
           "shortcode": "PLAT",
           "status": "Draft",
           "title": "a mistake",
+          "uid": "<uid>",
+          "uid_of": {
+            "PLAT-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -2549,6 +2735,11 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a gap, retitled",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-2": "<uid>",
+            "PLAT-2": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -2604,6 +2795,10 @@
           "shortcode": "GOLD",
           "status": "Coding",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -2635,6 +2830,10 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "defines",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -2672,6 +2871,11 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a gap, retitled",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-2": "<uid>",
+            "PLAT-2": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -2724,6 +2928,11 @@
           "shortcode": "PLAT",
           "status": "Draft",
           "title": "work",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-3": "<uid>",
+            "PLAT-1": "<uid>"
+          },
           "unlocks": [
             "GOLD-3"
           ],
@@ -2763,6 +2972,11 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a gap, retitled",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-2": "<uid>",
+            "PLAT-2": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -2811,6 +3025,11 @@
           "shortcode": "PLAT",
           "status": "Draft",
           "title": "work",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-3": "<uid>",
+            "PLAT-1": "<uid>"
+          },
           "unlocks": [
             "GOLD-3"
           ],
@@ -3747,6 +3966,11 @@
           "shortcode": "PLAT",
           "status": "Draft",
           "title": "work",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-3": "<uid>",
+            "PLAT-1": "<uid>"
+          },
           "unlocks": [
             "GOLD-3"
           ],
@@ -3798,6 +4022,11 @@
           "shortcode": "PLAT",
           "status": "Draft",
           "title": "work",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-3": "<uid>",
+            "PLAT-1": "<uid>"
+          },
           "unlocks": [
             "GOLD-3"
           ],
@@ -3856,6 +4085,7 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "the root",
+          "uid": "<uid>",
           "unlocks": [],
           "updated_unix": 0
         },
@@ -3890,6 +4120,7 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "the root",
+          "uid": "<uid>",
           "unlocks": [],
           "updated_unix": 0
         },
@@ -3951,6 +4182,10 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -4047,6 +4282,11 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a gap",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>",
+            "GOLD-2": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -4097,6 +4337,11 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>",
+            "GOLD-3": "<uid>"
+          },
           "unlocks": [
             "GOLD-3"
           ],
@@ -4140,6 +4385,10 @@
           "shortcode": "GOLD",
           "status": "Doc",
           "title": "the board",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -4207,6 +4456,10 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "defines",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -4284,6 +4537,7 @@
           "shortcode": "PLAT",
           "status": "Draft",
           "title": "the platform",
+          "uid": "<uid>",
           "unlocks": [],
           "updated_unix": 0
         },
@@ -4345,6 +4599,10 @@
           "shortcode": "PLAT",
           "status": "Draft",
           "title": "work",
+          "uid": "<uid>",
+          "uid_of": {
+            "PLAT-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -4413,6 +4671,11 @@
           "shortcode": "GOLD",
           "status": "Ready",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>",
+            "GOLD-3": "<uid>"
+          },
           "unlocks": [
             "GOLD-3"
           ],
@@ -4459,6 +4722,11 @@
           "shortcode": "GOLD",
           "status": "Coding",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>",
+            "GOLD-3": "<uid>"
+          },
           "unlocks": [
             "GOLD-3"
           ],
@@ -4505,6 +4773,10 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "defines",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -4552,6 +4824,10 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a gap",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-2": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -4596,6 +4872,10 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a gap, retitled",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-2": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -4629,6 +4909,11 @@
           "shortcode": "GOLD",
           "status": "Coding",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>",
+            "GOLD-3": "<uid>"
+          },
           "unlocks": [
             "GOLD-3"
           ],
@@ -4662,6 +4947,11 @@
           "shortcode": "GOLD",
           "status": "Coding",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>",
+            "GOLD-3": "<uid>"
+          },
           "unlocks": [
             "GOLD-3"
           ],
@@ -4701,6 +4991,10 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a gap, retitled",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-2": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -4739,6 +5033,11 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a gap, retitled",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-2": "<uid>",
+            "PLAT-2": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -4766,6 +5065,11 @@
           "shortcode": "PLAT",
           "status": "Draft",
           "title": "work",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-3": "<uid>",
+            "PLAT-1": "<uid>"
+          },
           "unlocks": [
             "GOLD-3"
           ],
@@ -4797,6 +5101,10 @@
           "shortcode": "GOLD",
           "status": "Coding",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -4829,6 +5137,11 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a gap, retitled",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-2": "<uid>",
+            "PLAT-2": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -4877,6 +5190,11 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a gap, retitled",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-2": "<uid>",
+            "PLAT-2": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -4909,6 +5227,11 @@
           "shortcode": "PLAT",
           "status": "Draft",
           "title": "work",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-3": "<uid>",
+            "PLAT-1": "<uid>"
+          },
           "unlocks": [
             "GOLD-3"
           ],
@@ -5183,6 +5506,10 @@
           "shortcode": "GOLD",
           "status": "Coding",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -5223,6 +5550,10 @@
           "shortcode": "GOLD",
           "status": "Coding",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -5268,6 +5599,10 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a mistake",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -5333,7 +5668,8 @@
             "name": "test",
             "parent": "GOLD-1",
             "restorable_until_unix": 0,
-            "title": "a mistake"
+            "title": "a mistake",
+            "uid": "<uid>"
           }
         ],
         "type": "deleted"
@@ -5377,6 +5713,10 @@
             "shortcode": "GOLD",
             "status": "Draft",
             "title": "a mistake",
+            "uid": "<uid>",
+            "uid_of": {
+              "GOLD-1": "<uid>"
+            },
             "unlocks": [],
             "updated_unix": 0
           }
@@ -5447,6 +5787,10 @@
             "shortcode": "PLAT",
             "status": "Draft",
             "title": "a mistake",
+            "uid": "<uid>",
+            "uid_of": {
+              "PLAT-1": "<uid>"
+            },
             "unlocks": [],
             "updated_unix": 0
           }
@@ -5522,6 +5866,10 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "watch drops events",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -5692,6 +6040,7 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "the root",
+          "uid": "<uid>",
           "unlocks": [],
           "updated_unix": 0
         },
@@ -5722,6 +6071,7 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "the root",
+          "uid": "<uid>",
           "unlocks": [],
           "updated_unix": 0
         },
@@ -5790,6 +6140,10 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -5893,6 +6247,11 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a gap",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>",
+            "GOLD-2": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -5943,6 +6302,11 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>",
+            "GOLD-3": "<uid>"
+          },
           "unlocks": [
             "GOLD-3"
           ],
@@ -5993,6 +6357,10 @@
           "shortcode": "GOLD",
           "status": "Doc",
           "title": "the board",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -6060,6 +6428,10 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "defines",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -6144,6 +6516,7 @@
           "shortcode": "PLAT",
           "status": "Draft",
           "title": "the platform",
+          "uid": "<uid>",
           "unlocks": [],
           "updated_unix": 0
         },
@@ -6212,6 +6585,10 @@
           "shortcode": "PLAT",
           "status": "Draft",
           "title": "work",
+          "uid": "<uid>",
+          "uid_of": {
+            "PLAT-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -6287,6 +6664,11 @@
           "shortcode": "GOLD",
           "status": "Ready",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>",
+            "GOLD-3": "<uid>"
+          },
           "unlocks": [
             "GOLD-3"
           ],
@@ -6333,6 +6715,11 @@
           "shortcode": "GOLD",
           "status": "Coding",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>",
+            "GOLD-3": "<uid>"
+          },
           "unlocks": [
             "GOLD-3"
           ],
@@ -6379,6 +6766,10 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "defines",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -6426,6 +6817,10 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a gap",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-2": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -6470,6 +6865,10 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a gap, retitled",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-2": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -6503,6 +6902,11 @@
           "shortcode": "GOLD",
           "status": "Coding",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>",
+            "GOLD-3": "<uid>"
+          },
           "unlocks": [
             "GOLD-3"
           ],
@@ -6536,6 +6940,11 @@
           "shortcode": "GOLD",
           "status": "Coding",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>",
+            "GOLD-3": "<uid>"
+          },
           "unlocks": [
             "GOLD-3"
           ],
@@ -6575,6 +6984,10 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a gap, retitled",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-2": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -6613,6 +7026,11 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a gap, retitled",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-2": "<uid>",
+            "PLAT-2": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -6640,6 +7058,11 @@
           "shortcode": "PLAT",
           "status": "Draft",
           "title": "work",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-3": "<uid>",
+            "PLAT-1": "<uid>"
+          },
           "unlocks": [
             "GOLD-3"
           ],
@@ -6671,6 +7094,10 @@
           "shortcode": "GOLD",
           "status": "Coding",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -6703,6 +7130,11 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a gap, retitled",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-2": "<uid>",
+            "PLAT-2": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -6751,6 +7183,11 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a gap, retitled",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-2": "<uid>",
+            "PLAT-2": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -6783,6 +7220,11 @@
           "shortcode": "PLAT",
           "status": "Draft",
           "title": "work",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-3": "<uid>",
+            "PLAT-1": "<uid>"
+          },
           "unlocks": [
             "GOLD-3"
           ],
@@ -7057,6 +7499,10 @@
           "shortcode": "GOLD",
           "status": "Coding",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -7097,6 +7543,10 @@
           "shortcode": "GOLD",
           "status": "Coding",
           "title": "asks",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -7142,6 +7592,10 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "a mistake",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -7214,7 +7668,8 @@
             "name": "test",
             "parent": "GOLD-1",
             "restorable_until_unix": 0,
-            "title": "a mistake"
+            "title": "a mistake",
+            "uid": "<uid>"
           }
         ],
         "type": "deleted"
@@ -7265,6 +7720,10 @@
             "shortcode": "GOLD",
             "status": "Draft",
             "title": "a mistake",
+            "uid": "<uid>",
+            "uid_of": {
+              "GOLD-1": "<uid>"
+            },
             "unlocks": [],
             "updated_unix": 0
           }
@@ -7342,6 +7801,10 @@
             "shortcode": "PLAT",
             "status": "Draft",
             "title": "a mistake",
+            "uid": "<uid>",
+            "uid_of": {
+              "PLAT-1": "<uid>"
+            },
             "unlocks": [],
             "updated_unix": 0
           }
@@ -7431,6 +7894,10 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "watch drops events",
+          "uid": "<uid>",
+          "uid_of": {
+            "GOLD-1": "<uid>"
+          },
           "unlocks": [],
           "updated_unix": 0
         },
@@ -7622,6 +8089,7 @@
           "shortcode": "GOLD",
           "status": "Draft",
           "title": "the root",
+          "uid": "<uid>",
           "unlocks": [],
           "updated_unix": 0
         },

@@ -53,7 +53,7 @@ impl Store {
         act: Act,
     ) -> Result<(Comment, QueueChange), StoreError> {
         // ACCESS-11: of the ticket `on` is for.
-        let id = self.resolve(on.id())?;
+        let id = self.keyed(on.id())?;
         let (mut anchor, author) =
             crate::comments::check(conversation_anchor(&id), &body, author.as_deref()).map_err(StoreError::CommentRefused)?;
         let serial = self.serial().await;

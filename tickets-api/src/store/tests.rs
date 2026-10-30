@@ -1645,6 +1645,8 @@ pub(super) fn write_db(path: &Path, rows: &[(&str, Kind, Status, Option<&str>)])
             Ticket {
                 hidden_blocked_by: 0,
                 hidden_unlocks: 0,
+                uid: Default::default(),
+                uid_of: Default::default(),
                 parent_hidden: false,
                 archived: None,
                 frozen: false,
@@ -2032,6 +2034,8 @@ fn write_blocked_db(path: &Path, rows: &[(&str, Kind, &[&str])]) {
             &Ticket {
                 hidden_blocked_by: 0,
                 hidden_unlocks: 0,
+                uid: Default::default(),
+                uid_of: Default::default(),
                 parent_hidden: false,
                 archived: None,
                 frozen: false,

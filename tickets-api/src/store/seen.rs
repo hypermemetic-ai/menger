@@ -340,6 +340,8 @@ impl<'c> Sees<'c> {
     pub(super) fn comment(&self, c: &crate::comments::Comment) -> bool {
         let c = c.reply_to.and_then(|r| self.cache.comments.get(r.get())).unwrap_or(c);
         let route = c.anchor.route.trim().strip_prefix("#/ticket/").map(|r| r.split(['?', '#']).next().unwrap_or(r).trim()).filter(|r| !r.is_empty());
+        // TICKETS-35: the page of a ticket by its uid, `#/t/<uid>/…`, is its too.
+        let route = route.or_else(|| crate::vocab::uid_named(c.anchor.route.trim()).map(|_| c.anchor.route.trim()));
         let mut on = c.anchor.ticket.iter().map(String::as_str).chain(route).peekable();
         if on.peek().is_none() {
             return self.app.admits(c.principal.as_deref());

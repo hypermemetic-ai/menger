@@ -67,8 +67,8 @@ impl Store {
     /// committed, the cache moved, `InputChanged` broadcast. A change that
     /// changes nothing writes and says nothing.
     async fn input_write(&self, ticket: &str, input: &str, op: inputs::Op) -> Result<InputWrite, StoreError> {
-        // ORG-3: by any address.
-        let ticket = self.resolve(ticket)?;
+        // ORG-3: by any address; TICKETS-35: a permit's key read as a key.
+        let ticket = self.keyed(ticket)?;
         let input = input.trim().to_string();
         let serial = self.serial().await;
         let (epic, current, row) = {

@@ -18,7 +18,11 @@
 //! A build that moves a method updates the fixture deliberately, its calls
 //! only: ACCESS-16 moved `groups`, `extents`, `tree`, `counts`, `facets` and
 //! `member` to `tickets.nav.<method>` — the six `call`s renamed, every item
-//! they answer byte for byte as before.
+//! they answer byte for byte as before. TICKETS-35 grew the rows: every
+//! ticket and summary the script answers gained `uid` (119 of them) and the
+//! 102 that name another ticket `uid_of` — each uid written `<uid>`, being
+//! random — and nothing else moved (the fixture minus those two keys is the
+//! one before it, checked key for key when it was re-blessed).
 
 
 /// ACCESS-24: the test provider — every server runs `key`, every client is its `--admin`.
@@ -127,7 +131,8 @@ fn round_trip(namespace: &str, v: &Value) {
 }
 
 /// `v` with its clocks set to 0 and the binary's version blanked: what the
-/// golden file holds.
+/// golden file holds. TICKETS-35: and every uid — minted at random — written
+/// `<uid>`, a ticket's own and each its `uid_of` names.
 fn steady(v: &Value) -> Value {
     match v {
         Value::Object(m) => Value::Object(
@@ -135,6 +140,8 @@ fn steady(v: &Value) -> Value {
                 .map(|(k, x)| {
                     let clock = k.ends_with("_unix") || k.ends_with("_at") || matches!(k.as_str(), "at" | "since" | "unix_now" | "began");
                     let x = match x {
+                        Value::String(_) if k == "uid" => json!("<uid>"),
+                        Value::Object(named) if k == "uid_of" => Value::Object(named.keys().map(|n| (n.clone(), json!("<uid>"))).collect()),
                         Value::Number(_) if clock || k == "version" => json!(0),
                         Value::String(_) if k == "version" => json!(""),
                         Value::String(t) => json!(noted(t)),
@@ -146,6 +153,21 @@ fn steady(v: &Value) -> Value {
         ),
         Value::Array(a) => Value::Array(a.iter().map(steady).collect()),
         x => x.clone(),
+    }
+}
+
+/// TICKETS-35: each ticket or summary in `v` — an object with a `seq`, a
+/// `status` and an `id`, at any depth.
+fn every_row(v: &Value, f: &mut dyn FnMut(&Value)) {
+    match v {
+        Value::Object(m) => {
+            if m.contains_key("seq") && m.contains_key("status") && m.contains_key("id") {
+                f(v);
+            }
+            m.values().for_each(|x| every_row(x, f));
+        }
+        Value::Array(a) => a.iter().for_each(|x| every_row(x, f)),
+        _ => {}
     }
 }
 
@@ -312,6 +334,19 @@ async fn every_item_round_trips_and_the_json_is_what_it_was() {
         }
         golden.push(json!({"call": name, "items": events.iter().map(steady).collect::<Vec<_>>()}));
     }
+
+    // TICKETS-35: every ticket and summary the script answered carries a
+    // uid, and names its parent's in `uid_of` — whichever call or watch
+    // carried it (the one place a row could go out without them).
+    let mut rows = 0;
+    every_row(&Value::Array(golden.clone()), &mut |row| {
+        rows += 1;
+        assert!(row["uid"].is_string(), "a row without its uid: {row}");
+        if let Some(parent) = row["parent"].as_str() {
+            assert!(row["uid_of"][parent].is_string(), "a row whose uid_of names not its parent {parent}: {row}");
+        }
+    });
+    assert!(rows > 100, "the script answered {rows} rows");
 
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden-wire.json");
     let got = serde_json::to_string_pretty(&golden).unwrap() + "\n";
