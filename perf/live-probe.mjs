@@ -32,6 +32,13 @@
 // the median over the runs, and the whole of the board's calls. Today `tickets.list` is 202 frames
 // (a frame per row, the page, done); after PERF-15 three (one `rows`, the page, done), and the stream
 // row (first data → done) ~0.
+//
+// FRAME-57: `--marks` adds, after the rest, every run's marks as one table (a column per run, the
+// warm-up's first, so a slow run's waterfall reads beside a fast one's), then each run's fetches —
+// every resource's start, duration, transfer and body size, whether it came from cache, its
+// protocol, Chromium's priority and connection id (CDP's), and for the html and the socket the
+// connection's timing: DNS, TCP, TLS (the socket's from its handshake, CDP's clock moved to the
+// page's by the socket's own `made` mark). Without the flag the output is unchanged.
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -45,6 +52,7 @@ if (!tokenFile) { console.error("live-probe: --token-file FILE (a session token;
 const origin = opt("--origin", "https://app-test.menger.sh").replace(/\/$/, "");
 const runs = Number(opt("--runs", "5"));
 const route = opt("--path", "/");
+const showMarks = args.includes("--marks");
 const token = readFileSync(tokenFile, "utf8").trim();
 const req = createRequire(path.join(here, "package.json"));
 const { chromium } = await import(req.resolve("playwright").replace(/index\.js$/, "index.mjs"));
@@ -87,6 +95,7 @@ const MARKS = `(() => {
 })();`;
 
 const browser = await chromium.launch();
+const perRun = []; // FRAME-57: every run's marks and fetches, the warm-up's first
 const firsts = [], ttfbs = [], sockets = [], marks = [], calls = [];
 // PERF-15: each call's frames and bytes (the ack's included), keyed by its method — a method asked
 // more than once (the three watches) summed under its name.
@@ -115,12 +124,23 @@ for (let i = 0; i <= runs; i++) {
   await cdp.send("Network.enable");
   cdp.on("Network.webSocketFrameSent", ({ requestId, response }) => wire.sent.push([requestId, response.payloadData]));
   cdp.on("Network.webSocketFrameReceived", ({ requestId, response }) => wire.recv.push([requestId, response.payloadData]));
+  // FRAME-57: each request as Chromium saw it (priority, connection, cache), and the socket's handshake.
+  const net = new Map(), ws = {};
+  const at = (id) => net.get(id) ?? (net.set(id, {}), net.get(id));
+  cdp.on("Network.requestWillBeSent", ({ requestId, request, timestamp }) => Object.assign(at(requestId), { url: request.url, priority: request.initialPriority, sent: timestamp }));
+  cdp.on("Network.responseReceived", ({ requestId, response }) => Object.assign(at(requestId), { status: response.status, conn: response.connectionId, reused: response.connectionReused, disk: response.fromDiskCache, proto: response.protocol, timing: response.timing }));
+  cdp.on("Network.webSocketCreated", ({ requestId }) => { ws.id ??= requestId; });
+  cdp.on("Network.webSocketWillSendHandshakeRequest", ({ requestId, timestamp }) => { if (requestId === ws.id) ws.sent ??= timestamp; });
+  cdp.on("Network.webSocketHandshakeResponseReceived", ({ requestId, timestamp, response }) => { if (requestId === ws.id) { ws.answered ??= timestamp; ws.status = response.status; } });
+  cdp.on("Network.requestWillBeSentExtraInfo", ({ requestId, connectTiming }) => { if (connectTiming) at(requestId).connectTiming = connectTiming; });
   const t0 = Date.now();
   await page.goto(origin + route, { waitUntil: "commit" });
-  const ok = await page.waitForSelector(".board-row[data-id] [data-field=title]", { timeout: 30000 }).then(() => true).catch(() => false);
+  const ok = await page.waitForFunction(() => [...document.querySelectorAll(".board-row[data-id] [data-field=title]")].some((el) => el.textContent.trim()), null, { polling: "raf", timeout: 30000 }).then(() => true).catch(() => false); // FRAME-57: every frame, not waitForSelector's 0/20/50/100/100/500 ms backoff
   const first = ok ? await page.evaluate(() => performance.now()) : null;
   const nav = await page.evaluate(() => { const n = performance.getEntriesByType("navigation")[0]; return { ttfb: n.responseStart, proto: n.nextHopProtocol }; });
-  const res = await page.evaluate(() => performance.getEntriesByType("resource").map(r => ({ name: r.name.replace(location.origin, ""), start: r.startTime, dur: r.duration, enc: r.encodedBodySize, dec: r.decodedBodySize })));
+  const res = await page.evaluate(() => performance.getEntriesByType("resource").map(r => ({ name: r.name.replace(location.origin, ""), start: r.startTime, dur: r.duration, enc: r.encodedBodySize, dec: r.decodedBodySize, xfer: r.transferSize, delivery: r.deliveryType, proto: r.nextHopProtocol, req: r.requestStart, resp: r.responseStart })));
+  // FRAME-57: the html's connection, on the page's clock.
+  const doc = showMarks ? await page.evaluate(() => { const n = performance.getEntriesByType("navigation")[0]; return { name: "(html) " + location.pathname, start: n.startTime, dur: n.responseEnd - n.startTime, enc: n.encodedBodySize, dec: n.decodedBodySize, xfer: n.transferSize, delivery: n.deliveryType, proto: n.nextHopProtocol, dns: n.domainLookupEnd - n.domainLookupStart, tcp: n.connectEnd - n.connectStart, tls: n.secureConnectionStart > 0 ? n.connectEnd - n.secureConnectionStart : 0, req: n.requestStart, resp: n.responseStart }; }) : null;
   const mark = await page.evaluate(() => window.__probe ?? {});
   // FRAME-17: the board's list, matched by its request id to its subscription; the host's own marks.
   const frames = await page.evaluate(() => window.__frames ?? { sent: [], recv: [] });
@@ -133,6 +153,7 @@ for (let i = 0; i <= runs; i++) {
   Object.assign(mark, { first_call: snap?.[0] ?? null, list_sent: ask?.[0] ?? null, list_acked: ack ?? null, list_first_data: of_list("data"), list_done: of_list("done") });
   for (const m of await page.evaluate(() => performance.getEntriesByType("mark").map((m) => [m.name, m.startTime]))) if (m[0].startsWith("plexus-ui:")) mark[m[0]] ??= m[1];
   const bytes = perCall(wire);
+  if (showMarks) perRun.push({ mark: { ...mark }, first, res, doc, net: [...net.values()], ws });
   if (i > 0) { firsts.push(first); ttfbs.push(nav.ttfb); sockets.push(opened.length ? opened[0] - t0 : null); marks.push(mark); calls.push(bytes); last = { res, nav, first }; }
   await ctx.close();
 }
@@ -186,4 +207,37 @@ for (const [k, rs] of Object.entries(by)) {
   const s = Math.min(...rs.map(r => r.start)), e = Math.max(...rs.map(r => r.start + r.dur));
   console.log(`  ${k.padEnd(12)} ${String(rs.length).padStart(3)} req  ${(enc / 1024).toFixed(0).padStart(5)} KiB wire (${(dec / 1024).toFixed(0)} KiB)  +${ms(s)} → +${ms(e)} ms`);
 }
+if (showMarks) printPerRun();
 console.log(JSON.stringify({ origin, route, runs, first_row_ms: firsts.map(x => x == null ? null : Math.round(x)), median_ms: median(firsts) == null ? null : Math.round(median(firsts)), ttfb_ms: ttfbs.map(Math.round), socket_open_ms: sockets, marks: marks.map((m) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, v == null ? null : Math.round(v)]))), socket_open_before_wasm: before, requests, calls }));
+
+// FRAME-57: every run's marks, a column per run (w the warm-up), then each run's fetches.
+function printPerRun() {
+  const cols = perRun.map((_, i) => (i === 0 ? "w" : `${i}`));
+  console.log(`\n## every run's marks (FRAME-57; w the warm-up, not in the medians)\n`);
+  console.log(`| mark | ${cols.join(" | ")} |\n| -- |${cols.map(() => " --: |").join("")}`);
+  const rows = [["socket made", (m) => m.socket_made], ["socket open", (m) => m.socket_open], ["wasm instantiated", (m) => m.wasm_instantiated], ...steps];
+  for (const [what, f] of rows) console.log(`| ${what} | ${perRun.map((r) => ms(f(r.mark) ?? null)).join(" | ")} |`);
+  console.log(`| Playwright's first titled row | ${perRun.map((r) => ms(r.first)).join(" | ")} |`);
+  perRun.forEach((r, i) => {
+    console.log(`\n### run ${cols[i]}: first titled row +${ms(r.mark.first_row)} ms\n`);
+    console.log("| file | start | dur | req→resp | xfer | body | cache | proto | prio | conn | DNS/TCP/TLS |\n| -- | --: | --: | --: | --: | --: | -- | -- | -- | -- | -- |");
+    const short = (n) => n.replace(/^\/app\/[0-9a-f]{16,}\//, "/app/…/").slice(0, 60);
+    const cdpOf = (name) => r.net.find((n) => n.url && n.url.replace(origin, "") === name);
+    const conn = (t) => (t ? `${ms(t.dns)}/${ms(t.tcp)}/${ms(t.tls)}` : "");
+    const ct = (t) => (t && t.connectStart >= 0 ? { dns: t.dnsEnd - t.dnsStart, tcp: t.connectEnd - t.connectStart, tls: t.sslStart >= 0 ? t.sslEnd - t.sslStart : 0 } : null);
+    for (const f of [r.doc, ...r.res]) {
+      const c = f === r.doc ? r.net.find((n) => n.url && n.url.startsWith(origin) && n.priority === "VeryHigh") : cdpOf(f.name);
+      const cache = f.delivery === "cache" || (f.xfer === 0 && f.dec > 0) || c?.disk ? "cache" : "net";
+      const t = f === r.doc ? { dns: f.dns, tcp: f.tcp, tls: f.tls } : ct(c?.timing);
+      console.log(`| ${short(f.name)} | ${ms(f.start)} | ${ms(f.dur)} | ${f.req > 0 && f.resp > 0 ? ms(f.resp - f.req) : "—"} | ${f.xfer ?? "—"} | ${f.enc ?? "—"} | ${cache} | ${f.proto || c?.proto || "—"} | ${c?.priority ?? "—"} | ${c?.conn ?? "—"}${c?.reused ? " (reused)" : ""} | ${conn(t)} |`);
+    }
+    // The socket: CDP's monotonic clock moved onto the page's by its `made` mark.
+    const w = r.ws, made = r.mark.socket_made;
+    const wsNet = w.id ? r.net.find((n) => n.url && n.url.startsWith("ws") || false) : null;
+    if (w.sent != null && made != null) {
+      const created = wsNet?.sent ?? w.sent, off = made - created * 1000;
+      const t = ct(wsNet?.timing);
+      console.log(`| (socket) handshake sent +${ms(w.sent * 1000 + off)}, answered +${ms(w.answered == null ? null : w.answered * 1000 + off)} (${w.status ?? "—"}), open +${ms(r.mark.socket_open)} | ${ms(made)} | ${ms(r.mark.socket_open == null ? null : r.mark.socket_open - made)} | ${w.answered != null ? ms((w.answered - w.sent) * 1000) : "—"} | | | | | | ${wsNet?.conn ?? "—"} | ${conn(t)} |`);
+    }
+  });
+}
