@@ -9,5 +9,12 @@
   "#/new": "ticket-create",
   "#/new/:parent": "ticket-create",
   "#/bulk": "bulk-bar",
-  "#/bulk/:ids": "bulk-bar"
+  "#/bulk/:ids": "bulk-bar",
+  "#/ready": "work-ready",
+  "#/ready/:filter": "work-ready",
+  "#/waves": "work-waves",
+  "#/waves/in/:epics": "work-waves",
+  "#/waves/:id": "work-waves",
+  "#/waves/to/:to": "work-waves",
+  "#/blockers/:id": "work-blockers"
 }
