@@ -740,3 +740,23 @@ board's 0.189 → 0.149 s, 5.6 → 4.1 MiB, 6.9 → 7.6 ms (within its IQR); JS 
 **The server probes at 10⁶** (`filter-probe.mjs after PORT 5`, one seeded database, before's binary
 then after's): the floor `list { summary, limit 200 }` 2.5 → 1.8 ms; the nine filters' slowest
 read 0.9–5.3 ms before, 0.9–5.5 ms after — within noise, every head page 200 rows.
+
+### After deploy 25 on app-test (release 20261030T044057Z-bd75f3a: PERF-15 and FRAME-26; 2026-10-30 04:42Z)
+
+`node perf/live-probe.mjs`, the bytes column (CDP `webSocketFrameReceived`), the rhx board, before (release 864a853,
+04:39Z, load ~2.5) and after (04:42Z, the machine at load 9–12 from four builders compiling — the per-call bytes and
+frames are load-free; the first-row medians are not):
+
+| call | before frames / bytes | after frames / bytes |
+|---|---|---|
+| `tickets.list` (200 summary rows, `fields: id,title,kind,status`) | 203 / 149,416 | 4 / 40,682 |
+| `tickets.nav.groups` | 85 / 46,826 | 3 / 27,500 |
+| `tickets.nav.extents` | 85 / 25,598 | 3 / 6,190 |
+| `tickets.nav.counts` | 85 / 25,010 | 3 / 5,684 |
+| the nine | **465 / 247,624** | **20 / 80,829** |
+
+The list's stream (first data → done) 66–91 ms → 3–5 ms; `tickets.list` sent − socket open 35 → 15 ms (the acceptance's
+≤ 20); the first titled row 336–369 → 328–356 ms under the heavier load. The Svelte board's after could not be read
+(the machine at load 12–44 during its runs: 0.5–3 s) — to be re-measured in a quiet window; its modules were 5 requests /
+85 KiB brotli before and 6 / 33 KiB after (the runtime once, 21 KiB, and four modules of ~2 KiB — FRAME-26). The session
+minted before the deploy stood after it (FRAME-21).
