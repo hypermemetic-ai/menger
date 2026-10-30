@@ -256,8 +256,13 @@ child behind its gate, so a page's one socket reaches it
 `examples/shop`). menger links the library and builds no binary of that
 name (`tests/apart.rs`). The tool assumes no service: menger's calls to it
 name `--service menger` (`deploy/pipeline`'s push), and a contract asked of
-a service is its `ui.contract` — menger's, one service named, is
-`tickets.schema`'s hash, as the pipeline stamps it.
+a service is its `ui.contract` — the hash over every service the
+bundle's `uses` name (one service: its schema's own hash). The pipeline
+stamps each bundle so (SURFACE-11): it reads the methods from the
+manifest of a first, unstamped build, asks the menger it just built `ui
+contract --uses` them, and builds again with `--contract` — the app over
+`tickets` and every other service its components name, the studio over
+`ui` — and its log names the services each contract covers.
 
 One process registers these on the `menger` service (`src/builder.rs`), all
 behind plexus-core's gate; menger's own are declared on the frame
@@ -712,10 +717,12 @@ against a tenant that is not menger (`../plexus-ui/service/tests`); menger's
   every component's `uses` is looked up in the service it names through the
   seam (an unmounted service or a missing method: `unknown_method`, naming
   the `service`); the manifest's `contract` is compared with the hash of the
-  services named — one service, its schema's own hash (menger's bundles name
-  `tickets` alone: `tickets.schema`'s, which `plexus-ui build
-  --contract-from URL` stamps, or `--contract HASH` as given — UI-12: the
-  pipeline's build reads it from the binary it built and passes it so;
+  services named — one service, its schema's own hash, several a hash over
+  each (a bundle naming `tickets` alone: `tickets.schema`'s; one naming
+  `epics` or `ui` beside it, another), which `plexus-ui build
+  --contract-from URL` stamps, or `--contract HASH` as given — UI-12,
+  SURFACE-11: the pipeline's build asks the binary it built `ui contract
+  --uses` the methods the bundle's manifest names and passes the answer so;
   `unknown`, the build's without either flag and never accepted as
   `--contract`'s value, answers `contract_matches: null`, as a manifest
   naming no service does; UI-11). The row and the live pointer move together. The same

@@ -1,1 +1,9 @@
-{ "#/": "board-layout", "#/f/:filter": "board-layout", "#/ticket/:id": "ticket-page", "#/hello": "page-shell", "#/sv/": "board-frame", "#/sv/f/:filter": "board-frame", "#/sv/ticket/:id": "ticket-page-sv" }
+{
+  "#/": "board-layout",
+  "#/f/:filter": "board-layout",
+  "#/ticket/:id": "ticket-page",
+  "#/hello": "page-shell",
+  "#/sv/": "board-frame",
+  "#/sv/f/:filter": "board-frame",
+  "#/sv/ticket/:id": "ticket-page-sv"
+}
