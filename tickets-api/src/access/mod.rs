@@ -135,7 +135,9 @@ pub trait SessionMint: Send + Sync {
     /// Starts a session for `ctx`, lasting `ttl_secs`: the token that opens
     /// it and when it ends. The token is kept only hashed; `ctx` is stamped
     /// with its session key ([`SessionCheck::key`]) and `expires_at`.
-    fn mint(&self, ctx: AuthContext, ttl_secs: i64) -> (String, i64);
+    /// FRAME-21: `Err` when the session could not be kept (its journal
+    /// refused the row) — no token is handed out.
+    fn mint(&self, ctx: AuthContext, ttl_secs: i64) -> Result<(String, i64), String>;
     /// Ends the session whose session key is `key`; whether it stood.
     fn end_key(&self, key: &str) -> bool;
 }
@@ -861,7 +863,7 @@ impl Access {
         // A session id that says what it is (the session's key rides in the
         // metadata): an empty one would read as no one.
         let minted = AuthContext::new(ctx.user_id.clone(), "mgs".into(), ctx.roles.clone(), serde_json::Value::Object(meta));
-        let (token, expires_at) = minter.mint(minted, ttl as i64);
+        let (token, expires_at) = minter.mint(minted, ttl as i64)?;
         Ok(Minted { token, principal, agent, name, expires_at, scope: shown })
     }
 
@@ -885,7 +887,7 @@ impl Access {
         let agent = ctx.get_metadata_string(AGENT_KEY);
         let name = ctx.get_metadata_string("name");
         let minted = AuthContext::new(ctx.user_id.clone(), "mgs".into(), ctx.roles.clone(), serde_json::Value::Object(meta));
-        let (token, expires_at) = minter.mint(minted, ttl_secs.clamp(1, MINT_TTL_MAX_SECS) as i64);
+        let (token, expires_at) = minter.mint(minted, ttl_secs.clamp(1, MINT_TTL_MAX_SECS) as i64)?;
         Ok(Minted { token, principal, agent, name, expires_at, scope: Vec::new() })
     }
 

@@ -212,9 +212,9 @@ async fn an_operator_admin_is_admin_everywhere() {
 #[derive(Default)]
 struct Mint(Mutex<Vec<AuthContext>>);
 impl SessionMint for Mint {
-    fn mint(&self, ctx: AuthContext, ttl: i64) -> (String, i64) {
+    fn mint(&self, ctx: AuthContext, ttl: i64) -> Result<(String, i64), String> {
         self.0.lock().unwrap().push(ctx);
-        ("mgs_t".into(), now() + ttl)
+        Ok(("mgs_t".into(), now() + ttl))
     }
     fn end_key(&self, _: &str) -> bool {
         true

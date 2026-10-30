@@ -123,7 +123,8 @@ impl LocalServer {
             Some(p) => p.parse::<menger_tickets_api::vocab::Principal>().map_err(|e| anyhow::anyhow!("owner: {e}"))?.as_str().to_string(),
             None => format!("key:{}", hex(&rand::random::<[u8; 32]>())),
         };
-        let sessions = Arc::new(crate::sessions::Sessions::new(SESSION_SECS, &crate::login_names()));
+        // FRAME-21: kept beside the database, as the binary keeps them.
+        let sessions = Arc::new(crate::sessions::Sessions::open(crate::sessions_file(&cfg.db_path), SESSION_SECS, &crate::login_names())?);
         let table = crate::session_table(&sessions);
         let access = Access::with_login(table.clone(), vec![owner.clone()]).minting(table);
         let hub = crate::build_rpc(&cfg.db_path, access.clone()).await?;
@@ -150,7 +151,7 @@ impl LocalServer {
     /// ACCESS-24: a session for the owner, lasting `ttl_secs` (1 s to 24 h)
     /// — what the host's connections carry, as `Authorization: Bearer
     /// <token>` or the `access_token` cookie. Mint another before it ends;
-    /// a restart ends them all.
+    /// it outlives a restart on the same database (FRAME-21).
     pub fn owner_token(&self, ttl_secs: u64) -> anyhow::Result<String> {
         let meta = serde_json::json!({ "principal": self.owner, "agent": "local", "provider": "local", "name": "owner" });
         let ctx = AuthContext::new(self.owner.clone(), "local".into(), vec![], meta);
