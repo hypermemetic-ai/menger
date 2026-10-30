@@ -98,7 +98,16 @@ whichever the live pointer names at `/app/`:
   stored and made live in one transaction. `ui rollback --to <hash>`,
   `ui versions`, `ui preview [--version]`, `ui watch`.
 - **Sections**: `ui slots list | set | clear` — what component fills each
-  slot of each layout, over the live manifest's defaults.
+  slot of each layout, over the live manifest's defaults. **A page composed
+  from bundles** (FRAME-15): a bundle pushed with `--no-live` (`ui.push
+  { live: false }`) is kept and made live by nothing — a bundle of
+  components alone, with no `index.html`, can only be kept that way; a
+  section is set to one of its components by hash (`--version`) or by
+  the bundle's name (`--follow NAME`, the `name` the tool's `build --name`
+  writes in the manifest), and a follower moves with every push carrying
+  that name, said as `slot_changed`; a set by version, or a clear, ends
+  the following. `../plexus-ui/CONTRACT.md` "A page composed from bundles"
+  has the rules.
 - **Its flags**: `--ui-db-path` (`MENGER_UI_DB_PATH`; default `ui.db` beside
   the database), `--ui-signer` (`MENGER_UI_SIGNERS`, `;`-separated 64-hex
   public keys; none: every push refused `no_signer`), `--ui-compiler`
@@ -149,7 +158,7 @@ framework's contract's, `../plexus-ui/CONTRACT.md` (it was UI-4): a `<script>` o
 — and a template of `{expr}`, `{#if}`, `{#each … as x (key)}`,
 `on:event={handler}`, another component as `<name prop={…}/>`, and in a
 layout `<slot name="…"/>`. `ui/src/*.rhx` are the worked examples; a
-`.svelte` is real Svelte (`svelte/1`, FRAME-13) and refused.
+`.svelte` is real Svelte (`svelte/1`, FRAME-13): `ui/src/*-sv.svelte` are the board's real-Svelte twins at `#/sv/` (FRAME-14, README "The bundle in the repository").
 
 **1. Write it** — `ui/src/ticket-kids.rhx`, a ticket's children, live (a
 new child appears, a status moves, a delete goes):

@@ -1,0 +1,18 @@
+<script>
+  // FRAME-14: the frame the Svelte board is drawn in — an rhx layout because
+  // a section is the host's and only an rhx template marks one. It places
+  // four sections and nothing else (tests/apart.rs holds it to that): `top`
+  // the Svelte top bar (board-layout-sv), then the Svelte nav, board and
+  // palette (ui/slots.json). The route gives the filter (`#/sv/` none,
+  // `#/sv/f/:filter` the text); every section gets it.
+  prop("filter");
+</script>
+
+<div class="board-layout" data-board-layout data-filter={filter}>
+  <slot name="top" filter={filter}/>
+  <div class="board-body">
+    <slot name="nav" filter={filter}/>
+    <slot name="main" filter={filter}/>
+  </div>
+  <slot name="palette"/>
+</div>
