@@ -135,7 +135,7 @@ for (let i = 0; i <= runs; i++) {
   cdp.on("Network.requestWillBeSentExtraInfo", ({ requestId, connectTiming }) => { if (connectTiming) at(requestId).connectTiming = connectTiming; });
   const t0 = Date.now();
   await page.goto(origin + route, { waitUntil: "commit" });
-  const ok = await page.waitForSelector(".board-row[data-id] [data-field=title]", { timeout: 30000 }).then(() => true).catch(() => false);
+  const ok = await page.waitForFunction(() => [...document.querySelectorAll(".board-row[data-id] [data-field=title]")].some((el) => el.textContent.trim()), null, { polling: "raf", timeout: 30000 }).then(() => true).catch(() => false); // FRAME-57: every frame, not waitForSelector's 0/20/50/100/100/500 ms backoff
   const first = ok ? await page.evaluate(() => performance.now()) : null;
   const nav = await page.evaluate(() => { const n = performance.getEntriesByType("navigation")[0]; return { ttfb: n.responseStart, proto: n.nextHopProtocol }; });
   const res = await page.evaluate(() => performance.getEntriesByType("resource").map(r => ({ name: r.name.replace(location.origin, ""), start: r.startTime, dur: r.duration, enc: r.encodedBodySize, dec: r.decodedBodySize, xfer: r.transferSize, delivery: r.deliveryType, proto: r.nextHopProtocol, req: r.requestStart, resp: r.responseStart })));

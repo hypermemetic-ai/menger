@@ -66,7 +66,7 @@ node perf/live-probe.mjs --token-file FILE --runs 5   # app-test; FILE holds a s
 
 Cold loads of a deployed menger signed in by cookie. Its output is a
 table, not a verdict — no test runs it: the first titled row's median
-(Playwright's, which reads ~30 ms late) and the boot's marks, then
+(Playwright's, polled every frame since FRAME-57 — waitForSelector's backoff, 0/20/50/100/100/500 ms, turned a row past ~270 ms after the wait began into one 500 ms later — and ~60 ms behind the page's own stamp) and the boot's marks, then
 FRAME-17's steps after the boot on the page's clock, each with its median
 and every run — the boot done, the first call and `tickets.list` sent,
 `tickets.list` answered (first data, `done`), the nav drawn, the first
