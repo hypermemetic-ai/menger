@@ -64,6 +64,7 @@ const PAGE = 200; // the board's page
 const HELD_MAX = 2_500; // rows held after a scroll
 const CREATE_MS = 100; // a created ticket's frame → its row and count
 const QUIET_MS = 80; // the palette's pause
+const KEY_MS = 20; // FRAME-25: one key per 20 ms inside a burst, on the page's clock
 const QUIET_CEIL_MS = 300; // … and no longer than this
 const SCROLL_ROW = Math.min(50_000, SEED); // the row the scroll goes to (1-based)
 const ROW_PITCH = 28; // board-rows.rhx's `data-row-height`: both boards scroll at one pitch
@@ -84,6 +85,7 @@ const BOARDS = {
     layout: "board-frame", top: "board-layout-sv", nav: "nav-tree-sv", main: "board-rows-sv", palette: "jump-palette-sv", page: "ticket-page-sv",
     sections: [["top", "board-layout-sv"], ["nav", "nav-tree-sv"], ["main", "board-rows-sv"], ["palette", "jump-palette-sv"]],
     module: "board-rows-sv.js", epics: ["AAAC", "AAAD"],
+    siblings: ["nav-flat-sv", "nav-children-sv", "ticket-chip-sv"], // FRAME-25: imported by their parents, components in their own right
   },
 };
 const BOARD_NAMES = opt("--board", "rhx,sv").split(",");
@@ -135,6 +137,45 @@ function rowsOf(extents) {
 // ── the tests ────────────────────────────────────────────────────────────
 const results = [];
 const pages = [];
+/** FRAME-25: bursts of keys typed inside the page, so the page's clock
+ *  times them, not Node's: each burst's characters appended to the field
+ *  `sel` one per `KEY_MS` from an in-page timer (its value set, an `input`
+ *  dispatched), `gap` ms between bursts; each key's time and the field's
+ *  value after it kept in `__pages.keys` (and `__pages.lastKey`). Answers
+ *  the bursts as the clock made them — keys split wherever a gap reached
+ *  `QUIET_MS` — each `{ value, last }` (the query a correct debounce asks,
+ *  and its last key's time), and whether they are the bursts asked for: a
+ *  key late by a loaded machine breaks the test's precondition, not the
+ *  board. */
+async function typeBursts(page, sel, bursts, gap) {
+  const keys = await page.evaluate(({ sel, bursts, gap, keyMs }) => new Promise((done) => {
+    const P = window.__pages;
+    const el = document.querySelector(sel);
+    P.keys = [];
+    const plan = [];
+    for (const [i, b] of bursts.entries()) for (const [j, ch] of [...b].entries()) plan.push({ ch, wait: j === 0 && i > 0 ? gap : keyMs });
+    const step = (k) => {
+      if (k === plan.length) return done(P.keys);
+      setTimeout(() => {
+        el.value += plan[k].ch;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        P.lastKey = performance.now();
+        P.keys.push({ t: P.lastKey, value: el.value });
+        step(k + 1);
+      }, k === 0 ? 0 : plan[k].wait);
+    };
+    step(0);
+  }), { sel, bursts, gap, keyMs: KEY_MS });
+  const made = [];
+  for (const [i, k] of keys.entries()) {
+    if (i === 0 || k.t - keys[i - 1].t >= QUIET_MS) made.push({ value: k.value, last: k.t });
+    else Object.assign(made.at(-1), { value: k.value, last: k.t });
+  }
+  let typed = "";
+  const asked = bursts.map((b) => (typed += b));
+  return { made, kept: JSON.stringify(made.map((m) => m.value)) === JSON.stringify(asked), keys };
+}
+
 async function test(name, body) {
   if (ONLY && !ONLY.includes(name)) return;
   const t0 = Date.now();
@@ -249,6 +290,20 @@ async function main() {
           }
           await page.evaluate((r) => (location.hash = r), `${B.ticketRoute}NONE-1`);
           await eventually(`${B.ticketRoute}:id draws ${B.page}`, async () => (await page.locator(B.page).count()) === 1);
+          // FRAME-25: the Svelte board's siblings are components in their own
+          // right — svelte/1 entries of the live manifest, each its own module
+          // served — so a right-click can put one in a section.
+          for (const name of B.siblings ?? []) {
+            const entry = await page.evaluate(async (name) => {
+              const at = performance.getEntriesByType("resource").map((e) => new URL(e.name).pathname).find((p) => /^\/app\/[^/]+\/manifest\.json$/.test(p));
+              if (!at) return { error: "no manifest.json fetched" };
+              const m = await (await fetch(at)).json();
+              const e = m.components?.[name];
+              const js = e ? await fetch(at.replace(/manifest\.json$/, `components/${name}.js`)) : null;
+              return { profile: e?.profile, module: e?.module ?? null, served: js?.ok ?? false };
+            }, name);
+            assert(entry.profile === "svelte/1" && /^[0-9a-f]{64}$/.test(entry.module ?? "") && entry.served, `${name} is a svelte/1 component of the live manifest with its own module, served: ${JSON.stringify(entry)}`);
+          }
         } catch (e) {
           B.down = e.message.split("\n")[0];
           throw e;
@@ -590,11 +645,22 @@ async function main() {
         await eventually("`/` focuses the palette's field", async () => input.evaluate((e) => e === document.activeElement), 2_000);
 
         // Typed at once: one find, after the pause and within its ceiling.
+        // FRAME-25: typed in the page; a burst the clock split is typed again,
+        // once, after the palette let its collections go.
+        const inputSel = `[data-layout=${B.layout}][data-slot=palette] input[data-palette-input]`;
         let asked = (await sentCalls(page)).length;
-        await page.keyboard.type(query, { delay: 20 });
+        let typed = await typeBursts(page, inputSel, [query], 0);
+        if (!typed.kept) {
+          console.log(`     the page's clock split ${query} (${JSON.stringify(typed.made.map((m) => m.value))}): typed again`);
+          await input.fill("");
+          await sleep(6_000);
+          asked = (await sentCalls(page)).length;
+          typed = await typeBursts(page, inputSel, [query], 0);
+          assert(typed.kept, `the page typed ${query} as one burst twice running (${JSON.stringify(typed.keys.map((k) => Math.round(k.t)))}): the machine is too loaded for this case`);
+        }
         await eventually("the find hits are drawn", async () => (await palette(page, B).locator("[data-palette-hit]").count()) > 0, 3_000);
         await sleep(500);
-        const lastKey = await page.evaluate(() => window.__pages.lastKey);
+        const lastKey = typed.made.at(-1).last;
         let calls = (await sentCalls(page)).slice(asked);
         const finds = calls.filter((c) => c.method === "tickets.find");
         assert(finds.length === 1, `one find (${finds.length}: ${JSON.stringify(finds.map((f) => f.params.query))})`);
@@ -613,12 +679,21 @@ async function main() {
         await sleep(400);
         asked = (await sentCalls(page)).length;
         await input.focus();
-        await page.keyboard.type("zap", { delay: 20 });
-        await sleep(150);
-        await page.keyboard.type("-34", { delay: 20 });
+        typed = await typeBursts(page, inputSel, ["zap", "-34"], 150);
+        if (!typed.kept) {
+          console.log(`     the page's clock made ${JSON.stringify(typed.made.map((m) => m.value))} of zap, -34: typed again`);
+          await input.fill("");
+          await sleep(6_000);
+          asked = (await sentCalls(page)).length;
+          await input.focus();
+          typed = await typeBursts(page, inputSel, ["zap", "-34"], 150);
+          assert(typed.kept, `the page typed zap, -34 as two bursts twice running (${JSON.stringify(typed.keys.map((k) => Math.round(k.t)))}): the machine is too loaded for this case`);
+        }
         await sleep(800);
         calls = (await sentCalls(page)).slice(asked).filter((c) => c.method === "tickets.find");
         assert(calls.at(-1)?.params.query === "zap-34", `the last find is zap-34: ${JSON.stringify(calls.map((c) => c.params.query))}`);
+        // FRAME-25: one find per burst of keys typed within the pause — `zap`, then `zap-34`, nothing between.
+        assert(JSON.stringify(calls.map((c) => c.params.query)) === JSON.stringify(typed.made.map((m) => m.value)), `one find per burst (${JSON.stringify(typed.made.map((m) => m.value))}): ${JSON.stringify(calls.map((c) => c.params.query))}`);
         const drawn = await attrs(palette(page, B).locator("[data-palette-hit]"), "data-palette-hit");
         assert(JSON.stringify(drawn) === JSON.stringify(zap34.slice(0, drawn.length)) && drawn.length > 0, `only zap-34's hits are drawn: ${JSON.stringify(drawn)} vs ${JSON.stringify(zap34)}`);
 

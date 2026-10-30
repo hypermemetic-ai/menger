@@ -32,6 +32,8 @@
 //   marks                      FRAME-17: `tickets.list` sent (INIT's frames) and every mark the host
 //                              sets on the page's clock (`plexus-ui:*`, CONTRACT.md's host chapter),
 //                              each one's median, on a line of their own and in the JSON
+//   modules fetched            FRAME-25: the `components/<name>.js` files the load requested
+//                              (FRAME-17: only the route's), their median count and names
 //
 // Budgets (UI-8's `first_rows_at_a_million`): first rows ≤ 0.3 s, wasm
 // memory ≤ 10 MB. Prints one row the way perf/notes.md records them, and
@@ -97,6 +99,12 @@ async function main() {
       await context.addInitScript(INIT);
       const page = await context.newPage();
       const cdp = await context.newCDPSession(page);
+      // FRAME-25: the module files the load fetched (components/<name>.js).
+      const modules = new Set();
+      page.on("request", (r) => {
+        const m = new URL(r.url()).pathname.match(/\/components\/([^/]+)\.js$/);
+        if (m) modules.add(m[1]);
+      });
       await page.goto(`${server.origin}${PATH}`);
       const deadline = Date.now() + RUN_TIMEOUT_MS;
       let got = null;
@@ -136,7 +144,7 @@ async function main() {
         }
       }
       got ??= { firstRow: null, held: 0, heap: await heap(), created: null, memory: await page.evaluate(() => window.__pages.memory?.buffer?.byteLength ?? null) };
-      if (i > 0) runs.push({ ...got, marks });
+      if (i > 0) runs.push({ ...got, marks, modules: [...modules].sort() });
       await context.close();
     }
   } finally {
@@ -151,6 +159,7 @@ async function main() {
   const held = median(painted.map((r) => r.held));
   const heap = median(runs.filter((r) => r.heap != null).map((r) => r.heap));
   const createdMs = median(runs.filter((r) => r.created != null).map((r) => r.created));
+  const moduleCount = median(runs.map((r) => r.modules.length));
   const each = runs.map((r) => (r.firstRow == null ? "never" : `${r.firstRow.toFixed(0)}`)).join(", ");
   const ok = painted.length === runs.length && first <= FIRST_ROWS_MS && memory <= MEMORY_BYTES;
   console.log(
@@ -159,7 +168,8 @@ async function main() {
   const names = [...new Set(runs.flatMap((r) => Object.keys(r.marks ?? {})))];
   const marks = Object.fromEntries(names.map((n) => [n, median(runs.map((r) => r.marks?.[n]).filter((x) => x != null))]).sort((a, b) => a[1] - b[1]));
   console.log(`  marks (median, ms): ${Object.entries(marks).map(([n, t]) => `${n} +${t.toFixed(0)}`).join(" · ") || "none"}${names.some((n) => n.startsWith("plexus-ui:")) ? "" : " (the engine sets no plexus-ui:* marks)"}`);
-  console.log(JSON.stringify({ seed: SEED, path: PATH, runs, first_rows_ms: first, wasm_bytes: memory, rows_held: held, js_heap_bytes: heap, created_row_ms: createdMs, marks, ok }));
+  console.log(`  modules fetched (median ${moduleCount}): ${[...new Set(runs.flatMap((r) => r.modules))].join(", ") || "none"}`);
+  console.log(JSON.stringify({ seed: SEED, path: PATH, runs, first_rows_ms: first, wasm_bytes: memory, rows_held: held, js_heap_bytes: heap, created_row_ms: createdMs, modules_fetched: moduleCount, marks, ok }));
   process.exit(ok ? 0 : 1);
 }
 
