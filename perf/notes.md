@@ -701,3 +701,42 @@ New row objects and row renders per change are 1 each (the framework's smoke,
 `a_created_row_is_one_new_object`: 87 bytes, A-201 alone rendered; a `status_changed` 84 bytes,
 A-7 alone). The JS heap over 100 changes after a GC: the first hundred +250–300 KiB on both
 before and after (warming, once), the second +45 KiB before, +23–60 KiB after; rhx +6–10 KiB.
+
+## A page is one frame — the board's nine answers before and after (PERF-15, 2026-10-30)
+
+A throwaway seeded like app-test (`--seed-synthetic 1000`, 16 shortcodes, then 67 more of one scope
+each: 1,067 tickets in 83 shortcodes, synthetic titles shorter than app-test's), the checkout's
+bundle pushed, then `perf/live-probe.mjs --origin http://127.0.0.1:SHELL --runs 5` (its bytes
+column: CDP's `webSocketFrameReceived`, each call's ack and items), both boards, the same hour;
+before is v2 cb8966e with plexus-ui main, after PERF-15 (52871bf) with plexus-ui PERF-15. The two
+boards answer byte for byte the same; the rhx board's:
+
+| call | before frames | before bytes | after frames | after bytes |
+|---|---|---|---|---|
+| `tickets.list { summary, limit: 200 }` (after: `fields: id,title,kind,status`) | 203 | 126,333 | 4 | 24,366 |
+| `tickets.nav.groups` | 85 | 39,914 | 3 | 20,588 |
+| `tickets.nav.extents` | 85 | 25,102 | 3 | 5,694 |
+| `tickets.nav.counts` | 85 | 24,604 | 3 | 5,278 |
+| `ui.watch` · `ui.slots.list` · `tickets.watch` ×3 | 7 | 776 | 7 | 776 |
+| **the nine** | **465** | **216,729** | **20** | **56,702** |
+
+(a call's frames count its ack: a page is the ack, one `rows`, the `page`, `done`.) The list's rows:
+
+| gap (median of 5, ms) | rhx before | rhx after | Svelte before | Svelte after |
+|---|---|---|---|---|
+| the stream: first data → done | 115 | 2 | 21 | 2 |
+| `tickets.list` sent → acknowledged | 39 | 34 | 48 | 27 |
+| the first titled row | 311 | 170 | 266 | 159 |
+
+(load 5–10 through both: another builder's gates.) On app-test's own frames (phase 0's projection,
+976 tickets, titles ~135 B) the nine go from 247,540 B / 465 frames to ~81 KB / 20 frames; the
+60 KB of the first acceptance needs compression (PERF-19).
+
+**The local probe at 10⁶** (`pages-probe.mjs --seed 1000000`, the same hour, before → after): the
+rhx board's first rows 0.158 → 0.113 s, wasm 9.4 → 7.8 MiB, a created row 9.9 → 4.6 ms; the Svelte
+board's 0.189 → 0.149 s, 5.6 → 4.1 MiB, 6.9 → 7.6 ms (within its IQR); JS heap unchanged (1.4,
+3.2–3.3 MiB). Thinner rows are less to parse and to keep.
+
+**The server probes at 10⁶** (`filter-probe.mjs after PORT 5`, one seeded database, before's binary
+then after's): the floor `list { summary, limit 200 }` 2.5 → 1.8 ms; the nine filters' slowest
+read 0.9–5.3 ms before, 0.9–5.5 ms after — within noise, every head page 200 rows.
