@@ -643,7 +643,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
                 }
                 let validator = wired.gate.clone().map(|g| g as Arc<dyn plexus_core::plexus::SessionValidator>);
                 let bridge = plexus_transport::plexus_transport_mcp::McpBridge::new(plexus_transport::ServiceUpstream::new(service.clone(), validator), mcp);
-                tracing::info!("MCP:       {public}/mcp — the login's callers: a session or a key proof as the Bearer");
+                tracing::info!("MCP:       {public}/mcp — the login's callers: a session or a key proof in the Authorization header");
                 plexus_transport::plexus_transport_mcp::router(bridge)
             }),
         };
