@@ -25,7 +25,7 @@ npm run smoke                     # the concurrency ladder's smoke — must pass
 | `reads-probe.mjs` | FILTER-15: `find`, `member`, `ready_set` under a filter | yours |
 | `tree-probe.mjs` | FILTER-13: the kept tree's reads | yours |
 | `ready-probe.mjs` | SCALE-32: ready-set and status pages; the fan-out of one blocker (`fan-out.py`'s store) | yours |
-| `live-probe.mjs` | FRAME-16: the first row on the wire — cold loads of a deployed menger, the waterfall by kind; FRAME-17: the steps after the boot and the host's marks, as a table | a deployment (app-test), a session token file |
+| `live-probe.mjs` | FRAME-16: the first row on the wire — cold loads of a deployed menger, the waterfall by kind; FRAME-17: the steps after the boot and the host's marks, as a table; FRAME-57: `--marks`, every run's marks and fetches | a deployment (app-test), a session token file |
 | `filter-identical.mjs` | FILTER-4: unfiltered pages byte for byte what another server answers | yours (two) |
 
 `fan-out.py` writes the store `ready-probe.mjs fan-out` reads; `menger_ws.py`
@@ -88,6 +88,23 @@ traffic until the page closes. For the stream row on a local throwaway, run
 `live-probe.mjs --origin http://127.0.0.1:SHELL` against it
 (`pages-probe.mjs` has no first-data → done mark). The hand gate is three runs of five, the release before
 and after, in the same hour.
+
+```sh
+node perf/live-probe.mjs --token-file FILE --runs 9 --marks   # FRAME-57: every run's marks and fetches
+```
+
+`--marks` (FRAME-57) adds, after the rest and before the JSON line, every
+run's marks as one table — the same rows as the median table (the socket made
+and open, the wasm instantiated, the boot done, the first `live` snapshot,
+`tickets.list` sent, acknowledged, answered and done, the nav drawn, the
+first titled row, each `plexus-ui:*` mark) and Playwright's first titled row
+under them, a column per run, the warm-up's (`w`) first — so a slow run's
+waterfall reads beside a fast one's. Then, per run, every fetched file: its
+start, duration, request → response, transfer and body size, whether it came
+from cache, its protocol, Chromium's priority and connection id (CDP's,
+`(reused)` on a connection already open), the html's DNS/TCP/TLS, and the
+socket's handshake (sent, answered with its status, the `open` event).
+Without the flag the output is unchanged.
 
 ## The concurrency ladder — `concurrency.mjs` (PERF-12)
 
