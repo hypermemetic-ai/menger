@@ -1,0 +1,15 @@
+<script>
+  // STUDIO-12: a component alone, for its browser cases — an rhx page like
+  // every route's, placing one svelte/1 component by its mark and nothing
+  // else (no top: the app's pages carry it). #/bulk and #/bulk/:ids: bulk-bar, the selection from the route.
+  prop("ids");
+</script>
+
+<section class="page page-bulk">
+  <bulk-bar ids={ids}/>
+</section>
+
+<style>
+  :scope { display: block; }
+  .page-bulk { color: var(--ink); background: var(--bg); font-family: var(--font-text); font-size: var(--text-size); }
+</style>

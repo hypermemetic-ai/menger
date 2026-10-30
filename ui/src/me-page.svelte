@@ -10,7 +10,8 @@
      none of refused in place, the methods asked before kept as "recent" —
      and the way out: the form, posted to the shell's door, /logout — the
      page runs on the shell's cookie, and the door ends it (`session.logout`
-     is the door's, not reached from here). -->
+     is the door's, not reached from here).
+     STUDIO-12: the page's title is page-me's (rhx). -->
 <script module>
   export const uses = ["session.whoami", "session.providers", "auth.whoami", "auth.providers", "auth.requires", "members.mine"];
 </script>
@@ -63,7 +64,6 @@
 
 <section class="me-page" data-surface="me-page">
   <div class="page-head">
-    <h1>me</h1>
     <span class="sub">your session, your grants, who may what</span>
     {#if $who.status !== "live"}<span class="state" data-loading={$who.status}>{$who.status}</span>{/if}
   </div>
@@ -155,7 +155,6 @@
 <style>
   .me-page { max-width: 1180px; margin: 0 auto; padding: 18px 24px 40px; color: var(--ink); font-family: var(--font-text); font-size: var(--text-size); }
   .page-head { display: flex; align-items: baseline; gap: 10px; margin: 0 0 14px; }
-  .page-head h1 { margin: 0; font-family: var(--font-display); font-size: 20px; font-weight: var(--weight-strong); }
   .sub { color: var(--muted); font-size: 12px; }
   .state { margin-left: auto; font-size: 11px; color: var(--muted); }
   .me { display: grid; grid-template-columns: 380px minmax(0, 1fr); gap: 20px; align-items: start; }

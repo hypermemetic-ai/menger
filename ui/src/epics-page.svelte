@@ -7,7 +7,8 @@
      at once and the answer puts it right — `current { epic }` confirms,
      `not_found { name }` or a refusal is said beside the action and the top
      goes back. `get` is one card. A switch is said on the bus as
-     `epic.switched { epic }` for the app's top. -->
+     `epic.switched { epic }` for the app's top.
+     STUDIO-12: the page's title is page-epics's (rhx). -->
 <script module>
   export const uses = ["epics.list", "epics.watch", "epics.current", "epics.switch", "epics.dismiss", "epics.get"];
 </script>
@@ -147,7 +148,6 @@
 
 <section class="epics-page" data-surface="epics-page">
   <div class="page-head">
-    <h1>epics</h1>
     <span class="sub">you are in <strong data-field="current">{cur}</strong></span>
     {#if $current.status !== "live"}<span class="state" data-loading={$current.status}>{$current.status}</span>{/if}
   </div>
@@ -215,7 +215,6 @@
 <style>
   .epics-page { max-width: 1180px; margin: 0 auto; padding: 18px 24px 40px; color: var(--ink); font-family: var(--font-text); font-size: var(--text-size); }
   .page-head { display: flex; align-items: baseline; gap: 10px; margin: 0 0 14px; }
-  .page-head h1 { margin: 0; font-family: var(--font-display); font-size: 20px; font-weight: var(--weight-strong); }
   .sub { color: var(--muted); font-size: 12px; }
   .sub strong { color: var(--accent); font-weight: var(--weight-medium); }
   .state { margin-left: auto; font-size: 11px; color: var(--muted); }

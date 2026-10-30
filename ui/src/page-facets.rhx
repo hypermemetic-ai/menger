@@ -1,0 +1,15 @@
+<script>
+  // STUDIO-12: a component alone, for its browser cases — an rhx page like
+  // every route's, placing one svelte/1 component by its mark and nothing
+  // else (no top: the app's pages carry it). #/facets and #/facets/:filter: nav-facets.
+  prop("filter");
+</script>
+
+<section class="page page-facets">
+  <nav-facets filter={filter}/>
+</section>
+
+<style>
+  :scope { display: block; }
+  .page-facets { color: var(--ink); background: var(--bg); font-family: var(--font-text); font-size: var(--text-size); }
+</style>

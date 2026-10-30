@@ -172,10 +172,10 @@ export default async ({ test, assert, eventually, sleep, openPage, sy, groupsNow
     taken(await pressed(page, "Enter"), "enter");
     await eventually(`enter opens ${order[1]}`, async () => (await hash(page)) === `${SV.ticketRoute}${order[1]}`, 3_000);
 
-    // Escape closes; the bus's palette.open opens (the search page's jump button emits it).
+    // Escape closes; the bus's palette.open opens (the page's top's jump button emits it; STUDIO-12: app-top's, the one on the page).
     await page.evaluate(() => (location.hash = "#/search/qorvex"));
     await eventually("the search page draws", async () => (await sp(page).count()) === 1);
-    await sp(page).locator('[data-action="palette.open"]').click();
+    await page.locator('[data-surface=app-top] [data-action="palette.open"]').click();
     await eventually("palette.open on the bus opens it", async () => (await palInput(page).count()) === 1, 2_000);
     await palInput(page).focus();
     taken(await pressed(page, "Escape"), "escape");

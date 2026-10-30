@@ -1,0 +1,27 @@
+<script>
+  // STUDIO-12: the waves page — an rhx page the studio edits, placing its
+  // svelte/1 component by its mark, the app's top in its `top` section and the palette in its
+  // `palette` section (app-top's jump button and ctrl+k open it)
+  // (app-top by ui/slots.json); a full-height column, so the list scrolls
+  // in its own box under its bar and the title sits in the panel above it. #/waves, #/waves/in/:epics, #/waves/:id and #/waves/to/:to: work-waves, the mode from the route.
+  prop("epics");
+  prop("id");
+  prop("to");
+</script>
+
+<section class="page page-waves">
+  <slot name="top" here="waves"/>
+  <header class="page-title"><h1>waves</h1></header>
+  <work-waves epics={epics} id={id} to={to}/>
+  <slot name="palette"/>
+</section>
+
+<style>
+  :scope { display: block; }
+  .page-waves { display: flex; flex-direction: column; height: 100vh; height: 100dvh; color: var(--ink); background: var(--bg); font-family: var(--font-text); font-size: var(--text-size); }
+  .page-waves > [data-slot=top] { flex: none; }
+  .page-title { flex: none; padding: 10px 24px 0; background: var(--panel); }
+  .page-title h1 { margin: 0; font-family: var(--font-display); font-size: 18px; font-weight: var(--weight-strong); color: var(--ink); }
+  .page-waves > [data-slot=work-waves] { flex: 1; min-height: 0; min-width: 0; display: flex; }
+  .page-waves > [data-slot=work-waves] > * { flex: 1; min-width: 0; min-height: 0; display: flex; }
+</style>

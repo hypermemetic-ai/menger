@@ -1,5 +1,6 @@
-// SURFACE-3: the ticket page, whole — ticket-page-sv (svelte/1) composed of
-// its parts, each a svelte/1 component the host fills into its bound mark.
+// SURFACE-3: the ticket page, whole — composed of its parts, each a svelte/1
+// component the host fills into its bound mark; STUDIO-12: the page is the rhx
+// page-ticket, its root still `[data-surface=ticket-page]`.
 // Marks: `[data-surface=ticket-page]` (`[data-loading]`, `[data-empty]` "No
 // ticket …", `[data-deleted]`), `[data-surface=ticket-head]`
 // `[data-field=id|title|kind|status|severity|labels|parent|address]`,
@@ -11,8 +12,9 @@
 // `[data-refused]`), `[data-surface=ticket-history]` (`[data-transition]`, `[data-field=from|to|at|actor]`),
 // `[data-surface=ticket-revisions]` (`[data-open]`, `li[data-id=<rev>]` `[data-ab=a|b]`, `[data-view=side|text|was]`,
 // `[data-revision-open]`, `[data-diff]` `[data-side-by-side]` `[data-text]`, `[data-pick]`), and the other
-// tickets' marks `[data-mark=X][data-slot=X][data-component=X]` for ticket-edit, ticket-actions (SURFACE-4)
-// and work-blockers (SURFACE-7), holes until those components are in the bundle.
+// tickets' marks `[data-mark=X]` (carrying `data-id`) holding — or being — the bound mark
+// `[data-slot=X][data-component=X]` for ticket-edit, ticket-actions (SURFACE-4; the rhx page's
+// wrapper around its `<ticket-edit id/>`, STUDIO-12) and work-blockers (SURFACE-7, ticket-relations' own).
 import { sentCalls } from "../../scripts/ui-throwaway.mjs";
 
 export default async (ctx) => {
@@ -20,7 +22,7 @@ export default async (ctx) => {
   const trimmed = (t) => String(t ?? "").trim();
   const text = async (loc) => trimmed(await loc.first().textContent({ timeout: 1000 }));
   const scratch = path.dirname(session);
-  // The page is ticket-page-sv (svelte/1); #/sv/ticket/:id routes to it today, #/ticket/:id once SURFACE-2 flips the board.
+  // The page is page-ticket (rhx, STUDIO-12) at #/ticket/:id and its alias #/sv/ticket/:id.
   const ROUTE = "#/sv/ticket/";
   let n = 0;
   const root = () => groupsNow().filter((g) => g.root && !g.shortcode.startsWith("AAA")).at(-1);
@@ -283,12 +285,16 @@ export default async (ctx) => {
       const by = calls.reduce((m, c) => ((m[c.method] = (m[c.method] ?? 0) + 1), m), {});
       console.log(`     sent: ${JSON.stringify(by)}`);
       assert(calls.filter((c) => c.method === "tickets.get" && c.params.id === t.id).length === 1, `one get of ${t.id}: ${JSON.stringify(by)}`);
-      assert((by["tickets.watch"] ?? 0) <= 5, `at most five watches: ${JSON.stringify(by)}`);
+      // STUDIO-12: the page carries the app's top (app-top, its count live on `watch { membership }`), apart from the five.
+      const own = calls.filter((c) => c.method === "tickets.watch" && c.params?.membership !== true).length;
+      assert(own <= 5, `at most five watches of the ticket's (${own}): ${JSON.stringify(by)}`);
       for (const [mark, where] of [["ticket-edit", tp], ["ticket-actions", tp], ["work-blockers", tp.locator("[data-surface=ticket-relations]")]]) {
-        const m = where.locator(`[data-mark=${mark}][data-slot=${mark}][data-component=${mark}]`);
+        const m = where.locator(`[data-mark=${mark}]`);
         assert((await m.count()) === 1, `${mark}'s mark is placed`);
         assert((await m.getAttribute("data-id")) === t.id, `${mark}'s mark carries id=${t.id}`);
-        const filled = await m.locator(`[data-surface=${mark}]`).count();
+        const bound = m.locator(`xpath=descendant-or-self::*[@data-slot="${mark}" and @data-component="${mark}"]`);
+        assert((await bound.count()) === 1, `${mark}'s mark is (or holds) its bound mark`);
+        const filled = await bound.locator(`[data-surface=${mark}]`).count();
         console.log(`     ${mark}: ${filled ? "the component" : "a hole (its ticket not merged)"}`);
       }
     } finally {
@@ -314,6 +320,8 @@ export default async (ctx) => {
       await eventually("its siblings", async () => (await page.locator("[data-surface=ticket-head] [data-sib=prev]").count()) === 1, 5_000);
       await page.keyboard.press("[");
       await eventually(`[ goes back to ${kids[1]}`, async () => (await page.evaluate(() => location.hash)) === `${ROUTE}${kids[1]}`, 5_000);
+      // STUDIO-12: an rhx page takes a new route by drawing again from its initial state (CONTRACT, rhx/1): count from its new draw.
+      await eventually(`the page is ${kids[1]}'s`, async () => (await tp.getAttribute("data-ticket")) === kids[1], 5_000);
       // e says ticket.edit on the bus (SURFACE-4 hears it): the page counts it on its root and the edit mark flashes; no navigation.
       const asked = Number(await tp.getAttribute("data-edit-asked"));
       await page.keyboard.press("e");

@@ -5,9 +5,9 @@
      first), each hit's title and passage marked as the method marked them,
      paged by offset eight at a time — the `searched` event (matched, next)
      is the pager, kept as a row by `upsert:.`. A filter the service refuses
-     is said in its words. The palette is placed here by its mark, so ctrl+k
-     jumps from this page too, and the jump button asks it on the bus
-     (`palette.open`). -->
+     is said in its words. STUDIO-12: the page is page-search's (rhx) — the
+     board link and the jump button are app-top's in its `top` section, the
+     palette its `palette` section's; this is the query's lists. -->
 <script module>
   // PERF-15: a row is the four fields drawn, not the whole summary row.
   const FIELDS = ["id", "title", "kind", "status"];
@@ -24,7 +24,6 @@
 
 <script>
   import { bus, live } from "plexus-ui/host";
-  import Palette from "plexus-ui:jump-palette-sv";
 
   let { q = null, filter = null, sheet = null } = $props();
   const b = bus();
@@ -54,14 +53,9 @@
   function next() { paged = { asked, offset: offset + LIMIT }; }
   function prev() { paged = { asked, offset: Math.max(0, offset - LIMIT) }; }
   function everything() { b.navigate("#/search/" + encodeURIComponent(q)); }
-  function jump() { b.emit("palette.open", {}); }
 </script>
 
 <article class="search-page" data-surface="search-page" data-q={q}>
-  <nav class="crumbs">
-    <a href="#/" data-back>← board</a>
-    <button class="btn jump" data-action="palette.open" onclick={jump}>jump <kbd>ctrl</kbd><kbd>k</kbd></button>
-  </nav>
   {#if !q}
     <p class="sp-empty" data-empty>Type words to search: ids and titles on the left, bodies on the right.</p>
   {:else}
@@ -114,17 +108,10 @@
       </section>
     </div>
   {/if}
-  <Palette/>
 </article>
 
 <style>
-  .search-page { min-height: 100vh; min-height: 100dvh; background: var(--bg); max-width: 1180px; margin: 0 auto; padding: 16px 20px 40px; color: var(--ink); font-family: var(--font-text); font-size: var(--text-size); }
-  .search-page .crumbs { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; font-size: 12px; }
-  .search-page .crumbs a { color: var(--muted); text-decoration: none; border-radius: var(--radius-sm); }
-  .search-page .crumbs a:hover, .search-page .crumbs a:global([data-sheet~=hover]) { color: var(--accent); }
-  .search-page .crumbs a:focus-visible, .search-page .crumbs a:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
-  .search-page .jump { margin-left: auto; }
-  .search-page kbd { display: inline-block; min-width: 18px; padding: 0 5px; font: 11px/17px var(--font-text); text-align: center; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-bottom-width: 2px; border-radius: var(--radius-sm); }
+  .search-page { display: block; max-width: 1180px; margin: 0 auto; padding: 16px 20px 40px; color: var(--ink); font-family: var(--font-text); font-size: var(--text-size); }
   .search-page .btn { padding: 3px 10px; font: inherit; font-size: 12px; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; transition: border-color var(--motion-fast) var(--ease), background-color var(--motion-fast) var(--ease); }
   .search-page .btn:hover:not(:disabled), .search-page .btn:global([data-sheet~=hover]):not(:disabled) { border-color: var(--muted); background: var(--hover); }
   .search-page .btn:focus-visible, .search-page .btn:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }

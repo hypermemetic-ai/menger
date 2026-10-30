@@ -9,7 +9,8 @@
      (`ui.slots.list`). For a reader holding admin: rollback asks first and
      its answer (`live { version }`, or the refusal's words) is said in the
      row; preview's answer is the link to /app/, and a clear. Anyone else
-     sees both disabled, with the roles `auth.requires` names for them. -->
+     sees both disabled, with the roles `auth.requires` names for them.
+     STUDIO-12: the page's title is page-releases's (rhx). -->
 <script module>
   export const uses = ["ui.versions", "ui.watch", "ui.contract", "ui.routes.list", "ui.slots.list", "ui.rollback", "ui.preview",
                        "auth.whoami", "auth.requires"];
@@ -149,7 +150,6 @@
 
 <section class="ui-versions" data-surface="ui-versions">
   <div class="page-head">
-    <h1>releases</h1>
     <span class="sub"><span data-field="count">{versions.length}</span> versions of the app</span>
     <span class="head-live">live <b class="hash" data-field="live">{cur ? short(cur) : "none"}</b></span>
     {#if list == null}<span class="state" data-loading="pending">pending</span>{/if}
@@ -219,7 +219,6 @@
 <style>
   .ui-versions { max-width: 1340px; margin: 0 auto; padding: 18px 24px 40px; color: var(--ink); font-family: var(--font-text); font-size: var(--text-size); }
   .page-head { display: flex; align-items: baseline; gap: 10px; margin: 0 0 14px; }
-  .page-head h1 { margin: 0; font-family: var(--font-display); font-size: 20px; font-weight: var(--weight-strong); }
   .sub { color: var(--muted); font-size: 12px; }
   .head-live { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
   .head-live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--live); }
