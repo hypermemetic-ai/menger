@@ -500,3 +500,24 @@ instead of +256 ms and the wasm instantiates at +171–195 ms: the two race, and
 ms; the components are one request of 5 KiB instead of 22. The tail is wider (two loads of 15 at
 0.9 s, both with the wasm instantiated late at +434–468 ms: the network, not the boot). What is
 left between +190 ms and the row at +450 ms is the mount and the board's calls — the next ticket.
+
+## v2's service at 10⁶ — the server probes on the v2 tip (57d1179, release build, 2026-10-30 00:31Z)
+
+A throwaway seeded a million tickets (`--auth-provider key`, the probes signed in by a session file,
+`MENGER_SESSION_FILE`), medians of five, on this machine. v2 cut nothing of the tickets service, and
+the numbers say so: every filter read is the transport's floor.
+
+| probe | at 10⁶ |
+|---|---|
+| `list { summary, limit 200 }` (the floor) | 4.0 ms |
+| the nine filters' five reads (`counts`, head page, `after`, `at` half, `facets`) — the slowest | 5.8 ms (`not kind doc`, 1,000,000 matches; `facets`) |
+| the slowest first tree page of the nine | 2.6 ms |
+| `under X`: `counts`, `list ready`, `tree root` | 1.0, 0.8, 0.2 ms |
+| `find "audit"` unfiltered (49,935 matches) · `"the"` (571,678) · `"zzqx"` (0) | 195 · 192 · 188 ms |
+| `find` under a filter admitting 18 % · 1 % | 77 · 7 ms |
+| `member` of 1,000 ids, empty filter | 10.9 ms |
+
+`find` is the one read that costs at 10⁶: ~190 ms whatever the query, the FTS5 walk over every
+row's title (it is proportional to the filter's admits: 77 ms at 18 %). The `ready-probe pages`
+run failed on its arguments (`ready_set after 100: after: no ticket 100` — the seed's ids are not
+numbers); its page numbers are in the ladders above.
