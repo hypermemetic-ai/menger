@@ -203,6 +203,7 @@ on_exit() {
   [[ $rc -ne 0 && -n $LOG_STAMP ]] && red_run # CI-6: a run that failed keeps its logs
   [[ ${#PENDING[@]} -eq 3 ]] && tell "${PENDING[0]}" failed "${PENDING[1]}" "${PENDING[2]}"
   [[ -n $LANDING_EXPORT && -d $LANDING_EXPORT ]] && rm -rf "$LANDING_EXPORT"
+  [[ -n ${KEPT_HDR:-} ]] && rm -f "$KEPT_HDR" # FRAME-21: the check's cookie, never left behind
   [[ -n ${IMAGE_CONTEXT:-} && -d $IMAGE_CONTEXT ]] && { chmod -R u+w "$IMAGE_CONTEXT"; rm -rf "$IMAGE_CONTEXT"; }
   # what the run said goes through tee into its log: close our ends and let the tees finish,
   # or the last lines (a die's) can be lost to whoever reads the output. V2-7: both tees, by
@@ -942,6 +943,7 @@ cmd_remote() {
     begin_run remote-test
     step "remote test: $ref → $host (bin/infra app.yml -e env=test -e sha=$rel)"
     tell test started "$rel" "$good"
+    session_before "wss://$host/ws" "$(app_url test)" "$good" # FRAME-21: the release test runs now
     "$INFRA/bin/infra" app.yml -e "app_dir=$src" -e env=test -e "sha=$rel" >&2 \
       || { record test run "$rel" "infra failed"; tell test failed "$rel" "$good"; die "infra did not deploy $img to $host"; }
     # V2-7: a v2 release's bundle, pushed once the deploy is healthy, before the smoke reads /app/
@@ -964,6 +966,10 @@ cmd_remote() {
     if ! smoke_remote test "$rel"; then
       record test run "$rel" "smoke failed"; tell test failed "$rel" "$good"
       die "$host runs $rel and its smoke FAILED — prod untouched"
+    fi
+    if ! session_after "$(app_url test)"; then
+      record test run "$rel" "sessions lost"; tell test failed "$rel" "$good"
+      die "$host runs $rel and a session signed in before the deploy is gone (FRAME-21) — prod untouched"
     fi
     mark_release "$rel" TESTED "$(date -u +%FT%TZ)"
     record test run "$rel" "ok $img"
@@ -994,6 +1000,46 @@ cmd_remote() {
     tell app-prod succeeded "$rel" "$good"
   fi
   hf_output "url=$url"
+}
+
+# ── FRAME-21: a deploy keeps every session ──────────────────────────────────
+# Just before `infra app.yml` the pipeline signs in on the release test runs
+# then (`auth.login {session}` as the pipeline key, 15 minutes), keeps the
+# token as a cookie in a 0600 header file (never argv, never the
+# environment), and after the deploy's smoke wants $base/login/me to answer
+# 200 with it — the cookie a browser holds stands across the deploy; then it
+# signs that session out (POST /logout with the cookie). The release running
+# at mint time decides the skip: one from before FRAME-21
+# (MENGER_SESSIONS_KEPT_SINCE, the commit that keeps sessions, not its
+# ancestor) kept its sessions in memory, and the check is skipped, said.
+KEPT_SINCE=${MENGER_SESSIONS_KEPT_SINCE:-fdffc7712ced97d38162fe5fe026eff8aef67f76}
+KEPT_HDR="" KEPT_WHY=""
+kept_cookie() { if [[ $1 == https://* ]]; then echo __Host-menger_session; else echo "menger_session_${1##*:}"; fi; }
+session_before() { # WS BASE RUNNING → KEPT_HDR (the cookie's header file), or KEPT_WHY (why there is none)
+  local ws=$1 base=$2 rel=${3:-} sha tok
+  KEPT_HDR="" KEPT_WHY=""
+  sha=$(sha_of "$rel")
+  if [[ -z $sha ]]; then KEPT_WHY="no release this log knows runs there yet"; return 0; fi
+  if ! git -C "$REPO" merge-base --is-ancestor "$KEPT_SINCE" "$sha" 2>/dev/null; then
+    KEPT_WHY="$rel predates FRAME-21: it kept its sessions in memory"; return 0
+  fi
+  [[ -n $DEPLOY_KEY_FILE ]] || { KEPT_WHY="no pipeline key (MENGER_DEPLOY_KEY_FILE) to sign in with"; return 0; }
+  tok=$(kcall "$ws" auth.login --params '{"flow":{"session":{"ttl_secs":900}}}' 2>/dev/null | jq -rR 'fromjson? | .token // empty' 2>/dev/null | head -n 1)
+  [[ -n $tok ]] || { KEPT_WHY="$rel minted no session before the deploy"; return 0; }
+  KEPT_HDR=$(umask 077; mktemp "${TMPDIR:-/tmp}/menger-kept.XXXXXX")
+  printf 'Cookie: %s=%s\n' "$(kept_cookie "$base")" "$tok" >"$KEPT_HDR"
+  say "ok   signed in on $rel before the deploy (a session for the check after it)"
+}
+session_after() { # BASE → 0: the session stands (or the check is skipped, said); 1: it is gone
+  local base=$1 code
+  if [[ -z $KEPT_HDR ]]; then say "skip a session across the deploy: ${KEPT_WHY:-none was minted}"; return 0; fi
+  code=$(curl -s -o /dev/null -m 10 -H "@$KEPT_HDR" -w '%{http_code}' "$base/login/me" 2>/dev/null || true)
+  # the session was the check's alone: signed out whichever way it went
+  curl -s -o /dev/null -m 10 -X POST -H "@$KEPT_HDR" -H "Origin: $base" "$base/logout" 2>/dev/null || true
+  rm -f "$KEPT_HDR"; KEPT_HDR=""
+  if [[ $code == 200 ]]; then say "ok   a session signed in before the deploy stands after it ($base/login/me: 200)"; return 0; fi
+  say "FAIL a session signed in before the deploy is gone after it ($base/login/me: ${code:-nothing}): the deploy signed everyone out"
+  return 1
 }
 
 # ── the smoke, against the deployment (DEPLOY-52) ───────────────────────────

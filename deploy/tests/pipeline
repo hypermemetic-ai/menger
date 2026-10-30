@@ -32,6 +32,9 @@ export MENGER_DEPLOY_TRACKER_PORT=4769
 # DEPLOY-28: the tracker is app.menger.sh by default; `local` is :4769, the stand-ins
 # below (DEPLOY-28's own checks unset it, and dial app.menger.sh's stand-in)
 export MENGER_DEPLOY_TRACKER_URL=local MENGER_SMOKE_WAIT=1
+# FRAME-21: no release here keeps its sessions unless a check says so (a name that is no
+# commit: every remote test skips the session check, and says so)
+export MENGER_SESSIONS_KEPT_SINCE=0000000000000000000000000000000000000000
 unset MENGER_DEPLOY_COMPLETE_KEY_FILE
 # Belt and braces: even a real systemctl --user would find no bus.
 export XDG_RUNTIME_DIR=$SCRATCH/no-runtime DBUS_SESSION_BUS_ADDRESS=unix:path=$SCRATCH/no-bus
@@ -1017,7 +1020,19 @@ for a in "$@"; do
   prev=$a
 done
 rest=${url#*://}; if [[ $rest == */* ]]; then p=/${rest#*/}; else p=/; fi; p=${p%%\?*}
+# FRAME-21: /login/me 200 for a session the stand-in minted (401 once STUB_SESSIONS_LOST says a
+# restart dropped them); POST /logout ends it, noted in $STUB_UI_STATE/logouts
 case $p in
+  /login/me|/logout)
+    echo "curl $*" >>"$STUB_ARGV"
+    hostport=${rest%%/*}
+    if [[ $url == https://* ]]; then name=__Host-menger_session; else name=menger_session_${hostport##*:}; fi
+    tok=$(tr ";" "\n" <<<"$cookie" | sed -n "s/^ *$name=//p" | head -n 1)
+    if [[ $p == /logout ]]; then echo "$tok" >>"$STUB_UI_STATE/logouts"; [[ -n $w ]] && printf "%b" "${w//%\{http_code\}/303}"; exit 0; fi
+    code=401
+    if [[ -n $tok && -z ${STUB_SESSIONS_LOST:-} ]] && grep -qxF -- "$tok" "$STUB_UI_STATE/tokens" 2>/dev/null && ! grep -qxF -- "$tok" "$STUB_UI_STATE/logouts" 2>/dev/null; then code=200; fi
+    [[ -n $w ]] && printf "%b" "${w//%\{http_code\}/$code}"
+    exit 0 ;;
   /app|/app/|/app/*/index.html)
     echo "curl $*" >>"$STUB_ARGV"
     hostport=${rest%%/*}
@@ -1478,6 +1493,52 @@ for c in null false; do
 done
 [[ ! -f $D4/releases/$VU/TESTED ]] && ok || bad "$T7: a release whose bundle says unknown is marked TESTED"
 [[ ! -f $D4/releases/$VO/TESTED ]] && ok || bad "$T7: a release whose bundle names another service is marked TESTED"
+unset STUB_UI_SIGNER
+
+# ── FRAME-21 a_deploy_keeps_every_session ──────────────────────────────────
+# `remote test` signs in on the release test runs before infra deploys (auth.login, a short
+# session, as the pipeline key), and after the smoke wants /login/me 200 with that cookie, then
+# signs it out. The release running at mint time decides the skip: one that does not descend
+# from MENGER_SESSIONS_KEPT_SINCE kept its sessions in memory. The stand-in curl answers
+# /login/me 200 for a token the stand-in minted, 401 with STUB_SESSIONS_LOST (a restart that
+# dropped them).
+T8=a_deploy_keeps_every_session
+export STUB_UI_SIGNER=$PUB2
+kept() { ls "${TMPDIR:-/tmp}"/menger-kept.* 2>/dev/null | wc -l; }
+v2run remote test --image "menger:$V4"
+same "$T8: (setup) test runs $V4" "$code" 0
+# the release running predates FRAME-21: no sign-in, no /login/me, the skip said
+: >"$STUB_UI_STATE/calls"; : >"$STUB_UI_STATE/logouts"
+MENGER_SESSIONS_KEPT_SINCE=${IC[2]} v2run remote test --image "menger:$V4"
+same "$T8: predates: exits 0" "$code" 0
+has "$T8: predates: the skip said" "$err" "skip a session across the deploy: $V4 predates FRAME-21: it kept its sessions in memory"
+[[ $(<"$STUB_ARGV") != *"/login/me"* ]] && ok || bad "$T8: predates: /login/me was asked"
+# it keeps them: signed in before infra, the cookie stands after the smoke, then signed out
+before=$(kept); : >"$STUB_UI_STATE/calls"; : >"$STUB_UI_STATE/logouts"; : >"$STUB_UI_STATE/tokens"
+m=$(mark); MENGER_SESSIONS_KEPT_SINCE=${IC[0]} v2run remote test --image "menger:$V4"
+same "$T8: kept: exits 0" "$code" 0
+has "$T8: kept: signed in before the deploy" "$err" "ok   signed in on $V4 before the deploy"
+has "$T8: kept: the cookie stands after it" "$err" "ok   a session signed in before the deploy stands after it (https://app-test.menger.sh/login/me: 200)"
+first=$(head -n 1 "$STUB_UI_STATE/tokens" 2>/dev/null)
+[[ -n $first ]] && ok || bad "$T8: kept: no session minted"
+has "$T8: kept: minted as the pipeline, short-lived" "$(grep '^auth.login' "$STUB_UI_STATE/calls" | head -n 1)" "auth.login wss://app-test.menger.sh/ws pipeline"
+grep -q '"ttl_secs":900' <<<"$(grep 'auth.login' "$STUB_ARGV" | head -n 1)" && ok || bad "$T8: kept: the session is not the short one: $(grep 'auth.login' "$STUB_ARGV" | head -n 1)"
+i_mint=$(grep -n -m1 '^auth.login' "$STUB_UI_STATE/calls" | cut -d: -f1) i_push=$(grep -n -m1 '^ui.push' "$STUB_UI_STATE/calls" | cut -d: -f1)
+[[ -n $i_mint && -n $i_push && $i_mint -lt $i_push ]] && ok || bad "$T8: kept: the sign-in came after the deploy (mint $i_mint, push $i_push)"
+same "$T8: kept: signed out after the check" "$(head -n 1 "$STUB_UI_STATE/logouts")" "$first"
+[[ $(<"$STUB_ARGV") != *"$first"* ]] && ok || bad "$T8: kept: the token rode in argv"
+same "$T8: kept: the cookie's file removed" "$(kept)" "$before"
+same "$T8: kept: recorded started, succeeded" "$(since "$m" .state)" '"started" "succeeded"'
+# a deploy that dropped them: the deploy fails, said and recorded, and still signs out
+: >"$STUB_UI_STATE/logouts"; : >"$STUB_UI_STATE/tokens"
+m=$(mark); STUB_SESSIONS_LOST=1 MENGER_SESSIONS_KEPT_SINCE=${IC[0]} v2run remote test --image "menger:$V4"
+same "$T8: lost: exits 1" "$code" 1
+has "$T8: lost: said" "$err" "FAIL a session signed in before the deploy is gone after it (https://app-test.menger.sh/login/me: 401)"
+has "$T8: lost: the deploy dies naming it" "$err" "a session signed in before the deploy is gone (FRAME-21)"
+same "$T8: lost: recorded started, failed" "$(since "$m" '[.environment, .state]')" '["test","started"] ["test","failed"]'
+has "$T8: lost: the log line says it" "$(tail -n 1 "$D4/deployments.log")" "sessions lost"
+same "$T8: lost: still signed out" "$(head -n 1 "$STUB_UI_STATE/logouts")" "$(head -n 1 "$STUB_UI_STATE/tokens")"
+same "$T8: lost: the cookie's file removed" "$(kept)" "$before"
 unset STUB_UI_SIGNER
 
 # ── V2-7 the_runner_targets_the_branch (status: MENGER_RUNNER_BRANCH in deploy-runner.env, the one

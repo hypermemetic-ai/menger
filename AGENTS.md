@@ -531,7 +531,9 @@ synapse -P 4460 menger members teams delete --team ship-crew
 Login is always on (ACCESS-24): `--auth-provider` names at least one
 provider — `key` (agents), `idp=…`, `auth0=…`, `oidc:<name>=…`, `workos=…`
 or `nostr=…` — else menger runs as its local admin on loopback, or refuses
-beyond it. Each becomes an adapter at the WebSocket upgrade; nothing past
+beyond it. Sessions are kept beside the database
+(`<database>.sessions.jsonl`, FRAME-21), so a restart or a deploy signs no
+browser and no agent out. Each becomes an adapter at the WebSocket upgrade; nothing past
 the upgrade knows the provider. An anonymous connection reaches `auth`'s
 door and nothing else. **Every method is its own grant** (AUTH-7), a role is
 a list of grants declared with `roles(...)` on each activation (`admin`

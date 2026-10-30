@@ -76,6 +76,20 @@ The ui service's file is `ui.db` beside the database unless
 `--ui-db-path` names another; two dev servers in one directory share it, so
 give each its own. A push needs `--ui-signer` (below, "The ui service").
 
+**A restart keeps every session** (FRAME-21). The login's session table —
+every browser's sign-in and every agent's `session login` token — is kept
+beside the database, named for it: `tickets.db` → `tickets.sessions.jsonl`
+(the image's `/data/tickets.sessions.jsonl`, a local start's
+`local.sessions.jsonl`), 0600, each session under its id's sha256 and never
+the id. So a deploy signs no one out: an open page keeps its cookie, an
+agent its token. Beside it, `….sessions.jsonl.lock` is held while the
+server runs: a second server on the same database's sessions refuses to
+start, naming the file. A sign-in under way at the restart starts again. A
+session the sign-in page started (WorkOS) stands across a restart until its
+own expiry and sign-out still ends it at WorkOS, but its tokens are not
+kept, so a revocation made at WorkOS no longer ends it here (FRAME-22). The
+sessions file goes with the database: delete both, or neither.
+
 Login is always required: the shell's pages are behind `/login`, a socket
 that proves no one reaches the anonymous view and nothing else ("The AUTH
 protocol"). There is no REST bridge (it could not carry an identity;
@@ -812,7 +826,9 @@ test is the framework's (`../plexus-ui`, `npm test`).
 `menger::local` starts the server from code — the store, every service,
 the WebSocket and the shell on loopback, no registry announcement — behind
 the gate with one owner (`LocalConfig::owner`), whose sessions
-`owner_token(ttl_secs)` mints:
+`owner_token(ttl_secs)` mints — kept, as the binary keeps them, beside the
+database (`<database>.sessions.jsonl`, FRAME-21), so a token outlives a
+restart on the same database:
 
 ```rust
 use menger::local::{LocalConfig, LocalServer, TAURI_ORIGINS};
