@@ -865,9 +865,13 @@ sections (a section is the host's, and only an rhx template marks one), whose
 defaults are the svelte/1 ones — `top` the app's top (`app-top`: the epic,
 the live count, search, the links, the palette's button), `bar`
 `board-layout-sv` (the top bar and its filter line), `nav`, `keys` the
-board's keymap (`keys-help`), `main` and `palette`. The board's keys are `board-rows-sv`'s (FRAME-36's
-`bus.keys`: `j`/`k`, `enter`, `x`, `shift+x`, `c`, `/`, `ctrl+k`, `g b`,
-`g r`, `g w`, `escape`; `?` the host's overlay), its selection
+board's keymap (`keys-help`), `main`, `bulk` the bulk bar (`bulk-bar`,
+hearing the rows' `board.selected`) and `palette`. The rhx board at `#/rhx/`
+is the comparison, and its links and filter line land on the real Svelte pages
+(`#/ticket/:id`, `#/f/:filter`) by design: rhx reads no route prefix. The board's keys are `board-rows-sv`'s (FRAME-36's
+`bus.keys`: `j`/`k`, `enter`, `x`, `shift+x`, `c`, `/` the filter line,
+`g b`, `g r`, `g w`, `escape`; `ctrl+k` the palette's own; `?` the host's
+overlay), its selection
 `[data-selected]` and `[data-checked]`, said on the bus as `board.selected
 { ids }` and `board.focus { id }`. The rhx components stay
 the defaults of `board-layout`'s sections; a right-click on one puts the

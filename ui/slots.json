@@ -13,6 +13,7 @@
     "nav": "nav-tree-sv",
     "keys": "keys-help",
     "main": "board-rows-sv",
+    "bulk": "bulk-bar",
     "palette": "jump-palette-sv"
   }
 }

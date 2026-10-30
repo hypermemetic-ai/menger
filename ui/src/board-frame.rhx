@@ -5,7 +5,8 @@
   // the Svelte board is the default (`#/`, `#/f/:filter`; `#/sv/…` kept as
   // aliases); `top` the app's top (app-top), `bar` the Svelte top bar and
   // its filter line (board-layout-sv), then the nav column — the nav and
-  // the board's keymap (keys-help) — the board, and the palette
+  // the board's keymap (keys-help) — the board with the bulk bar under it
+  // (bulk-bar, SURFACE-5: it hears `board.selected`), and the palette
   // (ui/slots.json the defaults). A section is placed only with its default:
   // one with none costs the first row ~0.3 s (SURFACE-2's probe). The route
   // gives the filter (`#/` none, `#/f/:filter` the text); every section gets it.
@@ -22,6 +23,7 @@
     </div>
     <div class="board-main">
       <slot name="main" filter={filter}/>
+      <slot name="bulk"/>
     </div>
   </div>
   <slot name="palette"/>

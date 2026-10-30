@@ -16,7 +16,7 @@
      checks it by click), both by id, so a window move keeps them. Every
      change says `board.selected { ids }` and `board.focus { id }` on the bus
      (the bulk bar, SURFACE-5, hears the first); `/` says `filter.focus`
-     (the filter line's to take), `ctrl+k` `palette.open`. The host draws
+     (the filter line's to take); `ctrl+k` is the palette's own. The host draws
      `?`'s overlay from the labels. -->
 <script module>
   // PERF-15: a row is the four fields drawn, not the whole summary row.
@@ -137,7 +137,6 @@
     "shift+x": { to: range, label: "check the range to here" },
     c: { to: () => b.navigate(base + "new"), label: "a new ticket" },
     "/": { to: () => b.emit("filter.focus", {}), label: "the filter line" },
-    "ctrl+k": { to: () => b.emit("palette.open", {}), label: "jump to a ticket" },
     "g b": { to: () => b.navigate(base), label: "the board" },
     "g r": { to: () => b.navigate("#/ready"), label: "ready" },
     "g w": { to: () => b.navigate("#/waves"), label: "waves" },

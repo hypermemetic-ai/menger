@@ -77,7 +77,10 @@ export default async (ctx) => {
       assert((await t.locator(`[data-link=${link}]`).getAttribute("href")) === href, `the ${link} link is ${href}`);
     }
     assert((await t.locator("[data-link=board]").getAttribute("aria-current")) === "page", "the board is the current link");
-    assert((await t.locator('[data-action="palette.open"]').count()) === 1, "the palette's button");
+    await t.locator('[data-action="palette.open"]').click();
+    await eventually("the palette's button opens the palette (palette.open on the bus)", async () => (await section(page, B, "palette").locator("input[data-palette-input]").count()) === 1, 2_000);
+    await page.keyboard.press("Escape");
+    await eventually("escape closes it", async () => (await section(page, B, "palette").locator("input[data-palette-input]").count()) === 0, 2_000);
 
     // Live: a ticket made elsewhere is counted, one deleted is taken off.
     const epic = ctx.extentsNow()[0].epic;
@@ -198,7 +201,7 @@ export default async (ctx) => {
     await page.keyboard.press("/");
     const k = await lastKey(page);
     assert(k.prevented === true && k.reached === false, `/ is the host's: ${JSON.stringify(k)}`);
-    assert((await page.locator("input[data-palette-input]").count()) === 0, "/ no longer opens the palette (ctrl+k does, SURFACE-8)");
+    assert((await page.locator("input[data-palette-input]").count()) === 0, "/ does not open the palette (ctrl+k does, the palette's own)");
     const focused = await page.evaluate(() => document.activeElement?.matches?.("input[data-filter-input]") ?? false);
     if (!focused) console.log("     skip the filter line's focus: `/` says filter.focus on the bus, and the filter line (board-layout-sv, SURFACE-6) takes it — waits on SURFACE-6");
     const typed = await page.locator("input[data-filter-input]").inputValue();
@@ -226,6 +229,10 @@ export default async (ctx) => {
       const k = await lastKey(page);
       assert(k.prevented === true && k.reached === false, `${key} is prevented and never reaches the page: ${JSON.stringify(k)}`);
     }
+    // ctrl+k opened the palette (its own key): escape in its field closes it.
+    await eventually("ctrl+k opened the palette", async () => (await section(page, B, "palette").locator("input[data-palette-input]").count()) === 1, 2_000);
+    await page.keyboard.press("Escape");
+    await eventually("escape closed it", async () => (await section(page, B, "palette").locator("input[data-palette-input]").count()) === 0, 2_000);
     await calm(page);
     await page.keyboard.press("?");
     const q = await lastKey(page);
@@ -235,7 +242,7 @@ export default async (ctx) => {
     const mine = overlay.locator("[data-component=board-rows-sv]");
     assert((await mine.count()) === 1, "the overlay has board-rows-sv's section");
     const chords = await mine.locator("[data-chord]").evaluateAll((els) => els.map((e) => [e.getAttribute("data-chord"), e.querySelector("[data-label]")?.textContent ?? ""]));
-    for (const c of ["j", "k", "arrowdown", "arrowup", "enter", "x", "shift+x", "c", "/", "ctrl+k", "g b", "g r", "g w", "escape"]) {
+    for (const c of ["j", "k", "arrowdown", "arrowup", "enter", "x", "shift+x", "c", "/", "g b", "g r", "g w", "escape"]) {
       const row = chords.find(([chord]) => chord === c);
       assert(row && row[1].trim() && row[1] !== c, `the overlay lists ${c} with its label: ${JSON.stringify(chords)}`);
     }
