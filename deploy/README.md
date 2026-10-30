@@ -79,7 +79,7 @@ and its `install`. Nothing on this machine reads them now.
 deploy/pipeline build [REV] [--no-gate]   # a commit → a release (prints its name); --no-gate: the suite comes after
 deploy/pipeline image [RELEASE]           # RUN-10: the release as an image (IMAGE_STORE=ghcr pushes it to GHCR)
 deploy/pipeline remote test --image IMG   # app-test.menger.sh through infra, then the smoke; recorded as test
-deploy/pipeline suite RELEASE             # DEPLOY-52: the full suite at the release's commit; marks the release
+deploy/pipeline suite RELEASE             # DEPLOY-52: the full suite at the release's commit, plexus-bench beside it (PERF-6); marks the release
 deploy/pipeline suite --status RELEASE    # suite: passed | failed | running | none
 deploy/pipeline remote prod               # what test runs → app.menger.sh, only once its suite passed
 deploy/pipeline smoke test|prod           # the smoke against app-test / app.menger.sh, on its own
@@ -129,7 +129,16 @@ Review ("Automatic test", below); prod is the owner's.
    `failed`), and `deployments.log` gets `suite test <release> passed|failed`
    (no deployment). Each gate log is a file of its own (CI-6), as the build's.
    A release built with the gate (every one before DEPLOY-52) counts as
-   passed: its gate was the suite.
+   passed: its gate was the suite. **Beside it, plexus-bench** (PERF-6): its
+   `scripts/gate.sh` runs every PERF scenario under the perf profile and
+   `plexus-bench check` against the goldens (a red scenario is run once more
+   before it counts; a red taken on a busy machine is said, not failed), with
+   `schema.*` measuring the release's own `bin/menger`. A red bench marks the
+   release `failed … — bench red; log …` and logs `suite test <release>
+   failed bench`, as a red test does; green, the `SUITE` line ends `; bench
+   <check's verdict>`. `MENGER_BENCH_DIR` names the checkout (default
+   `../plexus-bench`; `none` skips it and the line says `bench not run`),
+   `MENGER_BENCH_TARGET` its cargo target (`~/.cache/cargo-target/plexus-bench`).
 6. **Promote** (`remote prod`). infra's `promote.yml` ships the image test
    runs — the release `deployments.log` last shows test running `ok` — and
    only when that release's suite `passed`: `failed`, `running` or no result
@@ -767,7 +776,8 @@ Tests: `deploy/tests/pipeline` runs the pipeline itself on a throwaway root —
 `deploy/menger-call.mjs` meet them, `synapse`, `docker` and `gh` stand-ins —
 through every row above, the smoke (each check failing on its own), a tracker
 down, hung, refusing and refusing the key, `remote prod`'s suite check, the
-suite green and red in its own checkout, `build --no-gate`, `status`,
+suite green and red in its own checkout, plexus-bench beside it (a stand-in
+`scripts/gate.sh`: green, red, `MENGER_BENCH_DIR=none`), `build --no-gate`, `status`,
 `backfill` and the retired commands; `cargo test` runs it.
 
 ## The deployment record

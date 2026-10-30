@@ -176,3 +176,14 @@ http-body-util = "0.1"
 # MNG-8's `[patch.crates-io]` on the plexus-transport-v0.2.3 tag went with
 # MFE-10: the REST bridge fixes it carried are on plexus-transport `main`
 # (0.5.0), consumed by path above.
+
+# PERF-6 (PLEXUS/PERF-6): the one build perf runs and releases use, PERF-1's
+# `profiles` fork built to its recommendation. Release, with LTO across every
+# crate and one codegen unit, and line tables kept for flamegraphs; `panic` is
+# release's (menger's tests rely on unwinding). Dev, test and release are
+# unchanged. `cargo build --profile perf`; plexus-bench measures with it.
+[profile.perf]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+debug = "line-tables-only"
