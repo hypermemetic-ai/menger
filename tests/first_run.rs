@@ -177,6 +177,27 @@ async fn a_first_run_prints_a_link_that_signs_in_once_and_menger_login_prints_an
     assert!(status(&second) == 303 && session_cookie(&second).is_some(), "{second}");
 }
 
+/// FRAME-21: the no-flags start keeps its sessions in its data directory —
+/// `sessions.jsonl` beside `local.db`, the service's own (0600) — and the
+/// cookie the link set is not in it.
+#[tokio::test]
+async fn a_first_run_keeps_its_sessions_in_its_data_dir() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let home = dir.path();
+    let (ws, shell) = (free_port(), free_port());
+    let (_server, lines) = start(home, ws, shell, &[]);
+    let link = lines[1].trim_start().split_whitespace().nth(1).unwrap().to_string();
+    let first = get(shell, path_of(&link), None).await;
+    let cookie = session_cookie(&first).expect("a session cookie");
+    let file = home.join(".local/share/menger/sessions.jsonl");
+    use std::os::unix::fs::PermissionsExt;
+    let meta = std::fs::metadata(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+    assert_eq!(meta.permissions().mode() & 0o777, 0o600, "the service's own file");
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(!text.is_empty(), "the sign-in is kept");
+    assert!(!text.contains(cookie.split_once('=').unwrap().1), "the cookie itself is never at rest");
+}
+
 /// DIST-17: a local start links its key for synapse, says how to sign in,
 /// `menger login --agent` says it again, an existing file is never
 /// overwritten, and a provider's server links nothing and prints no line.
