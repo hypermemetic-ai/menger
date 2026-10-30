@@ -470,7 +470,13 @@ declared `typed_params` (MACRO-12), so a bare `String` parameter does not
 compile (`tickets-api/tests/param_types.rs`). A bad value is `-32602
 invalid_params` naming the parameter, before the method runs; what needs the
 store (a ticket that is none, a cycle) stays an in-band `error`. A blank
-optional value is refused, not none.
+optional value is refused, not none. A key no parameter claims is refused
+the same way (MACRO-31): `tickets.list {sumary: true}` is ``Invalid params:
+unknown field `sumary`; tickets.list takes: after, at, epic, filter, keep,
+limit, parent, status, summary, tz`` — every unknown key named, the
+parameters sorted, a child's method by its own namespace (`nav.tree`, not
+`tickets.nav.tree`) — and `unknown field` is the words synapse reads to
+re-read a stale cached schema and run the call again.
 
 ### Capabilities, reads, watches and writes (ACCESS-9..12)
 

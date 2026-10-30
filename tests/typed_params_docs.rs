@@ -29,8 +29,12 @@ fn section<'a>(text: &'a str, start: &str, stop_at_blank: bool) -> &'a str {
 }
 
 fn says_an_unknown_key_is_refused(where_: &str, text: &str) {
-    assert!(text.contains("unknown field"), "{where_} gives the refusal's words, `unknown field`:\n{text}");
     assert!(text.contains("MACRO-31"), "{where_} names MACRO-31:\n{text}");
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        flat.split(". ").any(|sentence| sentence.contains("unknown field `") && sentence.contains("refused")),
+        "one sentence of {where_} says an unknown key is refused, in the refusal's words (unknown field `…`):\n{text}"
+    );
 }
 
 #[test]

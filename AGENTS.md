@@ -567,8 +567,11 @@ caps".
 
 **Every parameter is a type** (ACCESS-8, `tickets-api/src/vocab/`): a value
 its type refuses is `-32602 invalid_params` naming the parameter, before the
-method runs; domain refusals stay in band. An enum flag takes its canonical
-spelling only (`--status Coding`, `--kind` lower case). A new parameter gets
+method runs, and so is a key no parameter claims — ``unknown field
+`sumary`; tickets.list takes: …`` (MACRO-31; `unknown field` is what
+synapse heals a stale schema cache on), so a typo in `-p` JSON is refused,
+never read as the default; domain refusals stay in band. An enum flag
+takes its canonical spelling only (`--status Coding`, `--kind` lower case). A new parameter gets
 a type in the vocabulary — every activation is `typed_params` and
 `tickets-api/tests/param_types.rs` holds the flag.
 

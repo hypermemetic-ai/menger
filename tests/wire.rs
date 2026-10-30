@@ -2768,8 +2768,14 @@ async fn an_unknown_parameter_is_refused_before_the_method_runs() {
     assert_eq!(ev["ticket_count"], 0, "a refused create wrote nothing: {ev}");
     assert!(rows(call(&client, "tickets.list", json!({"summary": true})).await).await.is_empty());
 
+    // A child's method is named by the child's own namespace — the
+    // dispatch is not handed the path it is mounted at.
+    let m = invalid(&client, "tickets.filters.save", json!({"nmae": "Open", "filter": "ready"})).await;
+    assert_eq!(m, "Invalid params: unknown field `nmae`; filters.save takes: filter, name");
+
     // A call naming only its own parameters runs as before.
-    let mut sub = call(&client, "tickets.create", json!({"epic": "WIRE", "title": "a gap", "kind": "gap"})).await;
+    // (A shortcode's first ticket is its scope.)
+    let mut sub = call(&client, "tickets.create", json!({"epic": "WIRE", "title": "the root", "kind": "scope"})).await;
     let ev = content(sub.next().await.unwrap().unwrap());
-    assert_eq!((ev["type"].as_str(), ev["ticket"]["kind"].as_str()), (Some("created"), Some("gap")), "{ev}");
+    assert_eq!((ev["type"].as_str(), ev["ticket"]["kind"].as_str()), (Some("created"), Some("scope")), "{ev}");
 }
