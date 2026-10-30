@@ -703,6 +703,26 @@ async fn pre_sdlc7_database_opens_unchanged_and_the_worker_states_survive_sigkil
         let host = if epic == "PRESUB" { "PRE/" } else { "" };
         want["shortcode"] = json!(epic);
         want["address"] = json!(format!("hypermemetic:{host}{epic}-{seq}"));
+        // TICKETS-35 (RUN-38): and its uid, which this open minted — that
+        // binary's rows had none — 8 characters of lower-case Crockford
+        // base32; and `uid_of`, the uid of each ticket it names (held below
+        // to be that ticket's own). After the restart, the same ones.
+        let uid = got["uid"].as_str().unwrap_or_else(|| panic!("{} has a uid: {got}", got["id"]));
+        assert!(uid.len() == 8 && uid.bytes().all(|b| b.is_ascii_digit() || b.is_ascii_lowercase()), "{} has a uid: {got}", got["id"]);
+        want["uid"] = json!(uid);
+        if let Some(of) = got.get("uid_of") {
+            want["uid_of"] = of.clone();
+        }
+    }
+    let uids: std::collections::HashMap<&str, &str> =
+        tickets.iter().map(|t| (t["id"].as_str().unwrap(), t["uid"].as_str().unwrap())).collect();
+    let distinct: std::collections::HashSet<&&str> = uids.values().collect();
+    assert_eq!(distinct.len(), tickets.len(), "one uid for each ticket: {uids:?}");
+    assert!(tickets.iter().any(|t| t["uid_of"].is_object()), "a child names its parent's uid");
+    for t in &tickets {
+        for (name, uid) in t["uid_of"].as_object().into_iter().flatten() {
+            assert_eq!(uids.get(name.as_str()).copied(), uid.as_str(), "{}'s uid_of names {name}'s own uid", t["id"]);
+        }
     }
     for (got, want) in tickets.iter().zip(&expected) {
         assert_eq!(got, want, "{} exactly as the seven-status binary answered it", want["id"]);
