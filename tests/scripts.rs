@@ -134,3 +134,24 @@ fn cleanup_gate_script() {
 fn disk_check_script() {
     passes("disk-check", "bash", &["scripts/tests/disk-check"], &[" 0 failed"], Duration::from_secs(300));
 }
+
+/// RUN-34: the throwaway's work directories (`ui8-*`, `workDir()` in
+/// `scripts/ui-throwaway.mjs`) are said to go — by the caller, or by the
+/// cleanup gate within the hour under `/tmp/claude-UID/` or a scratch root
+/// (`menger-perf-scratch`, `MENGER_SCRATCH_DIRS`). The harness's usage and
+/// perf/README.md's probe section say so, and neither says the gate has no
+/// shape for them any more.
+#[test]
+fn ui8_work_dirs_are_said_to_go_within_the_hour() {
+    let read = |p: &str| std::fs::read_to_string(Path::new(root()).join(p)).unwrap_or_else(|e| panic!("{p}: {e}"));
+    let harness = read("scripts/ui-throwaway.mjs");
+    let usage: String = harness.lines().take_while(|l| l.starts_with("//")).collect::<Vec<_>>().join("\n");
+    let readme = read("perf/README.md");
+    let probe = readme.split("\n## ").find(|s| s.contains("`pages-probe.mjs` (UI-8)")).expect("perf/README.md's pages-probe section");
+    for (name, text) in [("scripts/ui-throwaway.mjs's usage", usage.as_str()), ("perf/README.md's pages-probe section", probe)] {
+        for want in ["the caller removes the work directory", "within the hour", "scripts/cleanup-gate.sh", "menger-perf-scratch", "MENGER_SCRATCH_DIRS"] {
+            assert!(text.contains(want), "{name} does not say {want:?}:\n{text}");
+        }
+    }
+    assert!(!harness.contains("the gate has no shape"), "scripts/ui-throwaway.mjs still says the gate has no shape for a work directory under another $TMPDIR");
+}
