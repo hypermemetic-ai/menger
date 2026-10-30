@@ -492,3 +492,30 @@ On "before" the boot's last file (the components) is done near +350 ms and the b
 leaves at +480–570 ms (scratch breakdown, two loads): what the parallel boot can take off is the
 socket → manifest → components chain after the wasm (~150 ms); what follows the components is the
 mount and the calls.
+
+## The board in both profiles — `pages-probe.mjs --path` (FRAME-14, 2026-10-30)
+
+`node perf/pages-probe.mjs --no-build --seed N [--path '/app/#/sv/']`, release build, this machine,
+1440×900, a warm-up then five cold loads each; the medians. rhx is `/app/` (the engine's rhx/1
+components), Svelte is `/app/#/sv/` (svelte/1 — real Svelte 5.57.2 — in the rhx frame
+board-frame.rhx, which only places its sections). wasm is the engine's linear memory a second
+after the first rows; JS heap is the page's JS heap in use then, after a collection (CDP
+`Runtime.getHeapUsage`, the wasm's memory apart); created row is one ticket made by synapse after
+that, its `created` frame to its `.board-row`.
+
+| N | board | first titled row (five runs) | wasm | JS heap | rows held | created row |
+|---|---|---|---|---|---|---|
+| 10⁴ | rhx | 0.182 s (186, 182, 182, 186, 177 ms) | 5.8 MiB | 1.6 MiB | 200 | 13.9 ms |
+| 10⁴ | Svelte | 0.128 s (128, 126, 127, 134, 132 ms) | 3.3 MiB | 2.4 MiB | 200 | 7.4 ms |
+| 10⁵ | rhx | 0.207 s (207, 227, 198, 202, 208 ms) | 6.7 MiB | 1.6 MiB | 200 | 13.8 ms |
+| 10⁵ | Svelte | 0.142 s (142, 151, 137, 136, 158 ms) | 3.6 MiB | 2.7 MiB | 200 | 9.3 ms |
+| 10⁶ | rhx | 0.202 s (197, 193, 279, 202, 256 ms) | 9.3 MiB | 1.7 MiB | 200 | 23.8 ms |
+| 10⁶ | Svelte | 0.149 s (140, 181, 167, 149, 142 ms) | 4.0 MiB | 3.2 MiB | 200 | 7.8 ms |
+
+At a million the Svelte board draws its first row about 50 ms sooner, holds 7.2 MiB in all against
+rhx's 11.0 (the rows' DOM bindings live in the JS heap instead of the wasm), and puts a created row on
+screen in a third of the time. Both stay within UI-8's 0.3 s / 10 MB. The collections themselves are
+the engine's on both boards (one cache, in the wasm): every change crosses to JS as the whole
+collection, JSON (FRAME-20 would make it the change). Locally the five Svelte modules are free; on the
+wire they are five more files (54–75 KB each, each with its own Svelte runtime; 20–28 KB gzipped,
+116 KB for the five) — the live probe on app-test is where that shows.

@@ -511,7 +511,7 @@ build_v2() { # V2-7, FRAME-8: every step on this machine — the release, the to
   # the bundle: the components compiled in-process, the manifest, the tar — no cargo, no container.
   # FRAME-13: a svelte/1 component (ui/src/<name>.svelte, real Svelte) is compiled by the tool in Node 22+
   # with svelte and esbuild from ../plexus-ui's node_modules — its package.json pins them, `npm ci` in
-  # ../plexus-ui installs them; an rhx-only UI needs neither (FRAME-14 brings menger's first .svelte)
+  # ../plexus-ui installs them; an rhx-only UI needs neither (FRAME-14: the board's real-Svelte twins, ui/src/*-sv.svelte)
   step "ui-build (plexus-ui build --contract $CONTRACT)"
   lr=$(log_path build-ui); say "log: $lr"
   if compgen -G "$BUILD/ui/src/*.svelte" >/dev/null; then command -v node >/dev/null || die "ui-build: ui/src holds svelte/1 components (.svelte), built in Node, and there is no node on PATH — install Node 22 or newer"; say "svelte/1: node $(node --version)"; fi

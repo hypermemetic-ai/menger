@@ -30,18 +30,18 @@ start(version);
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
 a { color: inherit; text-decoration: none; }
 button, input, select { font: inherit; color: inherit; }
-board-layout, ticket-page { display: block; }
+board-layout, ticket-page, board-layout-sv, ticket-page-sv { display: block; }
 .board-layout { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
 .topbar { display: flex; align-items: flex-start; gap: 12px; padding: 10px max(16px, env(safe-area-inset-left)); border-bottom: 1px solid var(--line); background: var(--panel); }
 .brand { font-weight: 650; letter-spacing: .02em; padding-top: 6px; }
 .hint { margin-left: auto; color: var(--muted); font-size: 12px; padding-top: 8px; white-space: nowrap; }
-filter-line { flex: 1; min-width: 0; }
+filter-line, .topbar > .filter-line { flex: 1; min-width: 0; }
 .filter-input { width: 100%; max-width: 640px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
 .filter-refused { margin: 4px 0 0; color: var(--warn); font-size: 12px; }
 .board-body { flex: 1; min-height: 0; display: flex; }
 .board-body > [data-slot=nav] { width: 260px; flex: none; border-right: 1px solid var(--line); overflow: auto; background: var(--panel); }
 .board-body > [data-slot=main] { flex: 1; min-width: 0; display: flex; }
-board-rows { display: flex; flex: 1; min-width: 0; }
+board-rows, board-rows-sv { display: flex; flex: 1; min-width: 0; }
 .board { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 .board-head { padding: 8px 16px; color: var(--muted); border-bottom: 1px solid var(--line); display: flex; gap: 6px; align-items: baseline; }
 .board-count { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
