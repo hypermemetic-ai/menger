@@ -12,25 +12,36 @@
 
      With `ids` (an array, from a mark: `<nav-counts filter="status Ready"
      ids={selected}/>`) it is how many of those tickets the filter admits:
-     `nav member { ids, filter }`, folded by the same stream. -->
+     `nav member { ids, filter }`, folded by the same stream. PERF-22: beside
+     the board it asks once the board's first rows are drawn. -->
 <script module>
   export const uses = ["tickets.nav.counts", "tickets.list", "tickets.watch", "tickets.nav.member"];
   const PAGE = 1000;
 </script>
 
 <script>
+  import { tick } from "svelte";
   import { bus, live } from "plexus-ui/host";
 
   let { filter = null, label = null, ids = null } = $props();
   const b = bus();
   const many = () => Array.isArray(ids) && ids.length > 0;
+  // PERF-22: on the board, asked once its first rows are drawn (`board.drawn`;
+  // `[data-drawn]` when it drew before this mounted) — the rows are what the
+  // person waits for; with no board on the page, at once (a tick after the
+  // mount, the layout's sections all in place by then).
+  let drawn = $state(false);
+  b.on("board.drawn", () => (drawn = true));
+  tick().then(() => {
+    if (!document.querySelector("[data-board][data-surface=board-rows]:not([data-drawn])")) drawn = true;
+  });
   const membership = () => ({ filter: filter ?? null, membership: true });
   const total = live({ snapshot: "tickets.nav.counts", params: () => ({ filter: filter ?? null }), changes: "tickets.watch", changes_params: membership,
-                       key: "shortcode", on: { recount: "upsert:." }, when: () => !many() });
+                       key: "shortcode", on: { recount: "upsert:." }, when: () => drawn && !many() });
   const held = live({ snapshot: "tickets.list", params: () => ({ filter: filter ?? null, summary: true, fields: ["id"], limit: PAGE }),
-                      changes: "tickets.watch", changes_params: membership, key: "id", on: { entered: "upsert:.", left: "remove:id" }, when: () => !many() });
+                      changes: "tickets.watch", changes_params: membership, key: "id", on: { entered: "upsert:.", left: "remove:id" }, when: () => drawn && !many() });
   const member = live({ snapshot: "tickets.nav.member", params: () => ({ ids: many() ? ids : [], filter: filter ?? null }),
-                        changes: "tickets.watch", changes_params: membership, key: "id", on: { entered: "upsert:.", left: "remove:id" }, when: many });
+                        changes: "tickets.watch", changes_params: membership, key: "id", on: { entered: "upsert:.", left: "remove:id" }, when: () => drawn && many() });
 
   const sum = $derived(total.rows.reduce((a, c) => a + c.held, 0));
   const count = $derived(sum - Math.min(sum, PAGE) + held.rows.length);

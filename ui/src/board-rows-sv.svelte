@@ -17,7 +17,9 @@
      change says `board.selected { ids }` and `board.focus { id }` on the bus
      (the bulk bar, SURFACE-5, hears the first); `/` says `filter.focus`
      (the filter line's to take); `ctrl+k` is the palette's own. The host draws
-     `?`'s overlay from the labels. -->
+     `?`'s overlay from the labels. PERF-22: its first answer drawn, it says
+     `board.drawn` once on the bus and keeps `[data-drawn]`: the nav's facets,
+     saved filters and counts ask then, not beside the rows. -->
 <script module>
   // PERF-15: a row is the four fields drawn, not the whole summary row.
   const FIELDS = ["id", "title", "kind", "status"];
@@ -25,7 +27,7 @@
 </script>
 
 <script>
-  import { tick } from "svelte";
+  import { tick, untrack } from "svelte";
   import { bus, live } from "plexus-ui/host";
 
   let { filter = null } = $props();
@@ -47,6 +49,16 @@
     on: { created: "upsert:ticket", status_changed: "upsert:ticket", amended: "upsert:ticket",
           kind_changed: "upsert:ticket", labels_changed: "upsert:ticket", deleted: "remove:ids" },
     debounce_ms: 20 });
+  // PERF-22: the first answer drawn (rows, none, or a refusal), said once.
+  let drawn = $state(false);
+  $effect(() => {
+    if (rows.status === "pending") return;
+    untrack(() => {
+      if (drawn) return;
+      drawn = true;
+      b.emit("board.drawn", {});
+    });
+  });
   const held = (e) => (e.last_seq ?? e.seq) - (e.holes ?? []).length;
   const total = $derived(filter == null ? $extents.rows.reduce((a, e) => a + held(e), 0) : $counts.rows.reduce((a, c) => a + c.held, 0));
 
@@ -154,7 +166,7 @@
   }
 </script>
 
-<section class="board" data-board data-surface="board-rows">
+<section class="board" data-board data-surface="board-rows" data-drawn={drawn ? "" : undefined}>
   <header class="board-head">
     <span class="board-count">{total}</span>
     <span class="board-count-label">tickets</span>
