@@ -1,4 +1,6 @@
 import type { RpcClient } from '../../rpc';
+import { MethodStream } from '../../rpc';
+import type { SchemaResult } from './types';
 import type { Kind, ShortcodeRef, TicketRef } from '../../notes/types';
 import type { Cursor, FilterText, TicketsEvent, Zone } from '../../tickets/types';
 /** Typed client interface for tickets.work plugin */
@@ -20,7 +22,7 @@ export interface TicketsWorkClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `work.blockers` anywhere it is held
      */
-    blockers(id: TicketRef): AsyncGenerator<TicketsEvent>;
+    blockers(id: TicketRef): MethodStream<'tickets.work.blockers', TicketsEvent>;
     /**
      * Tickets that can start now: Ready, with every blocker Complete, Superseded or Canceled; optionally under a filter.
   
@@ -44,12 +46,12 @@ export interface TicketsWorkClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `work.ready` anywhere it is held
      */
-    ready(after?: Cursor | null, epic?: ShortcodeRef | null, filter?: FilterText | null, limit?: number | null, summary?: boolean | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
+    ready(after?: Cursor | null, epic?: ShortcodeRef | null, filter?: FilterText | null, limit?: number | null, summary?: boolean | null, tz?: Zone | null): MethodStream<'tickets.work.ready', TicketsEvent>;
     /**
      * Get plugin or method schema. Pass {"method": "name"} for a specific method.
      * @requires `work.schema` anywhere it is held
      */
-    schema(): Promise<unknown>;
+    schema(method?: string | null): Promise<SchemaResult>;
     /**
      * The order of work: each ticket of the shortcodes placed in its wave over the whole blocked_by graph (or missing_blocker, or done) with what it waits on, then the wave counts.
   
@@ -76,7 +78,7 @@ export interface TicketsWorkClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `work.waves` anywhere it is held
      */
-    waves(epics: ShortcodeRef[], kinds?: Kind[] | null): AsyncGenerator<TicketsEvent>;
+    waves(epics: ShortcodeRef[], kinds?: Kind[] | null): MethodStream<'tickets.work.waves', TicketsEvent>;
     /**
      * The wave board whose final state is one ticket: its blockers transitively (and a scope's open descendants) placed in waves, done blockers done, the ticket alone in the last wave; cycles named; then the wave counts.
   
@@ -85,7 +87,7 @@ export interface TicketsWorkClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `work.waves_to` anywhere it is held
      */
-    wavesTo(id: TicketRef, kinds?: Kind[] | null): AsyncGenerator<TicketsEvent>;
+    wavesTo(id: TicketRef, kinds?: Kind[] | null): MethodStream<'tickets.work.waves_to', TicketsEvent>;
     /**
      * The order of work under one ticket: each ticket of its subtree placed in its wave (or missing_blocker, or done) with what it waits on, then the wave counts.
   
@@ -94,7 +96,7 @@ export interface TicketsWorkClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `work.waves_under` anywhere it is held
      */
-    wavesUnder(id: TicketRef, kinds?: Kind[] | null): AsyncGenerator<TicketsEvent>;
+    wavesUnder(id: TicketRef, kinds?: Kind[] | null): MethodStream<'tickets.work.waves_under', TicketsEvent>;
 }
 /** Create a typed tickets.work client from an RPC client */
 export declare function createTicketsWorkClient(rpc: RpcClient): TicketsWorkClient;

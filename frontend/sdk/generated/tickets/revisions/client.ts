@@ -2,8 +2,8 @@
 // Wraps RPC layer and unwraps PlexusStreamItem to domain types
 
 import type { RpcClient } from '../../rpc';
-import { extractData, collectOne } from '../../rpc';
-import type { RevisionField } from './types';
+import { MethodStream, collectOne } from '../../rpc';
+import type { RevisionField, SchemaResult } from './types';
 import type { TicketRef } from '../../notes/types';
 import type { CallerSource, Message, TicketsEvent } from '../../tickets/types';
 
@@ -23,7 +23,7 @@ hunks (`truncated` says so).
    * @requiresAuth — resolver: self.access.verify
    * @requires `revisions.diff` anywhere it is held
    */
-  diff(id: TicketRef, from?: number | null, text?: boolean | null, to?: number | null): AsyncGenerator<TicketsEvent>;
+  diff(id: TicketRef, from?: number | null, text?: boolean | null, to?: number | null): MethodStream<'tickets.revisions.diff', TicketsEvent>;
   /**
    * The ticket exactly as it was at a revision; yields revision_at { revision, ticket }.
 
@@ -36,7 +36,7 @@ for a ticket out of reach; an `Error` for a revision it does not have.
    * @requiresAuth — resolver: self.access.verify
    * @requires `revisions.get` anywhere it is held
    */
-  get(id: TicketRef, rev: number): AsyncGenerator<TicketsEvent>;
+  get(id: TicketRef, rev: number): MethodStream<'tickets.revisions.get', TicketsEvent>;
   /**
    * A ticket's revisions, newest first: rev, when, who, from where, why, what changed, the body's hash, size and +/- lines; then revisions_end { count, latest, next }.
 
@@ -52,7 +52,7 @@ storage, not the cache.
    * @requiresAuth — resolver: self.access.verify
    * @requires `revisions.list` anywhere it is held
    */
-  list(id: TicketRef, before?: number | null, limit?: number | null): AsyncGenerator<TicketsEvent>;
+  list(id: TicketRef, before?: number | null, limit?: number | null): MethodStream<'tickets.revisions.list', TicketsEvent>;
   /**
    * Put a revision's fields back — all it keeps but its commits, or those named — as one update, itself a new revision; yields revision_restored { ticket, from_rev, changed, rev }.
 
@@ -69,12 +69,12 @@ restored; a parent is moved, never cleared.
    * @requiresAuth — resolver: self.access.verify
    * @requires `revisions.restore` on the scope of `id`
    */
-  restore(id: TicketRef, rev: number, fields?: RevisionField[] | null, message?: Message | null, source?: CallerSource | null): AsyncGenerator<TicketsEvent>;
+  restore(id: TicketRef, rev: number, fields?: RevisionField[] | null, message?: Message | null, source?: CallerSource | null): MethodStream<'tickets.revisions.restore', TicketsEvent>;
   /**
    * Get plugin or method schema. Pass {"method": "name"} for a specific method.
    * @requires `revisions.schema` anywhere it is held
    */
-  schema(): Promise<unknown>;
+  schema(method?: string | null): Promise<SchemaResult>;
 }
 
 /** Typed client implementation for tickets.revisions plugin */
@@ -82,29 +82,29 @@ class TicketsRevisionsClientImpl implements TicketsRevisionsClient {
   private rpc: RpcClient;
   constructor(rpc: RpcClient) { this.rpc = rpc; }
 
-  async *diff(id: TicketRef, from?: number | null, text?: boolean | null, to?: number | null): AsyncGenerator<TicketsEvent> {
+  diff(id: TicketRef, from?: number | null, text?: boolean | null, to?: number | null): MethodStream<'tickets.revisions.diff', TicketsEvent> {
     const stream = this.rpc.call('tickets.revisions.diff', { from, id, text, to });
-    yield* extractData<TicketsEvent>(stream);
+    return new MethodStream<'tickets.revisions.diff', TicketsEvent>('tickets.revisions.diff', stream);
   }
 
-  async *get(id: TicketRef, rev: number): AsyncGenerator<TicketsEvent> {
+  get(id: TicketRef, rev: number): MethodStream<'tickets.revisions.get', TicketsEvent> {
     const stream = this.rpc.call('tickets.revisions.get', { id, rev });
-    yield* extractData<TicketsEvent>(stream);
+    return new MethodStream<'tickets.revisions.get', TicketsEvent>('tickets.revisions.get', stream);
   }
 
-  async *list(id: TicketRef, before?: number | null, limit?: number | null): AsyncGenerator<TicketsEvent> {
+  list(id: TicketRef, before?: number | null, limit?: number | null): MethodStream<'tickets.revisions.list', TicketsEvent> {
     const stream = this.rpc.call('tickets.revisions.list', { before, id, limit });
-    yield* extractData<TicketsEvent>(stream);
+    return new MethodStream<'tickets.revisions.list', TicketsEvent>('tickets.revisions.list', stream);
   }
 
-  async *restore(id: TicketRef, rev: number, fields?: RevisionField[] | null, message?: Message | null, source?: CallerSource | null): AsyncGenerator<TicketsEvent> {
+  restore(id: TicketRef, rev: number, fields?: RevisionField[] | null, message?: Message | null, source?: CallerSource | null): MethodStream<'tickets.revisions.restore', TicketsEvent> {
     const stream = this.rpc.call('tickets.revisions.restore', { fields, id, message, rev, source });
-    yield* extractData<TicketsEvent>(stream);
+    return new MethodStream<'tickets.revisions.restore', TicketsEvent>('tickets.revisions.restore', stream);
   }
 
-  async schema(): Promise<unknown> {
-    const stream = this.rpc.call('tickets.revisions.schema', {});
-    return collectOne<unknown>(stream);
+  async schema(method?: string | null): Promise<SchemaResult> {
+    const stream = this.rpc.call('tickets.revisions.schema', { method });
+    return collectOne<SchemaResult>(stream);
   }
 }
 

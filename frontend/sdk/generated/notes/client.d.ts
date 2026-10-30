@@ -1,5 +1,6 @@
 import type { RpcClient } from '../rpc';
-import type { Author, Body, Kind, NoteId, NoteState, NotesEvent, Query, ShortcodeRef, TicketRef, Title } from './types';
+import { MethodStream } from '../rpc';
+import type { Author, Body, Kind, NoteId, NoteState, NotesEvent, Query, SchemaResult, ShortcodeRef, TicketRef, Title } from './types';
 /** Typed client interface for notes plugin */
 export interface NotesClient {
     /**
@@ -14,7 +15,7 @@ export interface NotesClient {
      * `error` naming the problem, with nothing kept.
      * @requires `notes.add` anywhere it is held
      */
-    add(body: Body, author?: Author | null): AsyncGenerator<NotesEvent>;
+    add(body: Body, author?: Author | null): MethodStream<'notes.add', NotesEvent>;
     /**
      * Get one note by id
      *
@@ -22,7 +23,7 @@ export interface NotesClient {
      * in-band `error` for an id that names no note.
      * @requires `notes.get` anywhere it is held
      */
-    get(id: NoteId): AsyncGenerator<NotesEvent>;
+    get(id: NoteId): MethodStream<'notes.get', NotesEvent>;
     /**
      * List notes newest first, by state, author and text; paged with after and limit
      *
@@ -36,12 +37,12 @@ export interface NotesClient {
      * names no note, is one in-band `error` and nothing else. From the cache.
      * @requires `notes.list` anywhere it is held
      */
-    list(after?: NoteId | null, author?: Author | null, limit?: number | null, state?: NoteState | null, text?: Query | null): AsyncGenerator<NotesEvent>;
+    list(after?: NoteId | null, author?: Author | null, limit?: number | null, state?: NoteState | null, text?: Query | null): MethodStream<'notes.list', NotesEvent>;
     /**
      * Get plugin or method schema. Pass {"method": "name"} for a specific method.
      * @requires `notes.schema` anywhere it is held
      */
-    schema(): Promise<unknown>;
+    schema(method?: string | null): Promise<SchemaResult>;
     /**
      * Make a note a ticket, titled by its first line unless given; yields the note
      *
@@ -60,7 +61,7 @@ export interface NotesClient {
      * `tickets.create` where the ticket lands, as `tickets.create` does.
      * @requires `notes.upgrade` anywhere it is held
      */
-    upgrade(epic: ShortcodeRef, id: NoteId, kind?: Kind | null, parent?: TicketRef | null, title?: Title | null): AsyncGenerator<NotesEvent>;
+    upgrade(epic: ShortcodeRef, id: NoteId, kind?: Kind | null, parent?: TicketRef | null, title?: Title | null): MethodStream<'notes.upgrade', NotesEvent>;
 }
 /** Create a typed notes client from an RPC client */
 export declare function createNotesClient(rpc: RpcClient): NotesClient;

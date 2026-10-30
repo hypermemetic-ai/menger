@@ -1,5 +1,6 @@
 import type { RpcClient } from '../../rpc';
-import type { RevisionField } from './types';
+import { MethodStream } from '../../rpc';
+import type { RevisionField, SchemaResult } from './types';
 import type { TicketRef } from '../../notes/types';
 import type { CallerSource, Message, TicketsEvent } from '../../tickets/types';
 /** Typed client interface for tickets.revisions plugin */
@@ -18,7 +19,7 @@ export interface TicketsRevisionsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `revisions.diff` anywhere it is held
      */
-    diff(id: TicketRef, from?: number | null, text?: boolean | null, to?: number | null): AsyncGenerator<TicketsEvent>;
+    diff(id: TicketRef, from?: number | null, text?: boolean | null, to?: number | null): MethodStream<'tickets.revisions.diff', TicketsEvent>;
     /**
      * The ticket exactly as it was at a revision; yields revision_at { revision, ticket }.
   
@@ -31,7 +32,7 @@ export interface TicketsRevisionsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `revisions.get` anywhere it is held
      */
-    get(id: TicketRef, rev: number): AsyncGenerator<TicketsEvent>;
+    get(id: TicketRef, rev: number): MethodStream<'tickets.revisions.get', TicketsEvent>;
     /**
      * A ticket's revisions, newest first: rev, when, who, from where, why, what changed, the body's hash, size and +/- lines; then revisions_end { count, latest, next }.
   
@@ -47,7 +48,7 @@ export interface TicketsRevisionsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `revisions.list` anywhere it is held
      */
-    list(id: TicketRef, before?: number | null, limit?: number | null): AsyncGenerator<TicketsEvent>;
+    list(id: TicketRef, before?: number | null, limit?: number | null): MethodStream<'tickets.revisions.list', TicketsEvent>;
     /**
      * Put a revision's fields back — all it keeps but its commits, or those named — as one update, itself a new revision; yields revision_restored { ticket, from_rev, changed, rev }.
   
@@ -64,12 +65,12 @@ export interface TicketsRevisionsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `revisions.restore` on the scope of `id`
      */
-    restore(id: TicketRef, rev: number, fields?: RevisionField[] | null, message?: Message | null, source?: CallerSource | null): AsyncGenerator<TicketsEvent>;
+    restore(id: TicketRef, rev: number, fields?: RevisionField[] | null, message?: Message | null, source?: CallerSource | null): MethodStream<'tickets.revisions.restore', TicketsEvent>;
     /**
      * Get plugin or method schema. Pass {"method": "name"} for a specific method.
      * @requires `revisions.schema` anywhere it is held
      */
-    schema(): Promise<unknown>;
+    schema(method?: string | null): Promise<SchemaResult>;
 }
 /** Create a typed tickets.revisions client from an RPC client */
 export declare function createTicketsRevisionsClient(rpc: RpcClient): TicketsRevisionsClient;

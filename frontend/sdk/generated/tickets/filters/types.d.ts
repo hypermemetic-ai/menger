@@ -7,3 +7,5 @@ export type FilterName = string;
 take: the language's refusal comes back in band, naming the chunk and
 where it stands, where [`FilterText`] would refuse the parameter. */
 export type FilterSource = string;
+/** Stub type - definition missing from IR */
+export type SchemaResult = unknown;

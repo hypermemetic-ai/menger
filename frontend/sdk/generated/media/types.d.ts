@@ -66,3 +66,5 @@ export type MediaHash = string;
 cased). Which ones are kept, and whether the bytes are that, is the
 store's rule (`image/png`, `image/jpeg`, `image/gif`, `image/webp`). */
 export type MediaType = string;
+/** Stub type - definition missing from IR */
+export type SchemaResult = unknown;

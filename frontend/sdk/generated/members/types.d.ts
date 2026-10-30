@@ -146,3 +146,5 @@ export interface TeamMember {
 /** ACCESS-22: a team's name — lower-kebab, starting with a letter, at
 most 32 (`release-crew`). */
 export type TeamName = string;
+/** Stub type - definition missing from IR */
+export type SchemaResult = unknown;

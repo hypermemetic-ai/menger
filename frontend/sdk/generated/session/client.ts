@@ -2,8 +2,8 @@
 // Wraps RPC layer and unwraps PlexusStreamItem to domain types
 
 import type { RpcClient } from '../rpc';
-import { extractData, collectOne } from '../rpc';
-import type { Ceiling, SessionEvent } from './types';
+import { MethodStream, collectOne } from '../rpc';
+import type { Ceiling, SchemaResult, SessionEvent } from './types';
 
 /** Typed client interface for session plugin */
 export interface SessionClient {
@@ -23,7 +23,7 @@ allow it. A session minted from a scoped session keeps that scope too.
    * @requiresAuth — resolver: self.access.verify
    * @requires `session.login` anywhere it is held
    */
-  login(scope?: Ceiling[] | null, ttlSecs?: number | null): AsyncGenerator<SessionEvent>;
+  login(scope?: Ceiling[] | null, ttlSecs?: number | null): MethodStream<'session.login', SessionEvent>;
   /**
    * End this connection's session: logged_out.
 
@@ -33,7 +33,7 @@ Yields `logged_out`, or an in-band `error` when the connection holds
 no session.
    * @requires `session.logout` anywhere it is held
    */
-  logout(): AsyncGenerator<SessionEvent>;
+  logout(): MethodStream<'session.logout', SessionEvent>;
   /**
    * The providers this menger admits callers through: provider { name, kind, issuer, audience }.
 
@@ -44,12 +44,12 @@ is secret: it is what a sign-in needs to find the provider — so it is
 `public` (ACCESS-19), answered before anyone has signed in.
    * @requires `session.providers` anywhere it is held
    */
-  providers(): AsyncGenerator<SessionEvent>;
+  providers(): MethodStream<'session.providers', SessionEvent>;
   /**
    * Get plugin or method schema. Pass {"method": "name"} for a specific method.
    * @requires `session.schema` anywhere it is held
    */
-  schema(): Promise<unknown>;
+  schema(method?: string | null): Promise<SchemaResult>;
   /**
    * Who this connection is: identity { principal, name, roles, tenant, provider }, or anonymous.
 
@@ -63,7 +63,7 @@ is — a sign-in signed out or expired is refused `unauthenticated`,
 never reported as signed in.
    * @requires `session.whoami` anywhere it is held
    */
-  whoami(): AsyncGenerator<SessionEvent>;
+  whoami(): MethodStream<'session.whoami', SessionEvent>;
 }
 
 /** Typed client implementation for session plugin */
@@ -71,29 +71,29 @@ class SessionClientImpl implements SessionClient {
   private rpc: RpcClient;
   constructor(rpc: RpcClient) { this.rpc = rpc; }
 
-  async *login(scope?: Ceiling[] | null, ttlSecs?: number | null): AsyncGenerator<SessionEvent> {
+  login(scope?: Ceiling[] | null, ttlSecs?: number | null): MethodStream<'session.login', SessionEvent> {
     const stream = this.rpc.call('session.login', { scope, ttl_secs: ttlSecs });
-    yield* extractData<SessionEvent>(stream);
+    return new MethodStream<'session.login', SessionEvent>('session.login', stream);
   }
 
-  async *logout(): AsyncGenerator<SessionEvent> {
+  logout(): MethodStream<'session.logout', SessionEvent> {
     const stream = this.rpc.call('session.logout', {});
-    yield* extractData<SessionEvent>(stream);
+    return new MethodStream<'session.logout', SessionEvent>('session.logout', stream);
   }
 
-  async *providers(): AsyncGenerator<SessionEvent> {
+  providers(): MethodStream<'session.providers', SessionEvent> {
     const stream = this.rpc.call('session.providers', {});
-    yield* extractData<SessionEvent>(stream);
+    return new MethodStream<'session.providers', SessionEvent>('session.providers', stream);
   }
 
-  async schema(): Promise<unknown> {
-    const stream = this.rpc.call('session.schema', {});
-    return collectOne<unknown>(stream);
+  async schema(method?: string | null): Promise<SchemaResult> {
+    const stream = this.rpc.call('session.schema', { method });
+    return collectOne<SchemaResult>(stream);
   }
 
-  async *whoami(): AsyncGenerator<SessionEvent> {
+  whoami(): MethodStream<'session.whoami', SessionEvent> {
     const stream = this.rpc.call('session.whoami', {});
-    yield* extractData<SessionEvent>(stream);
+    return new MethodStream<'session.whoami', SessionEvent>('session.whoami', stream);
   }
 }
 

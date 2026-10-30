@@ -2,7 +2,7 @@
  * frame's postMessage channel, and the entry point of the SDK's generated
  * region.
  *
- * `menger.tickets` is `createTicketsClient` from the client hub-codegen
+ * `menger.tickets` is `createTicketsClient` from the client service-codegen
  * generates from the `tickets` activation's schema (./generated/, written by
  * scripts/sdk-codegen.sh — never edited by hand). That client's only seam is
  * Layer 1, `RpcClient` (./generated/rpc.ts): `call(method, params)` → an
@@ -37,7 +37,7 @@ import type { PlexusStreamItem, StreamMetadata } from './generated/types';
 import { createTicketsClient, type TicketsClient } from './generated/tickets/client';
 
 /** The typed `tickets` a frame gets: the generated client as generated —
- *  its children (hub-codegen ≥ 0.5.0) its own typed sub-clients,
+ *  its children (the generator ≥ 0.5.0) its own typed sub-clients,
  *  `menger.tickets.work.waves([…])`, `.nav.groups()`, `.inputs.list(…)`,
  *  `.components.list()` (ACCESS-20, SDK 2.0: no alias at the old names). */
 export type FrameTickets = TicketsClient;
@@ -60,8 +60,11 @@ export interface Typed {
  *  (`get`, `work.waves`), as a frame's `menger.call` does (ACCESS-20). */
 const NAMESPACE = 'tickets.';
 
+/** The items' fields are the wire's spelling (POLYGLOT-12, service-codegen
+ *  ≥ 0.5.1): `plexus_hash`, `content_type`. The generated runtime reads only
+ *  `type`, `content` and an error's fields. */
 function metadata(method: string): StreamMetadata {
-  return { provenance: ['menger', 'bridge', method], plexusHash: '', timestamp: Math.floor(Date.now() / 1000) };
+  return { provenance: ['menger', 'bridge', method], plexus_hash: '', timestamp: Math.floor(Date.now() / 1000) };
 }
 
 /** `RpcClient` over the bridge — see the header. */
@@ -78,7 +81,7 @@ function bridgeRpc(call: BridgeCall): RpcClient {
         return;
       }
       for (const content of items) {
-        yield { type: 'data', metadata: metadata(method), contentType: method, content };
+        yield { type: 'data', metadata: metadata(method), content_type: method, content };
       }
       yield { type: 'done', metadata: metadata(method) };
     },
@@ -87,7 +90,7 @@ function bridgeRpc(call: BridgeCall): RpcClient {
 
 /** One data item, as the generated runtime reads a stream. */
 async function* one(content: unknown): AsyncGenerator<PlexusStreamItem> {
-  yield { type: 'data', metadata: metadata('typed'), contentType: 'typed', content };
+  yield { type: 'data', metadata: metadata('typed'), content_type: 'typed', content };
 }
 
 /** The shell's variable (menger-sdk.js declares it just above the region). */

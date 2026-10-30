@@ -346,3 +346,5 @@ export interface WebhookConfig {
 }
 /** DEPLOY-25: where a request's webhook delivery stands. */
 export type WebhookState = "none" | "pending" | "retrying" | "delivered" | "failed" | "stopped";
+/** Stub type - definition missing from IR */
+export type SchemaResult = unknown;

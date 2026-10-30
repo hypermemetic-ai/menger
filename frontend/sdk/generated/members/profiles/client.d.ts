@@ -1,4 +1,6 @@
 import type { RpcClient } from '../../rpc';
+import { MethodStream } from '../../rpc';
+import type { SchemaResult } from './types';
 import type { MembersEvent } from '../../members/types';
 import type { Principal } from '../../orgs/types';
 /** Typed client interface for members.profiles plugin */
@@ -12,7 +14,7 @@ export interface MembersProfilesClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `profiles.get` anywhere it is held
      */
-    get(principal: Principal): AsyncGenerator<MembersEvent>;
+    get(principal: Principal): MethodStream<'members.profiles.get', MembersEvent>;
     /**
      * Everyone who signed in, newest sign-in first; one profile each, with holds_grant (false: waiting). Admin of * only.
   
@@ -23,12 +25,12 @@ export interface MembersProfilesClient {
   admin of `*` is refused in band.
      * @requires `profiles.list` anywhere it is held
      */
-    list(): AsyncGenerator<MembersEvent>;
+    list(): MethodStream<'members.profiles.list', MembersEvent>;
     /**
      * Get plugin or method schema. Pass {"method": "name"} for a specific method.
      * @requires `profiles.schema` anywhere it is held
      */
-    schema(): Promise<unknown>;
+    schema(method?: string | null): Promise<SchemaResult>;
 }
 /** Create a typed members.profiles client from an RPC client */
 export declare function createMembersProfilesClient(rpc: RpcClient): MembersProfilesClient;

@@ -118,3 +118,5 @@ export type Route = string;
 and its descendants) or a shortcode (it and every shortcode hosted
 under it), by any name [`TicketRef`] or [`ShortcodeRef`] takes. */
 export type Under = string;
+/** Stub type - definition missing from IR */
+export type SchemaResult = unknown;

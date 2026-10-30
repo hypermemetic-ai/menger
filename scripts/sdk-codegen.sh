@@ -245,7 +245,8 @@ say "generated in $(( $(date +%s) - started ))s"
 # --- the snapshot --------------------------------------------------------
 rm -rf "$out"
 mkdir -p "$out"
-for f in index.ts rpc.ts types.ts transport.ts package.json; do
+# RETURNS-38 (the generator ≥ 0.5.1): watch.ts, which index.ts and transport.ts import
+for f in index.ts rpc.ts types.ts transport.ts watch.ts package.json; do
   cp "$gen/generated/$f" "$out/$f"
 done
 # COMMENT-2: every activation's module — a directory holding a client;

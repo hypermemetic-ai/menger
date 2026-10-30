@@ -1,5 +1,6 @@
 import type { RpcClient } from '../rpc';
-import type { ActivityLine, ActivityState, ChatGrant, ChatState, ChatsEvent, MessageId, MessageInput } from './types';
+import { MethodStream } from '../rpc';
+import type { ActivityLine, ActivityState, ChatGrant, ChatState, ChatsEvent, MessageId, MessageInput, SchemaResult } from './types';
 import type { ChatId } from '../media/types';
 import type { Body, TicketRef, Title } from '../notes/types';
 import type { Principal } from '../orgs/types';
@@ -21,7 +22,7 @@ export interface ChatsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `chats.activity` anywhere it is held
      */
-    activity(chat: ChatId, line?: ActivityLine | null, state?: ActivityState | null): AsyncGenerator<ChatsEvent>;
+    activity(chat: ChatId, line?: ActivityLine | null, state?: ActivityState | null): MethodStream<'chats.activity', ChatsEvent>;
     /**
      * A chat's live work kept in memory — its last 200 activity items, oldest first; an activity { activity } each, then the end (CHAT-18).
   
@@ -31,7 +32,7 @@ export interface ChatsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `chats.activity_log` anywhere it is held
      */
-    activityLog(chat: ChatId): AsyncGenerator<ChatsEvent>;
+    activityLog(chat: ChatId): MethodStream<'chats.activity_log', ChatsEvent>;
     /**
      * Add a participant to a chat; yields added { chat }.
   
@@ -49,7 +50,7 @@ export interface ChatsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `chats.add` anywhere it is held
      */
-    add(chat: ChatId, principal: Principal, grant?: ChatGrant | null): AsyncGenerator<ChatsEvent>;
+    add(chat: ChatId, principal: Principal, grant?: ChatGrant | null): MethodStream<'chats.add', ChatsEvent>;
     /**
      * Wait for the next message for the caller: waiting at once, then one message { message } by someone else — in the chat named, or any of the caller's chats (on ticket, when named) — or one answered { … } to an input in the caller's own messages (input: that one alone), and the end; timed_out after timeout_minutes.
   
@@ -64,7 +65,7 @@ export interface ChatsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `chats.await_message` anywhere it is held
      */
-    awaitMessage(after?: MessageId | null, chat?: ChatId | null, input?: MessageInput | null, since?: number | null, ticket?: TicketRef | null, timeoutMinutes?: number | null): AsyncGenerator<ChatsEvent>;
+    awaitMessage(after?: MessageId | null, chat?: ChatId | null, input?: MessageInput | null, since?: number | null, ticket?: TicketRef | null, timeoutMinutes?: number | null): MethodStream<'chats.await_message', ChatsEvent>;
     /**
      * Who could be in a chat — on a ticket, or (without one) outside tickets: a candidate { principal, reads, name?, agent } each — every principal holding a grant in the organization (a team's members by name), and those in the caller's chats there — then the end.
   
@@ -82,7 +83,7 @@ export interface ChatsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `chats.candidates` anywhere it is held
      */
-    candidates(ticket?: TicketRef | null): AsyncGenerator<ChatsEvent>;
+    candidates(ticket?: TicketRef | null): MethodStream<'chats.candidates', ChatsEvent>;
     /**
      * Close a chat; yields closed { chat }. A closed chat is read-only, kept on its ticket.
   
@@ -91,7 +92,7 @@ export interface ChatsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `chats.close` anywhere it is held
      */
-    close(chat: ChatId): AsyncGenerator<ChatsEvent>;
+    close(chat: ChatId): MethodStream<'chats.close', ChatsEvent>;
     /**
      * Delete messages in a chat — kept and marked deleted { at, by }, never gone; yields messages_deleted { chat, ids, by, at, unread } (CHAT-44).
   
@@ -107,7 +108,7 @@ export interface ChatsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `chats.delete` anywhere it is held
      */
-    delete(chat: ChatId, from?: MessageId | null, ids?: MessageId[] | null, to?: MessageId | null): AsyncGenerator<ChatsEvent>;
+    delete(chat: ChatId, from?: MessageId | null, ids?: MessageId[] | null, to?: MessageId | null): MethodStream<'chats.delete', ChatsEvent>;
     /**
      * Link tickets to a chat, as a builder's work from it; yields linked { chat, tickets, how } — those new to it (CHAT-55).
   
@@ -118,7 +119,7 @@ export interface ChatsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `chats.link` anywhere it is held
      */
-    link(chat: ChatId, tickets: TicketRef[]): AsyncGenerator<ChatsEvent>;
+    link(chat: ChatId, tickets: TicketRef[]): MethodStream<'chats.link', ChatsEvent>;
     /**
      * The caller's chats, by last activity, newest first — on a ticket, with or without unread, open or closed; a chat { chat } each, then page { next }.
   
@@ -130,7 +131,7 @@ export interface ChatsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `chats.list` anywhere it is held
      */
-    list(after?: ChatId | null, limit?: number | null, state?: ChatState | null, ticket?: TicketRef | null, unread?: boolean | null): AsyncGenerator<ChatsEvent>;
+    list(after?: ChatId | null, limit?: number | null, state?: ChatState | null, ticket?: TicketRef | null, unread?: boolean | null): MethodStream<'chats.list', ChatsEvent>;
     /**
      * A page of a chat's messages, oldest first within it; a message { message } each, then page { next }.
   
@@ -144,7 +145,7 @@ export interface ChatsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `chats.messages` anywhere it is held
      */
-    messages(chat: ChatId, after?: MessageId | null, before?: MessageId | null, limit?: number | null, newest?: boolean | null): AsyncGenerator<ChatsEvent>;
+    messages(chat: ChatId, after?: MessageId | null, before?: MessageId | null, limit?: number | null, newest?: boolean | null): MethodStream<'chats.messages', ChatsEvent>;
     /**
      * Open a chat on a ticket, or outside tickets — a direct message or a group — with the principals named; yields opened { chat } — the open chat they already have, when they do (existing: true).
   
@@ -164,7 +165,7 @@ export interface ChatsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `chats.open` anywhere it is held
      */
-    open(others?: Principal[] | null, ticket?: TicketRef | null, title?: Title | null): AsyncGenerator<ChatsEvent>;
+    open(others?: Principal[] | null, ticket?: TicketRef | null, title?: Title | null): MethodStream<'chats.open', ChatsEvent>;
     /**
      * Post a message in a chat; yields posted { message, inputs }, signed by the caller.
   
@@ -176,7 +177,7 @@ export interface ChatsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `chats.post` anywhere it is held
      */
-    post(body: Body, chat: ChatId): AsyncGenerator<ChatsEvent>;
+    post(body: Body, chat: ChatId): MethodStream<'chats.post', ChatsEvent>;
     /**
      * Mark a chat read up to a message; yields read { chat, upto, unread }.
   
@@ -187,7 +188,7 @@ export interface ChatsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `chats.read` anywhere it is held
      */
-    read(chat: ChatId, upto: MessageId): AsyncGenerator<ChatsEvent>;
+    read(chat: ChatId, upto: MessageId): MethodStream<'chats.read', ChatsEvent>;
     /**
      * Take a participant out of a chat; yields removed { chat, principal, revoked } (CHAT-14; CHAT-16: revoke takes back the grant their add made).
   
@@ -199,7 +200,7 @@ export interface ChatsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `chats.remove` anywhere it is held
      */
-    remove(chat: ChatId, principal: Principal, revoke?: boolean | null): AsyncGenerator<ChatsEvent>;
+    remove(chat: ChatId, principal: Principal, revoke?: boolean | null): MethodStream<'chats.remove', ChatsEvent>;
     /**
      * Rename a chat; yields renamed { chat } — the composer's /title (CHAT-7).
   
@@ -209,7 +210,7 @@ export interface ChatsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `chats.rename` anywhere it is held
      */
-    rename(chat: ChatId, title?: Title | null): AsyncGenerator<ChatsEvent>;
+    rename(chat: ChatId, title?: Title | null): MethodStream<'chats.rename', ChatsEvent>;
     /**
      * Reopen a closed chat; yields reopened { chat }.
   
@@ -218,7 +219,7 @@ export interface ChatsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `chats.reopen` anywhere it is held
      */
-    reopen(chat: ChatId): AsyncGenerator<ChatsEvent>;
+    reopen(chat: ChatId): MethodStream<'chats.reopen', ChatsEvent>;
     /**
      * Put deleted messages back in a chat; yields messages_restored { chat, ids, by, at, unread } (CHAT-44).
   
@@ -230,12 +231,12 @@ export interface ChatsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `chats.restore` anywhere it is held
      */
-    restore(chat: ChatId, from?: MessageId | null, ids?: MessageId[] | null, to?: MessageId | null): AsyncGenerator<ChatsEvent>;
+    restore(chat: ChatId, from?: MessageId | null, ids?: MessageId[] | null, to?: MessageId | null): MethodStream<'chats.restore', ChatsEvent>;
     /**
      * Get plugin or method schema. Pass {"method": "name"} for a specific method.
      * @requires `chats.schema` anywhere it is held
      */
-    schema(): Promise<unknown>;
+    schema(method?: string | null): Promise<SchemaResult>;
     /**
      * The tickets a chat names — in its messages, filed from it or linked to it — each a ticket { ticket } with its stage, newest first (CHAT-55).
   
@@ -248,7 +249,7 @@ export interface ChatsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `chats.tickets` anywhere it is held
      */
-    tickets(chat: ChatId): AsyncGenerator<ChatsEvent>;
+    tickets(chat: ChatId): MethodStream<'chats.tickets', ChatsEvent>;
     /**
      * Subscribe to the caller's chats: opened, posted, added, read, closed, reopened, messages_deleted, messages_restored, listening, left — until disconnect.
   
@@ -263,7 +264,7 @@ export interface ChatsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `chats.watch` anywhere it is held
      */
-    watch(ticket?: TicketRef | null): AsyncGenerator<ChatsEvent>;
+    watch(ticket?: TicketRef | null): MethodStream<'chats.watch', ChatsEvent>;
 }
 /** Create a typed chats client from an RPC client */
 export declare function createChatsClient(rpc: RpcClient): ChatsClient;

@@ -54,9 +54,14 @@ export type ShortcodeRef = string;
 /** A ticket as a call names it (ORG-3): its key (`MNG-1`, a namesake's
 `THEME.62-3`), any short form of its address (`MENGER/THEME-3`,
 `hypermemetic:THEME-3`) or a path address (`PLEXUS/_MENGER/board`),
-its codes folded to upper case — `mng-1` is `MNG-1`. The store
-resolves it to the one ticket it names in the caller's reach. */
+its codes folded to upper case — `mng-1` is `MNG-1`. TICKETS-35: or
+its uid (`7k3mq2xa`, any case), bare or in the app's link to it
+(`/t/7k3mq2xa/…`, `https://app.menger.sh/t/7k3mq2xa/…`), kept as the
+uid alone. The store resolves it to the one ticket it names in the
+caller's reach. */
 export type TicketRef = string;
 /** A ticket's (or a note's ticket's) title: not blank, at most
 [`TITLE_MAX`] bytes, kept as written (ACCESS-29). */
 export type Title = string;
+/** Stub type - definition missing from IR */
+export type SchemaResult = unknown;

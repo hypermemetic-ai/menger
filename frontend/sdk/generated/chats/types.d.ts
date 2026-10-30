@@ -654,6 +654,16 @@ export interface TicketSummary {
     shortcode?: ShortcodeId;
     status: Status;
     title: string;
+    /** TICKETS-35: as on [`Ticket`] — on the row, so every link the app
+  makes to a ticket is by its uid. */
+    uid?: Uid;
+    /** TICKETS-35: as on [`Ticket`] — the uids of its parent, blockers and
+  unlocks, so their links are by uid too; omitted when empty. */
+    uidOf?: Record<string, unknown>;
     unlocks: TicketName[];
     updatedUnix: number;
 }
+/** TICKETS-35: a ticket's uid — 8 characters of Crockford's base32, lower case (7k3mq2xa), read case-blind; minted at its birth, kept through every move, never another's */
+export type Uid = string;
+/** Stub type - definition missing from IR */
+export type SchemaResult = unknown;

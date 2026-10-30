@@ -2,8 +2,8 @@
 // Wraps RPC layer and unwraps PlexusStreamItem to domain types
 
 import type { RpcClient } from '../rpc';
-import { extractData, collectOne } from '../rpc';
-import type { AnchorPath, CommentsEvent, Route, Under } from './types';
+import { MethodStream, collectOne } from '../rpc';
+import type { AnchorPath, CommentsEvent, Route, SchemaResult, Under } from './types';
 import type { Author, Body, Query, TicketRef } from '../notes/types';
 import type { Anchor, CommentId, CommentIntent, CommentState, Message, Reason } from '../tickets/types';
 
@@ -41,7 +41,7 @@ write (`watch` carries `added`, then `reopened`). The answer carries
    * @requiresAuth — resolver: self.access.verify
    * @requires `comments.add` anywhere it is held
    */
-  add(body: Body, anchor?: Anchor | null, replyTo?: CommentId | null): AsyncGenerator<CommentsEvent>;
+  add(body: Body, anchor?: Anchor | null, replyTo?: CommentId | null): MethodStream<'comments.add', CommentsEvent>;
   /**
    * COMMENT-9: the comments the app could not keep, newest first — `failure { failure }` each.
 
@@ -51,7 +51,7 @@ been kept; at most `limit` (default 50, at most 200).
    * @requiresAuth — resolver: self.access.verify
    * @requires `comments.failures` anywhere it is held
    */
-  failures(limit?: number | null): AsyncGenerator<CommentsEvent>;
+  failures(limit?: number | null): MethodStream<'comments.failures', CommentsEvent>;
   /**
    * List comments, newest first, filtered by ticket, under (a ticket or shortcode's lineage), route, path (a prefix), state, author and text; paged with after + limit.
 
@@ -75,7 +75,7 @@ app, its author's and the admins' of `*`). From the cache.
    * @requiresAuth — resolver: self.access.verify
    * @requires `comments.list` anywhere it is held
    */
-  list(after?: CommentId | null, author?: Author | null, intent?: CommentIntent | null, limit?: number | null, path?: AnchorPath | null, route?: Route | null, state?: CommentState | null, text?: Query | null, thread?: CommentId | null, ticket?: TicketRef | null, under?: Under | null): AsyncGenerator<CommentsEvent>;
+  list(after?: CommentId | null, author?: Author | null, intent?: CommentIntent | null, limit?: number | null, path?: AnchorPath | null, route?: Route | null, state?: CommentState | null, text?: Query | null, thread?: CommentId | null, ticket?: TicketRef | null, under?: Under | null): MethodStream<'comments.list', CommentsEvent>;
   /**
    * Reopen a resolved comment; yields the comment, open.
 
@@ -87,7 +87,7 @@ there, naming nothing (ACCESS-3 #7). `watch` carries `reopened`.
    * @requiresAuth — resolver: self.access.verify
    * @requires `comments.reopen` anywhere it is held
    */
-  reopen(id: CommentId): AsyncGenerator<CommentsEvent>;
+  reopen(id: CommentId): MethodStream<'comments.reopen', CommentsEvent>;
   /**
    * COMMENT-9: report a comment the app could not keep; yields `reported { failure }`.
 
@@ -99,7 +99,7 @@ a restart forgets them) and logged; never a comment.
    * @requiresAuth — resolver: self.access.verify
    * @requires `comments.report` anywhere it is held
    */
-  report(anchor: Anchor, body: Body, reason: Reason, agent?: Message | null, failedAt?: number | null): AsyncGenerator<CommentsEvent>;
+  report(anchor: Anchor, body: Body, reason: Reason, agent?: Message | null, failedAt?: number | null): MethodStream<'comments.report', CommentsEvent>;
   /**
    * Resolve a comment; yields the comment, resolved.
 
@@ -112,12 +112,12 @@ nothing (ACCESS-3 #7). `watch` carries `resolved`.
    * @requiresAuth — resolver: self.access.verify
    * @requires `comments.resolve` anywhere it is held
    */
-  resolve(id: CommentId): AsyncGenerator<CommentsEvent>;
+  resolve(id: CommentId): MethodStream<'comments.resolve', CommentsEvent>;
   /**
    * Get plugin or method schema. Pass {"method": "name"} for a specific method.
    * @requires `comments.schema` anywhere it is held
    */
-  schema(): Promise<unknown>;
+  schema(method?: string | null): Promise<SchemaResult>;
   /**
    * Subscribe to comments: added / resolved / reopened, each with the comment, until disconnect; lagged { missed } where a slow subscriber lost changes.
 
@@ -132,7 +132,7 @@ ACCESS-12: with one `watch_closed { reason, message }`, at once when
 a revoke or sign-out ends it.
    * @requires `comments.watch` anywhere it is held
    */
-  watch(): AsyncGenerator<CommentsEvent>;
+  watch(): MethodStream<'comments.watch', CommentsEvent>;
 }
 
 /** Typed client implementation for comments plugin */
@@ -140,44 +140,44 @@ class CommentsClientImpl implements CommentsClient {
   private rpc: RpcClient;
   constructor(rpc: RpcClient) { this.rpc = rpc; }
 
-  async *add(body: Body, anchor?: Anchor | null, replyTo?: CommentId | null): AsyncGenerator<CommentsEvent> {
+  add(body: Body, anchor?: Anchor | null, replyTo?: CommentId | null): MethodStream<'comments.add', CommentsEvent> {
     const stream = this.rpc.call('comments.add', { anchor, body, reply_to: replyTo });
-    yield* extractData<CommentsEvent>(stream);
+    return new MethodStream<'comments.add', CommentsEvent>('comments.add', stream);
   }
 
-  async *failures(limit?: number | null): AsyncGenerator<CommentsEvent> {
+  failures(limit?: number | null): MethodStream<'comments.failures', CommentsEvent> {
     const stream = this.rpc.call('comments.failures', { limit });
-    yield* extractData<CommentsEvent>(stream);
+    return new MethodStream<'comments.failures', CommentsEvent>('comments.failures', stream);
   }
 
-  async *list(after?: CommentId | null, author?: Author | null, intent?: CommentIntent | null, limit?: number | null, path?: AnchorPath | null, route?: Route | null, state?: CommentState | null, text?: Query | null, thread?: CommentId | null, ticket?: TicketRef | null, under?: Under | null): AsyncGenerator<CommentsEvent> {
+  list(after?: CommentId | null, author?: Author | null, intent?: CommentIntent | null, limit?: number | null, path?: AnchorPath | null, route?: Route | null, state?: CommentState | null, text?: Query | null, thread?: CommentId | null, ticket?: TicketRef | null, under?: Under | null): MethodStream<'comments.list', CommentsEvent> {
     const stream = this.rpc.call('comments.list', { after, author, intent, limit, path, route, state, text, thread, ticket, under });
-    yield* extractData<CommentsEvent>(stream);
+    return new MethodStream<'comments.list', CommentsEvent>('comments.list', stream);
   }
 
-  async *reopen(id: CommentId): AsyncGenerator<CommentsEvent> {
+  reopen(id: CommentId): MethodStream<'comments.reopen', CommentsEvent> {
     const stream = this.rpc.call('comments.reopen', { id });
-    yield* extractData<CommentsEvent>(stream);
+    return new MethodStream<'comments.reopen', CommentsEvent>('comments.reopen', stream);
   }
 
-  async *report(anchor: Anchor, body: Body, reason: Reason, agent?: Message | null, failedAt?: number | null): AsyncGenerator<CommentsEvent> {
+  report(anchor: Anchor, body: Body, reason: Reason, agent?: Message | null, failedAt?: number | null): MethodStream<'comments.report', CommentsEvent> {
     const stream = this.rpc.call('comments.report', { agent, anchor, body, failed_at: failedAt, reason });
-    yield* extractData<CommentsEvent>(stream);
+    return new MethodStream<'comments.report', CommentsEvent>('comments.report', stream);
   }
 
-  async *resolve(id: CommentId): AsyncGenerator<CommentsEvent> {
+  resolve(id: CommentId): MethodStream<'comments.resolve', CommentsEvent> {
     const stream = this.rpc.call('comments.resolve', { id });
-    yield* extractData<CommentsEvent>(stream);
+    return new MethodStream<'comments.resolve', CommentsEvent>('comments.resolve', stream);
   }
 
-  async schema(): Promise<unknown> {
-    const stream = this.rpc.call('comments.schema', {});
-    return collectOne<unknown>(stream);
+  async schema(method?: string | null): Promise<SchemaResult> {
+    const stream = this.rpc.call('comments.schema', { method });
+    return collectOne<SchemaResult>(stream);
   }
 
-  async *watch(): AsyncGenerator<CommentsEvent> {
+  watch(): MethodStream<'comments.watch', CommentsEvent> {
     const stream = this.rpc.call('comments.watch', {});
-    yield* extractData<CommentsEvent>(stream);
+    return new MethodStream<'comments.watch', CommentsEvent>('comments.watch', stream);
   }
 }
 

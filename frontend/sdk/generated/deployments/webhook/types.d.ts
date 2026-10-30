@@ -10,3 +10,5 @@ export type WebhookSecret = string;
 local CI; no credentials in it, at most 2,048 bytes:
 [`crate::deployments::webhook_url_of`]. */
 export type WebhookUrl = string;
+/** Stub type - definition missing from IR */
+export type SchemaResult = unknown;

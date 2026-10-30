@@ -2,7 +2,8 @@
 // Wraps RPC layer and unwraps PlexusStreamItem to domain types
 
 import type { RpcClient } from '../../rpc';
-import { extractData, collectOne } from '../../rpc';
+import { MethodStream, collectOne } from '../../rpc';
+import type { SchemaResult } from './types';
 import type { CommitRef } from '../../chats/types';
 import type { TicketRef } from '../../notes/types';
 import type { TicketsEvent } from '../../tickets/types';
@@ -32,12 +33,12 @@ one `CommitsLinked` per ticket (`cells_stream`).
    * @requiresAuth — resolver: self.access.verify
    * @requires `commits.link` on the scope of `id`
    */
-  link(commits: CommitRef[], id?: TicketRef | null, ids?: TicketRef[] | null): AsyncGenerator<TicketsEvent>;
+  link(commits: CommitRef[], id?: TicketRef | null, ids?: TicketRef[] | null): MethodStream<'tickets.commits.link', TicketsEvent>;
   /**
    * Get plugin or method schema. Pass {"method": "name"} for a specific method.
    * @requires `commits.schema` anywhere it is held
    */
-  schema(): Promise<unknown>;
+  schema(method?: string | null): Promise<SchemaResult>;
   /**
    * Unlink commits from a ticket; yields commits_unlinked { ticket, removed }.
 
@@ -52,7 +53,7 @@ is `invalid_params` naming it. `watch` carries every
    * @requiresAuth — resolver: self.access.verify
    * @requires `commits.unlink` on the scope of `id`
    */
-  unlink(commits: CommitRef[], id: TicketRef): AsyncGenerator<TicketsEvent>;
+  unlink(commits: CommitRef[], id: TicketRef): MethodStream<'tickets.commits.unlink', TicketsEvent>;
 }
 
 /** Typed client implementation for tickets.commits plugin */
@@ -60,19 +61,19 @@ class TicketsCommitsClientImpl implements TicketsCommitsClient {
   private rpc: RpcClient;
   constructor(rpc: RpcClient) { this.rpc = rpc; }
 
-  async *link(commits: CommitRef[], id?: TicketRef | null, ids?: TicketRef[] | null): AsyncGenerator<TicketsEvent> {
+  link(commits: CommitRef[], id?: TicketRef | null, ids?: TicketRef[] | null): MethodStream<'tickets.commits.link', TicketsEvent> {
     const stream = this.rpc.call('tickets.commits.link', { commits, id, ids });
-    yield* extractData<TicketsEvent>(stream);
+    return new MethodStream<'tickets.commits.link', TicketsEvent>('tickets.commits.link', stream);
   }
 
-  async schema(): Promise<unknown> {
-    const stream = this.rpc.call('tickets.commits.schema', {});
-    return collectOne<unknown>(stream);
+  async schema(method?: string | null): Promise<SchemaResult> {
+    const stream = this.rpc.call('tickets.commits.schema', { method });
+    return collectOne<SchemaResult>(stream);
   }
 
-  async *unlink(commits: CommitRef[], id: TicketRef): AsyncGenerator<TicketsEvent> {
+  unlink(commits: CommitRef[], id: TicketRef): MethodStream<'tickets.commits.unlink', TicketsEvent> {
     const stream = this.rpc.call('tickets.commits.unlink', { commits, id });
-    yield* extractData<TicketsEvent>(stream);
+    return new MethodStream<'tickets.commits.unlink', TicketsEvent>('tickets.commits.unlink', stream);
   }
 }
 

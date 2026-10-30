@@ -2,7 +2,8 @@
 // Wraps RPC layer and unwraps PlexusStreamItem to domain types
 
 import type { RpcClient } from '../../rpc';
-import { extractData, collectOne } from '../../rpc';
+import { MethodStream, collectOne } from '../../rpc';
+import type { SchemaResult } from './types';
 import type { MembersEvent } from '../../members/types';
 import type { Principal } from '../../orgs/types';
 
@@ -17,7 +18,7 @@ has never seen it sign in.
    * @requiresAuth — resolver: self.access.verify
    * @requires `profiles.get` anywhere it is held
    */
-  get(principal: Principal): AsyncGenerator<MembersEvent>;
+  get(principal: Principal): MethodStream<'members.profiles.get', MembersEvent>;
   /**
    * Everyone who signed in, newest sign-in first; one profile each, with holds_grant (false: waiting). Admin of * only.
 
@@ -28,12 +29,12 @@ in: `provider`, `method` (`githuboauth`, `email_code`, `key`, …),
 admin of `*` is refused in band.
    * @requires `profiles.list` anywhere it is held
    */
-  list(): AsyncGenerator<MembersEvent>;
+  list(): MethodStream<'members.profiles.list', MembersEvent>;
   /**
    * Get plugin or method schema. Pass {"method": "name"} for a specific method.
    * @requires `profiles.schema` anywhere it is held
    */
-  schema(): Promise<unknown>;
+  schema(method?: string | null): Promise<SchemaResult>;
 }
 
 /** Typed client implementation for members.profiles plugin */
@@ -41,19 +42,19 @@ class MembersProfilesClientImpl implements MembersProfilesClient {
   private rpc: RpcClient;
   constructor(rpc: RpcClient) { this.rpc = rpc; }
 
-  async *get(principal: Principal): AsyncGenerator<MembersEvent> {
+  get(principal: Principal): MethodStream<'members.profiles.get', MembersEvent> {
     const stream = this.rpc.call('members.profiles.get', { principal });
-    yield* extractData<MembersEvent>(stream);
+    return new MethodStream<'members.profiles.get', MembersEvent>('members.profiles.get', stream);
   }
 
-  async *list(): AsyncGenerator<MembersEvent> {
+  list(): MethodStream<'members.profiles.list', MembersEvent> {
     const stream = this.rpc.call('members.profiles.list', {});
-    yield* extractData<MembersEvent>(stream);
+    return new MethodStream<'members.profiles.list', MembersEvent>('members.profiles.list', stream);
   }
 
-  async schema(): Promise<unknown> {
-    const stream = this.rpc.call('members.profiles.schema', {});
-    return collectOne<unknown>(stream);
+  async schema(method?: string | null): Promise<SchemaResult> {
+    const stream = this.rpc.call('members.profiles.schema', { method });
+    return collectOne<SchemaResult>(stream);
   }
 }
 

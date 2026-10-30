@@ -181,3 +181,5 @@ grants moved (or its sign-in ended), and refused. Every watch (`tickets`,
 `comments`, `themes`, `deployments`) ends with one `watch_closed { reason,
 message }` and nothing after it. */
 export type WatchEnd = "signed_out" | "expired" | "revoked" | "refused";
+/** Stub type - definition missing from IR */
+export type SchemaResult = unknown;

@@ -2,7 +2,8 @@
 // Wraps RPC layer and unwraps PlexusStreamItem to domain types
 
 import type { RpcClient } from '../../rpc';
-import { extractData, collectOne } from '../../rpc';
+import { MethodStream, collectOne } from '../../rpc';
+import type { SchemaResult } from './types';
 import type { MembersEvent, TeamName } from '../../members/types';
 import type { OrgId, Principal } from '../../orgs/types';
 
@@ -17,7 +18,7 @@ Yields `team_member { member }`. Their open sockets follow at once
    * @requiresAuth — resolver: self.access.verify
    * @requires `teams.add` anywhere it is held
    */
-  add(principal: Principal, team: TeamName): AsyncGenerator<MembersEvent>;
+  add(principal: Principal, team: TeamName): MethodStream<'members.teams.add', MembersEvent>;
   /**
    * Make a team, empty, in an organization; yields the team. Needs admin somewhere.
 
@@ -28,7 +29,7 @@ scope; it holds nothing until granted (`members grant --team`).
    * @requiresAuth — resolver: self.access.verify
    * @requires `teams.create` anywhere it is held
    */
-  create(name: TeamName, org?: OrgId | null): AsyncGenerator<MembersEvent>;
+  create(name: TeamName, org?: OrgId | null): MethodStream<'members.teams.create', MembersEvent>;
   /**
    * Delete a team — every grant it holds goes with it; needs admin on every scope it holds.
 
@@ -38,7 +39,7 @@ members went with it.
    * @requiresAuth — resolver: self.access.verify
    * @requires `teams.delete` anywhere it is held
    */
-  delete(team: TeamName): AsyncGenerator<MembersEvent>;
+  delete(team: TeamName): MethodStream<'members.teams.delete', MembersEvent>;
   /**
    * The teams in your organizations, by name; one team { name, org, created_by, at, members } each.
 
@@ -48,7 +49,7 @@ team, for a role on `*`), by name — `org` narrows to one. Admin's.
    * @requiresAuth — resolver: self.access.verify
    * @requires `teams.list` anywhere it is held
    */
-  list(org?: OrgId | null): AsyncGenerator<MembersEvent>;
+  list(org?: OrgId | null): MethodStream<'members.teams.list', MembersEvent>;
   /**
    * Take a principal out of a team; needs admin on every scope it holds.
 
@@ -58,19 +59,19 @@ stop hearing the team's scopes at once (ACCESS-12).
    * @requiresAuth — resolver: self.access.verify
    * @requires `teams.remove` anywhere it is held
    */
-  remove(principal: Principal, team: TeamName): AsyncGenerator<MembersEvent>;
+  remove(principal: Principal, team: TeamName): MethodStream<'members.teams.remove', MembersEvent>;
   /**
    * Rename a team — its members and grants go with it; needs admin on every scope it holds.
    * @server-derived auth
    * @requiresAuth — resolver: self.access.verify
    * @requires `teams.rename` anywhere it is held
    */
-  rename(team: TeamName, to: TeamName): AsyncGenerator<MembersEvent>;
+  rename(team: TeamName, to: TeamName): MethodStream<'members.teams.rename', MembersEvent>;
   /**
    * Get plugin or method schema. Pass {"method": "name"} for a specific method.
    * @requires `teams.schema` anywhere it is held
    */
-  schema(): Promise<unknown>;
+  schema(method?: string | null): Promise<SchemaResult>;
   /**
    * A team: then each member (team_member), then each grant it holds on a scope you administer.
 
@@ -82,7 +83,7 @@ in-band `error`.
    * @requiresAuth — resolver: self.access.verify
    * @requires `teams.show` anywhere it is held
    */
-  show(team: TeamName): AsyncGenerator<MembersEvent>;
+  show(team: TeamName): MethodStream<'members.teams.show', MembersEvent>;
 }
 
 /** Typed client implementation for members.teams plugin */
@@ -90,44 +91,44 @@ class MembersTeamsClientImpl implements MembersTeamsClient {
   private rpc: RpcClient;
   constructor(rpc: RpcClient) { this.rpc = rpc; }
 
-  async *add(principal: Principal, team: TeamName): AsyncGenerator<MembersEvent> {
+  add(principal: Principal, team: TeamName): MethodStream<'members.teams.add', MembersEvent> {
     const stream = this.rpc.call('members.teams.add', { principal, team });
-    yield* extractData<MembersEvent>(stream);
+    return new MethodStream<'members.teams.add', MembersEvent>('members.teams.add', stream);
   }
 
-  async *create(name: TeamName, org?: OrgId | null): AsyncGenerator<MembersEvent> {
+  create(name: TeamName, org?: OrgId | null): MethodStream<'members.teams.create', MembersEvent> {
     const stream = this.rpc.call('members.teams.create', { name, org });
-    yield* extractData<MembersEvent>(stream);
+    return new MethodStream<'members.teams.create', MembersEvent>('members.teams.create', stream);
   }
 
-  async *delete(team: TeamName): AsyncGenerator<MembersEvent> {
+  delete(team: TeamName): MethodStream<'members.teams.delete', MembersEvent> {
     const stream = this.rpc.call('members.teams.delete', { team });
-    yield* extractData<MembersEvent>(stream);
+    return new MethodStream<'members.teams.delete', MembersEvent>('members.teams.delete', stream);
   }
 
-  async *list(org?: OrgId | null): AsyncGenerator<MembersEvent> {
+  list(org?: OrgId | null): MethodStream<'members.teams.list', MembersEvent> {
     const stream = this.rpc.call('members.teams.list', { org });
-    yield* extractData<MembersEvent>(stream);
+    return new MethodStream<'members.teams.list', MembersEvent>('members.teams.list', stream);
   }
 
-  async *remove(principal: Principal, team: TeamName): AsyncGenerator<MembersEvent> {
+  remove(principal: Principal, team: TeamName): MethodStream<'members.teams.remove', MembersEvent> {
     const stream = this.rpc.call('members.teams.remove', { principal, team });
-    yield* extractData<MembersEvent>(stream);
+    return new MethodStream<'members.teams.remove', MembersEvent>('members.teams.remove', stream);
   }
 
-  async *rename(team: TeamName, to: TeamName): AsyncGenerator<MembersEvent> {
+  rename(team: TeamName, to: TeamName): MethodStream<'members.teams.rename', MembersEvent> {
     const stream = this.rpc.call('members.teams.rename', { team, to });
-    yield* extractData<MembersEvent>(stream);
+    return new MethodStream<'members.teams.rename', MembersEvent>('members.teams.rename', stream);
   }
 
-  async schema(): Promise<unknown> {
-    const stream = this.rpc.call('members.teams.schema', {});
-    return collectOne<unknown>(stream);
+  async schema(method?: string | null): Promise<SchemaResult> {
+    const stream = this.rpc.call('members.teams.schema', { method });
+    return collectOne<SchemaResult>(stream);
   }
 
-  async *show(team: TeamName): AsyncGenerator<MembersEvent> {
+  show(team: TeamName): MethodStream<'members.teams.show', MembersEvent> {
     const stream = this.rpc.call('members.teams.show', { team });
-    yield* extractData<MembersEvent>(stream);
+    return new MethodStream<'members.teams.show', MembersEvent>('members.teams.show', stream);
   }
 }
 

@@ -1,4 +1,6 @@
 import type { RpcClient } from '../../rpc';
+import { MethodStream } from '../../rpc';
+import type { SchemaResult } from './types';
 import type { ChatsEvent, InputId, InputKind, InputState, InputValue, MessageId } from '../../chats/types';
 import type { ChatId } from '../../media/types';
 import type { TicketRef } from '../../notes/types';
@@ -20,7 +22,7 @@ export interface ChatsInputsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `message_inputs.answer` anywhere it is held
      */
-    answer(chat: ChatId, input: InputId, message: MessageId, value: InputValue, rationale?: Message | null): AsyncGenerator<ChatsEvent>;
+    answer(chat: ChatId, input: InputId, message: MessageId, value: InputValue, rationale?: Message | null): MethodStream<'chats.inputs.answer', ChatsEvent>;
     /**
      * Clear a message's input's answer (open again; kept in its history); yields input_changed { input }, or input { input } when it held none.
   
@@ -31,7 +33,7 @@ export interface ChatsInputsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `message_inputs.clear` anywhere it is held
      */
-    clear(chat: ChatId, input: InputId, message: MessageId): AsyncGenerator<ChatsEvent>;
+    clear(chat: ChatId, input: InputId, message: MessageId): MethodStream<'chats.inputs.clear', ChatsEvent>;
     /**
      * Close a message's input: freeze its answer (DECIDED, for a decision); yields input_changed { input }, or input { input } when it was closed.
   
@@ -41,7 +43,7 @@ export interface ChatsInputsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `message_inputs.close` anywhere it is held
      */
-    close(chat: ChatId, input: InputId, message: MessageId): AsyncGenerator<ChatsEvent>;
+    close(chat: ChatId, input: InputId, message: MessageId): MethodStream<'chats.inputs.close', ChatsEvent>;
     /**
      * The inputs of the messages in the caller's chats (an <m-decision id> / <m-input id kind> in a message's body), oldest message first; an input { input } each, then page { next }.
   
@@ -56,7 +58,7 @@ export interface ChatsInputsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `message_inputs.list` anywhere it is held
      */
-    list(after?: MessageId | null, chat?: ChatId | null, kind?: InputKind | null, limit?: number | null, state?: InputState | null, ticket?: TicketRef | null): AsyncGenerator<ChatsEvent>;
+    list(after?: MessageId | null, chat?: ChatId | null, kind?: InputKind | null, limit?: number | null, state?: InputState | null, ticket?: TicketRef | null): MethodStream<'chats.inputs.list', ChatsEvent>;
     /**
      * Reopen a closed message's input; yields input_changed { input }, or input { input } when it was not closed.
   
@@ -66,12 +68,12 @@ export interface ChatsInputsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `message_inputs.reopen` anywhere it is held
      */
-    reopen(chat: ChatId, input: InputId, message: MessageId): AsyncGenerator<ChatsEvent>;
+    reopen(chat: ChatId, input: InputId, message: MessageId): MethodStream<'chats.inputs.reopen', ChatsEvent>;
     /**
      * Get plugin or method schema. Pass {"method": "name"} for a specific method.
      * @requires `message_inputs.schema` anywhere it is held
      */
-    schema(): Promise<unknown>;
+    schema(method?: string | null): Promise<SchemaResult>;
 }
 /** Create a typed chats.inputs client from an RPC client */
 export declare function createChatsInputsClient(rpc: RpcClient): ChatsInputsClient;

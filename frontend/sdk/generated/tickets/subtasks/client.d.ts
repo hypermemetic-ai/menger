@@ -1,4 +1,6 @@
 import type { RpcClient } from '../../rpc';
+import { MethodStream } from '../../rpc';
+import type { SchemaResult } from './types';
 import type { Body, Kind, TicketRef, Title } from '../../notes/types';
 import type { Cursor, TicketsEvent } from '../../tickets/types';
 /** Typed client interface for tickets.subtasks plugin */
@@ -20,7 +22,7 @@ export interface TicketsSubtasksClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `subtasks.create` anywhere it is held
      */
-    create(parent: TicketRef, title: Title, blockedBy?: TicketRef[] | null, body?: Body | null, kind?: Kind | null): AsyncGenerator<TicketsEvent>;
+    create(parent: TicketRef, title: Title, blockedBy?: TicketRef[] | null, body?: Body | null, kind?: Kind | null): MethodStream<'tickets.subtasks.create', TicketsEvent>;
     /**
      * A ticket's subtasks in `.N` order, as summaries (hidden ones included), then one page event.
   
@@ -31,12 +33,12 @@ export interface TicketsSubtasksClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `subtasks.list` anywhere it is held
      */
-    list(parent: TicketRef, after?: Cursor | null, limit?: number | null): AsyncGenerator<TicketsEvent>;
+    list(parent: TicketRef, after?: Cursor | null, limit?: number | null): MethodStream<'tickets.subtasks.list', TicketsEvent>;
     /**
      * Get plugin or method schema. Pass {"method": "name"} for a specific method.
      * @requires `subtasks.schema` anywhere it is held
      */
-    schema(): Promise<unknown>;
+    schema(method?: string | null): Promise<SchemaResult>;
 }
 /** Create a typed tickets.subtasks client from an RPC client */
 export declare function createTicketsSubtasksClient(rpc: RpcClient): TicketsSubtasksClient;

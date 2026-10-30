@@ -2,7 +2,8 @@
 // Wraps RPC layer and unwraps PlexusStreamItem to domain types
 
 import type { RpcClient } from '../../rpc';
-import { extractData, collectOne } from '../../rpc';
+import { MethodStream, collectOne } from '../../rpc';
+import type { SchemaResult } from './types';
 import type { Body, Kind, TicketRef, Title } from '../../notes/types';
 import type { Cursor, TicketsEvent } from '../../tickets/types';
 
@@ -25,7 +26,7 @@ in-band error and nothing is written. Yields exactly one event:
    * @requiresAuth — resolver: self.access.verify
    * @requires `subtasks.create` anywhere it is held
    */
-  create(parent: TicketRef, title: Title, blockedBy?: TicketRef[] | null, body?: Body | null, kind?: Kind | null): AsyncGenerator<TicketsEvent>;
+  create(parent: TicketRef, title: Title, blockedBy?: TicketRef[] | null, body?: Body | null, kind?: Kind | null): MethodStream<'tickets.subtasks.create', TicketsEvent>;
   /**
    * A ticket's subtasks in `.N` order, as summaries (hidden ones included), then one page event.
 
@@ -36,12 +37,12 @@ caller's reach. `after` and `limit` page as `list`'s do.
    * @requiresAuth — resolver: self.access.verify
    * @requires `subtasks.list` anywhere it is held
    */
-  list(parent: TicketRef, after?: Cursor | null, limit?: number | null): AsyncGenerator<TicketsEvent>;
+  list(parent: TicketRef, after?: Cursor | null, limit?: number | null): MethodStream<'tickets.subtasks.list', TicketsEvent>;
   /**
    * Get plugin or method schema. Pass {"method": "name"} for a specific method.
    * @requires `subtasks.schema` anywhere it is held
    */
-  schema(): Promise<unknown>;
+  schema(method?: string | null): Promise<SchemaResult>;
 }
 
 /** Typed client implementation for tickets.subtasks plugin */
@@ -49,19 +50,19 @@ class TicketsSubtasksClientImpl implements TicketsSubtasksClient {
   private rpc: RpcClient;
   constructor(rpc: RpcClient) { this.rpc = rpc; }
 
-  async *create(parent: TicketRef, title: Title, blockedBy?: TicketRef[] | null, body?: Body | null, kind?: Kind | null): AsyncGenerator<TicketsEvent> {
+  create(parent: TicketRef, title: Title, blockedBy?: TicketRef[] | null, body?: Body | null, kind?: Kind | null): MethodStream<'tickets.subtasks.create', TicketsEvent> {
     const stream = this.rpc.call('tickets.subtasks.create', { blocked_by: blockedBy, body, kind, parent, title });
-    yield* extractData<TicketsEvent>(stream);
+    return new MethodStream<'tickets.subtasks.create', TicketsEvent>('tickets.subtasks.create', stream);
   }
 
-  async *list(parent: TicketRef, after?: Cursor | null, limit?: number | null): AsyncGenerator<TicketsEvent> {
+  list(parent: TicketRef, after?: Cursor | null, limit?: number | null): MethodStream<'tickets.subtasks.list', TicketsEvent> {
     const stream = this.rpc.call('tickets.subtasks.list', { after, limit, parent });
-    yield* extractData<TicketsEvent>(stream);
+    return new MethodStream<'tickets.subtasks.list', TicketsEvent>('tickets.subtasks.list', stream);
   }
 
-  async schema(): Promise<unknown> {
-    const stream = this.rpc.call('tickets.subtasks.schema', {});
-    return collectOne<unknown>(stream);
+  async schema(method?: string | null): Promise<SchemaResult> {
+    const stream = this.rpc.call('tickets.subtasks.schema', { method });
+    return collectOne<SchemaResult>(stream);
   }
 }
 

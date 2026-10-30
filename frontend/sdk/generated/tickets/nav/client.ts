@@ -2,7 +2,8 @@
 // Wraps RPC layer and unwraps PlexusStreamItem to domain types
 
 import type { RpcClient } from '../../rpc';
-import { extractData, collectOne } from '../../rpc';
+import { MethodStream, collectOne } from '../../rpc';
+import type { SchemaResult } from './types';
 import type { ShortcodeRef, TicketRef } from '../../notes/types';
 import type { Cursor, FilterText, TicketsEvent, Zone } from '../../tickets/types';
 
@@ -27,7 +28,7 @@ once — as `list { filter, keep }` pages it.
    * @requiresAuth — resolver: self.access.verify
    * @requires `nav.counts` anywhere it is held
    */
-  counts(filter?: FilterText | null, keep?: TicketRef | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
+  counts(filter?: FilterText | null, keep?: TicketRef | null, tz?: Zone | null): MethodStream<'tickets.nav.counts', TicketsEvent>;
   /**
    * Each shortcode's last sequence (a deleted ticket's too: numbers are never reused) and the holes below it, in shortcode order — where each shortcode ends in the store's order.
 
@@ -46,7 +47,7 @@ answer, as for `groups` and `blockers`. No watch event keeps them:
 `created` already carries the newborn's `epic` and `seq`.
    * @requires `nav.extents` anywhere it is held
    */
-  extents(): AsyncGenerator<TicketsEvent>;
+  extents(): MethodStream<'tickets.nav.extents', TicketsEvent>;
   /**
    * Menu counts: per field (status, category, kind, severity, blocked, ready, has commits, menger doc, in), the matches of base and filter without filter's own groups for that field, by value.
 
@@ -67,7 +68,7 @@ or `text`, is one in-band `error` and nothing else.
    * @requiresAuth — resolver: self.access.verify
    * @requires `nav.facets` anywhere it is held
    */
-  facets(base?: FilterText | null, filter?: FilterText | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
+  facets(base?: FilterText | null, filter?: FilterText | null, tz?: Zone | null): MethodStream<'tickets.nav.facets', TicketsEvent>;
   /**
    * One roll-up per shortcode: done/total over its subtree's work, its docs, its root (with the root's title, status and kind), and the host it nests under.
 
@@ -87,7 +88,7 @@ the caller sees; a root or host out of reach is none (the shortcode
 at the top for this caller).
    * @requires `nav.groups` anywhere it is held
    */
-  groups(): AsyncGenerator<TicketsEvent>;
+  groups(): MethodStream<'tickets.nav.groups', TicketsEvent>;
   /**
    * Which of these tickets a filter admits: one member { id, matched } per id, in the order given (an unknown id: false); at most 1000 ids.
 
@@ -105,12 +106,12 @@ the filter's admitted cells, never a test of the ticket. At most
    * @requiresAuth — resolver: self.access.verify
    * @requires `nav.member` anywhere it is held
    */
-  member(filter: FilterText, ids: TicketRef[], tz?: Zone | null): AsyncGenerator<TicketsEvent>;
+  member(filter: FilterText, ids: TicketRef[], tz?: Zone | null): MethodStream<'tickets.nav.member', TicketsEvent>;
   /**
    * Get plugin or method schema. Pass {"method": "name"} for a specific method.
    * @requires `nav.schema` anywhere it is held
    */
-  schema(): Promise<unknown>;
+  schema(method?: string | null): Promise<SchemaResult>;
   /**
    * The nav under a filter: a parent's children (or a shortcode's top level) that match or hold a match, each with matched and below (matches strictly under it), then a page; matches_only: the matches nearest below instead, then the hosted shortcodes drawn there.
 
@@ -151,7 +152,7 @@ caller's reach changes nothing.
    * @requiresAuth — resolver: self.access.verify
    * @requires `nav.tree` anywhere it is held
    */
-  tree(filter: FilterText, after?: Cursor | null, epic?: ShortcodeRef | null, keep?: TicketRef | null, limit?: number | null, matchesOnly?: boolean | null, parent?: TicketRef | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
+  tree(filter: FilterText, after?: Cursor | null, epic?: ShortcodeRef | null, keep?: TicketRef | null, limit?: number | null, matchesOnly?: boolean | null, parent?: TicketRef | null, tz?: Zone | null): MethodStream<'tickets.nav.tree', TicketsEvent>;
 }
 
 /** Typed client implementation for tickets.nav plugin */
@@ -159,39 +160,39 @@ class TicketsNavClientImpl implements TicketsNavClient {
   private rpc: RpcClient;
   constructor(rpc: RpcClient) { this.rpc = rpc; }
 
-  async *counts(filter?: FilterText | null, keep?: TicketRef | null, tz?: Zone | null): AsyncGenerator<TicketsEvent> {
+  counts(filter?: FilterText | null, keep?: TicketRef | null, tz?: Zone | null): MethodStream<'tickets.nav.counts', TicketsEvent> {
     const stream = this.rpc.call('tickets.nav.counts', { filter, keep, tz });
-    yield* extractData<TicketsEvent>(stream);
+    return new MethodStream<'tickets.nav.counts', TicketsEvent>('tickets.nav.counts', stream);
   }
 
-  async *extents(): AsyncGenerator<TicketsEvent> {
+  extents(): MethodStream<'tickets.nav.extents', TicketsEvent> {
     const stream = this.rpc.call('tickets.nav.extents', {});
-    yield* extractData<TicketsEvent>(stream);
+    return new MethodStream<'tickets.nav.extents', TicketsEvent>('tickets.nav.extents', stream);
   }
 
-  async *facets(base?: FilterText | null, filter?: FilterText | null, tz?: Zone | null): AsyncGenerator<TicketsEvent> {
+  facets(base?: FilterText | null, filter?: FilterText | null, tz?: Zone | null): MethodStream<'tickets.nav.facets', TicketsEvent> {
     const stream = this.rpc.call('tickets.nav.facets', { base, filter, tz });
-    yield* extractData<TicketsEvent>(stream);
+    return new MethodStream<'tickets.nav.facets', TicketsEvent>('tickets.nav.facets', stream);
   }
 
-  async *groups(): AsyncGenerator<TicketsEvent> {
+  groups(): MethodStream<'tickets.nav.groups', TicketsEvent> {
     const stream = this.rpc.call('tickets.nav.groups', {});
-    yield* extractData<TicketsEvent>(stream);
+    return new MethodStream<'tickets.nav.groups', TicketsEvent>('tickets.nav.groups', stream);
   }
 
-  async *member(filter: FilterText, ids: TicketRef[], tz?: Zone | null): AsyncGenerator<TicketsEvent> {
+  member(filter: FilterText, ids: TicketRef[], tz?: Zone | null): MethodStream<'tickets.nav.member', TicketsEvent> {
     const stream = this.rpc.call('tickets.nav.member', { filter, ids, tz });
-    yield* extractData<TicketsEvent>(stream);
+    return new MethodStream<'tickets.nav.member', TicketsEvent>('tickets.nav.member', stream);
   }
 
-  async schema(): Promise<unknown> {
-    const stream = this.rpc.call('tickets.nav.schema', {});
-    return collectOne<unknown>(stream);
+  async schema(method?: string | null): Promise<SchemaResult> {
+    const stream = this.rpc.call('tickets.nav.schema', { method });
+    return collectOne<SchemaResult>(stream);
   }
 
-  async *tree(filter: FilterText, after?: Cursor | null, epic?: ShortcodeRef | null, keep?: TicketRef | null, limit?: number | null, matchesOnly?: boolean | null, parent?: TicketRef | null, tz?: Zone | null): AsyncGenerator<TicketsEvent> {
+  tree(filter: FilterText, after?: Cursor | null, epic?: ShortcodeRef | null, keep?: TicketRef | null, limit?: number | null, matchesOnly?: boolean | null, parent?: TicketRef | null, tz?: Zone | null): MethodStream<'tickets.nav.tree', TicketsEvent> {
     const stream = this.rpc.call('tickets.nav.tree', { after, epic, filter, keep, limit, matches_only: matchesOnly, parent, tz });
-    yield* extractData<TicketsEvent>(stream);
+    return new MethodStream<'tickets.nav.tree', TicketsEvent>('tickets.nav.tree', stream);
   }
 }
 

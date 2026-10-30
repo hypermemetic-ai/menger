@@ -1,9 +1,9 @@
 {
   "name": "@plexus/client",
-  "version": "0.0.0-0909ef9aae52d41b",
+  "version": "0.0.0-822a5f627f35ca8f",
   "type": "module",
   "main": "index.ts",
-  "_generatedBy": "hub-codegen",
+  "_generatedBy": "service-codegen",
   "scripts": {
     "test": "bun test",
     "typecheck": "bun x tsc --noEmit"

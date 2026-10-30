@@ -1,5 +1,6 @@
 import type { RpcClient } from '../rpc';
-import type { OrgId, OrgsEvent, Principal } from './types';
+import { MethodStream } from '../rpc';
+import type { OrgId, OrgsEvent, Principal, SchemaResult } from './types';
 /** Typed client interface for orgs plugin */
 export interface OrgsClient {
     /**
@@ -11,7 +12,7 @@ export interface OrgsClient {
      * from this grant. Needs admin on `*`. Yields `created { org, admin }`.
      * @requires `orgs.create` anywhere it is held
      */
-    create(name: OrgId, admin?: Principal | null): AsyncGenerator<OrgsEvent>;
+    create(name: OrgId, admin?: Principal | null): MethodStream<'orgs.create', OrgsEvent>;
     /**
      * Delete an empty organization, and every grant on it
      *
@@ -21,7 +22,7 @@ export interface OrgsClient {
      * on `*`. Yields `deleted { name, grants }`.
      * @requires `orgs.delete` anywhere it is held
      */
-    delete(name: OrgId): AsyncGenerator<OrgsEvent>;
+    delete(name: OrgId): MethodStream<'orgs.delete', OrgsEvent>;
     /**
      * The organizations you hold a role in
      *
@@ -30,7 +31,7 @@ export interface OrgsClient {
      * { name, aliases, roots, shortcodes, tickets }` each.
      * @requires `orgs.list` anywhere it is held
      */
-    list(): AsyncGenerator<OrgsEvent>;
+    list(): MethodStream<'orgs.list', OrgsEvent>;
     /**
      * Rename an organization; its old name keeps resolving
      *
@@ -40,12 +41,12 @@ export interface OrgsClient {
      * admin on it (`name:`) or on `*`. Yields `renamed { from, org }`.
      * @requires `orgs.rename` anywhere it is held
      */
-    rename(name: OrgId, to: OrgId): AsyncGenerator<OrgsEvent>;
+    rename(name: OrgId, to: OrgId): MethodStream<'orgs.rename', OrgsEvent>;
     /**
      * Get plugin or method schema. Pass {"method": "name"} for a specific method.
      * @requires `orgs.schema` anywhere it is held
      */
-    schema(): Promise<unknown>;
+    schema(method?: string | null): Promise<SchemaResult>;
 }
 /** Create a typed orgs client from an RPC client */
 export declare function createOrgsClient(rpc: RpcClient): OrgsClient;

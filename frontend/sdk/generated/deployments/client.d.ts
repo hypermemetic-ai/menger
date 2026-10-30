@@ -1,5 +1,6 @@
 import type { RpcClient } from '../rpc';
-import type { Branch, DeploySource, DeployState, DeploymentId, DeploymentsEvent, EnvironmentName, Project, Release, StepName, StepState, StepUrl, Timestamp } from './types';
+import { MethodStream } from '../rpc';
+import type { Branch, DeploySource, DeployState, DeploymentId, DeploymentsEvent, EnvironmentName, Project, Release, SchemaResult, StepName, StepState, StepUrl, Timestamp } from './types';
 import type { CommitRef } from '../chats/types';
 import type { TicketRef } from '../notes/types';
 import type { Message } from '../tickets/types';
@@ -22,7 +23,7 @@ export interface DeploymentsClient {
      * admin's) on the request's project.
      * @requires `deployments.cancel_request` anywhere it is held
      */
-    cancelRequest(id: DeploymentId): AsyncGenerator<DeploymentsEvent>;
+    cancelRequest(id: DeploymentId): MethodStream<'deployments.cancel_request', DeploymentsEvent>;
     /**
      * Each environment: what it runs, since when, its last deployment, how many tickets run there
      *
@@ -32,7 +33,7 @@ export interface DeploymentsClient {
      * tickets run there, and (DEPLOY-21) `from`, where it promotes from.
      * @requires `deployments.environments` anywhere it is held
      */
-    environments(project?: Project | null): AsyncGenerator<DeploymentsEvent>;
+    environments(project?: Project | null): MethodStream<'deployments.environments', DeploymentsEvent>;
     /**
      * Where a ticket's work runs: running { environment, since, deployment, behind, version } per environment, not_running for the rest
      *
@@ -46,7 +47,7 @@ export interface DeploymentsClient {
      * names no ticket.
      * @requires `deployments.for_ticket` on the scope of `id`
      */
-    forTicket(id: TicketRef): AsyncGenerator<DeploymentsEvent>;
+    forTicket(id: TicketRef): MethodStream<'deployments.for_ticket', DeploymentsEvent>;
     /**
      * List deployments newest first, by project, environment, state and ticket; each with the tickets it carried
      *
@@ -57,7 +58,7 @@ export interface DeploymentsClient {
      * (older than) that deployment; `limit` caps the page. From the cache.
      * @requires `deployments.list` anywhere it is held
      */
-    list(after?: DeploymentId | null, environment?: EnvironmentName | null, limit?: number | null, project?: Project | null, state?: DeployState | null, ticket?: TicketRef | null): AsyncGenerator<DeploymentsEvent>;
+    list(after?: DeploymentId | null, environment?: EnvironmentName | null, limit?: number | null, project?: Project | null, state?: DeployState | null, ticket?: TicketRef | null): MethodStream<'deployments.list', DeploymentsEvent>;
     /**
      * Set where an environment promotes from (admin): prod from test; without from, from none; yields promotes { project, environment, from }
      *
@@ -71,7 +72,7 @@ export interface DeploymentsClient {
      * moved — or an in-band `error` (itself, a cycle), nothing written.
      * @requires `deployments.promotes` on the scope of `project`
      */
-    promotes(environment: EnvironmentName, project: Project, from?: EnvironmentName | null): AsyncGenerator<DeploymentsEvent>;
+    promotes(environment: EnvironmentName, project: Project, from?: EnvironmentName | null): MethodStream<'deployments.promotes', DeploymentsEvent>;
     /**
      * Record a deployment (DEPLOY-10's record): the tickets its commits carry run in the environment; yields deployed { deployment, carried, unlinked, entered, left, duplicate }
      *
@@ -101,7 +102,7 @@ export interface DeploymentsClient {
      * `watch`.
      * @requires `deployments.record` on the scope of `project`
      */
-    record(environment: EnvironmentName, project: Project, revision: CommitRef, state: DeployState, at?: Timestamp | null, commits?: CommitRef[] | null, from?: EnvironmentName | null, previous?: CommitRef | null, release?: Release | null, request?: DeploymentId | null, source?: DeploySource | null, tickets?: TicketRef[] | null): AsyncGenerator<DeploymentsEvent>;
+    record(environment: EnvironmentName, project: Project, revision: CommitRef, state: DeployState, at?: Timestamp | null, commits?: CommitRef[] | null, from?: EnvironmentName | null, previous?: CommitRef | null, release?: Release | null, request?: DeploymentId | null, source?: DeploySource | null, tickets?: TicketRef[] | null): MethodStream<'deployments.record', DeploymentsEvent>;
     /**
      * Queue a deploy: kept as a requested deployment, POSTed to the environment's webhook (signed); yields request { deployment, carried }
      *
@@ -121,7 +122,7 @@ export interface DeploymentsClient {
      * (or admin's) on the project.
      * @requires `deployments.request` on the scope of `project`
      */
-    request(environment: EnvironmentName, project: Project, branch?: Branch | null, note?: Message | null, release?: Release | null, revision?: CommitRef | null): AsyncGenerator<DeploymentsEvent>;
+    request(environment: EnvironmentName, project: Project, branch?: Branch | null, note?: Message | null, release?: Release | null, revision?: CommitRef | null): MethodStream<'deployments.request', DeploymentsEvent>;
     /**
      * The kept cells: cells { project, environment, running: [{ ticket, since, deployment, behind, version }], staged: [{ ticket, stage }] } per environment
      *
@@ -136,12 +137,12 @@ export interface DeploymentsClient {
      * What the app's board marks are drawn from, one read for every row.
      * @requires `deployments.running` anywhere it is held
      */
-    running(environment?: EnvironmentName | null, ids?: TicketRef[] | null, project?: Project | null): AsyncGenerator<DeploymentsEvent>;
+    running(environment?: EnvironmentName | null, ids?: TicketRef[] | null, project?: Project | null): MethodStream<'deployments.running', DeploymentsEvent>;
     /**
      * Get plugin or method schema. Pass {"method": "name"} for a specific method.
      * @requires `deployments.schema` anywhere it is held
      */
-    schema(): Promise<unknown>;
+    schema(method?: string | null): Promise<SchemaResult>;
     /**
      * Report a step of a request's run (its executor's): name, state, detail, url; yields request { deployment, carried }
      *
@@ -160,7 +161,7 @@ export interface DeploymentsClient {
      * on the request's project.
      * @requires `deployments.step` anywhere it is held
      */
-    step(name: StepName, request: DeploymentId, state: StepState, detail?: Message | null, url?: StepUrl | null): AsyncGenerator<DeploymentsEvent>;
+    step(name: StepName, request: DeploymentId, state: StepState, detail?: Message | null, url?: StepUrl | null): MethodStream<'deployments.step', DeploymentsEvent>;
     /**
      * Watch deployments: deployed, then environment_changed, as each is recorded
      *
@@ -171,7 +172,7 @@ export interface DeploymentsClient {
      * `tickets.watch { filter }`.
      * @requires `deployments.watch` anywhere it is held
      */
-    watch(): AsyncGenerator<DeploymentsEvent>;
+    watch(): MethodStream<'deployments.watch', DeploymentsEvent>;
 }
 /** Create a typed deployments client from an RPC client */
 export declare function createDeploymentsClient(rpc: RpcClient): DeploymentsClient;

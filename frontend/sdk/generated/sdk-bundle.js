@@ -109,28 +109,13 @@
     }
     return result;
   }
-  async function* extractData(stream) {
-    for await (const item of stream) {
-      switch (item.type) {
-        case "data":
-          yield transformKeys(item.content);
-          break;
-        case "error":
-          throw errorFromStreamItem(item);
-        case "progress":
-          break;
-        case "done":
-          return;
-      }
-    }
-  }
   async function collectOne(stream) {
     for await (const item of stream) {
       switch (item.type) {
         case "data":
           return transformKeys(item.content);
         case "error":
-          throw errorFromStreamItem(item);
+          throw remoteCallError(undefined, item);
         case "progress":
           break;
         case "done":
@@ -139,6 +124,115 @@
     }
     throw new Error("No data received from method call");
   }
+  var REMOTE_CALL_ERROR = Symbol.for("plexus.RemoteCallError");
+  function stampRemote(target, method, error) {
+    const e = error;
+    const fields = {
+      method,
+      error,
+      error_kind: e.error_kind,
+      grant: e.grant,
+      scope: e.scope,
+      roles: e.roles,
+      held_on: e.held_on
+    };
+    for (const [k, v] of Object.entries(fields)) {
+      if (!Object.prototype.hasOwnProperty.call(target, k)) {
+        Object.defineProperty(target, k, { value: v, enumerable: true });
+      }
+    }
+    Object.defineProperty(target, REMOTE_CALL_ERROR, { value: true });
+  }
+  function remoteCallError(method, item) {
+    const thrown = errorFromStreamItem(item);
+    const { type: _type, metadata: _metadata, ...rest } = item;
+    stampRemote(thrown, method, { ...rest, code: item.code ?? "" });
+    return thrown;
+  }
+
+  class MethodStream {
+    method;
+    #raw;
+    #items;
+    constructor(method, stream) {
+      this.method = method;
+      this.#raw = stream;
+    }
+    #take(how) {
+      const raw = this.#raw;
+      if (!raw) {
+        throw new TypeError(`${this.method}: ${how} on a stream already being read — a MethodStream is read once`);
+      }
+      this.#raw = undefined;
+      return raw;
+    }
+    #iterator() {
+      this.#items ??= decodeItems(this.method, this.#take("for await"));
+      return this.#items;
+    }
+    [Symbol.asyncIterator]() {
+      return this;
+    }
+    next() {
+      return this.#iterator().next();
+    }
+    return(_value) {
+      if (this.#items)
+        return this.#items.return(undefined);
+      const raw = this.#raw;
+      this.#raw = undefined;
+      return (raw ? raw.return(undefined) : Promise.resolve()).then(() => ({ value: undefined, done: true }));
+    }
+    throw(e) {
+      return this.#iterator().throw(e);
+    }
+    events() {
+      return tagEvents(this.method, decodeItems(this.method, this.#take(".events()")));
+    }
+    withProgress() {
+      return decodeWithProgress(this.method, this.#take(".withProgress()"));
+    }
+  }
+  async function* decodeItems(method, stream) {
+    for await (const item of stream) {
+      switch (item.type) {
+        case "data":
+          yield transformKeys(item.content);
+          break;
+        case "error":
+          throw remoteCallError(method, item);
+        case "done":
+          return;
+        default:
+          break;
+      }
+    }
+    return;
+  }
+  async function* tagEvents(method, items) {
+    for await (const event of items)
+      yield { method, event };
+    return;
+  }
+  async function* decodeWithProgress(method, stream) {
+    for await (const item of stream) {
+      switch (item.type) {
+        case "data":
+          yield { item: transformKeys(item.content) };
+          break;
+        case "progress":
+          yield { progress: item.percentage === undefined ? { message: item.message } : { message: item.message, percentage: item.percentage } };
+          break;
+        case "error":
+          throw remoteCallError(method, item);
+        case "done":
+          return;
+        default:
+          break;
+      }
+    }
+    return;
+  }
 
   // generated/tickets/commits/client.ts
   class TicketsCommitsClientImpl {
@@ -146,17 +240,17 @@
     constructor(rpc) {
       this.rpc = rpc;
     }
-    async* link(commits, id, ids) {
+    link(commits, id, ids) {
       const stream = this.rpc.call("tickets.commits.link", { commits, id, ids });
-      yield* extractData(stream);
+      return new MethodStream("tickets.commits.link", stream);
     }
-    async schema() {
-      const stream = this.rpc.call("tickets.commits.schema", {});
+    async schema(method) {
+      const stream = this.rpc.call("tickets.commits.schema", { method });
       return collectOne(stream);
     }
-    async* unlink(commits, id) {
+    unlink(commits, id) {
       const stream = this.rpc.call("tickets.commits.unlink", { commits, id });
-      yield* extractData(stream);
+      return new MethodStream("tickets.commits.unlink", stream);
     }
   }
   function createTicketsCommitsClient(rpc) {
@@ -169,12 +263,12 @@
     constructor(rpc) {
       this.rpc = rpc;
     }
-    async* list() {
+    list() {
       const stream = this.rpc.call("tickets.components.list", {});
-      yield* extractData(stream);
+      return new MethodStream("tickets.components.list", stream);
     }
-    async schema() {
-      const stream = this.rpc.call("tickets.components.schema", {});
+    async schema(method) {
+      const stream = this.rpc.call("tickets.components.schema", { method });
       return collectOne(stream);
     }
   }
@@ -188,32 +282,32 @@
     constructor(rpc) {
       this.rpc = rpc;
     }
-    async* check(filter) {
+    check(filter) {
       const stream = this.rpc.call("tickets.filters.check", { filter });
-      yield* extractData(stream);
+      return new MethodStream("tickets.filters.check", stream);
     }
-    async* delete(name) {
+    delete(name) {
       const stream = this.rpc.call("tickets.filters.delete", { name });
-      yield* extractData(stream);
+      return new MethodStream("tickets.filters.delete", stream);
     }
-    async* get(name) {
+    get(name) {
       const stream = this.rpc.call("tickets.filters.get", { name });
-      yield* extractData(stream);
+      return new MethodStream("tickets.filters.get", stream);
     }
-    async* list() {
+    list() {
       const stream = this.rpc.call("tickets.filters.list", {});
-      yield* extractData(stream);
+      return new MethodStream("tickets.filters.list", stream);
     }
-    async* rename(name, to) {
+    rename(name, to) {
       const stream = this.rpc.call("tickets.filters.rename", { name, to });
-      yield* extractData(stream);
+      return new MethodStream("tickets.filters.rename", stream);
     }
-    async* save(filter, name) {
+    save(filter, name) {
       const stream = this.rpc.call("tickets.filters.save", { filter, name });
-      yield* extractData(stream);
+      return new MethodStream("tickets.filters.save", stream);
     }
-    async schema() {
-      const stream = this.rpc.call("tickets.filters.schema", {});
+    async schema(method) {
+      const stream = this.rpc.call("tickets.filters.schema", { method });
       return collectOne(stream);
     }
   }
@@ -227,32 +321,32 @@
     constructor(rpc) {
       this.rpc = rpc;
     }
-    async* answer(input, ticket, value, rationale) {
+    answer(input, ticket, value, rationale) {
       const stream = this.rpc.call("tickets.inputs.answer", { input, rationale, ticket, value });
-      yield* extractData(stream);
+      return new MethodStream("tickets.inputs.answer", stream);
     }
-    async* ask(question, ticket) {
+    ask(question, ticket) {
       const stream = this.rpc.call("tickets.inputs.ask", { question, ticket });
-      yield* extractData(stream);
+      return new MethodStream("tickets.inputs.ask", stream);
     }
-    async* clear(input, ticket) {
+    clear(input, ticket) {
       const stream = this.rpc.call("tickets.inputs.clear", { input, ticket });
-      yield* extractData(stream);
+      return new MethodStream("tickets.inputs.clear", stream);
     }
-    async* close(input, ticket) {
+    close(input, ticket) {
       const stream = this.rpc.call("tickets.inputs.close", { input, ticket });
-      yield* extractData(stream);
+      return new MethodStream("tickets.inputs.close", stream);
     }
-    async* list(epic, filter, state, ticket, tz) {
+    list(epic, filter, state, ticket, tz) {
       const stream = this.rpc.call("tickets.inputs.list", { epic, filter, state, ticket, tz });
-      yield* extractData(stream);
+      return new MethodStream("tickets.inputs.list", stream);
     }
-    async* reopen(input, ticket) {
+    reopen(input, ticket) {
       const stream = this.rpc.call("tickets.inputs.reopen", { input, ticket });
-      yield* extractData(stream);
+      return new MethodStream("tickets.inputs.reopen", stream);
     }
-    async schema() {
-      const stream = this.rpc.call("tickets.inputs.schema", {});
+    async schema(method) {
+      const stream = this.rpc.call("tickets.inputs.schema", { method });
       return collectOne(stream);
     }
   }
@@ -266,33 +360,33 @@
     constructor(rpc) {
       this.rpc = rpc;
     }
-    async* counts(filter, keep, tz) {
+    counts(filter, keep, tz) {
       const stream = this.rpc.call("tickets.nav.counts", { filter, keep, tz });
-      yield* extractData(stream);
+      return new MethodStream("tickets.nav.counts", stream);
     }
-    async* extents() {
+    extents() {
       const stream = this.rpc.call("tickets.nav.extents", {});
-      yield* extractData(stream);
+      return new MethodStream("tickets.nav.extents", stream);
     }
-    async* facets(base, filter, tz) {
+    facets(base, filter, tz) {
       const stream = this.rpc.call("tickets.nav.facets", { base, filter, tz });
-      yield* extractData(stream);
+      return new MethodStream("tickets.nav.facets", stream);
     }
-    async* groups() {
+    groups() {
       const stream = this.rpc.call("tickets.nav.groups", {});
-      yield* extractData(stream);
+      return new MethodStream("tickets.nav.groups", stream);
     }
-    async* member(filter, ids, tz) {
+    member(filter, ids, tz) {
       const stream = this.rpc.call("tickets.nav.member", { filter, ids, tz });
-      yield* extractData(stream);
+      return new MethodStream("tickets.nav.member", stream);
     }
-    async schema() {
-      const stream = this.rpc.call("tickets.nav.schema", {});
+    async schema(method) {
+      const stream = this.rpc.call("tickets.nav.schema", { method });
       return collectOne(stream);
     }
-    async* tree(filter, after, epic, keep, limit, matchesOnly, parent, tz) {
+    tree(filter, after, epic, keep, limit, matchesOnly, parent, tz) {
       const stream = this.rpc.call("tickets.nav.tree", { after, epic, filter, keep, limit, matches_only: matchesOnly, parent, tz });
-      yield* extractData(stream);
+      return new MethodStream("tickets.nav.tree", stream);
     }
   }
   function createTicketsNavClient(rpc) {
@@ -305,24 +399,24 @@
     constructor(rpc) {
       this.rpc = rpc;
     }
-    async* diff(id, from, text, to) {
+    diff(id, from, text, to) {
       const stream = this.rpc.call("tickets.revisions.diff", { from, id, text, to });
-      yield* extractData(stream);
+      return new MethodStream("tickets.revisions.diff", stream);
     }
-    async* get(id, rev) {
+    get(id, rev) {
       const stream = this.rpc.call("tickets.revisions.get", { id, rev });
-      yield* extractData(stream);
+      return new MethodStream("tickets.revisions.get", stream);
     }
-    async* list(id, before, limit) {
+    list(id, before, limit) {
       const stream = this.rpc.call("tickets.revisions.list", { before, id, limit });
-      yield* extractData(stream);
+      return new MethodStream("tickets.revisions.list", stream);
     }
-    async* restore(id, rev, fields, message, source) {
+    restore(id, rev, fields, message, source) {
       const stream = this.rpc.call("tickets.revisions.restore", { fields, id, message, rev, source });
-      yield* extractData(stream);
+      return new MethodStream("tickets.revisions.restore", stream);
     }
-    async schema() {
-      const stream = this.rpc.call("tickets.revisions.schema", {});
+    async schema(method) {
+      const stream = this.rpc.call("tickets.revisions.schema", { method });
       return collectOne(stream);
     }
   }
@@ -336,16 +430,16 @@
     constructor(rpc) {
       this.rpc = rpc;
     }
-    async* create(parent, title, blockedBy, body, kind) {
+    create(parent, title, blockedBy, body, kind) {
       const stream = this.rpc.call("tickets.subtasks.create", { blocked_by: blockedBy, body, kind, parent, title });
-      yield* extractData(stream);
+      return new MethodStream("tickets.subtasks.create", stream);
     }
-    async* list(parent, after, limit) {
+    list(parent, after, limit) {
       const stream = this.rpc.call("tickets.subtasks.list", { after, limit, parent });
-      yield* extractData(stream);
+      return new MethodStream("tickets.subtasks.list", stream);
     }
-    async schema() {
-      const stream = this.rpc.call("tickets.subtasks.schema", {});
+    async schema(method) {
+      const stream = this.rpc.call("tickets.subtasks.schema", { method });
       return collectOne(stream);
     }
   }
@@ -359,29 +453,29 @@
     constructor(rpc) {
       this.rpc = rpc;
     }
-    async* blockers(id) {
+    blockers(id) {
       const stream = this.rpc.call("tickets.work.blockers", { id });
-      yield* extractData(stream);
+      return new MethodStream("tickets.work.blockers", stream);
     }
-    async* ready(after, epic, filter, limit, summary, tz) {
+    ready(after, epic, filter, limit, summary, tz) {
       const stream = this.rpc.call("tickets.work.ready", { after, epic, filter, limit, summary, tz });
-      yield* extractData(stream);
+      return new MethodStream("tickets.work.ready", stream);
     }
-    async schema() {
-      const stream = this.rpc.call("tickets.work.schema", {});
+    async schema(method) {
+      const stream = this.rpc.call("tickets.work.schema", { method });
       return collectOne(stream);
     }
-    async* waves(epics, kinds) {
+    waves(epics, kinds) {
       const stream = this.rpc.call("tickets.work.waves", { epics, kinds });
-      yield* extractData(stream);
+      return new MethodStream("tickets.work.waves", stream);
     }
-    async* wavesTo(id, kinds) {
+    wavesTo(id, kinds) {
       const stream = this.rpc.call("tickets.work.waves_to", { id, kinds });
-      yield* extractData(stream);
+      return new MethodStream("tickets.work.waves_to", stream);
     }
-    async* wavesUnder(id, kinds) {
+    wavesUnder(id, kinds) {
       const stream = this.rpc.call("tickets.work.waves_under", { id, kinds });
-      yield* extractData(stream);
+      return new MethodStream("tickets.work.waves_under", stream);
     }
   }
   function createTicketsWorkClient(rpc) {
@@ -410,129 +504,129 @@
       this.subtasks = createTicketsSubtasksClient(rpc);
       this.work = createTicketsWorkClient(rpc);
     }
-    async* amend(id, body, title) {
+    amend(id, body, title) {
       const stream = this.rpc.call("tickets.amend", { body, id, title });
-      yield* extractData(stream);
+      return new MethodStream("tickets.amend", stream);
     }
-    async* archive(dryRun, filter, ids, max, message, tz) {
+    archive(dryRun, filter, ids, max, message, tz) {
       const stream = this.rpc.call("tickets.archive", { dry_run: dryRun, filter, ids, max, message, tz });
-      yield* extractData(stream);
+      return new MethodStream("tickets.archive", stream);
     }
-    async* assign(add, id, ids, message, remove, source) {
+    assign(add, id, ids, message, remove, source) {
       const stream = this.rpc.call("tickets.assign", { add, id, ids, message, remove, source });
-      yield* extractData(stream);
+      return new MethodStream("tickets.assign", stream);
     }
-    async* awaitReply(id, input, since, timeoutMinutes) {
+    awaitReply(id, input, since, timeoutMinutes) {
       const stream = this.rpc.call("tickets.await_reply", { id, input, since, timeout_minutes: timeoutMinutes });
-      yield* extractData(stream);
+      return new MethodStream("tickets.await_reply", stream);
     }
-    async* create(epic, title, blockedBy, body, chat, kind, org, parent, path, severity) {
+    create(epic, title, blockedBy, body, chat, kind, org, parent, path, severity) {
       const stream = this.rpc.call("tickets.create", { blocked_by: blockedBy, body, chat, epic, kind, org, parent, path, severity, title });
-      yield* extractData(stream);
+      return new MethodStream("tickets.create", stream);
     }
-    async* delete(children, filter, ids, max, message, tz, unblock) {
+    delete(children, filter, ids, max, message, tz, unblock) {
       const stream = this.rpc.call("tickets.delete", { children, filter, ids, max, message, tz, unblock });
-      yield* extractData(stream);
+      return new MethodStream("tickets.delete", stream);
     }
-    async* find(query, after, filter, limit, tz) {
+    find(query, after, filter, limit, tz) {
       const stream = this.rpc.call("tickets.find", { after, filter, limit, query, tz });
-      yield* extractData(stream);
+      return new MethodStream("tickets.find", stream);
     }
-    async* freeze(id) {
+    freeze(id) {
       const stream = this.rpc.call("tickets.freeze", { id });
-      yield* extractData(stream);
+      return new MethodStream("tickets.freeze", stream);
     }
-    async* get(id) {
+    get(id) {
       const stream = this.rpc.call("tickets.get", { id });
-      yield* extractData(stream);
+      return new MethodStream("tickets.get", stream);
     }
-    async* health() {
+    health() {
       const stream = this.rpc.call("tickets.health", {});
-      yield* extractData(stream);
+      return new MethodStream("tickets.health", stream);
     }
-    async* history(id) {
+    history(id) {
       const stream = this.rpc.call("tickets.history", { id });
-      yield* extractData(stream);
+      return new MethodStream("tickets.history", stream);
     }
-    async* label(add, id, ids, remove) {
+    label(add, id, ids, remove) {
       const stream = this.rpc.call("tickets.label", { add, id, ids, remove });
-      yield* extractData(stream);
+      return new MethodStream("tickets.label", stream);
     }
-    async* list(after, at, epic, filter, keep, limit, parent, status, summary, tz) {
+    list(after, at, epic, filter, keep, limit, parent, status, summary, tz) {
       const stream = this.rpc.call("tickets.list", { after, at, epic, filter, keep, limit, parent, status, summary, tz });
-      yield* extractData(stream);
+      return new MethodStream("tickets.list", stream);
     }
-    async* queue(id, reason, urgency, blocking, input, message, mockup, source) {
+    queue(id, reason, urgency, blocking, input, message, mockup, source) {
       const stream = this.rpc.call("tickets.queue", { blocking, id, input, message, mockup, reason, source, urgency });
-      yield* extractData(stream);
+      return new MethodStream("tickets.queue", stream);
     }
-    async* queued(snoozed) {
+    queued(snoozed) {
       const stream = this.rpc.call("tickets.queued", { snoozed });
-      yield* extractData(stream);
+      return new MethodStream("tickets.queued", stream);
     }
-    async* rename(id, to, dryRun, message) {
+    rename(id, to, dryRun, message) {
       const stream = this.rpc.call("tickets.rename", { dry_run: dryRun, id, message, to });
-      yield* extractData(stream);
+      return new MethodStream("tickets.rename", stream);
     }
-    async* requestChanges(body, id, source) {
+    requestChanges(body, id, source) {
       const stream = this.rpc.call("tickets.request_changes", { body, id, source });
-      yield* extractData(stream);
+      return new MethodStream("tickets.request_changes", stream);
     }
-    async* reshortcode(ids, to, dryRun, message, newScope, parent, withChildren) {
+    reshortcode(ids, to, dryRun, message, newScope, parent, withChildren) {
       const stream = this.rpc.call("tickets.reshortcode", { dry_run: dryRun, ids, message, new_scope: newScope, parent, to, with_children: withChildren });
-      yield* extractData(stream);
+      return new MethodStream("tickets.reshortcode", stream);
     }
-    async* restore(dryRun, filter, ids, max, message, tz, withChildren) {
+    restore(dryRun, filter, ids, max, message, tz, withChildren) {
       const stream = this.rpc.call("tickets.restore", { dry_run: dryRun, filter, ids, max, message, tz, with_children: withChildren });
-      yield* extractData(stream);
+      return new MethodStream("tickets.restore", stream);
     }
-    async schema() {
-      const stream = this.rpc.call("tickets.schema", {});
+    async schema(method) {
+      const stream = this.rpc.call("tickets.schema", { method });
       return collectOne(stream);
     }
-    async* search(query, filter, limit, offset, tz) {
+    search(query, filter, limit, offset, tz) {
       const stream = this.rpc.call("tickets.search", { filter, limit, offset, query, tz });
-      yield* extractData(stream);
+      return new MethodStream("tickets.search", stream);
     }
-    async* setKind(id, kind, message, source, status) {
+    setKind(id, kind, message, source, status) {
       const stream = this.rpc.call("tickets.set_kind", { id, kind, message, source, status });
-      yield* extractData(stream);
+      return new MethodStream("tickets.set_kind", stream);
     }
-    async* setParent(id, parent) {
+    setParent(id, parent) {
       const stream = this.rpc.call("tickets.set_parent", { id, parent });
-      yield* extractData(stream);
+      return new MethodStream("tickets.set_parent", stream);
     }
-    async* setStatus(id, status, message, restoreChildren, source) {
+    setStatus(id, status, message, restoreChildren, source) {
       const stream = this.rpc.call("tickets.set_status", { id, message, restore_children: restoreChildren, source, status });
-      yield* extractData(stream);
+      return new MethodStream("tickets.set_status", stream);
     }
-    async* snooze(id, minutes, source) {
+    snooze(id, minutes, source) {
       const stream = this.rpc.call("tickets.snooze", { id, minutes, source });
-      yield* extractData(stream);
+      return new MethodStream("tickets.snooze", stream);
     }
-    async* undelete(ids) {
+    undelete(ids) {
       const stream = this.rpc.call("tickets.undelete", { ids });
-      yield* extractData(stream);
+      return new MethodStream("tickets.undelete", stream);
     }
-    async* unfreeze(id) {
+    unfreeze(id) {
       const stream = this.rpc.call("tickets.unfreeze", { id });
-      yield* extractData(stream);
+      return new MethodStream("tickets.unfreeze", stream);
     }
-    async* unqueue(id, source) {
+    unqueue(id, source) {
       const stream = this.rpc.call("tickets.unqueue", { id, source });
-      yield* extractData(stream);
+      return new MethodStream("tickets.unqueue", stream);
     }
-    async* update(id, block, body, hidden, kind, message, parent, severity, source, status, title, unblock) {
+    update(id, block, body, hidden, kind, message, parent, severity, source, status, title, unblock) {
       const stream = this.rpc.call("tickets.update", { block, body, hidden, id, kind, message, parent, severity, source, status, title, unblock });
-      yield* extractData(stream);
+      return new MethodStream("tickets.update", stream);
     }
-    async* updateMany(assign, block, filter, ids, kind, label, max, message, parent, severity, source, status, tz, unassign, unblock, unlabel) {
+    updateMany(assign, block, filter, ids, kind, label, max, message, parent, severity, source, status, tz, unassign, unblock, unlabel) {
       const stream = this.rpc.call("tickets.update_many", { assign, block, filter, ids, kind, label, max, message, parent, severity, source, status, tz, unassign, unblock, unlabel });
-      yield* extractData(stream);
+      return new MethodStream("tickets.update_many", stream);
     }
-    async* watch(epic, filter, membership, revisions, tz) {
+    watch(epic, filter, membership, revisions, tz) {
       const stream = this.rpc.call("tickets.watch", { epic, filter, membership, revisions, tz });
-      yield* extractData(stream);
+      return new MethodStream("tickets.watch", stream);
     }
   }
   function createTicketsClient(rpc) {
@@ -542,7 +636,7 @@
   // bridge.ts
   var NAMESPACE = "tickets.";
   function metadata(method) {
-    return { provenance: ["menger", "bridge", method], plexusHash: "", timestamp: Math.floor(Date.now() / 1000) };
+    return { provenance: ["menger", "bridge", method], plexus_hash: "", timestamp: Math.floor(Date.now() / 1000) };
   }
   function bridgeRpc(call) {
     return {
@@ -557,14 +651,14 @@
           return;
         }
         for (const content of items) {
-          yield { type: "data", metadata: metadata(method), contentType: method, content };
+          yield { type: "data", metadata: metadata(method), content_type: method, content };
         }
         yield { type: "done", metadata: metadata(method) };
       }
     };
   }
   async function* one(content) {
-    yield { type: "data", metadata: metadata("typed"), contentType: "typed", content };
+    yield { type: "data", metadata: metadata("typed"), content_type: "typed", content };
   }
   mengerTyped = {
     tickets: (call) => createTicketsClient(bridgeRpc(call)),

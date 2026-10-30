@@ -1,5 +1,6 @@
 import type { RpcClient } from '../../rpc';
-import type { FilterName, FilterSource } from './types';
+import { MethodStream } from '../../rpc';
+import type { FilterName, FilterSource, SchemaResult } from './types';
 import type { TicketsEvent } from '../../tickets/types';
 /** Typed client interface for tickets.filters plugin */
 export interface TicketsFiltersClient {
@@ -9,45 +10,45 @@ export interface TicketsFiltersClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `filters.check` anywhere it is held
      */
-    check(filter: FilterSource): AsyncGenerator<TicketsEvent>;
+    check(filter: FilterSource): MethodStream<'tickets.filters.check', TicketsEvent>;
     /**
      * Delete a saved filter by name; an in-band error when there is none. Yields filter_deleted. A filter that names it stops resolving.
      * @server-derived auth
      * @requiresAuth — resolver: self.access.verify
      * @requires `filters.delete` anywhere it is held
      */
-    delete(name: FilterName): AsyncGenerator<TicketsEvent>;
+    delete(name: FilterName): MethodStream<'tickets.filters.delete', TicketsEvent>;
     /**
      * One saved filter, by name (matched by its slug: `Open Builds` is `open-builds`), with its count; an in-band error when there is none.
      * @server-derived auth
      * @requiresAuth — resolver: self.access.verify
      * @requires `filters.get` anywhere it is held
      */
-    get(name: FilterName): AsyncGenerator<TicketsEvent>;
+    get(name: FilterName): MethodStream<'tickets.filters.get', TicketsEvent>;
     /**
      * Every saved filter of the caller's organization, by name: its filter, how many tickets in reach it admits, who saved it and when (`Needs you` among them until one is saved under that name).
      * @requires `filters.list` anywhere it is held
      */
-    list(): AsyncGenerator<TicketsEvent>;
+    list(): MethodStream<'tickets.filters.list', TicketsEvent>;
     /**
      * Give a saved filter another name, keeping its filter and who saved it; refused in band when the new name is another filter's. Yields filter_saved with `renamed_from`. A filter that names the old name stops resolving.
      * @server-derived auth
      * @requiresAuth — resolver: self.access.verify
      * @requires `filters.rename` anywhere it is held
      */
-    rename(name: FilterName, to: FilterName): AsyncGenerator<TicketsEvent>;
+    rename(name: FilterName, to: FilterName): MethodStream<'tickets.filters.rename', TicketsEvent>;
     /**
      * Save a filter under a name in the caller's organization — new, or replacing the one of that name (who first saved it is kept). Refused in band, nothing written: a filter the language cannot read (the chunk and where it stands are named), one holding `text`, a `saved "…"` that names none or makes a cycle. Yields filter_saved with the row.
      * @server-derived auth
      * @requiresAuth — resolver: self.access.verify
      * @requires `filters.save` anywhere it is held
      */
-    save(filter: FilterSource, name: FilterName): AsyncGenerator<TicketsEvent>;
+    save(filter: FilterSource, name: FilterName): MethodStream<'tickets.filters.save', TicketsEvent>;
     /**
      * Get plugin or method schema. Pass {"method": "name"} for a specific method.
      * @requires `filters.schema` anywhere it is held
      */
-    schema(): Promise<unknown>;
+    schema(method?: string | null): Promise<SchemaResult>;
 }
 /** Create a typed tickets.filters client from an RPC client */
 export declare function createTicketsFiltersClient(rpc: RpcClient): TicketsFiltersClient;
