@@ -769,6 +769,23 @@ with the stamped version.
 layouts' default sections), `src/*.rhx` (`board-layout`, `board-rows`,
 `filter-line`, `jump-palette`, `nav-tree`, `nav-flat`, `nav-children`,
 `ticket-page`, `ticket-chip`, `page-shell`, `hello-list`).
+
+FRAME-14: the board is in two profiles. Beside each of the five board
+components above (`board-layout`, `board-rows`, `nav-tree`, `ticket-page`,
+`jump-palette`) is its real Svelte twin, `src/<name>-sv.svelte` (`svelte/1`:
+compiled at build in Node, `--node-modules ../plexus-ui/node_modules`), with
+the same calls and the same DOM marks. The real Svelte board is at `#/sv/`,
+`#/sv/f/:filter` and `#/sv/ticket/:id`; it is drawn in `board-frame.rhx`, an
+rhx layout that only places four sections (a section is the host's, and only
+an rhx template marks one), whose defaults are the svelte/1 ones — `top` holds
+`board-layout-sv`, the top bar and its filter line. The rhx components stay
+the defaults of `board-layout`'s sections; a right-click on one puts the
+real Svelte twin there (`ui slots set`), and `ui slots clear` takes it back. A
+real Svelte twin carries what a module cannot ask of the host today: the
+palette's 80 ms pause and its hold until a query (rhx's `debounce_ms` and
+`when:`), the window's 20 ms, the nav's and the page's children inside them
+(no `.svelte` imports another), and the body's markdown and the engine's
+allow-list (`markdown()` is not on the bus).
 `../plexus-ui`'s `plexus-ui` tool (FRAME-8; `scripts/plexus-ui` builds it
 from the sibling into this checkout's target and runs it) builds it into
 `dist/ui.tar`: `build --prebuild` the engine (cargo: `wasm32-unknown-unknown`
