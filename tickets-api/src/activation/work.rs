@@ -79,7 +79,7 @@ impl WorkActivation {
         /// The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC).
         tz: Option<Zone>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        crate::store::reading_as(user.principal_text(), ready_stream(self.store.clone(), user, ReadyAsk { epic, after, limit, summary, filter, tz }))
+        dressing(self.store.clone(), crate::store::reading_as(user.principal_text(), ready_stream(self.store.clone(), user, ReadyAsk { epic, after, limit, summary, filter, tz })))
     }
 
     /// The order of work: each ticket of the shortcodes placed in its wave over the whole blocked_by graph (or missing_blocker, or done) with what it waits on, then the wave counts.
@@ -112,7 +112,7 @@ impl WorkActivation {
         /// Kinds to place: scope | execution | build | gap | spike (optional; default build, spike, gap — a doc is never placed).
         kinds: Option<Vec<Kind>>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        futures::stream::iter(waves_answer(&self.store, user, texts(epics), kinds))
+        dressing(self.store.clone(), futures::stream::iter(waves_answer(&self.store, user, texts(epics), kinds)))
     }
 
     /// The order of work under one ticket: each ticket of its subtree placed in its wave (or missing_blocker, or done) with what it waits on, then the wave counts.
@@ -127,7 +127,7 @@ impl WorkActivation {
         /// Kinds to place: scope | execution | build | gap | spike (optional; default build, spike, gap — a doc is never placed).
         kinds: Option<Vec<Kind>>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        futures::stream::iter(waves_under_answer(&self.store, user, id.into_string(), kinds))
+        dressing(self.store.clone(), futures::stream::iter(waves_under_answer(&self.store, user, id.into_string(), kinds)))
     }
 
     /// The wave board whose final state is one ticket: its blockers transitively (and a scope's open descendants) placed in waves, done blockers done, the ticket alone in the last wave; cycles named; then the wave counts.
@@ -142,7 +142,7 @@ impl WorkActivation {
         /// Kinds to yield: scope | execution | build | gap | spike (optional; default all five — never a doc; the ticket itself always; every kind is followed).
         kinds: Option<Vec<Kind>>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        futures::stream::iter(waves_to_answer(&self.store, user, id.into_string(), kinds))
+        dressing(self.store.clone(), futures::stream::iter(waves_to_answer(&self.store, user, id.into_string(), kinds)))
     }
 
     /// One ticket's blockers resolved to current statuses; dangling ids marked; those out of your reach counted, never named.
@@ -164,6 +164,6 @@ impl WorkActivation {
         /// Ticket id whose blockers to resolve, e.g. MNG-2.
         id: TicketRef,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        crate::store::reading_as(user.principal_text(), blockers_stream(self.store.clone(), user, id.into_string()))
+        dressing(self.store.clone(), crate::store::reading_as(user.principal_text(), blockers_stream(self.store.clone(), user, id.into_string())))
     }
 }

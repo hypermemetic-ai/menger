@@ -275,6 +275,8 @@ async fn every_path_that_sets_a_parent_keeps_the_index_a_scan() {
                 &Ticket {
                     hidden_blocked_by: 0,
                     hidden_unlocks: 0,
+                    uid: Default::default(),
+                    uid_of: Default::default(),
                     parent_hidden: false,
                     archived: None,
                     frozen: false,

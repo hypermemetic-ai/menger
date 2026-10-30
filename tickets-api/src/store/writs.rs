@@ -282,8 +282,16 @@ fn mismatch(what: &str) -> StoreError {
     StoreError::Invalid(format!("{what}: the write was not given the proof it needs (nothing written)"))
 }
 
-/// The key `text` names in `cache`, as a write resolves it (`None`: none).
+/// The key `text` names in `cache`, as a write resolves it (`None`: none) —
+/// TICKETS-35 (TICKETS-32): a key, a proof's, read as the key, never again
+/// as a name ([`Cache::keyed`]).
 pub(super) fn key_of(cache: &Cache, text: &str) -> Option<String> {
+    cache.keyed(text).ok()
+}
+
+/// The key a caller's `text` names, as the write's own plan reads it — any
+/// name, through the resolver (`None`: none, or several).
+fn name_of(cache: &Cache, text: &str) -> Option<String> {
     match cache.find_ticket(text, shortcodes::OrgReach::All) {
         shortcodes::Found::One(key) => Some(key),
         _ => None,
@@ -399,7 +407,7 @@ impl Updating {
     pub(super) fn check(&self, cache: &Cache, row: &Row, update: &Update) -> Result<(), StoreError> {
         let Some((parenting, blockers)) = &self.by else { return Ok(()) };
         // A parent that names no ticket: the update's own refusal says so.
-        if let Some(parent) = update.parent.as_deref().map(str::trim).filter(|p| !p.is_empty()).and_then(|p| key_of(cache, p)) {
+        if let Some(parent) = update.parent.as_deref().map(str::trim).filter(|p| !p.is_empty()).and_then(|p| name_of(cache, p)) {
             match parenting {
                 Some(p) => p.check(cache, row, &parent)?,
                 None => return Err(mismatch("update: the parent")),
@@ -407,7 +415,7 @@ impl Updating {
         }
         let held: Vec<String> = blockers.iter().map(|b| key_of(cache, b.name()).unwrap_or_else(|| b.name().to_ascii_uppercase())).collect();
         for b in update.block.iter().chain(&update.unblock).map(|b| b.trim()).filter(|b| !b.is_empty()) {
-            let named = key_of(cache, b).unwrap_or_else(|| b.to_ascii_uppercase());
+            let named = name_of(cache, b).unwrap_or_else(|| b.to_ascii_uppercase());
             let ok = held.iter().zip(blockers).any(|(h, given)| *h == named && (matches!(given, Blocker::Forward(_)) || cache.get(&named).is_some()));
             if !ok {
                 return Err(mismatch("update: a blocker"));

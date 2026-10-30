@@ -536,9 +536,10 @@ impl VerifiedUser {
             }
             Err(_) => false,
         };
-        // ACCESS-48: a name no ticket could have is no forward reference.
+        // ACCESS-48: a name no ticket could have is no forward reference —
+        // TICKETS-35: nor a uid, which no ticket is born as.
         match (ok, name.parse::<TicketRef>()) {
-            (true, Ok(name)) => Ok(Forward { name }),
+            (true, Ok(name)) if name.uid().is_none() => Ok(Forward { name }),
             _ => Err(Hidden),
         }
     }

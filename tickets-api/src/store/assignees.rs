@@ -224,7 +224,7 @@ impl Store {
     pub async fn assign_by(&self, on: Vec<Permit<Editor>>, add: Vec<Principal>, remove: Vec<Principal>, act: Act) -> Result<Vec<Change>, StoreError> {
         let mut ids: Vec<String> = Vec::with_capacity(on.len());
         for p in &on {
-            let id = self.resolve(p.id())?;
+            let id = self.keyed(p.id())?;
             if !ids.contains(&id) {
                 ids.push(id);
             }

@@ -100,6 +100,9 @@ pub use types::{
 };
 // MENGER-13: the transition log's vocabulary.
 pub use types::{ShortcodeMove, Tombstone, WatchEnd, Transition, TransitionField, TransitionSource, ANONYMOUS_ACTOR, SYSTEM_ACTOR};
+// TICKETS-35: what `ambiguous` says of each ticket a name fits.
+pub use types::{Choice, ChoiceParent};
+pub use vocab::Uid;
 
 /// IDENTITY-19: the rule every method asks first — who a call acts as, or
 /// why it is refused. Server-only.

@@ -22,7 +22,7 @@
 use crate::types::TicketsEvent;
 use crate::vocab::{Cursor, FilterText, ShortcodeRef, TicketRef, Zone};
 #[cfg(feature = "server")]
-use super::{counts_stream, facets_stream, listed, member_events, tree_events, TreeAsk};
+use super::{counts_stream, dressing, facets_stream, listed, member_events, tree_events, TreeAsk};
 #[cfg(feature = "server")]
 use crate::access::{Access, MengerRequest, VerifiedUser};
 #[cfg(feature = "server")]
@@ -226,7 +226,7 @@ impl NavActivation {
         tz: Option<Zone>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let me = user.principal_text();
-        futures::stream::iter(crate::store::reading_now(me, || tree_events(&self.store, &user, TreeAsk { parent, epic, filter, after, limit, matches_only, keep, tz })))
+        dressing(self.store.clone(), futures::stream::iter(crate::store::reading_now(me, || tree_events(&self.store, &user, TreeAsk { parent, epic, filter, after, limit, matches_only, keep, tz }))))
     }
 
     /// Which of these tickets a filter admits: one member { id, matched } per id, in the order given (an unknown id: false); at most 1000 ids.

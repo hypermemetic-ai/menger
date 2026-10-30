@@ -190,6 +190,21 @@ pub(super) fn under(cache: &Cache, id: &str, name: &str) -> bool {
 /// letters or address; one naming several is refused, naming each; one
 /// naming nothing stays as written (a ticket a hand edit names, or none).
 fn under_identity(cache: &Cache, name: &str) -> Result<String, StoreError> {
+    // TICKETS-35: a uid names its ticket — beside a shortcode of those
+    // letters, both, refused as the filter's `under` refuses them.
+    if let Some(key) = cache.uid_key(name).filter(|k| cache.at.contains_key(*k)) {
+        return match cache.shortcodes.find_shortcode(name, shortcodes::OrgReach::All) {
+            shortcodes::Found::None => Ok(key.to_string()),
+            shortcodes::Found::One(sc) => Err(StoreError::Ambiguous {
+                text: name.trim().to_string(),
+                candidates: vec![cache.get(key).map_or_else(|| key.to_string(), |r| r.address.clone()), cache.shortcodes.address(&sc)],
+            }),
+            shortcodes::Found::Many(mut c) => {
+                c.insert(0, cache.get(key).map_or_else(|| key.to_string(), |r| r.address.clone()));
+                Err(StoreError::Ambiguous { text: name.trim().to_string(), candidates: c })
+            }
+        };
+    }
     let names_ticket = crate::address::Address::parse(name).map_or(true, |a| a.names_ticket());
     let found = match names_ticket {
         true => cache.find_ticket(name, shortcodes::OrgReach::All),

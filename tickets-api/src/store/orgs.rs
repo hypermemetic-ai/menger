@@ -493,8 +493,11 @@ impl Store {
             match hosted {
                 Some(chain) => (chain, None),
                 None => {
-                    let names_ticket = parsed.as_ref().is_none_or(Address::names_ticket);
-                    (self.scope_chain(t)?, names_ticket.then(|| folded(t)))
+                    // TICKETS-35: a uid names a ticket too — labelled as the
+                    // uid it is, never as letters.
+                    let uid = crate::vocab::uid_named(t).filter(|_| cache_holds_uid(self, t));
+                    let names_ticket = uid.is_some() || parsed.as_ref().is_none_or(Address::names_ticket);
+                    (self.scope_chain(t)?, names_ticket.then(|| uid.map_or_else(|| folded(t), String::from)))
                 }
             }
         };
@@ -535,6 +538,11 @@ impl Store {
         out.push(Scope::Org(org.unwrap_or(fallback)).text());
         Some(out)
     }
+}
+
+/// TICKETS-35: whether `text` names a ticket by its uid — one the store holds.
+fn cache_holds_uid(store: &Store, text: &str) -> bool {
+    store.tickets.read().expect("store lock poisoned").uid_key(text).is_some()
 }
 
 /// ORG-4: a grant's scope from before ORG-4 — a bare shortcode, `IDENTITY`

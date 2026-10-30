@@ -244,6 +244,9 @@ impl Store {
 
             let now = chrono::Utc::now().timestamp();
             let mut ticket = Ticket {
+                // TICKETS-35: its uid, minted now — no other's, no code.
+                uid: tickets.mint_uid(&[]),
+                uid_of: Default::default(),
                 id: crate::address::TicketId::new(id.clone()),
                 // ORG-3: its letters and address as the write leaves the
                 // registry — set below, once the birth is worked out.

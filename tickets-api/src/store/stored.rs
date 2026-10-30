@@ -1521,6 +1521,10 @@ pub enum Verdict {
         /// TICKETS-7: the revisions the file keeps, each ticket's latest the
         /// ticket as it is — `None` when it has no table yet.
         revisions: Option<usize>,
+        /// TICKETS-35: the uids the file holds, one for every ticket and
+        /// every tombstone, no two alike — `None` when it has no column yet
+        /// (the next open mints them).
+        uids: Option<usize>,
     },
     /// Where they differ, one line each, naming the structure and the key.
     Differs(Vec<String>),
@@ -1625,6 +1629,11 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
         out.extend(differs);
         n
     });
+    // TICKETS-35: the uids — every ticket and tombstone one, no two alike.
+    let uids = super::uids::check(&tx)?.map(|(n, differs)| {
+        out.extend(differs);
+        n
+    });
     tx.commit()?;
     if !out.is_empty() {
         return Ok(Verdict::Differs(out));
@@ -1647,6 +1656,7 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
         deployments,
         shortcodes,
         revisions,
+        uids,
     })
 }
 

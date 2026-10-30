@@ -24,7 +24,8 @@ use std::fmt;
 use std::str::FromStr;
 
 pub use crate::address::{Address, At, Code, EpicName, Namespace, OrgId, Shortcode, ShortcodeId, TicketId, TicketName};
-use crate::vocab::{CommitRef, Label};
+use crate::vocab::{CommitRef, Label, Uid};
+use std::collections::BTreeMap;
 
 /// Lifecycle status. Serialized with frontmatter casing (`Pending`, `Ready`, …)
 /// so a ticket round-trips into a plans/ file unchanged.
@@ -371,6 +372,13 @@ impl FromStr for Severity {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Ticket {
+    /// TICKETS-35: the ticket's uid — the one name nothing changes: minted
+    /// at its birth (and once for every ticket a file held before uids),
+    /// kept through every move, never another's. Every name of the ticket
+    /// takes it, bare or in a link (`/t/<uid>/…`). `default`, and omitted
+    /// when there is none: a server from before TICKETS-35 sends none.
+    #[serde(default, skip_serializing_if = "Uid::is_none")]
+    pub uid: Uid,
     /// `EPIC-N`, allocated by the store. ORG-3: the ticket's key — opaque
     /// and immutable ([`crate::TicketId`]): today's id for today's tickets,
     /// its shortcode's id, `-` and its number for a newborn.
@@ -409,6 +417,12 @@ pub struct Ticket {
     /// `hidden_blocked_by`.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub hidden_unlocks: u32,
+    /// TICKETS-35: the uid of each ticket this one names — its `parent`,
+    /// each of `blocked_by` and each of `unlocks` — keyed as it names them;
+    /// a forward reference (a ticket not born yet) has none. Filled as the
+    /// ticket goes out, of the tickets its reader sees; omitted when empty.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub uid_of: BTreeMap<TicketName, Uid>,
     /// AGS-19: the ticket this one is an output of, if any. Any epic; the
     /// parent must exist at creation and the chain is acyclic.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -554,6 +568,10 @@ fn is_false(b: &bool) -> bool {
 /// the same keys in every row.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct TicketSummary {
+    /// TICKETS-35: as on [`Ticket`] — on the row, so every link the app
+    /// makes to a ticket is by its uid.
+    #[serde(default, skip_serializing_if = "Uid::is_none")]
+    pub uid: Uid,
     pub id: TicketId,
     pub epic: Code,
     /// ORG-3: as on [`Ticket`].
@@ -581,6 +599,10 @@ pub struct TicketSummary {
     /// ACCESS-10: as on [`Ticket`].
     #[serde(default, skip_serializing_if = "is_zero")]
     pub hidden_unlocks: u32,
+    /// TICKETS-35: as on [`Ticket`] — the uids of its parent, blockers and
+    /// unlocks, so their links are by uid too; omitted when empty.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub uid_of: BTreeMap<TicketName, Uid>,
     /// SDLC-9: as on [`Ticket`] — on the row, so the board, the nav and
     /// the ticket page all have it without a `get`.
     pub commits: Vec<CommitRef>,
@@ -622,6 +644,7 @@ pub struct TicketSummary {
 impl From<Ticket> for TicketSummary {
     fn from(t: Ticket) -> Self {
         Self {
+            uid: t.uid,
             id: t.id,
             epic: t.epic,
             shortcode: t.shortcode,
@@ -638,6 +661,7 @@ impl From<Ticket> for TicketSummary {
             unlocks: t.unlocks,
             hidden_blocked_by: t.hidden_blocked_by,
             hidden_unlocks: t.hidden_unlocks,
+            uid_of: t.uid_of,
             commits: t.commits,
             path: t.path,
             placement: t.placement,
@@ -688,6 +712,37 @@ pub fn path_address(id: &str) -> Option<(String, &str)> {
     }
     let path = &id[id.find('/')? + 1..];
     Some((a.code.as_str().to_string(), path))
+}
+
+/// TICKETS-35: what a ticket or a summary names — its parent, blockers and
+/// unlocks — and where their uids go ([`Ticket::uid_of`]).
+pub struct Named<'a> {
+    pub parent: Option<&'a TicketId>,
+    pub blocked_by: &'a [TicketName],
+    pub unlocks: &'a [TicketName],
+    pub uid_of: &'a mut BTreeMap<TicketName, Uid>,
+}
+
+impl Named<'_> {
+    /// Each name, as the row writes it: the parent, then each blocker, then
+    /// each unlock.
+    pub fn names(&self) -> impl Iterator<Item = &str> + '_ {
+        self.parent.map(TicketId::as_str).into_iter().chain(self.blocked_by.iter().map(TicketName::as_str)).chain(self.unlocks.iter().map(TicketName::as_str))
+    }
+}
+
+impl Ticket {
+    /// TICKETS-35: what it names, and its `uid_of` to fill.
+    pub fn named(&mut self) -> Named<'_> {
+        Named { parent: self.parent.as_ref(), blocked_by: &self.blocked_by, unlocks: &self.unlocks, uid_of: &mut self.uid_of }
+    }
+}
+
+impl TicketSummary {
+    /// TICKETS-35: what it names, and its `uid_of` to fill.
+    pub fn named(&mut self) -> Named<'_> {
+        Named { parent: self.parent.as_ref(), blocked_by: &self.blocked_by, unlocks: &self.unlocks, uid_of: &mut self.uid_of }
+    }
 }
 
 /// MFE-9: the same narrowing from a borrowed ticket, for a consumer that
@@ -1556,6 +1611,11 @@ pub struct Transition {
 /// delete dropped (`unblock`) — what `undelete` puts back.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Tombstone {
+    /// TICKETS-35: the deleted ticket's uid — it names the tombstone, and
+    /// the ticket again once it is undeleted. Omitted when none (a ticket
+    /// deleted by a server before TICKETS-35, until the next open mints it).
+    #[serde(default, skip_serializing_if = "Uid::is_none")]
+    pub uid: Uid,
     pub id: TicketId,
     pub title: String,
     pub by: String,
@@ -1572,6 +1632,46 @@ pub struct Tombstone {
     pub reparented: Vec<TicketId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unblocked: Vec<TicketId>,
+}
+
+/// TICKETS-35: one of the tickets a name fits — what `ambiguous` says of
+/// each candidate, so a reader can choose: its uid, key, full address,
+/// organization, epic, kind, status, title and parent. A candidate the
+/// caller may not read (or that is a shortcode, not a ticket) carries its
+/// address alone, as `candidates` does.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Choice {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<Uid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<TicketId>,
+    /// Its full address — always: the candidate it is.
+    pub address: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub org: Option<OrgId>,
+    /// ORG-13: the epic it is in (`genesis`), not its shortcode's letters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epic: Option<EpicName>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<Kind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<Status>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Its parent, when it has one the caller reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<ChoiceParent>,
+}
+
+/// TICKETS-35: a [`Choice`]'s parent — enough to tell two namesakes apart
+/// and to link to it by uid.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ChoiceParent {
+    #[serde(default, skip_serializing_if = "Uid::is_none")]
+    pub uid: Uid,
+    pub id: TicketId,
+    pub address: String,
+    pub title: String,
 }
 
 /// ACT-6: one ticket a `reshortcode` moved — the id it had and the id it
@@ -2002,7 +2102,16 @@ pub enum TicketsEvent {
     /// names more than one thing in the reader's reach: `candidates` are
     /// each one's full address, in the store's order. Nothing was read or
     /// written; name one of them in full, or by a short form only it has.
-    Ambiguous { id: crate::vocab::Asked, candidates: Vec<String> },
+    /// TICKETS-35: `choices`, one per candidate in the same order — a
+    /// ticket the caller reads with its uid, id, address, organization,
+    /// epic, kind, status, title and parent; any other (a shortcode, a
+    /// ticket out of the caller's reach) its address alone.
+    Ambiguous {
+        id: crate::vocab::Asked,
+        candidates: Vec<String>,
+        #[serde(default)]
+        choices: Vec<Choice>,
+    },
     /// TICKETS-6: refused because `scope` is frozen — a new child of it, a
     /// move under it, a new number in the shortcode it roots, or a kind
     /// change off a scope. `message` names the scope and the unfreeze
@@ -2379,6 +2488,8 @@ mod tests {
             json!({"type": "wave_counts", "waves": [2, 0, 1], "missing": 1, "done": 4})
         );
         let summary = TicketSummary {
+            uid: Uid::default(),
+            uid_of: BTreeMap::new(),
             hidden_blocked_by: 0,
             hidden_unlocks: 0,
             parent_hidden: false,
@@ -2458,6 +2569,9 @@ mod tests {
         // Every optional field set, so `Ticket`'s skip_serializing_if
         // does not hide one from the comparison.
         let ticket = Ticket {
+            // TICKETS-35: both set, so neither is skipped from the comparison.
+            uid: "7k3mq2xa".into(),
+            uid_of: [(TicketName::from("SUM-4"), Uid::from("q2r9wd4c"))].into_iter().collect(),
             hidden_blocked_by: 0,
             hidden_unlocks: 0,
             parent_hidden: false,
@@ -2514,5 +2628,40 @@ mod tests {
 impl plexus_client::FromClientError for TicketsEvent {
     fn from_client_error(error: plexus_client::ClientError) -> Self {
         TicketsEvent::Error { message: error.to_string() }
+    }
+}
+
+impl TicketsEvent {
+    /// TICKETS-35: each ticket and each summary the event carries — what
+    /// each names, and its `uid_of` to fill as it goes out. None for an
+    /// event that carries no row.
+    pub fn each_named(&mut self) -> Vec<Named<'_>> {
+        use TicketsEvent as E;
+        match self {
+            E::Created { ticket }
+            | E::Ticket { ticket }
+            | E::StatusChanged { ticket, .. }
+            | E::KindChanged { ticket, .. }
+            | E::Amended { ticket, .. }
+            | E::CommitsLinked { ticket, .. }
+            | E::CommitsUnlinked { ticket, .. }
+            | E::LabelsChanged { ticket, .. }
+            | E::FrozenChanged { ticket }
+            | E::HiddenChanged { ticket }
+            | E::AssigneesChanged { ticket, .. }
+            | E::UnlocksChanged { ticket, .. }
+            | E::UnlocksRemoved { ticket, .. }
+            | E::BlockersChanged { ticket, .. }
+            | E::SeverityChanged { ticket, .. }
+            | E::Updated { ticket, .. }
+            | E::ParentChanged { ticket, .. }
+            | E::Blocker { ticket }
+            | E::RevisionAt { ticket, .. }
+            | E::RevisionRestored { ticket, .. } => vec![ticket.named()],
+            E::UpdatedMany { tickets, .. } | E::Undeleted { tickets, .. } | E::Reshortcoded { tickets, .. } => tickets.iter_mut().map(Ticket::named).collect(),
+            E::Summary { summary } | E::Placed { summary, .. } | E::Node { summary, .. } | E::Hit { summary, .. } => vec![summary.named()],
+            E::Queued { ticket, .. } | E::Snoozed { ticket, .. } | E::QueueRow { ticket, .. } => vec![ticket.named()],
+            _ => Vec::new(),
+        }
     }
 }

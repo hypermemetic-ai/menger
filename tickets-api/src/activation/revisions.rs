@@ -33,7 +33,7 @@ fn list_stream(store: Arc<Store>, caller: VerifiedUser, id: String, before: Opti
                 yield TicketsEvent::RevisionsEnd { count: page.count, latest: page.latest, next: page.next };
             }
             Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: Asked::stored(id.as_str()) },
-            Err(e) => yield veiled(&caller, e),
+            Err(e) => yield veiled(&store, &caller, e),
         }
     }
 }

@@ -22,7 +22,7 @@ pub(super) fn key(store: &Store, caller: &VerifiedUser, id: &str) -> Result<Tick
     match store.resolve(id) {
         Ok(k) => Ok(TicketId::new(k)),
         Err(StoreError::NotFound(_)) => Err(TicketsEvent::NotFound { id: Asked::stored(id.trim()) }),
-        Err(e) => Err(veiled(caller, e)),
+        Err(e) => Err(veiled(store, caller, e)),
     }
 }
 
@@ -89,7 +89,7 @@ pub(super) fn filing(store: &Store, caller: &VerifiedUser, epic: &str, parent: O
     let error = |message: String| TicketsEvent::Error { message };
     let anchor = match parent {
         Some(p) => Some(p.to_string()),
-        None => store.root_of(epic).map_err(|e| veiled(caller, e))?,
+        None => store.root_of(epic).map_err(|e| veiled(store, caller, e))?,
     };
     let under = match anchor {
         Some(a) => match store.ticket_id(a.trim()) {
@@ -221,7 +221,7 @@ pub(crate) fn filing_text(store: &Store, caller: &VerifiedUser, epic: &str, pare
     filing(store, caller, epic, parent, None).map_err(|ev| match ev {
         TicketsEvent::Error { message } => message,
         TicketsEvent::NotFound { id } => format!("no ticket {id}"),
-        TicketsEvent::Ambiguous { id, candidates } => format!("{id} names several tickets: {}", candidates.join(", ")),
+        TicketsEvent::Ambiguous { id, candidates, .. } => format!("{id} names several tickets: {}", candidates.join(", ")),
         other => format!("{other:?}"),
     })
 }

@@ -295,15 +295,23 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   (`hypermemetic:MENGER/ACCESS/ORG-3`). Every `--id`, `--parent`,
   `--blocked-by`, `--epic` and `under` takes any short form of the address
   (`MENGER/ORG-3`, `ACCESS/ORG-3`, the bare id); every id older than ORG-3 is
-  pinned and keeps naming its ticket. A name that fits two is refused in-band
-  (`ambiguous { id, candidates }` — each by its full address; name one in
-  full). A create, rehome, kind change, note upgrade or undelete that would
+  pinned and keeps naming its ticket. **Every ticket has a uid** (TICKETS-35:
+  8 characters of Crockford's base32, `7k3mq2xa`, kept through every move):
+  every `--id`, `--ids`, `--parent`, `--blocked-by` and `under` / `ticket` in
+  a filter takes it too, bare or in the app's link (`/t/7k3mq2xa/…`), and a
+  write resolves a name once, as a read does — `amend --id
+  hypermemetic:MENGER/STORE/PERF-19` lands though the bare `PERF-19` fits two.
+  A name that fits two is refused in-band (`ambiguous { id, candidates,
+  choices }` — each by its full address, and TICKETS-35's choice each: uid,
+  id, address, org, epic, kind, status, title, parent; name one in full, or
+  by its uid). A create, rehome, kind change, note upgrade or undelete that would
   put a second code into one namespace is refused, naming the one there.
   `in THEME` matches the letters wherever hosted; `under X` binds one
   shortcode (its identity first). README "Addresses and namespaces":
 
   ```sh
   synapse -P 4455 menger tickets get --id MENGER/ORG-3
+  synapse -P 4455 menger tickets get --id 7k3mq2xa
   synapse -P 4455 menger tickets create --epic PLEXUS/THEME --title "a build in PLEXUS's THEME"
   ```
 

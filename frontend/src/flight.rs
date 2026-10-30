@@ -625,6 +625,8 @@ mod tests {
         TicketSummary {
             hidden_blocked_by: 0,
             hidden_unlocks: 0,
+            uid: Default::default(),
+            uid_of: Default::default(),
             parent_hidden: false,
             archived: None,
             frozen: false,
