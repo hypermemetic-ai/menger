@@ -476,3 +476,19 @@ rows and the extents grow with N (101 shortcodes at 10⁵).
 The chain is serial: the HTML, then engine.js, then the wasm, then the socket, then the manifest,
 then the components, then the board's calls. The local probe (0.218 s at 10⁶) sees none of it.
 FRAME-16 makes the boot parallel; this row is its "before".
+
+### Before and after, one hour (FRAME-16's hand gate)
+
+`node perf/live-probe.mjs --token-file FILE`, three runs of five cold loads each, the medians;
+the marks on the page's own clock (the socket's real `open`, the wasm instantiated). "Before"
+is app-test on release 20261029T220735Z-68c5c3c, 2026-10-30 00:10Z, from this machine.
+
+| | first titled row (three runs' medians) | TTFB | socket open · wasm instantiated | socket first | requests by kind |
+|---|---|---|---|---|---|
+| before | 0.886 s (886, 888, 884 ms) | 55–62 ms | +256–263 ms · +199–209 ms | 0 of 15 | engine.js 1, host.js 1, engine.wasm 1 (578 KiB gzip), manifest 1, components 22 |
+| after | — (filled after the deploy, the same hour) | | | | |
+
+On "before" the boot's last file (the components) is done near +350 ms and the board's `list`
+leaves at +480–570 ms (scratch breakdown, two loads): what the parallel boot can take off is the
+socket → manifest → components chain after the wasm (~150 ms); what follows the components is the
+mount and the calls.
