@@ -4,7 +4,7 @@
 #   scripts/sweep/install.sh --start    … and enable --now the timer, and run one sweep
 # It runs from an installed copy (~/.local/share/menger-sweep), so a
 # checkout's branch never changes what runs; run this again from main to
-# update it. `systemctl --user list-timers menger-sweep.timer` says when it
+# update it (its output names the revision installed). `systemctl --user list-timers menger-sweep.timer` says when it
 # runs next; `journalctl --user -u menger-sweep` what it did.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
@@ -19,7 +19,11 @@ git -C "$repo" rev-parse --short HEAD > "$dest/REVISION" 2>/dev/null || true
 install -m 0644 "$here/menger-sweep.service" "$units/menger-sweep.service"
 install -m 0644 "$here/menger-sweep.timer" "$units/menger-sweep.timer"
 systemctl --user daemon-reload
-echo "installed $(cat "$dest/REVISION" 2>/dev/null || echo '?') into $dest; units menger-sweep.service, menger-sweep.timer"
+rev=$(cat "$dest/REVISION" 2>/dev/null || echo '?')
+echo "installed $rev into $dest; units menger-sweep.service, menger-sweep.timer"
+# RUN-34: a merged gate is not the running one until this runs again
+echo "the timer runs this installed copy ($dest, revision $rev), not a checkout: a change merged after $rev runs only once install.sh runs again from main"
+echo "its settings: ~/.config/menger/sweep.env (optional; MENGER_SCRATCH_DIRS=DIR:DIR, scratch roots beyond ~/.cache/menger-perf-scratch)"
 if [ "${1:-}" = "--start" ]; then
   systemctl --user enable --now menger-sweep.timer
   systemctl --user start menger-sweep.service

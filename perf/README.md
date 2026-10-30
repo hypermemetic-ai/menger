@@ -44,6 +44,16 @@ the Svelte one, FRAME-14 — both draw the same marks), each in a fresh
 browser context signed in by cookie. Budgets: first rows ≤ 0.3 s and wasm memory ≤ 10 MB at a million;
 exit 1 past one, 2 when setup failed.
 
+Its work directory (`ui8-probe-…`, the database seeded N) is made under
+`$TMPDIR` — set it to `~/.cache/menger-perf-scratch` for a million, which
+the tmpfs `/tmp` does not hold. The probe never removes it: the caller
+removes the work directory, or `scripts/cleanup-gate.sh` does within the
+hour (RUN-34): in
+`~/.cache/menger-perf-scratch`, or a scratch root `MENGER_SCRATCH_DIRS`
+names, the hourly sweep takes a `ui8-*` directory nothing has held or
+written for an hour (`--path DIR` takes one by hand; below `/tmp/claude-UID/`
+too).
+
 The page's own marks, each one's median, on a line after the row
 (FRAME-17): `tickets.list` sent, and every `plexus-ui:*` mark the host sets
 (`performance.mark`, CONTRACT.md's host chapter in `../plexus-ui`).

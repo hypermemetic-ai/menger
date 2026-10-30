@@ -145,10 +145,12 @@ fn disk_check_script() {
 fn ui8_work_dirs_are_said_to_go_within_the_hour() {
     let read = |p: &str| std::fs::read_to_string(Path::new(root()).join(p)).unwrap_or_else(|e| panic!("{p}: {e}"));
     let harness = read("scripts/ui-throwaway.mjs");
-    let usage: String = harness.lines().take_while(|l| l.starts_with("//")).collect::<Vec<_>>().join("\n");
+    // the prose as one line: a sentence may wrap anywhere
+    let flat = |t: &str| t.split_whitespace().filter(|w| *w != "//").collect::<Vec<_>>().join(" ");
+    let usage = flat(&harness.lines().take_while(|l| l.starts_with("//")).collect::<Vec<_>>().join("\n"));
     let readme = read("perf/README.md");
-    let probe = readme.split("\n## ").find(|s| s.contains("`pages-probe.mjs` (UI-8)")).expect("perf/README.md's pages-probe section");
-    for (name, text) in [("scripts/ui-throwaway.mjs's usage", usage.as_str()), ("perf/README.md's pages-probe section", probe)] {
+    let probe = flat(readme.split("\n## ").find(|s| s.contains("`pages-probe.mjs` (UI-8)")).expect("perf/README.md's pages-probe section"));
+    for (name, text) in [("scripts/ui-throwaway.mjs's usage", usage.as_str()), ("perf/README.md's pages-probe section", probe.as_str())] {
         for want in ["the caller removes the work directory", "within the hour", "scripts/cleanup-gate.sh", "menger-perf-scratch", "MENGER_SCRATCH_DIRS"] {
             assert!(text.contains(want), "{name} does not say {want:?}:\n{text}");
         }

@@ -707,6 +707,9 @@ question.
 - **Builds clean up after themselves** (CI-2): the `systemd --user` timer
   `menger-sweep.timer` (hourly; `scripts/sweep/install.sh --start`) runs
   `cleanup-gate.sh --sweep --yes`, then `scripts/disk-check.sh --alert`.
+  It also takes the throwaway's `ui8-*` work directories (RUN-34) idle an
+  hour in a scratch root — `~/.cache/menger-perf-scratch`, or one
+  `MENGER_SCRATCH_DIRS` names in `~/.config/menger/sweep.env`.
   `deploy/pipeline build` refuses up front under 50 GB free or at 90% used.
   Before a long gate of your own, `scripts/disk-check.sh` (exit 3: low).
 

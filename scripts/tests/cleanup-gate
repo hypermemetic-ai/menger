@@ -31,7 +31,7 @@ cg() { local name=$1 want=$2; shift 2
 
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t \
   GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
-unset CLEANUP_GATE_LOG CLEANUP_GATE_IDLE_HOURS
+unset CLEANUP_GATE_LOG CLEANUP_GATE_IDLE_HOURS MENGER_SCRATCH_DIRS
 # CI-2: the disk's use is said, never measured, and cargo is a stand-in that
 # answers `metadata` from a map (manifest<TAB>build_directory) — no real cargo runs
 export CLEANUP_GATE_USED_PCT=30 CLEANUP_GATE_CARGO=$T/bin/cargo STUB_CARGO_MAP=$T/cargo-map
@@ -368,9 +368,12 @@ has "ui8: … the env's root's too" "$(<"$LOG")" "removed ui8-work $OS/ui8-probe
 there "ui8: the sweep keeps the young" "$PS/ui8-pages-young"; there "ui8: … the keys-only" "$PS/ui8-pages-early"
 there "ui8: … the unknown root's" "$UK/ui8-pages-x"; there "ui8: … ~/.cache's" "$H/.cache/ui8-pages-x"
 there "ui8: … the root's own files" "$PS/menger-perf.db"; there "ui8: … and dirs" "$PS/f17/a"; there "ui8: … the root" "$PS"
-MENGER_SCRATCH_DIRS=$H refused "ui8: \$HOME named a scratch root is still a root" "a root" --path "$H"
+MENGER_SCRATCH_DIRS="$OS:$H" cg "ui8: \$HOME named a scratch root refuses the run" 1 --yes --path "$PS/ui8-pages-young"
+has "ui8: … and says which" "$out" "MENGER_SCRATCH_DIRS names $H — a root"; there "ui8: … touching nothing" "$PS/ui8-pages-young"
+MENGER_SCRATCH_DIRS=relative/dir cg "ui8: a relative scratch root refuses the run" 1 --list; has "ui8: relative said" "$out" "not an absolute path"
 MENGER_SCRATCH_DIRS=$H cg "ui8: the env refuses a root as a scratch root" 1 --sweep; has "ui8: \$HOME said" "$out" "MENGER_SCRATCH_DIRS"
 MENGER_SCRATCH_DIRS="/" cg "ui8: / is no scratch root" 1 --sweep; has "ui8: / said" "$out" "MENGER_SCRATCH_DIRS"
+has "ui8: install.sh says the timer runs its installed copy, and which" "$(<"$(dirname "$HERE")/sweep/install.sh")" "the timer runs this installed copy"
 has "ui8: the timer reads its own env file" "$(<"$(dirname "$HERE")/sweep/menger-sweep.service")" "EnvironmentFile=-%h/.config/menger/sweep.env"
 
 # a_dir_named_ui8_without_the_marks_is_refused
