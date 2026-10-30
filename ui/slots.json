@@ -1,1 +1,1 @@
-{ "board-layout": { "nav": "nav-tree", "main": "board-rows", "palette": "jump-palette" }, "page-shell": { "main": "hello-list" }, "board-frame": { "top": "board-layout-sv", "nav": "nav-tree-sv", "main": "board-rows-sv", "palette": "jump-palette-sv" } }
+{ "board-layout": { "nav": "nav-tree", "main": "board-rows", "palette": "jump-palette" }, "page-shell": { "main": "hello-list" }, "board-frame": { "top": "app-top", "bar": "board-layout-sv", "nav": "nav-tree-sv", "keys": "keys-help", "main": "board-rows-sv", "palette": "jump-palette-sv" } }

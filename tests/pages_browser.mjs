@@ -3,8 +3,9 @@
 //
 //   node tests/pages_browser.mjs [--seed N] [--debug] [--no-build] [--headed] [--keep] [--only NAME[,NAME]] [--board rhx,sv]
 //
-// FRAME-14: every test of the board runs on both boards — the rhx one (`#/`,
-// named `NAME`) and the Svelte one (`#/sv/`, svelte/1, named `NAME_sv`),
+// FRAME-14: every test of the board runs on both boards — the rhx one (`#/rhx/`,
+// named `NAME`) and the Svelte one (`#/`, svelte/1, named `NAME_sv`; SURFACE-2:
+// the default since the owner's "I want svelte components", `#/sv/` its alias),
 // which draw the same marks — and `a_section_swaps_to_the_svelte_one` puts
 // each Svelte component in its section of the rhx board by right-click.
 // `--board` runs one of them.
@@ -26,7 +27,7 @@
 // The testing hooks the pages draw (UI-8's body: the named three, and
 // `data-*` attributes for the rest):
 //
-//   /app/ (#/, #/f/:filter)  board-layout: sections `[data-layout=board-layout][data-slot=nav|main|palette]`;
+//   /app/#/rhx/ (#/rhx/f/:filter)  board-layout: sections `[data-layout=board-layout][data-slot=nav|main|palette]`;
 //                       in its own template the filter line, `input[data-filter-input]`, its refusal `[data-filter-refused]`
 //   main: board-rows    `.board-scroll[data-row-height]` (the scrolling element, one fixed pitch in px),
 //                       `.board-row[data-id]` (a row held; its `[data-field=title]`, `[data-field=status]`),
@@ -42,11 +43,11 @@
 //
 // The Svelte board (FRAME-14), the same marks under its own names:
 //
-//   /app/#/sv/ (#/sv/f/:filter)  board-frame, an rhx layout (a section is the host's, and only an
-//                       rhx template marks one): `[data-layout=board-frame][data-slot=top|nav|main|palette]`,
-//                       holding board-layout-sv (the top bar: `input[data-filter-input]`,
-//                       `[data-filter-refused]`), nav-tree-sv, board-rows-sv and jump-palette-sv
-//   #/sv/ticket/:id     ticket-page-sv; its links and chips stay under #/sv/
+//   /app/ (#/, #/f/:filter; #/sv/… the same)  board-frame, an rhx layout (a section is the host's, and only an
+//                       rhx template marks one): `[data-layout=board-frame][data-slot=top|bar|nav|keys|main|palette]`,
+//                       holding app-top (SURFACE-2), board-layout-sv (the top bar: `input[data-filter-input]`,
+//                       `[data-filter-refused]`), nav-tree-sv, keys-help, board-rows-sv and jump-palette-sv
+//   #/ticket/:id        ticket-page-sv (#/sv/ticket/:id too; its links and chips stay under the prefix it was opened at)
 //
 // Exit 0 when every test passed, 1 when one failed, 2 when setup failed.
 import fs from "node:fs";
@@ -79,15 +80,15 @@ const ROW_PITCH = 28; // board-rows.rhx's `data-row-height`: both boards scroll 
 // fetches for the board's rows from another version.
 const BOARDS = {
   rhx: {
-    name: "rhx", tag: "", route: "", filterRoute: "#/f/", ticketRoute: "#/ticket/",
+    name: "rhx", tag: "", route: "#/rhx/", filterRoute: "#/rhx/f/", ticketRoute: "#/rhx/ticket/",
     layout: "board-layout", top: "board-layout", nav: "nav-tree", main: "board-rows", palette: "jump-palette", page: "ticket-page",
     sections: [["nav", "nav-tree"], ["main", "board-rows"], ["palette", "jump-palette"]],
     module: "board-rows.json", epics: ["AAAA", "AAAB"],
   },
   sv: {
-    name: "sv", tag: "_sv", route: "#/sv/", filterRoute: "#/sv/f/", ticketRoute: "#/sv/ticket/",
+    name: "sv", tag: "_sv", route: "", filterRoute: "#/f/", ticketRoute: "#/ticket/",
     layout: "board-frame", top: "board-layout-sv", nav: "nav-tree-sv", main: "board-rows-sv", palette: "jump-palette-sv", page: "ticket-page-sv",
-    sections: [["top", "board-layout-sv"], ["nav", "nav-tree-sv"], ["main", "board-rows-sv"], ["palette", "jump-palette-sv"]],
+    sections: [["top", "app-top"], ["bar", "board-layout-sv"], ["nav", "nav-tree-sv"], ["keys", "keys-help"], ["main", "board-rows-sv"], ["palette", "jump-palette-sv"]],
     module: "board-rows-sv.js", epics: ["AAAC", "AAAD"],
     siblings: ["nav-flat-sv", "nav-children-sv", "ticket-chip-sv"], // FRAME-25: imported by their parents, components in their own right
   },

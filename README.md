@@ -849,11 +849,20 @@ FRAME-14: the board is in two profiles. Beside each of the five board
 components above (`board-layout`, `board-rows`, `nav-tree`, `ticket-page`,
 `jump-palette`) is its real Svelte twin, `src/<name>-sv.svelte` (`svelte/1`:
 compiled at build in Node, `--node-modules ../plexus-ui/node_modules`), with
-the same calls and the same DOM marks. The real Svelte board is at `#/sv/`,
-`#/sv/f/:filter` and `#/sv/ticket/:id`; it is drawn in `board-frame.rhx`, an
-rhx layout that only places four sections (a section is the host's, and only
-an rhx template marks one), whose defaults are the svelte/1 ones — `top` holds
-`board-layout-sv`, the top bar and its filter line. The rhx components stay
+the same calls and the same DOM marks. SURFACE-2 (owner, 2026-10-30: "I want
+svelte components"): the real Svelte board is the default, at `#/`,
+`#/f/:filter` and `#/ticket/:id` (`#/sv/…` its alias), and the rhx board the
+comparison at `#/rhx/`, `#/rhx/f/:filter` and `#/rhx/ticket/:id`. The Svelte
+board is drawn in `board-frame.rhx`, an rhx layout that only places its
+sections (a section is the host's, and only an rhx template marks one), whose
+defaults are the svelte/1 ones — `top` the app's top (`app-top`: the epic,
+the live count, search, the links, the palette's button), `bar`
+`board-layout-sv` (the top bar and its filter line), `nav`, `keys` the
+board's keymap (`keys-help`), `main` and `palette`. The board's keys are `board-rows-sv`'s (FRAME-36's
+`bus.keys`: `j`/`k`, `enter`, `x`, `shift+x`, `c`, `/`, `ctrl+k`, `g b`,
+`g r`, `g w`, `escape`; `?` the host's overlay), its selection
+`[data-selected]` and `[data-checked]`, said on the bus as `board.selected
+{ ids }` and `board.focus { id }`. The rhx components stay
 the defaults of `board-layout`'s sections; a right-click on one puts the
 real Svelte twin there (`ui slots set`), and `ui slots clear` takes it back.
 FRAME-25: the real Svelte twins ride FRAME-19's bus as the rhx ones do — the

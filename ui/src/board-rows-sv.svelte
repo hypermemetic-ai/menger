@@ -9,7 +9,15 @@
      `created` moves the count and puts the row in; `status_changed` patches it
      in place (a keyed each: the same element). FRAME-20: the window iterates
      the handle's getter, `rows.rows`, not the store's `$rows.rows`: a row a
-     change leaves alone is the same object, so only the changed row renders. -->
+     change leaves alone is the same object, so only the changed row renders.
+     SURFACE-2: the board's keys (FRAME-36, `bus.keys`) and its selection —
+     `sel` the selected row's id ([data-selected], one, scrolled into view),
+     `checked` the multi-selection ([data-checked]; the box beside a row
+     checks it by click), both by id, so a window move keeps them. Every
+     change says `board.selected { ids }` and `board.focus { id }` on the bus
+     (the bulk bar, SURFACE-5, hears the first); `/` says `filter.focus`
+     (the filter line's to take), `ctrl+k` `palette.open`. The host draws
+     `?`'s overlay from the labels. -->
 <script module>
   // PERF-15: a row is the four fields drawn, not the whole summary row.
   const FIELDS = ["id", "title", "kind", "status"];
@@ -17,9 +25,11 @@
 </script>
 
 <script>
-  import { live } from "plexus-ui/host";
+  import { tick } from "svelte";
+  import { bus, live } from "plexus-ui/host";
 
   let { filter = null } = $props();
+  const b = bus();
   const PITCH = 28;
   const PAGE = 200;
   const base = location.hash.startsWith("#/sv/") ? "#/sv/" : "#/";
@@ -61,6 +71,79 @@
     return win.after;
   }
 
+  // SURFACE-2: the selection and the keys.
+  let sel = $state(null);
+  let checked = $state([]);
+  let anchor = null;
+  let scroller;
+  const ids = () => rows.rows.map((r) => r.id);
+  function focus(id) {
+    sel = id;
+    b.emit("board.focus", { id });
+    if (id == null || !scroller) return;
+    tick().then(() => scroller.querySelector(`.board-row[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "nearest" }));
+  }
+  const said = () => b.emit("board.selected", { ids: [...checked] });
+  function toggle(id) {
+    checked = checked.includes(id) ? checked.filter((x) => x !== id) : [...checked, id];
+    anchor = id;
+    said();
+  }
+  function down() {
+    const all = ids();
+    if (!all.length) return;
+    const i = sel == null ? -1 : all.indexOf(sel);
+    focus(all[Math.min(all.length - 1, i + 1)]);
+  }
+  function up() {
+    const all = ids();
+    if (!all.length) return;
+    const i = sel == null ? -1 : all.indexOf(sel);
+    focus(all[Math.max(0, i - 1)]);
+  }
+  function open() {
+    if (sel != null) b.navigate(base + "ticket/" + sel);
+  }
+  function check() {
+    if (sel != null) toggle(sel);
+  }
+  function range() {
+    if (sel == null) return;
+    const all = ids();
+    const to = all.indexOf(sel);
+    const from = anchor == null || all.indexOf(anchor) < 0 ? to : all.indexOf(anchor);
+    const more = all.slice(Math.min(from, to), Math.max(from, to) + 1).filter((x) => !checked.includes(x));
+    checked = [...checked, ...more];
+    anchor = sel;
+    said();
+  }
+  function clear() {
+    checked = [];
+    anchor = null;
+    focus(null);
+    said();
+  }
+  function clicked(id) {
+    toggle(id);
+    focus(id);
+  }
+  b.keys({
+    j: { to: down, label: "next row" },
+    arrowdown: { to: down, label: "next row" },
+    k: { to: up, label: "previous row" },
+    arrowup: { to: up, label: "previous row" },
+    enter: { to: open, label: "open the selected ticket" },
+    x: { to: check, label: "check the row" },
+    "shift+x": { to: range, label: "check the range to here" },
+    c: { to: () => b.navigate(base + "new"), label: "a new ticket" },
+    "/": { to: () => b.emit("filter.focus", {}), label: "the filter line" },
+    "ctrl+k": { to: () => b.emit("palette.open", {}), label: "jump to a ticket" },
+    "g b": { to: () => b.navigate(base), label: "the board" },
+    "g r": { to: () => b.navigate("#/ready"), label: "ready" },
+    "g w": { to: () => b.navigate("#/waves"), label: "waves" },
+    escape: { to: clear, label: "clear the selection" },
+  });
+
   function scrolled(ev) {
     const top = Math.floor(ev.currentTarget.scrollTop / PITCH);
     const seen = Math.ceil(ev.currentTarget.clientHeight / PITCH) + 1;
@@ -72,23 +155,28 @@
   }
 </script>
 
-<section class="board" data-board>
+<section class="board" data-board data-surface="board-rows">
   <header class="board-head">
     <span class="board-count">{total}</span>
     <span class="board-count-label">tickets</span>
+    {#if checked.length}<span class="board-checked"><b data-field="checked">{checked.length}</b> checked</span>{/if}
     {#if rows.status !== "live"}<span class="board-status" data-board-status={rows.status}>{rows.status}</span>{/if}
   </header>
-  <div class="board-scroll" data-row-height="28" onscroll={scrolled}>
+  <div class="board-scroll" data-row-height="28" onscroll={scrolled} bind:this={scroller}>
     <div class="board-space" style={"height:" + PITCH * total + "px"}>
       <div class="board-window" style={"transform:translateY(" + PITCH * first + "px)"}>
       {#each rows.rows as r (r.id)}
-        <a class="board-row" data-id={r.id} data-status={r.status} href={base + "ticket/" + r.id}>
+        <div class="board-line">
+        <a class="board-row" data-id={r.id} data-status={r.status} href={base + "ticket/" + r.id}
+           data-selected={sel === r.id ? "" : undefined} data-checked={checked.includes(r.id) ? "" : undefined}>
           <i class="kmark" data-kind={r.kind} aria-hidden="true"></i>
           <span class="row-id" data-field="id">{r.id}</span>
           <span class="row-title" data-field="title">{r.title}</span>
           <span class="row-kind" data-field="kind">{r.kind}</span>
           <span class="row-status" data-field="status">{r.status}</span>
         </a>
+        <button class="row-check" type="button" data-action="check" data-check={r.id} aria-label={"check " + r.id} onclick={() => clicked(r.id)}></button>
+        </div>
       {/each}
       </div>
     </div>
@@ -105,9 +193,19 @@
   .board-scroll:focus-visible { box-shadow: inset 0 0 0 2px var(--focus); }
   .board-space { position: relative; }
   .board-window { position: absolute; left: 0; right: 0; top: 0; will-change: transform; }
-  .board-row { display: grid; grid-template-columns: 10px 104px minmax(0, 1fr) auto auto; gap: 10px; align-items: center; height: var(--pitch); padding: 0 14px; color: var(--ink); text-decoration: none; white-space: nowrap; border-bottom: var(--border) solid var(--line); transition: background-color var(--motion-fast) var(--ease); }
+  .board-checked { margin-left: 10px; color: var(--accent); }
+  .board-checked b { font-weight: var(--weight-bold); }
+  .board-line { position: relative; }
+  .row-check { position: absolute; z-index: 1; left: 14px; top: 8px; width: 12px; height: 12px; padding: 0; background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-xs); cursor: pointer; transition: border-color var(--motion-fast) var(--ease); }
+  .row-check:hover, .board-row:hover + .row-check { border-color: var(--muted); }
+  .row-check:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .board-row[data-checked] + .row-check { background: var(--accent); border-color: var(--accent); }
+  .board-row[data-checked] + .row-check::after { content: ""; position: absolute; left: 3px; top: 0; width: 3px; height: 7px; border: solid var(--bg); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+  .board-row { display: grid; grid-template-columns: 10px 104px minmax(0, 1fr) auto auto; gap: 10px; align-items: center; height: var(--pitch); padding: 0 14px 0 38px; color: var(--ink); text-decoration: none; white-space: nowrap; border-bottom: var(--border) solid var(--line); transition: background-color var(--motion-fast) var(--ease); }
   .board-row:hover { background: var(--hover); }
   .board-row:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
+  .board-row[data-checked] { background: var(--sel); }
+  .board-row[data-selected] { background: var(--row-sel); box-shadow: inset 3px 0 0 var(--accent); }
   .row-id { color: var(--accent); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; }
   .row-title { overflow: hidden; text-overflow: ellipsis; }
   .row-kind { color: var(--muted); font-size: 11px; }
@@ -131,6 +229,6 @@
     .row-kind { display: none; }
   }
   @media (prefers-reduced-motion: reduce) {
-    .board-row { transition: none; }
+    .board-row, .row-check { transition: none; }
   }
 </style>
