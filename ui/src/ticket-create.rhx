@@ -1,0 +1,198 @@
+<script>
+  // SURFACE-5: a new ticket — `#/new`, and `#/new/:parent` with the parent
+  // filled. The epic is one of `epics.list` (the reader's `epics.current`
+  // when none is chosen): the current one's shortcodes are named bare, any
+  // other's as `org:epic:CODE`. The shortcode is typed, or the parent's.
+  // Parent and blockers come from `<ticket-picker>`s on the bus (`picked
+  // { name, id }`), each drawn as a `<ticket-chip>`.
+  //
+  // `call()` answers nothing (CONTRACT), and this form must say a refusal
+  // and go to the ticket made, so the write is a `live` held by `when`
+  // until Create (`state.sending`): the `s_` fields are the form as it was then,
+  // and nothing else moves its params. Its answer is the collection — `created { ticket }` a
+  // row, an in-band `error` its `message`. The row is drawn with a one-off
+  // animation whose start is the DOM event that runs `landed`: the fold that
+  // lets the write go and moves the page to `#/ticket/<id>`.
+  prop("parent");
+  state(#{ epic: "", code: "", kind: "build", title: "", severity: "", body: "", picked: (), unparent: false,
+           blocked: [], preview: false,
+           sending: false, s_epic: (), s_title: (), s_kind: (), s_parent: (), s_blocked: [], s_severity: (), s_body: () });
+  on("picked", "picked");
+  let epics = live(#{ snapshot: "epics.list", params: #{}, key: "name", on: #{ epic: "upsert:epic" } });
+  let current = live(#{ snapshot: "epics.current", params: #{}, key: "name", on: #{ current: "upsert:epic" } });
+  let par = live(#{ snapshot: "tickets.get", params: #{ id: parent }, key: "id", when: parent });
+  let made = live(#{ snapshot: "tickets.create",
+                     params: #{ epic: state.s_epic, title: state.s_title, kind: state.s_kind, parent: state.s_parent,
+                                blocked_by: state.s_blocked, severity: state.s_severity, body: state.s_body },
+                     key: "id", when: state.sending });
+  fn field(state, ev) { state[ev.target.name] = ev.value; state }
+  fn picked(state, ev) {
+    let d = ev.bus.data;
+    if d.name == "parent" { state.picked = d.id; state.unparent = false; }
+    else if d.name == "blocked_by" && !(d.id in state.blocked) { state.blocked.push(d.id); }
+    state
+  }
+  fn unparent(state, ev) { state.picked = (); state.unparent = true; state }
+  fn unblock(state, ev) {
+    let id = ev.target.data["unblock"];
+    state.blocked = state.blocked.filter(|b| b != id);
+    state
+  }
+  fn preview(state, ev) { state.preview = !state.preview; state }
+  fn create(state, ev) {
+    let parent = if state.picked != () { state.picked } else if state.unparent { () } else { ev.props.parent };
+    let code = state.code;
+    code.trim();
+    if code == "" && parent != () {
+      let p = ev.live.par;
+      if p.len() > 0 && p[0].id == parent { code = p[0].epic; }
+      else { let parts = parent.split("-"); let last = parts.pop(); code = parent.sub_string(0, parent.len() - last.len() - 1); }
+    }
+    let title = state.title;
+    title.trim();
+    if code == "" || title == "" { return state; }
+    let epic = code;
+    let chosen = state.epic;
+    for e in ev.live.epics {
+      let other = e.name == chosen && !e.current;
+      if other { epic = `${e.org}:${chosen}:${code}`; }
+    }
+    state.s_epic = epic; state.s_title = title; state.s_kind = state.kind; state.s_parent = parent; state.s_blocked = state.blocked;
+    state.s_severity = if state.severity == "" { () } else { state.severity };
+    state.s_body = if state.body == "" { () } else { state.body };
+    state.sending = true;
+    state
+  }
+  fn landed(state, ev) {
+    let id = ev.target.data["made"];
+    state.sending = false;
+    if id != () && id != "" { navigate("#/ticket/" + id); }
+    state
+  }
+</script>
+
+<section class="create" data-surface="ticket-create" data-form="tickets.create">
+  <nav class="crumbs"><a href="#/" data-back>← board</a></nav>
+  <h1 class="create-head">New ticket</h1>
+  <div class="grid">
+    <label class="f"><span class="l">epic</span>
+      <select data-field="epic" name="epic" on:change={field}>
+        {#each epics.rows.filter(|e| e.current) as e (e.name)}<option value={e.name}>{e.name + " · current"}</option>{/each}
+        {#each epics.rows.filter(|e| !e.current && e.archived == ()) as e (e.name)}<option value={e.name}>{e.name}</option>{/each}
+      </select>
+      {#if epics.status == "pending"}<span class="skeleton" data-loading aria-hidden="true"></span>{/if}
+      {#each current as c (c.name)}<span class="hint" data-current-epic={c.name}>you are in {c.name}</span>{/each}
+    </label>
+    <label class="f"><span class="l">shortcode</span>
+      <input data-field="shortcode" name="code" type="text" spellcheck="false" autocomplete="off" placeholder="KILN"
+             value={if state.code != "" { state.code } else if state.picked == () && !state.unparent && par.rows.len() > 0 { par.rows[0].epic } else { "" }} on:input={field}/>
+    </label>
+    <label class="f"><span class="l">kind</span>
+      <select data-field="kind" name="kind" on:change={field}>
+        <option value="build">build</option>
+        <option value="gap">gap</option>
+        <option value="spike">spike</option>
+        <option value="execution">execution</option>
+        <option value="scope">scope</option>
+        <option value="doc">doc</option>
+      </select>
+    </label>
+    <label class="f"><span class="l">severity</span>
+      <select data-field="severity" name="severity" on:change={field}>
+        <option value="">none</option>
+        <option value="Critical">Critical</option>
+        <option value="High">High</option>
+        <option value="Medium">Medium</option>
+        <option value="Low">Low</option>
+      </select>
+    </label>
+  </div>
+  <label class="f wide"><span class="l">title</span>
+    <input data-field="title" name="title" type="text" autocomplete="off" placeholder="what it is, in a line" value={state.title} on:input={field}/>
+  </label>
+  <div class="f wide"><span class="l">parent</span>
+    <div class="chips" data-field-value="parent">
+      {#if state.picked != ()}
+        <ticket-chip id={state.picked} kind="parent"/><button type="button" class="x" data-unparent aria-label="no parent" on:click={unparent}>×</button>
+      {:else}
+        {#if parent != () && !state.unparent}<ticket-chip id={parent} kind="parent"/><button type="button" class="x" data-unparent aria-label="no parent" on:click={unparent}>×</button>{/if}
+      {/if}
+    </div>
+    <ticket-picker name="parent" label="parent"/>
+  </div>
+  <div class="f wide"><span class="l">blocked by</span>
+    <div class="chips" data-field-value="blocked_by">
+      {#each state.blocked as b (b)}<span class="chipped"><ticket-chip id={b} kind="blocker"/><button type="button" class="x" data-unblock={b} aria-label={"not blocked by " + b} on:click={unblock}>×</button></span>{/each}
+    </div>
+    <ticket-picker name="blocked_by" label="blocked by"/>
+  </div>
+  <div class="f wide"><span class="l">body
+      <button type="button" class="tab" data-preview-toggle aria-pressed={if state.preview { "true" } else { "false" }} on:click={preview}>{if state.preview { "write" } else { "preview" }}</button></span>
+    {#if state.preview}
+      <div class="preview" data-preview>{@html markdown(state.body)}</div>
+      {#if state.body == ""}<p class="empty" data-empty>Nothing written yet.</p>{/if}
+    {:else}
+      <textarea data-field="body" name="body" rows="10" placeholder="markdown" on:input={field}>{state.body}</textarea>
+    {/if}
+  </div>
+  <div class="actions">
+    {#if state.title != "" && (state.code != "" || state.picked != () || (parent != () && !state.unparent))}
+      <button type="button" class="go" data-action="tickets.create" on:click={create}>Create</button>
+    {:else}
+      <button type="button" class="go" data-action="tickets.create" disabled="" title="a title, and a shortcode or a parent">Create</button>
+    {/if}
+    {#if state.sending && (made.status == "pending" || made.status == "resyncing")}<span class="hint" data-loading>creating…</span>{/if}
+  </div>
+  {#if made.status == "error" || made.status == "refused"}
+    <p class="refused" data-refused role="alert">{made.message}</p>
+  {/if}
+  {#each made as t (t.id)}
+    <p class="made" data-made={t.id} on:animationstart={landed}>created <a href={"#/ticket/" + t.id}>{t.id}</a></p>
+  {/each}
+</section>
+
+<style>
+  :scope { display: block; }
+  .create { max-width: 760px; margin: 0 auto; padding: 16px 20px 40px; color: var(--ink); font-family: var(--font-text); font-size: var(--text-size); }
+  .crumbs { margin-bottom: 12px; font-size: 12px; }
+  .crumbs a { color: var(--muted); text-decoration: none; border-radius: var(--radius-sm); }
+  .crumbs a:hover { color: var(--accent); }
+  .crumbs a:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .create-head { margin: 0 0 14px; font-family: var(--font-display); font-size: 22px; font-weight: var(--weight-strong); }
+  .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+  @media (max-width: 720px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .f { display: flex; flex-direction: column; gap: 4px; min-width: 0; margin-bottom: 12px; }
+  .l { display: flex; gap: 8px; align-items: center; font-size: 11px; font-weight: var(--weight-medium); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  input, select, textarea { width: 100%; padding: 5px 10px; font: inherit; color: var(--ink); background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius); transition: border-color var(--motion-fast) var(--ease); }
+  textarea { resize: vertical; font-family: var(--font-text); line-height: 1.5; }
+  input:hover, select:hover, textarea:hover { border-color: var(--muted); }
+  input:focus-visible, select:focus-visible, textarea:focus-visible { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px var(--sel); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-height: 4px; }
+  .chipped { display: inline-flex; gap: 2px; align-items: center; }
+  .x { padding: 0 6px; font: inherit; line-height: 18px; color: var(--muted); background: none; border: 0; border-radius: var(--radius-pill); cursor: pointer; }
+  .x:hover { color: var(--warn); background: var(--hover); }
+  .x:focus-visible { outline: 2px solid var(--focus); }
+  .tab { padding: 0 8px; font: inherit; font-size: 11px; text-transform: none; letter-spacing: 0; color: var(--muted); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; }
+  .tab:hover { color: var(--ink); }
+  .tab[aria-pressed=true] { color: var(--accent); border-color: var(--accent); background: var(--sel); }
+  .tab:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .preview { min-height: 120px; padding: 8px 10px; font-family: var(--sans); line-height: 1.55; overflow-wrap: anywhere; background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius); }
+  .preview a { color: var(--accent); }
+  .preview pre { overflow: auto; padding: 8px 10px; font-family: var(--font-text); background: var(--bg); border-radius: var(--radius); }
+  .empty, .hint { margin: 0; font-size: 11px; color: var(--muted); }
+  .skeleton { display: block; height: 12px; background: var(--skeleton); border-radius: var(--radius-sm); animation: breathe var(--motion-pulse) var(--ease) infinite alternate; }
+  .actions { display: flex; gap: 10px; align-items: center; margin-top: 6px; }
+  .go { padding: 5px 16px; font: inherit; font-weight: var(--weight-medium); color: var(--accent); background: var(--sel); border: var(--border) solid var(--accent); border-radius: var(--radius); cursor: pointer; transition: background-color var(--motion-fast) var(--ease); }
+  .go:hover { background: var(--row-sel); }
+  .go:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .go[disabled] { color: var(--disabled); background: var(--card); border-color: var(--line); cursor: default; }
+  .refused { margin: 10px 0 0; padding: 6px 10px; color: var(--warn); font-size: 12px; border-left: 2px solid var(--warn); background: var(--panel); }
+  .made { margin: 10px 0 0; color: var(--live); animation: landed 1ms; }
+  .made a { color: var(--accent); }
+  @keyframes landed { from { opacity: .99; } to { opacity: 1; } }
+  @keyframes breathe { from { opacity: 1; } to { opacity: .45; } }
+  @media (prefers-reduced-motion: reduce) {
+    input, select, textarea, .go { transition: none; }
+    .skeleton { animation: none; }
+  }
+</style>
