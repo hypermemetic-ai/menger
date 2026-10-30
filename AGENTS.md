@@ -159,7 +159,7 @@ framework's contract's, `../plexus-ui/CONTRACT.md` (it was UI-4): a `<script>` o
 — and a template of `{expr}`, `{#if}`, `{#each … as x (key)}`,
 `on:event={handler}`, another component as `<name prop={…}/>`, and in a
 layout `<slot name="…"/>`. `ui/src/*.rhx` are the worked examples; a
-`.svelte` is real Svelte (`svelte/1`, FRAME-13): `ui/src/*-sv.svelte` are the board's real-Svelte twins at `#/sv/` (FRAME-14, README "The bundle in the repository").
+`.svelte` is real Svelte (`svelte/1`, FRAME-13): `ui/src/*-sv.svelte` are the board's real-Svelte twins, the default board at `#/` since SURFACE-2 (the rhx one at `#/rhx/`; FRAME-14, README "The bundle in the repository").
 
 **1. Write it** — `ui/src/ticket-kids.rhx`, a ticket's children, live (a
 new child appears, a status moves, a delete goes):

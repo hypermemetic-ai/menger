@@ -3,9 +3,9 @@
      `search`'s best below. FRAME-25: on FRAME-19's bus, as rhx's — nothing
      asked while there is no query (`when`), the typing coalesced by
      `debounce_ms` in the host's registry; no timer of its own.
-     SURFACE-8: FRAME-36's keys, the host's alone — `ctrl+k` (and `/` outside
-     a field) opens it, and so does `palette.open` on the bus (`palette.close`
-     closes it). The open palette's keys — escape, the arrows, enter — are
+     SURFACE-8: FRAME-36's keys, the host's alone — `ctrl+k` opens it (`/` is
+     the board's filter line's, SURFACE-2), and so does `palette.open` on the
+     bus (`palette.close` closes it). The open palette's keys — escape, the arrows, enter — are
      bound only while it is open (registered on open, let go on close), so a
      closed palette leaves Enter and the arrows to the page and the browser.
      The arrows move `[data-selected]` over the find hits, then the search
@@ -115,7 +115,6 @@
 
   b.keys({
     "ctrl+k": { to: show, label: "jump to a ticket" },
-    "/": { to: () => { if (!open) show(); }, label: "jump to a ticket" },
   });
   b.on("palette.open", show);
   b.on("palette.close", close);

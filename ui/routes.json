@@ -1,7 +1,10 @@
 {
-  "#/": "board-layout",
-  "#/f/:filter": "board-layout",
-  "#/ticket/:id": "ticket-page",
+  "#/": "board-frame",
+  "#/f/:filter": "board-frame",
+  "#/ticket/:id": "ticket-page-sv",
+  "#/rhx/": "board-layout",
+  "#/rhx/f/:filter": "board-layout",
+  "#/rhx/ticket/:id": "ticket-page",
   "#/hello": "page-shell",
   "#/sv/": "board-frame",
   "#/sv/f/:filter": "board-frame",
