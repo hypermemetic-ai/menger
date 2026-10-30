@@ -406,6 +406,11 @@ const UI_ROLES: &[(&str, &str, &str)] = &[
     ("ui.routes", "set", "editor"),
     ("ui.routes", "clear", "editor"),
     ("ui", "author", "editor"),
+    // FRAME-48: an agent drives the studio.
+    ("ui", "show", "editor"),
+    ("ui", "sessions", "editor"),
+    ("ui", "here", "viewer"),
+    ("ui", "follow", "viewer"),
 ];
 
 /// V2-11, acceptance (the table's second row): `ui push --help` says the

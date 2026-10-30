@@ -758,12 +758,29 @@ against a tenant that is not menger (`../plexus-ui/service/tests`); menger's
   section change and `route_changed` on each route's, held to its caller by the gate: `watch_closed { reason }`
   (`signed_out`, `expired`, `revoked`, `refused`) when it no longer stands.
 - **Who may**: viewers and editors `versions`, `watch`, `slots list`,
-  `routes list`; editors `routes set`, `routes clear`, `author`; a
+  `routes list`, `here`, `follow`; editors `routes set`, `routes clear`, `author`,
+  `show`, `sessions`; a
   `deployer` `push` (V2-7: a deploy pushes as the pipeline key); `rollback`,
   `preview`, `slots set`, `slots clear` are the admin's. Every write
   (`push`, `author`, `rollback`, `preview`, `slots set|clear`, `routes
-  set|clear`) wants its grant held on `*`: the UI has no scope, and a grant
-  held on a scope alone is refused `forbidden` naming the scope (FRAME-43).
+  set|clear`, `show`) and `sessions` want their grant held on `*`: the UI
+  has no scope, and a grant held on a scope alone is refused `forbidden`
+  naming the scope (FRAME-43, FRAME-48).
+- **An agent drives the studio** (FRAME-48): a studio page opens its
+  `watch` with `--session` (its own id) and `--follows` (agents by name or
+  key); **`show --to ROUTE [--say NOTE] [--point NAME] [--only WHO]`** moves
+  every session that follows the caller there — a studio route
+  (`#/c/ticket-chip?id=KILN-4`, `#/page/…`, `#/gallery?q=chip`, `#/pages`)
+  or an app route (`/app/#/ticket/KILN-4`) — with a note bar and the
+  pointed thing haloed; `shown { sessions, seq }`, or `nobody_follows` (and
+  a person who does not follow is knocked once — who, by name and key,
+  nothing of what — and the show waits an hour for them to follow). An
+  admin's show reaches every session. A name proves nothing (any key may
+  sign in as `builder`): the studio shows the key behind it and follows a
+  knock by its key. **`here`** is a session's report of its route;
+  **`follow --session ID [--follows …]`** sets whom it follows at once;
+  **`sessions`** lists who follows the caller and where each is (`../plexus-ui/CONTRACT.md`, "An agent drives
+  the studio").
 - **Signing and pushing** a bundle: `plexus-ui sign KEYFILE TAR` prints the
   signature; `plexus-ui push --url ws://… --key NAME TAR` signs in as the key
   and pushes it (FRAME-8: `../plexus-ui`'s tool, `scripts/plexus-ui` here;
