@@ -42,27 +42,26 @@
   const b = bus();
 
   const ticket = live({ snapshot: "tickets.get", params: () => ({ id }), changes: "tickets.watch", key: "id",
-                        on: { amended: "upsert:ticket", status_changed: "upsert:ticket", kind_changed: "upsert:ticket", labels_changed: "upsert:ticket",
-                              severity_changed: "upsert:ticket", hidden_changed: "upsert:ticket", blockers_changed: "upsert:ticket",
-                              parent_changed: "upsert:ticket", frozen_changed: "upsert:ticket", deleted: "remove:ids" } });
-  // What the watch says of the ticket without carrying it — an archive, a restore, an undelete, a bulk
-  // update, a delete: each such event naming the id asks `get` again, from this page or another session.
-  const said = live({ snapshot: "tickets.get", params: () => ({ id }), changes: "tickets.watch", key: "ids",
-                      on: { archived: "upsert:.", restored: "upsert:.", undeleted: "upsert:.", updated_many: "upsert:.", deleted: "upsert:." } });
+                        on: { amended: "upsert:ticket", status_changed: "upsert:ticket", kind_changed: "upsert:ticket", updated: "upsert:ticket",
+                              labels_changed: "upsert:ticket", severity_changed: "upsert:ticket", frozen_changed: "upsert:ticket", hidden_changed: "upsert:ticket",
+                              blockers_changed: "upsert:ticket", unlocks_changed: "upsert:ticket", unlocks_removed: "upsert:ticket", parent_changed: "upsert:ticket",
+                              commits_linked: "upsert:ticket", commits_unlinked: "upsert:ticket", revision_restored: "upsert:ticket", deleted: "upsert:." } });
+  // ticket-head's spec word for word: the page holds one `get` and one `watch` of the ticket, shared.
+  // A delete is folded whole (`deleted { ids, tombstones }`); a ticket deleted before the page opened answers so too.
+  const t = $derived(ticket.rows.find((r) => r.title != null));
+  const tombed = $derived(ticket.rows.some((r) => Array.isArray(r.tombstones) && r.tombstones.some((x) => x.id === id)));
+  // A delete asked here is known at its answer (the page itself draws a delete from elsewhere, and mounts
+  // this component in its place, whose `get` answers `deleted`).
+  let deletedHere = $state(false);
+  let undone = $state(false); // undeleted here since
+  const gone = $derived((tombed || deletedHere) && !undone);
+  // An archive or a restore carries no ticket on the watch: after one asked here, `get` is asked again for its mark.
   let fresh = $state(null);
-  let heard = null;
-  $effect(() => {
-    const news = said.rows.filter((r) => Array.isArray(r.ids) && r.ids.includes(id));
-    if (heard === null) { heard = news; return; }
-    if (news.some((r) => !heard.includes(r))) regain();
-    heard = news;
-  });
   async function regain() {
     const r = await b.call("tickets.get", { id });
-    fresh = { ticket: r.ok ? (r.events.find((e) => e?.type === "ticket")?.ticket ?? null) : null };
+    fresh = r.ok ? (r.events.find((e) => e?.type === "ticket")?.ticket ?? null) : null;
   }
-  const t = $derived($ticket.rows[0] ?? (fresh?.ticket?.id === id ? fresh.ticket : undefined));
-  const archived = $derived(fresh?.ticket?.id === id ? fresh.ticket.archived != null : t?.archived != null);
+  const archived = $derived(fresh?.id === id ? fresh.archived != null : t?.archived != null);
 
   // Who may: the grants that cover this ticket, and the roles each class of action needs.
   const mine = live({ snapshot: "members.mine", params: {}, key: "principal", on: { me: "upsert:.", grant: "upsert:grant" } });
@@ -74,18 +73,18 @@
   let ancestors = $state([]);
   $effect(() => {
     if (!t || !grants.some((g) => g.scope.startsWith("under "))) return;
-    let gone = false;
+    let stop = false;
     (async () => {
       const chain = [];
       let at = t.parent;
-      while (at && chain.length < 32 && !gone) {
+      while (at && chain.length < 32 && !stop) {
         chain.push(at);
         const r = await b.call("tickets.get", { id: at });
         at = r.ok ? r.events.find((e) => e?.type === "ticket")?.ticket?.parent : null;
       }
-      if (!gone) ancestors = chain;
+      if (!stop) ancestors = chain;
     })();
-    return () => (gone = true);
+    return () => (stop = true);
   });
   function covers(scope, x) {
     if (scope === "*") return true;
@@ -205,12 +204,14 @@
     dry.archive = null;
     const r = await write("tickets.archive", b.call("tickets.archive", withWhy("archive", { ids: [id] })), (e) => `archived ${(e.ids ?? []).join(", ")}`);
     if (r.ok) msgs.archive = "";
+    await regain();
   }
   async function restore() {
     if (busy) return;
     const r = await write("tickets.archive", b.call("tickets.restore", withWhy("archive", { ids: [id], with_children: withChildren })),
       (e) => `restored ${(e.ids ?? []).join(", ")}${e.still_archived?.length ? ` · still archived: ${e.still_archived.join(", ")}` : ""}`);
     if (r.ok) msgs.archive = "";
+    await regain();
   }
 
   // Rename and reshortcode: a dry run, then the move.
@@ -256,9 +257,20 @@
     const p = withWhy("delete", { ids: [id], unblock: dlUnblock });
     if (dlChildren) p.children = dlChildren;
     const r = await write("tickets.delete", b.call("tickets.delete", p), (e) => `deleted ${(e.ids ?? []).join(", ")} · undelete within 30 days`);
-    if (r.ok) msgs.delete = "";
+    if (r.ok) {
+      msgs.delete = "";
+      deletedHere = true;
+      undone = false;
+    }
   }
-  const undelete = () => !busy && write("tickets.undelete", b.call("tickets.undelete", { ids: [id] }), (e) => `back: ${(e.ids ?? []).join(", ")}`);
+  async function undelete() {
+    if (busy) return;
+    const r = await write("tickets.undelete", b.call("tickets.undelete", { ids: [id] }), (e) => `back: ${(e.ids ?? []).join(", ")}`);
+    if (r.ok) {
+      undone = true;
+      deletedHere = false;
+    }
+  }
 </script>
 
 {#snippet answer(method)}
@@ -279,10 +291,10 @@
 {/snippet}
 
 <section class="ticket-actions" data-surface="ticket-actions" data-ticket={id}>
-  {#if $ticket.status === "pending"}
+  {#if ticket.status === "pending"}
     <div class="skel" data-loading><span class="bar"></span><span class="bar short"></span><span class="bar"></span></div>
   {/if}
-  {#if t}
+  {#if t && !gone}
     <div data-group="status">
       <h2 class="sec">Status
         {#if me}<span class="aside ta-who" data-field="who">as <b>{me.name ?? me.principal}</b> · {me.admin_everywhere ? "admin" : held.join(", ") || "nothing"} here</span>{/if}
@@ -452,10 +464,10 @@
     </div>
   {/if}
 
-  {#if $ticket.status === "live" && !t}
+  <!-- A deleted ticket offers its undelete; a ticket that is not there draws nothing (the page says so). -->
+  {#if gone}
     <div data-group="undelete">
-      <h2 class="sec">Gone</h2>
-      <p class="empty" data-empty>No ticket {id} here — deleted, moved or never filed.</p>
+      <h2 class="sec">Deleted</h2>
       {@render answer("tickets.delete")}
       <div class="ta-row">
         <button type="button" class="btn" data-action="tickets.undelete" disabled={!!lack.undelete || busy} onclick={undelete}>undelete</button>

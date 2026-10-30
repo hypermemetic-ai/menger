@@ -54,6 +54,13 @@ export default async (ctx) => {
     };
     return { page, done };
   };
+  /** `id` typed into the `name` picker (SURFACE-5's) and taken with Enter once it is a hit. */
+  const pick = async (loc, name, id) => {
+    const input = loc.locator(`[data-picker=${name}] input`);
+    await input.fill(id);
+    await eventually(`${id} found by the ${name} picker`, async () => (await loc.locator(`[data-picker=${name}] [data-pick="${id}"]`).count()) === 1);
+    await input.press("Enter");
+  };
   const opened = async (page) => {
     const edit = page.locator("[data-surface=ticket-edit]");
     await eventually("the edit button is drawn", async () => (await edit.locator("[data-action=edit]").count()) === 1);
@@ -110,8 +117,7 @@ export default async (ctx) => {
       const save = form.locator("[data-action='tickets.update']");
       assert(await save.isDisabled(), "save fields waits for a change");
       await form.locator("[data-sev-pick=High]").click();
-      await form.locator("[data-field=block]").fill(b);
-      await form.locator("[data-field=block]").press("Enter");
+      await pick(form, "blocker", b);
       await eventually("the blocker is a chip", async () => (await form.locator(`[data-field=blocked_by] [data-blocker="${b}"]`).count()) === 1);
       await form.locator("[data-field=title]").fill("waits on b, retitled");
       await eventually("the button counts the fields", async () => (await text(save)) === "save 3 fields");
@@ -127,8 +133,7 @@ export default async (ctx) => {
       await eventually("cleared in the store", async () => { const t = get(a); return t.severity == null && t.blocked_by.length === 0; });
       // A cycle: b waiting on a while a waits on b — refused under the form, nothing written.
       sy("tickets", "update", "--id", b, "--block", a);
-      await form.locator("[data-field=block]").fill(b);
-      await form.locator("[data-field=block]").press("Enter");
+      await pick(form, "blocker", b);
       await eventually("save offered again", async () => !(await save.isDisabled()));
       await save.click();
       await eventually("the cycle refused under the form, in the store's words", async () => /cycle/.test(await text(said(form, "tickets.update", "refused"))));
@@ -149,29 +154,27 @@ export default async (ctx) => {
     }
   });
 
-  await test("set_parent_by_an_id_typed", async () => {
+  await test("set_parent_by_the_picker", async () => {
     const other = child("another parent", "--kind", "build");
-    const moved = child("to be moved");
+    const moved = child("to be moved", "--kind", "build");
+    const below = make("under the moved one", "--parent", moved);
     const { context, page } = await openPage(`#/edit/${moved}`);
     try {
       const edit = await opened(page);
       const form = edit.locator("[data-form='tickets.update']");
-      // The picker is SURFACE-5's mark (empty until it lands); the id is typed.
-      await edit.locator("[data-field=parent]").fill(`${EPIC}-99999`);
+      assert((await form.locator("input[data-field=parent]").count()) === 1, "one parent field: the picker's");
+      // Its own child as its parent: the store refuses the cycle, said under the form.
+      await pick(form, "parent", below);
+      await eventually("the pick is the draft", async () => (await form.locator(`[data-field=parent-chosen] [data-chip-id="${below}"]`).count()) === 1);
       await form.locator("[data-action='tickets.update']").click();
-      await eventually("a parent that is not there, refused under the form", async () => /no ticket/.test(await text(said(form, "tickets.update", "refused"))));
-      await edit.locator("[data-field=parent]").fill(other);
+      await eventually("its own descendant refused under the form, in the store's words", async () => (await said(form, "tickets.update", "refused").count()) === 1);
+      assert(get(moved).parent === root, "nothing written");
+      await pick(form, "parent", other);
       await form.locator("[data-action='tickets.update']").click();
       await eventually("the store moved it", async () => get(moved).parent === other);
       await eventually("said", async () => /^saved .*parent/.test(await text(said(form, "tickets.update", "answer"))));
-      assert((await sent(page, "tickets.set_parent")).length === 0, "the parent rides the update");
-      // Emptied, the parent is asked as written and the store answers.
-      await eventually("the field holds the new parent", async () => (await edit.locator("[data-field=parent]").inputValue()) === other);
-      await edit.locator("[data-field=parent]").fill("");
-      await eventually("an emptied parent is a change", async () => !(await form.locator("[data-action='tickets.update']").isDisabled()));
-      await form.locator("[data-action='tickets.update']").click();
-      await eventually("the store's answer to clearing it", async () => (await said(form, "tickets.update", "refused").count()) + (await said(form, "tickets.update", "answer").count()) === 1);
-      console.log(`     clearing a parent: ${await text(form.locator("[data-for='tickets.update']"))} (parent now ${get(moved).parent})`);
+      const last = (await sent(page, "tickets.update")).at(-1);
+      assert(last.params.parent === other && (await sent(page, "tickets.set_parent")).length === 0, `the parent rides the update: ${JSON.stringify(last.params)}`);
     } finally {
       await context.close();
     }
@@ -328,15 +331,10 @@ export default async (ctx) => {
       await eventually("said", async () => (await text(said(group, "tickets.archive", "answer"))).startsWith("archived"));
       const asked = (await sent(page, "tickets.archive")).at(-1);
       assert(asked.params.message === "first season fired", `the archive's own message: ${JSON.stringify(asked.params)}`);
-      await eventually("restore offered, from the watch", async () => (await group.locator("[data-archived]").count()) === 1);
+      await eventually("restore offered", async () => (await group.locator("[data-archived]").count()) === 1);
       await group.locator("[data-action='tickets.restore']").click();
       await eventually("restored with its child", async () => !get(top).archived && !get(kid).archived);
       await eventually("archive… offered again", async () => (await group.locator("[data-action='tickets.archive'][data-dry]").count()) === 1);
-      // Another session archives it: the page hears it.
-      sy("tickets", "archive", "--ids", top);
-      await eventually("an archive elsewhere is drawn here", async () => (await group.locator("[data-archived]").count()) === 1);
-      sy("tickets", "restore", "--ids", top, "--with-children", "true");
-      await eventually("and its restore", async () => (await group.locator("[data-action='tickets.archive'][data-dry]").count()) === 1);
     } finally {
       await context.close();
     }
