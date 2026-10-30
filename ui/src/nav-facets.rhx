@@ -6,7 +6,10 @@
   // narrows the route's filter (`#/f/<filter> and <rule>`, the field's other
   // rule replaced); one the filter already holds is `[data-selected]` and a
   // click takes it out. Asked again when the route's filter moves (the prop
-  // `filter`, as board-rows takes it); placed by a mark, `<nav-facets
+  // `filter`, as board-rows takes it). A filter that is not a flat `and` of
+  // plain rules — a `(`, an `or`, a quote but a status's — is never cut:
+  // a chip puts it whole beside its rule, `(<filter>) and <rule>`, and no
+  // chip is drawn selected on it. Placed by a mark, `<nav-facets
   // filter={filter}/>`, or on its own at `#/facets/:filter`.
   prop("filter");
   let facets = live(#{ snapshot: "tickets.nav.facets", params: #{ filter: filter, base: "not category done" }, key: "field" });
@@ -21,14 +24,18 @@
     now.trim();
     let parts = [];
     if now != "" { parts = now.split(" and "); }
-    let had = rule in parts;
+    // the rules are cut apart only when the filter is a flat `and` of
+    // plain rules: no `(`, no `or`, no quote but a status's value
+    let flat = !now.contains("(") && !now.contains(" or ");
+    for p in parts {
+      if p.contains("\"") && !p.starts_with("status \"") { flat = false; }
+    }
     let t = "";
-    if now.contains(" or ") {
-      // a filter with a top-level `or`: the rule goes beside it, whole
-      t = now;
-      if !had { t = "(" + now + ") and " + rule; }
+    if !flat {
+      t = "(" + now + ") and " + rule;
     } else {
       // the field's other rule replaced by this one; this one again takes it out
+      let had = rule in parts;
       if !had { parts.push(rule); }
       for p in parts {
         let same = p.starts_with(prefix);
@@ -66,10 +73,10 @@
           <div class="nf-chips">
             {#each facets.rows.filter(|f| f.field == fld) as f (f.value)}
               {#each [if fld in ["blocked", "ready", "has commits", "menger doc"] { if f.value == "yes" { fld } else { "not " + fld } } else if f.value.contains(" ") { fld + " \"" + f.value + "\"" } else { fld + " " + f.value }] as rule (rule)}
-                {#if filter != () && rule in filter.split(" and ")}
-                  <button class="nf-chip" type="button" data-selected="" aria-pressed="true" data-facet={fld} data-value={f.value} data-rule={rule} data-status={f.value} title={"take out: " + rule} on:click={narrow}><span class="nf-v">{f.value}</span><span class="nf-n" data-held>{f.held}</span></button>
+                {#if filter != () && !filter.contains("(") && !filter.contains(" or ") && filter.split(" and ").all(|p| !p.contains("\"") || p.starts_with("status \"")) && rule in filter.split(" and ")}
+                  <button class="nf-chip" type="button" data-selected="" aria-pressed="true" data-facet={fld} data-value={f.value} data-rule={rule} title={"take out: " + rule} on:click={narrow}><span class="nf-v">{f.value}</span><span class="nf-n" data-held>{f.held}</span></button>
                 {:else}
-                  <button class="nf-chip" type="button" aria-pressed="false" data-facet={fld} data-value={f.value} data-rule={rule} data-status={f.value} title={"narrow: " + rule} on:click={narrow}><span class="nf-v">{f.value}</span><span class="nf-n" data-held>{f.held}</span></button>
+                  <button class="nf-chip" type="button" aria-pressed="false" data-facet={fld} data-value={f.value} data-rule={rule} title={"narrow: " + rule} on:click={narrow}><span class="nf-v">{f.value}</span><span class="nf-n" data-held>{f.held}</span></button>
                 {/if}
               {/each}
             {/each}
@@ -95,13 +102,13 @@
   .nf-chip[data-selected] { color: var(--accent); background: var(--sel); border-color: var(--accent); }
   .nf-n { padding: 0 6px; line-height: 16px; color: var(--muted); background: var(--card); border-radius: var(--radius-pill); font-variant-numeric: tabular-nums; }
   .nf-chip[data-selected] .nf-n { color: var(--accent); }
-  .nf-field[data-field=status] .nf-chip[data-status=Draft] .nf-v { color: var(--st-draft-fg); }
-  .nf-field[data-field=status] .nf-chip[data-status=Pending] .nf-v { color: var(--st-pending-fg); }
-  .nf-field[data-field=status] .nf-chip[data-status=Ready] .nf-v { color: var(--st-ready-fg); }
-  .nf-field[data-field=status] .nf-chip[data-status=Coding] .nf-v { color: var(--st-coding-fg); }
-  .nf-field[data-field=status] .nf-chip[data-status="In Review"] .nf-v { color: var(--st-in-review-fg); }
-  .nf-field[data-field=status] .nf-chip[data-status=Complete] .nf-v { color: var(--st-complete-fg); }
-  .nf-field[data-field=status] .nf-chip[data-status=Blocked] .nf-v { color: var(--st-blocked-fg); }
+  .nf-field[data-field=status] .nf-chip[data-value=Draft] .nf-v { color: var(--st-draft-fg); }
+  .nf-field[data-field=status] .nf-chip[data-value=Pending] .nf-v { color: var(--st-pending-fg); }
+  .nf-field[data-field=status] .nf-chip[data-value=Ready] .nf-v { color: var(--st-ready-fg); }
+  .nf-field[data-field=status] .nf-chip[data-value=Coding] .nf-v { color: var(--st-coding-fg); }
+  .nf-field[data-field=status] .nf-chip[data-value="In Review"] .nf-v { color: var(--st-in-review-fg); }
+  .nf-field[data-field=status] .nf-chip[data-value=Complete] .nf-v { color: var(--st-complete-fg); }
+  .nf-field[data-field=status] .nf-chip[data-value=Blocked] .nf-v { color: var(--st-blocked-fg); }
   .nf-note { margin: 4px 0; font-size: 11px; color: var(--muted); }
   .nf-note[data-refused] { color: var(--warn); }
   .nf-skel-wrap { display: flex; flex-direction: column; gap: 6px; }

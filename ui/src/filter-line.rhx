@@ -7,16 +7,17 @@
   // own live too, so the three share one call.
   //
   // SURFACE-6: what is typed is checked on each pause (`filters.check`,
-  // 200 ms of quiet, nothing asked before a key) and said under the line —
-  // `ok` and how many it admits, or the refusal's own words; an open
-  // `saved "…` completes from the saved filters (`filters.list`, asked only
-  // then); Escape clears the line (and the route's filter). The field is
-  // drawn again (keyed by `gen`) when a fold sets its text: the engine sets
-  // `value` as an attribute, which a field already typed in does not show.
-  /* keys (FRAME-36; until it merges the compiler refuses keys(), and the
-     field's own keydown below does it):
+  // 200 ms of quiet — the first key too: a `when`-held collection's first
+  // ask waits its debounce — nothing asked before a key) and said under the
+  // line — `ok` and how many it admits, or the refusal's own words;
+  // "checking…" while an ask is out (the previous answer stays drawn during
+  // the pause itself: the engine says nothing until it asks). An open
+  // `saved "…` completes from the saved filters (`filters.list`, asked
+  // only then); Escape (FRAME-36's keys, heard in the field) clears the
+  // line and the route's filter. The field is drawn again (keyed by `gen`)
+  // when a fold sets its text: the engine sets `value` as an attribute,
+  // which a field already typed in does not show.
   keys(#{ "escape": #{ to: "clear", in_inputs: true, label: "clear the filter line" } });
-  */
   prop("filter");
   state(#{ q: "", typed: false, gen: 0, naming: false, partial: "" });
   let counts = live(#{ snapshot: "tickets.nav.counts", params: #{ filter: filter }, key: "shortcode", on: #{ count: "upsert:." } });
@@ -63,18 +64,14 @@
   }
   fn keyed(state, ev) {
     if ev.key == "Enter" { return apply(state, ev); }
-    if ev.key == "Escape" {
-      state.q = "";
-      state.typed = true;
-      state.naming = false;
-      state.partial = "";
-      state.gen += 1;
-      if ev.props.filter != () { navigate("#/"); }
-    }
     state
   }
+  // Escape is the page's while the line is mounted (FRAME-36): it clears
+  // only when pressed in the line's own field.
   fn clear(state, ev) {
+    if ev.target == () || ev.target.data == () || !("filter-input" in ev.target.data) { return state; }
     state.q = "";
+    state.partial = "";
     state.typed = true;
     state.naming = false;
     state.gen += 1;
@@ -107,7 +104,7 @@
       <p class="filter-check" data-filter-check="refused" data-refused role="status">{if checked.message == () { "this filter is not taken" } else { checked.message }}</p>
     {:else}
       {#if checked.status == "live" && checked.rows.len() > 0}
-        <p class="filter-check" data-filter-check="ok" role="status"><span class="ok">ok</span> · <span data-field="count">{checked.rows[0].count}</span> tickets · Enter applies, Escape clears</p>
+        <p class="filter-check" data-filter-check="ok" role="status"><span class="ok">ok</span> · <span data-field="count">{checked.rows[0].count}</span> match</p>
       {:else}
         <p class="filter-check" data-filter-check="pending" data-loading>checking…</p>
       {/if}

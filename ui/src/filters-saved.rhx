@@ -2,10 +2,9 @@
   // SURFACE-6: the saved filters (FILTER-46) — `#/filters` (and
   // `#/filters/:filter`, the board's filter handed in to be saved), and the
   // nav's "saved" group as `<filters-saved filter={filter} compact="true"/>`.
-  // `filters.list` live on `watch`'s `filter_saved` / `filter_deleted`; a
-  // rename's `filter_saved { renamed_from }` puts the new row in and a second
-  // reading of the same stream (keyed by `renamed_from`) takes the old one
-  // out. A row selected is `filters.get` (its filter as the server keeps
+  // `filters.list` live on `watch`'s `filter_saved` / `filter_deleted` — a
+  // rename is both, the new row and then the old name gone (SURFACE-6's
+  // change to the service). A row selected is `filters.get` (its filter as the server keeps
   // it, its count), opened on the board as `#/f/saved "Name"`, renamed or
   // deleted; the form saves a name over the typed filter (the board's when
   // nothing is typed), `filters.check` on each pause saying ok or the
@@ -24,8 +23,6 @@
   state(#{ sel: "", name: "", text: "", typed: false, to: "", gen: 0, refused: "" });
   let saved = live(#{ snapshot: "tickets.filters.list", params: #{}, changes: "tickets.watch", key: "name",
                       on: #{ filter_saved: "upsert:filter", filter_deleted: "remove:name" } });
-  let renamed = live(#{ snapshot: "tickets.filters.list", params: #{}, changes: "tickets.watch", key: "renamed_from",
-                        on: #{ filter_saved: "upsert:." } });
   // a pause before the get: a row picked by the save that made it is asked once the save has landed
   let one = live(#{ snapshot: "tickets.filters.get", params: #{ name: state.sel }, key: "name", debounce_ms: 250, when: state.sel });
   let checked = live(#{ snapshot: "tickets.filters.check", params: #{ filter: state.text }, key: "filter", debounce_ms: 200, when: state.text });
@@ -40,14 +37,10 @@
     if text == "" { state.refused = "there is no filter to save — type one"; return state; }
     // the check is under the field: a refused (or unanswered) filter is not sent
     if state.typed && ev.live.checked.len() == 0 { return state; }
-    // FRAME-37: answer fold "saved_answer"
+    // FRAME-37: answer fold "saved_answer" — the fields stay until it says ok
     call("tickets.filters.save", #{ name: name, filter: text });
     state.sel = name;
-    state.name = "";
-    state.text = "";
-    state.typed = false;
     state.refused = "";
-    state.gen += 1;
     state
   }
   fn saved_on_enter(state, ev) {
@@ -76,7 +69,11 @@
     let from = state.sel;
     if to == "" || to == from { state.refused = "a new name, please"; return state; }
     let lower = to.to_lower();
-    if ev.live.saved.some(|f| f.name.to_lower() == lower) { state.refused = "another saved filter is named " + to; return state; }
+    let clash = false;
+    for f in ev.live.saved {
+      if f.name != from && f.name.to_lower() == lower { clash = true; }
+    }
+    if clash { state.refused = "another saved filter is named " + to; return state; }
     // FRAME-37: answer fold "renamed_answer"
     call("tickets.filters.rename", #{ name: from, to: to });
     state.sel = to;
@@ -90,7 +87,11 @@
   }
   // FRAME-37's answer folds: a refusal's words beside the write that was refused.
   fn saved_answer(state, ev) {
-    if !ev.ok { state.refused = if ev.message == () { "the save was refused" } else { ev.message }; state.sel = ""; }
+    if !ev.ok { state.refused = if ev.message == () { "the save was refused" } else { ev.message }; state.sel = ""; return state; }
+    state.name = "";
+    state.text = "";
+    state.typed = false;
+    state.gen += 1;
     state
   }
   fn renamed_answer(state, ev) {
@@ -113,7 +114,7 @@
 <section class="filters-saved" data-surface="filters-saved" data-compact={if compact == () { "false" } else { "true" }}>
   <header class="fs-head">
     <h2>Saved filters</h2>
-    <span class="fs-count" data-field="total">{saved.rows.filter(|f| !renamed.rows.some(|r| r.renamed_from == f.name)).len()}</span>
+    <span class="fs-count" data-field="total">{saved.rows.len()}</span>
   </header>
   {#if compact == ()}
     <div class="fs-form" data-form="tickets.filters.save">
@@ -124,7 +125,7 @@
           <input data-field="filter" type="text" spellcheck="false" autocomplete="off" placeholder="kind build and not category done"
                  value={if filter == () { "" } else { filter }} on:input={filtered} on:keydown={saved_on_enter}/></label>
       {/each}
-      {#if (state.typed && state.text != "" && (checked.status == "error" || checked.status == "refused")) || state.name == ""}
+      {#if (state.typed && state.text != "" && (checked.status != "live" || checked.rows.len() == 0)) || state.name == ""}
         <button class="fs-btn" type="button" data-action="tickets.filters.save" disabled="" aria-disabled="true">Save</button>
       {:else}
         <button class="fs-btn primary" type="button" data-action="tickets.filters.save" on:click={save}>Save</button>
@@ -150,7 +151,7 @@
       <p class="fs-empty" data-refused>{if saved.message == () { "the saved filters are not yours to read" } else { saved.message }}</p>
     {/if}
     <ul class="fs-rows">
-      {#each saved.rows.filter(|f| !renamed.rows.some(|r| r.renamed_from == f.name)) as f (f.name)}
+      {#each saved as f (f.name)}
         {#if f.name == state.sel}
           <li class="fs-row" data-id={f.name} data-selected="">
             <div class="fs-line">
@@ -188,7 +189,7 @@
         {/if}
       {/each}
     </ul>
-    {#if saved.status == "live" && saved.rows.filter(|f| !renamed.rows.some(|r| r.renamed_from == f.name)).len() == 0}
+    {#if saved.status == "live" && saved.rows.len() == 0}
       <p class="fs-empty" data-empty>No saved filters yet — type one above and give it a name.</p>
     {/if}
   {/if}

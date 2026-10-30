@@ -172,6 +172,8 @@ async fn a_watch_naming_a_filter_hears_what_a_save_a_rename_and_a_delete_did() {
     // a rename of a name it uses: the watch's refusal; a delete likewise.
     store.rename_filter(on(), &org(), "Plexus-Ready", "Pending").await.unwrap();
     assert!(matches!(rx.try_recv(), Ok(Change::Filters(FilterChange::Saved { renamed_from: Some(_), .. }))));
+    // SURFACE-6: and the old name said gone, right after.
+    assert!(matches!(rx.try_recv(), Ok(Change::Filters(FilterChange::Deleted { name })) if name == "Plexus-Ready"));
     assert!(watcher.resaved(&store, None).unwrap_err().contains("no saved filter named \"Plexus-Ready\""));
     store.delete_filter(on(), &org(), "Pending").await.unwrap();
     assert!(matches!(rx.try_recv(), Ok(Change::Filters(FilterChange::Deleted { name })) if name == "Pending"));
@@ -194,4 +196,38 @@ async fn needs_you_means_the_apps_default_until_one_is_saved() {
     assert!(ids(&store, "saved \"Needs you\"").is_empty());
     store.delete_filter(on(), &org(), "needs you").await.unwrap();
     assert_eq!(ids(&store, "saved \"Needs you\""), ["PLEXUS-3", "PLEXUS-4"]);
+}
+
+/// SURFACE-6: a rename is said as the new row and then the old name gone —
+/// so a reader keyed by name follows a rename, a rename back and a case-only
+/// rename; a rename to the very name it has says no delete.
+#[tokio::test]
+async fn a_rename_says_the_new_row_and_then_the_old_name_gone() {
+    let store = Store::new();
+    work(&store).await;
+    save(&store, "Plexus-Ready", "in PLEXUS and status Ready").await.unwrap();
+    let mut rx = store.subscribe();
+    let mut heard = Vec::new();
+    for (from, to) in [("Plexus-Ready", "Pending"), ("Pending", "Plexus-Ready"), ("Plexus-Ready", "PLEXUS-READY"), ("PLEXUS-READY", "PLEXUS-READY")] {
+        store.rename_filter(on(), &org(), from, to).await.unwrap();
+        while let Ok(c) = rx.try_recv() {
+            match c {
+                Change::Filters(FilterChange::Saved { filter, renamed_from }) => heard.push(format!("saved {} from {}", filter.name, renamed_from.unwrap_or_default())),
+                Change::Filters(FilterChange::Deleted { name }) => heard.push(format!("deleted {name}")),
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(
+        heard,
+        [
+            "saved Pending from Plexus-Ready",
+            "deleted Plexus-Ready",
+            "saved Plexus-Ready from Pending",
+            "deleted Pending",
+            "saved PLEXUS-READY from Plexus-Ready",
+            "deleted Plexus-Ready",
+            "saved PLEXUS-READY from PLEXUS-READY",
+        ]
+    );
 }

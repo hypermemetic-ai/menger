@@ -98,6 +98,25 @@ export default async (ctx) => {
       // Renamed elsewhere: the row moves without a reload.
       sy("tickets", "filters", "rename", "--name", "S6 other", "--to", "S6 other2");
       await eventually("a rename elsewhere moves the row", async () => (await fs.locator('[data-id="S6 other2"]').count()) === 1 && (await fs.locator('[data-id="S6 other"]').count()) === 0, 5000);
+      // Renamed back (the service says the old name gone after each rename,
+      // so a row keyed by name follows it both ways), and a save under a
+      // name renamed away is listed again.
+      sy("tickets", "filters", "rename", "--name", "S6 new", "--to", "S6 old");
+      await eventually("renamed back: S6 old again, S6 new gone", async () => (await fs.locator('[data-id="S6 old"]').count()) === 1 && (await fs.locator('[data-id="S6 new"]').count()) === 0, 5000);
+      sy("tickets", "filters", "rename", "--name", "S6 old", "--to", "S6 new");
+      sy("tickets", "filters", "save", "--name", "S6 old", "--filter", "kind spike");
+      await eventually("a new filter under the name renamed away is listed", async () => (await fs.locator('[data-id="S6 old"]').count()) === 1 && (await fs.locator('[data-id="S6 new"]').count()) === 1, 5000);
+      sy("tickets", "filters", "delete", "--name", "S6 old");
+      // A case-only rename is a rename, not a clash with itself.
+      if ((await renamed.getAttribute("data-selected")) === null) await renamed.locator("[data-pick]").click();
+      await eventually("S6 new picked", async () => (await renamed.getAttribute("data-selected")) !== null, 3000);
+      await renamed.locator("input[data-field=to]").fill("S6 NEW");
+      await renamed.locator('[data-action="tickets.filters.rename"]').click();
+      const upper = fs.locator('[data-id="S6 NEW"]');
+      await eventually("S6 NEW is listed, S6 new gone", async () => (await upper.count()) === 1 && (await fs.locator('[data-id="S6 new"]').count()) === 0, 5000);
+      await upper.locator("input[data-field=to]").fill("S6 new");
+      await upper.locator('[data-action="tickets.filters.rename"]').click();
+      await eventually("and back to S6 new", async () => (await renamed.count()) === 1 && (await upper.count()) === 0, 5000);
       // Deleted.
       await eventually("S6 new stays picked", async () => (await renamed.getAttribute("data-selected")) !== null, 3000);
       await renamed.locator('[data-action="tickets.filters.delete"]').click();
@@ -138,6 +157,9 @@ export default async (ctx) => {
       try {
         const input = () => page.locator("input[data-filter-input]");
         const check = page.locator("[data-surface=filter-line] [data-filter-check]");
+        await input().fill("k");
+        await page.waitForTimeout(120);
+        assert((await page.locator('[data-surface=filter-line] [data-filter-check=refused]').count()) === 0, "the first key waits its pause too: no one-letter refusal flashes");
         await input().fill(bad);
         await eventually("the filter line says the refusal's words", async () => (await check.getAttribute("data-filter-check", { timeout: 500 })) === "refused" && trimmed(await check.textContent()) === said, 3000);
         assert((await check.getAttribute("data-refused")) !== null, "marked [data-refused]");
@@ -147,7 +169,13 @@ export default async (ctx) => {
         const offer = page.locator('[data-surface=filter-line] [data-complete="S6 spikes"]');
         await eventually("an open saved \"… offers the saved names", async () => (await offer.count()) === 1, 3000);
         await offer.click();
+        assert((await hash(page)) === "" || (await hash(page)) === "#/", "a click on a completion applies nothing (Enter applies, a blur does not)");
         await eventually("the name completes the line", async () => (await input().inputValue()) === 'kind build or saved "S6 spikes"', 3000);
+        // The rhx line draws the field again to set its text (the engine sets `value` as an
+        // attribute) and cannot focus it: `autofocus` on a later-inserted field is the
+        // browser's to ignore, and it does, now and then — FRAME-39's gap.
+        const focused = await page.evaluate(() => document.activeElement?.matches("input[data-filter-input]") ?? false);
+        console.log(`     the rhx field after a completion: ${focused ? "focused" : "not focused (FRAME-39: the engine cannot focus)"}`);
         await eventually("and the completed line checks ok", async () => (await check.getAttribute("data-filter-check", { timeout: 500 })) === "ok", 3000);
         await input().press("Escape");
         await eventually("Escape clears the line", async () => (await input().inputValue()) === "" && (await check.count()) === 0, 3000);
@@ -240,6 +268,25 @@ export default async (ctx) => {
       }
     }
     {
+      // A filter in parentheses is never cut: the chip puts it whole beside its rule.
+      const { page, context } = await openPage(`#/facets/${encodeURIComponent("(kind build and status Ready)")}`);
+      try {
+        const nf = facets(page);
+        await eventually("drawn", async () => (await nf.locator("[data-facet]").count()) > 0, 5000);
+        assert((await nf.locator("[data-facet][data-selected]").count()) === 0, "no chip is drawn selected on a filter that is not cut");
+        // its status and kind are the group's own (only Ready, only build): narrow by a severity
+        const chip = nf.locator("[data-facet=severity]").first();
+        const rule = await chip.getAttribute("data-rule");
+        await chip.click();
+        const whole = `((kind build and status Ready)) and ${rule}`;
+        await eventually("the filter whole beside the rule", async () => (await hash(page)) === `#/f/${whole}`, 3000);
+        const n = held(whole);
+        await eventually(`the board takes it (no refusal) and counts ${n}`, async () => (await page.locator("[data-filter-refused]").count()) === 0 && Number(trimmed(await page.locator(".board-count").textContent({ timeout: 500 }))) === n, 5000);
+      } finally {
+        await context.close();
+      }
+    }
+    {
       const { page, context } = await openPage("#/facets/kind%20build%20and%20status%20Ready");
       try {
         const ready = facets(page).locator("[data-facet=status][data-value=Ready][data-selected]");
@@ -253,7 +300,7 @@ export default async (ctx) => {
   });
 
   await test("counts_are_live", async () => {
-    const epic = "AASF";
+    const epic = "S6CN";
     const root = one(sy("tickets", "create", "--epic", epic, "--kind", "scope", "--title", "the counts' shortcode"), "created")?.ticket;
     assert(root?.id, "a shortcode for the counts");
     const filter = `in ${epic} and status Draft`;

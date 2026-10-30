@@ -91,7 +91,7 @@ impl FiltersActivation {
         })
     }
 
-    /// Give a saved filter another name, keeping its filter and who saved it; refused in band when the new name is another filter's. Yields filter_saved with `renamed_from`. A filter that names the old name stops resolving.
+    /// Give a saved filter another name, keeping its filter and who saved it; refused in band when the new name is another filter's. Yields filter_saved with `renamed_from`; a watch hears it and then filter_deleted with the old name. A filter that names the old name stops resolving.
     #[plexus_macros::method(group = "filters")]
     pub async fn rename(
         &self,
