@@ -9,12 +9,12 @@
 </script>
 
 <script>
-  import { bus } from "plexus-ui/host";
+  import { bus, live } from "plexus-ui/host";
 
   let { filter = null } = $props();
   const b = bus();
   const base = location.hash.startsWith("#/sv/") ? "#/sv/" : "#/";
-  const counts = $derived(b.live({ snapshot: "tickets.nav.counts", params: { filter: filter ?? null }, key: "shortcode", on: { count: "upsert:." } }));
+  const counts = live({ snapshot: "tickets.nav.counts", params: () => ({ filter: filter ?? null }), key: "shortcode", on: { count: "upsert:." } });
 
   function apply(ev) {
     const t = ev.currentTarget.value.trim().replaceAll("%", "%25").replaceAll("/", "%2F").replaceAll("#", "%23");

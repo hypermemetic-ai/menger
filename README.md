@@ -800,12 +800,16 @@ rhx layout that only places four sections (a section is the host's, and only
 an rhx template marks one), whose defaults are the svelte/1 ones — `top` holds
 `board-layout-sv`, the top bar and its filter line. The rhx components stay
 the defaults of `board-layout`'s sections; a right-click on one puts the
-real Svelte twin there (`ui slots set`), and `ui slots clear` takes it back. A
-real Svelte twin carries what a module cannot ask of the host today: the
-palette's 80 ms pause and its hold until a query (rhx's `debounce_ms` and
-`when:`), the window's 20 ms, the nav's and the page's children inside them
-(no `.svelte` imports another), and the body's markdown and the engine's
-allow-list (`markdown()` is not on the bus).
+real Svelte twin there (`ui slots set`), and `ui slots clear` takes it back.
+FRAME-25: the real Svelte twins ride FRAME-19's bus as the rhx ones do — the
+palette's `live` held by `when` and its typing coalesced by `debounce_ms: 80`,
+the window's by `debounce_ms: 20`, in the host's registry (no timer of
+menger's own); the body through `markdown` from `plexus-ui/host`, the engine's
+own sanitized render (no allow-list of menger's); and the nav's Flat, an open
+shortcode's children and a page's chips as svelte/1 siblings
+(`nav-flat-sv`, `nav-children-sv`, `ticket-chip-sv`), each imported by its
+parent and bundled into that module, and each a component in its own right
+with no route or slot of its own; `tests/apart.rs` holds it to that.
 `../plexus-ui`'s `plexus-ui` tool (FRAME-8; `scripts/plexus-ui` builds it
 from the sibling into this checkout's target and runs it) builds it into
 `dist/ui.tar`: `build --prebuild` the engine (cargo: `wasm32-unknown-unknown`
