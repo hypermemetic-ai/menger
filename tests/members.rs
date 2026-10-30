@@ -99,15 +99,15 @@ async fn start() -> World {
     // MACRO-20: minting, so a member can take a ceilinged session (auth.login).
     let access = Access::with_login(menger::session_table(&sessions), vec![format!("idp:{ADA}")]).minting(menger::session_table(&sessions));
     let offers = providers.iter().map(menger::offer).collect();
-    let hub = build_rpc_offering(&dir.path().join("t.db"), None, Default::default(), offers, access.clone()).await.unwrap();
-    let service_generation = hub.gate().expect("menger's service is gated").generation().clone();
+    let service = build_rpc_offering(&dir.path().join("t.db"), None, Default::default(), offers, access.clone()).await.unwrap();
+    let service_generation = service.gate().expect("menger's service is gated").generation().clone();
     let access_generation = access.gate().generation().clone();
     // AUTH-7: as main wires it, the upgrade notices who signs in holding nothing.
     let gate = Arc::new(Gate::new(sessions, login::boundary(&providers).unwrap()).noticing(menger::MengerAccess(access)));
     let conv = |arc: Arc<DynamicHub>| DynamicHub::arc_into_rpc_module(arc).map_err(|e| anyhow::anyhow!("{e}"));
     tokio::spawn(async move {
         let _keep = dir;
-        TransportServer::builder(hub, conv)
+        TransportServer::builder(service, conv)
             .with_websocket(port)
             .with_session_validator(gate)
             .reject_upgrade_on_auth_failure()
@@ -161,6 +161,14 @@ fn refused(evs: &[Value]) -> (String, String) {
     let e = &evs[0];
     assert_eq!(e["error_kind"], "forbidden", "{evs:?}");
     (e["grant"].as_str().unwrap().to_string(), e["scope"].as_str().unwrap().to_string())
+}
+
+/// MACRO-31: a key no parameter claims is refused at dispatch, before the
+/// method runs — `-32602 invalid_params` naming it; the refusal's message.
+fn invalid(evs: &[Value]) -> String {
+    let e = &evs[0];
+    assert_eq!((evs.len(), e["type"].as_str(), e["code"].as_str(), e["error_kind"].as_str()), (1, Some("error"), Some("-32602"), Some("invalid_params")), "{evs:?}");
+    e["message"].as_str().unwrap().to_string()
 }
 
 fn ids(evs: &[Value]) -> BTreeSet<String> {
@@ -341,11 +349,22 @@ async fn comments_are_signed_and_scoped() {
     call(&ada, "members.grant", grant(ALICE, "IDENTITY", "editor")).await;
     call(&ada, "members.grant", grant(BOB, "OUGHT", "viewer")).await;
     let (alice, bob) = (as_(&w, ALICE, "alice").await, as_(&w, BOB, "bob").await);
-    let on = |t: &str| json!({ "anchor": { "route": format!("#/ticket/{t}"), "path": "main", "label": "body", "excerpt": "", "ticket": t }, "body": "note", "author": "ada" });
+    let on = |t: &str| json!({ "anchor": { "route": format!("#/ticket/{t}"), "path": "main", "label": "body", "excerpt": "", "ticket": t }, "body": "note" });
 
+    // ACCESS-19: signed by its caller. `author` is no parameter of add, so a
+    // call that claims a name is refused at dispatch (MACRO-31) and keeps
+    // nothing — the comment after it is the first.
+    let mut claims = on("IDENTITY-2");
+    claims["author"] = json!("ada");
+    let no = invalid(&call(&alice, "comments.add", claims).await);
+    assert!(no.contains("unknown field `author`"), "{no}");
     let a = call(&alice, "comments.add", on("IDENTITY-2")).await;
-    assert_eq!((a[0]["author"].as_str(), a[0]["principal"].as_str()), (Some("alice"), Some(format!("idp:{ALICE}").as_str())), "the name claimed is ignored: {a:?}");
-    assert_eq!(call(&bob, "comments.add", on("IDENTITY-2")).await[0]["type"], "error", "Bob cannot see IDENTITY-2");
+    assert_eq!((a[0]["id"].as_u64(), a[0]["author"].as_str(), a[0]["principal"].as_str()), (Some(1), Some("alice"), Some(format!("idp:{ALICE}").as_str())), "signed by its caller, the first kept: {a:?}");
+    // Bob is refused for his reach, and the refusal says so: a bare `error`
+    // would pass on a dispatch's refusal too.
+    let hidden = call(&bob, "comments.add", on("IDENTITY-2")).await;
+    assert_eq!(hidden[0]["type"], "error", "Bob cannot see IDENTITY-2: {hidden:?}");
+    assert!(hidden[0]["message"].as_str().unwrap_or_default().contains("needs comments.add on IDENTITY"), "{hidden:?}");
     assert_eq!(call(&bob, "comments.add", on("OUGHT-2")).await[0]["principal"], format!("idp:{BOB}"), "a viewer comments (G1)");
     let bobs: Vec<Value> = call(&bob, "comments.list", json!({})).await.into_iter().filter(|e| e["type"] == "comment").collect();
     assert_eq!(bobs.len(), 1, "Bob lists only the comment on OUGHT: {bobs:?}");
@@ -805,8 +824,9 @@ fn comment_ids(evs: &[Value]) -> Vec<u64> {
 }
 
 /// ACCESS-3 #9: a comment is signed by its caller — a principal with no
-/// name is its author by its principal, whatever the call claims (it was
-/// `caller.name.or(author)`: the claim stood). The parameter is gone.
+/// name is its author by its principal (it was `caller.name.or(author)`:
+/// the claim stood). The parameter is gone (ACCESS-19): a call that claims
+/// a name is refused at dispatch and keeps nothing (MACRO-31, MACRO-34).
 #[tokio::test]
 async fn a_comment_is_signed_never_named_even_without_a_name() {
     let w = start().await;
@@ -814,11 +834,14 @@ async fn a_comment_is_signed_never_named_even_without_a_name() {
     tickets(&ada).await;
     call(&ada, "members.grant", grant(BOB, "OUGHT", "viewer")).await;
     let bob = as_unnamed(&w, BOB).await;
-    let on = json!({ "anchor": { "route": "#/ticket/OUGHT-2", "path": "main", "label": "body", "excerpt": "", "ticket": "OUGHT-2" }, "body": "x", "author": "ada" });
+    let on = json!({ "anchor": { "route": "#/ticket/OUGHT-2", "path": "main", "label": "body", "excerpt": "", "ticket": "OUGHT-2" }, "body": "x" });
+    let mut claims = on.clone();
+    claims["author"] = json!("ada");
+    let no = invalid(&call(&bob, "comments.add", claims).await);
+    assert!(no.contains("unknown field `author`"), "the claim is no author: {no}");
     let c = call(&bob, "comments.add", on).await;
     let me = call(&bob, "session.whoami", json!({})).await;
-    assert_eq!(c[0]["principal"], format!("idp:{BOB}"), "{c:?}");
-    assert_ne!(c[0]["author"], "ada", "the claim is no author: {c:?}");
+    assert_eq!((c[0]["id"].as_u64(), c[0]["principal"].as_str()), (Some(1), Some(format!("idp:{BOB}").as_str())), "the first kept: {c:?}");
     assert_eq!(c[0]["author"], me[0]["name"].as_str().map_or(json!(format!("idp:{BOB}")), |n| json!(n)), "its own name, else its principal: {c:?} {me:?}");
     let schema = call(&ada, "comments.schema", json!({})).await;
     let add = schema.iter().find_map(|s| s["methods"].as_array()?.iter().find(|m| m["name"] == "add").cloned()).expect("comments.add in the schema");

@@ -164,7 +164,7 @@ async fn start_with(port: u16, providers: &[Provider], admins: &[&str]) {
     // As main wires it (IDENTITY-19): sessions, the per-call rule, the gate.
     let sessions = Arc::new(Sessions::new(3600, &menger::login_names()));
     let access = Access::with_login(menger::session_table(&sessions), admins.iter().map(|a| a.to_string()).collect());
-    let hub = build_rpc_offering(&dir.path().join("tickets.db"), None, Default::default(), offers, access.clone())
+    let service = build_rpc_offering(&dir.path().join("tickets.db"), None, Default::default(), offers, access.clone())
         .await
         .expect("open database");
     let carriers = login::boundary(providers).expect("providers").expect("a boundary");
@@ -172,7 +172,7 @@ async fn start_with(port: u16, providers: &[Provider], admins: &[&str]) {
     let conv = |arc: Arc<DynamicHub>| menger::calls::rpc_module(arc, menger::calls::CallLimits::default());
     tokio::spawn(async move {
         let _keep = dir;
-        TransportServer::builder(hub, conv)
+        TransportServer::builder(service, conv)
             .with_websocket(port)
             .with_session_validator(Arc::new(Gate::new(sessions, Some(carriers)).noticing(menger::MengerAccess(access))))
             .anonymous_view()
@@ -281,11 +281,12 @@ fn nip98(keys: &Keys, port: u16) -> String {
     base64::engine::general_purpose::STANDARD.encode(serde_json::to_string(&event).unwrap())
 }
 
-fn comment_by(author: &str) -> Value {
+/// A comment on the app. No call names its author (ACCESS-19): `author` is
+/// no parameter of `comments.add`.
+fn a_comment() -> Value {
     json!({
         "anchor": { "route": "#/comments", "path": "main", "label": "page", "excerpt": "" },
         "body": "looks right",
-        "author": author,
     })
 }
 
@@ -326,12 +327,20 @@ async fn a_signed_in_comment_carries_its_identity() {
     let alice_principal = format!("idp:{ALICE}");
     start_with(p.port, &p.list, &[&alice_principal]).await;
     let alice = connect(p.port, &[("cookie", format!("access_token={}", idp_token(&p.idp, now() + 600)))]).await.unwrap();
-    let added = call(&alice, "comments.add", comment_by("mallory")).await;
-    assert_eq!(added[0]["author"], "alice", "the identity, not the claim: {added:?}");
+    // The identity, never a claim: a call that claims an author is refused
+    // at dispatch (MACRO-31; MACRO-34) and keeps nothing — the comment after
+    // it is the first.
+    let mut claims = a_comment();
+    claims["author"] = json!("mallory");
+    let refused = call(&alice, "comments.add", claims).await;
+    assert_eq!((refused[0]["code"].as_str(), refused[0]["error_kind"].as_str()), (Some("-32602"), Some("invalid_params")), "{refused:?}");
+    assert!(refused[0]["message"].as_str().unwrap_or_default().contains("unknown field `author`"), "the claim is refused: {refused:?}");
+    let added = call(&alice, "comments.add", a_comment()).await;
+    assert_eq!((added[0]["id"].as_u64(), added[0]["author"].as_str()), (Some(1), Some("alice")), "the identity, the first kept: {added:?}");
     assert_eq!(added[0]["principal"], alice_principal, "IDENTITY-21: signed by the principal");
     // IDENTITY-21: with login on, an anonymous caller reaches nothing.
     let anonymous = connect(p.port, &[]).await.unwrap();
-    let added = call(&anonymous, "comments.add", comment_by("mallory")).await;
+    let added = call(&anonymous, "comments.add", a_comment()).await;
     assert_eq!(added[0]["type"], "error", "anonymous may not comment: {added:?}");
 }
 
