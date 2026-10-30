@@ -16,6 +16,9 @@
 <link rel="preload" as="fetch" crossorigin href="/app/{{UI_VERSION}}/engine.wasm">
 <link rel="preload" as="fetch" crossorigin href="/app/{{UI_VERSION}}/manifest.json">
 <link rel="preload" as="fetch" crossorigin href="/app/{{UI_VERSION}}/components.json">
+<!-- FRAME-26: the bundle's one svelte/1 runtime, which every Svelte module
+     imports (./svelte-runtime.js) — asked with the HTML, not after a module. -->
+<link rel="modulepreload" href="/app/{{UI_VERSION}}/components/svelte-runtime.js">
 <script type="module">
 const version = document.querySelector('meta[name="menger-ui-version"]').content;
 const { start } = await import(`/app/${version}/host.js`);

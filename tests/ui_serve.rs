@@ -198,6 +198,8 @@ fn link_attrs(tag: &str) -> Vec<(String, String)> {
 /// FRAME-26: what a bundle's Svelte runtime stands for here (the server
 /// serves its bytes and never runs them).
 const RUNTIME_JS: &str = "export function mount() {}\n";
+/// A svelte/1 module beside it, importing it.
+const MODULE_JS: &str = "import { mount as m } from \"./svelte-runtime.js\";\nexport function mount(t, o) { return m(t, o); }\n";
 
 /// FRAME-16: menger's entrypoint (`ui/index.html`, as a push carries it)
 /// names what the boot needs before its script runs, stamped with the
@@ -224,6 +226,9 @@ async fn the_entrypoint_preloads_the_boot() {
         ("manifest.json", "{}\n"),
         ("components.json", "{}\n"),
         ("components/svelte-runtime.js", RUNTIME_JS),
+        // runtimes stands beside a svelte/1 component (the push refuses one alone).
+        ("components/x-list.js", MODULE_JS),
+        ("src/x-list.svelte", "<script module>\n  export const uses = [];\n</script>\n<p>x</p>\n"),
     ];
     let mut b = tar::Builder::new(Vec::new());
     for (name, body) in files {
@@ -235,6 +240,7 @@ async fn the_entrypoint_preloads_the_boot() {
     }
     let bytes = b.into_inner().unwrap();
     let mut manifest: serde_json::Value = serde_json::from_str(&support::json_manifest("c1", "a1")).unwrap();
+    manifest["components"] = json!({ "x-list": { "profile": "svelte/1", "module": sha_hex(MODULE_JS.as_bytes()), "uses": [] } });
     manifest["runtimes"] = json!({ "svelte/1": sha_hex(RUNTIME_JS.as_bytes()) });
     let pushed = call(&admin, "ui.push", support::signed_params(&bytes, &manifest.to_string(), 1)).await;
     assert_eq!(pushed[0]["type"], "pushed", "{pushed:?}");

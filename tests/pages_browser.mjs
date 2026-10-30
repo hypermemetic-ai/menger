@@ -281,13 +281,22 @@ async function main() {
       // layout's sections, each with its default component (a descendant of
       // its section), and the ticket route.
       await test(`the_bundle_draws_the_board${B.tag}`, async () => {
-        const { page, context } = await openPage(B.route);
+        const { page, context, seen } = await openPage(B.route);
         try {
           for (const [slot, component] of B.sections) {
             await eventually(`${B.route || "#/"}: the ${slot} section of ${B.layout} holds ${component}`, async () => (await section(page, B, slot).locator(component).count()) === 1).catch((e) => {
               throw new Error(`${e.message}\n${pages.at(-1).console.slice(-10).join("\n")}`);
             });
           }
+          // FRAME-26: the bundle's one svelte/1 runtime, asked once on either
+          // board — the entrypoint's modulepreload and the modules' import
+          // share one fetch — and on the rhx board no svelte/1 module asked.
+          const asked = seen.requests.map((u) => new URL(u).pathname).filter((p) => /^\/app\/[0-9a-f]{64}\/components\/[^/]+\.js$/.test(p));
+          const runtimes = asked.filter((p) => p.endsWith("/svelte-runtime.js"));
+          assert(runtimes.length === 1, `${B.name} board: the svelte/1 runtime asked once, not ${runtimes.length}× (${asked.join(", ")})`);
+          if (!B.tag) assert(asked.length === 1, `the rhx board asks no svelte/1 module: ${asked.join(", ")}`);
+          else assert(asked.length > 1, `the Svelte board's modules beside the runtime: ${asked.join(", ")}`);
+          console.log(`     ${B.name} board: ${asked.map((p) => path.basename(p)).join(", ")}`);
           await page.evaluate((r) => (location.hash = r), `${B.ticketRoute}NONE-1`);
           await eventually(`${B.ticketRoute}:id draws ${B.page}`, async () => (await page.locator(B.page).count()) === 1);
           // FRAME-25: the Svelte board's siblings are components in their own
