@@ -345,6 +345,15 @@ export default async (ctx) => {
       const kept = sy("ui", "versions", "--tag", "s52").filter((e) => e.type === "version");
       assert(kept.length === 1 && kept[0].hash === v1.version && kept[0].label === "s52 first", `the server keeps them: ${JSON.stringify(kept)}`);
 
+      // FRAME-52b: a tag made elsewhere (an agent) appears on the row from the watch;
+      // the label moved there leaves v1's row.
+      sy("ui", "tag", "--version", v2.version, "--label", "s52 first", "--tags", "s52b");
+      const row2 = root.locator(`[data-id="${v2.version}"]`);
+      await eventually("the agent's tag on v2's row", async () => (await row2.locator("[data-tag=s52b]").count()) === 1 && (await row2.locator("[data-field=label]").count()) === 1);
+      await eventually("the label gone from v1's row", async () => (await row.locator("[data-field=label]").count()) === 0);
+      sy("ui", "tag", "--version", v1.version, "--label", "s52 first");
+      await eventually("and back on v1's", async () => (await row.locator("[data-field=label]").count()) === 1 && (await row2.locator("[data-field=label]").count()) === 0);
+
       // A move by label from elsewhere: heard, and the history says it.
       const back = sy("ui", "rollback", "--to", "s52 first");
       assert(ok(back, "live")?.version === v1.version, `rollback --to a label: ${JSON.stringify(back)}`);
@@ -355,6 +364,7 @@ export default async (ctx) => {
       // Undo: the pointer back to v2, kept as an undo; redo offered.
       await eventually("undo offered", async () => (await history.locator("[data-action='ui.undo']:not([disabled])").count()) === 1);
       await history.locator("[data-action='ui.undo']").click();
+      // FRAME-52b: by the seq the page showed — one move undone.
       await eventually("v2 live on the server", async () => live() === v2.version);
       await eventually("and on the page", async () => (await root.locator(`[data-id="${v2.version}"][data-live=true]`).count()) === 1 && (await root.locator("[data-live=true]").count()) === 1);
       await eventually("the answer said", async () => (await history.locator("[data-answer=undo]").count()) === 1);
@@ -364,7 +374,8 @@ export default async (ctx) => {
       await eventually("redo offered", async () => (await history.locator("[data-action='ui.redo']:not([disabled])").count()) === 1);
     } finally {
       await context.close();
-      sy("ui", "tag", "--version", v1.version, "--untag", "demo,s52");
+      sy("ui", "tag", "--version", v1.version, "--untag", "demo,s52", "--label", "");
+      sy("ui", "tag", "--version", v2.version, "--untag", "s52b");
       if (live() !== v2.version) sy("ui", "rollback", "--to", v2.version);
     }
   });
