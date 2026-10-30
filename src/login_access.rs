@@ -103,8 +103,9 @@ impl SessionCheck for SessionTable {
 }
 
 impl SessionMint for SessionTable {
-    fn mint(&self, ctx: AuthContext, ttl_secs: i64) -> (String, i64) {
-        self.0.mint(ctx, ttl_secs)
+    fn mint(&self, ctx: AuthContext, ttl_secs: i64) -> Result<(String, i64), String> {
+        // FRAME-21: a session the journal could not keep is not handed out.
+        self.0.mint(ctx, ttl_secs).map_err(|e| format!("the session could not be kept: {e}"))
     }
 
     fn end_key(&self, key: &str) -> bool {

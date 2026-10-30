@@ -178,7 +178,7 @@ async fn a_first_run_prints_a_link_that_signs_in_once_and_menger_login_prints_an
 }
 
 /// FRAME-21: the no-flags start keeps its sessions in its data directory —
-/// `sessions.jsonl` beside `local.db`, the service's own (0600) — and the
+/// `local.sessions.jsonl` beside `local.db`, the service's own (0600) — and the
 /// cookie the link set is not in it.
 #[tokio::test]
 async fn a_first_run_keeps_its_sessions_in_its_data_dir() {
@@ -189,7 +189,7 @@ async fn a_first_run_keeps_its_sessions_in_its_data_dir() {
     let link = lines[1].trim_start().split_whitespace().nth(1).unwrap().to_string();
     let first = get(shell, path_of(&link), None).await;
     let cookie = session_cookie(&first).expect("a session cookie");
-    let file = home.join(".local/share/menger/sessions.jsonl");
+    let file = home.join(".local/share/menger/local.sessions.jsonl");
     use std::os::unix::fs::PermissionsExt;
     let meta = std::fs::metadata(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
     assert_eq!(meta.permissions().mode() & 0o777, 0o600, "the service's own file");

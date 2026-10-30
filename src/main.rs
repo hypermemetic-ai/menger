@@ -446,6 +446,8 @@ async fn run(args: Args) -> anyhow::Result<()> {
         shell_loopback: args.bind.is_loopback(),
         session_ttl_secs: args.session_hours * 3600,
         session_idle_secs: args.session_idle_minutes * 60,
+        // FRAME-21: kept beside the database, so a restart signs no one out.
+        sessions_file: Some(menger::sessions_file(&db_path)),
         require: true,
         page: !args.no_shell,
         title: shell::tab_title(args.env.as_deref()),

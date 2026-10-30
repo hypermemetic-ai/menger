@@ -303,16 +303,24 @@ pub async fn spawn_menger(port: u16, db: &Path, extra: &[String]) -> Spawned {
 /// and `extra` (`--admin <ADMIN's principal>` lets the fixture key in too):
 /// the server and the banner it printed, up to and including `stop:` — the
 /// one-time sign-in link is in it. Started again on the same `data_dir` and
-/// ports, it is the same service restarted.
+/// ports, it is the same service restarted. Every `MENGER_*` of this
+/// process's environment is taken away; its stderr goes to
+/// `home/menger.stderr` (appended, a start per run).
 pub fn spawn_local(home: &Path, data_dir: &Path, ws: u16, shell: u16, extra: &[String]) -> (Spawned, Vec<String>) {
     use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_menger"));
     cmd.arg("--port").arg(ws.to_string()).arg("--shell-port").arg(shell.to_string()).arg("--data-dir").arg(data_dir).args(extra);
-    for var in ["MENGER_DB_PATH", "MENGER_DATA_DIR", "MENGER_AUTH_PROVIDERS", "MENGER_ADMINS", "MENGER_IDENTITY", "MENGER_BIND", "MENGER_PUBLIC_URL", "MENGER_ENV", "MENGER_UI_DB_PATH", "MENGER_UI_SIGNERS", "MENGER_UI_COMPILER", "XDG_DATA_HOME", "RUST_LOG"] {
+    for (var, _) in std::env::vars_os() {
+        if var.to_string_lossy().starts_with("MENGER_") {
+            cmd.env_remove(var);
+        }
+    }
+    for var in ["XDG_DATA_HOME", "RUST_LOG"] {
         cmd.env_remove(var);
     }
-    cmd.env("HOME", home).env("PLEXUS_NO_REGISTRY", "1").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    let log = std::fs::OpenOptions::new().create(true).append(true).open(home.join("menger.stderr")).expect("a stderr file");
+    cmd.env("HOME", home).env("PLEXUS_NO_REGISTRY", "1").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(log);
     let mut child = cmd.spawn().expect("spawn menger");
     let out = child.stdout.take().unwrap();
     let server = Spawned { child, port: ws };
