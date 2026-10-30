@@ -796,3 +796,50 @@ The sections cost the first row nothing now: after is within noise of the frame 
 of the gate is not reached in this hour; the floor without the sections is 0.16–0.17 s at this load
 (FRAME-30's 0.146 was a quiet machine), and every call's ack lands ~45 ms after it is sent, the socket's
 own first answers (`epics.current`, `health`) included — that is where the rest goes, not in the nav.
+
+## The page's first 45 ms: the mount yields and holds its sections (FRAME-50, 2026-10-30)
+
+PERF-23 found every acknowledgement waiting ~45 ms on the page's clock behind the engine's mount (one
+task) and the first frame's layout. Phase 0, a Chromium trace of the board's boot at 10³ with the CPU
+profiler (its times ~1.4× the untraced ones) and an engine built with its names kept:
+
+| piece of the mount task (53 ms traced, 30–37 untraced) | ms traced |
+|---|---|
+| the layout's prepare: board-frame's tree parsed — the expression engine's first making (`Engine::new`, the packages registered) 11.1, the expressions 3.3 — and its handlers 1.0 | 17.0 |
+| the nine sections: the Svelte modules' `mount` 20.5, the sheets adopted 1.1–1.4, the walks 0.8, the engine's side of `live` and the calls the rest | 27.0 |
+| `boot_specs` 1.5, `ui.watch` opened 1.4, marks 0.6 | 3.5 |
+
+Untraced, by the marks: components-parsed → board-frame compiled 11 ms; then top 4–8 (app-top), bar 2.2,
+nav 1.1, facets 0.8, saved 1.0, keys 0.9, main 1.8, bulk 1.6, palette 2.2. Then the first frame: Layout
+25.9, Paint 10.5, style 2.5 ms traced (the fonts, APP-115, left alone), and only after it the first
+answer's frame handled — every acknowledgement queued behind both. At 10⁶ the same shape, the list's ack
+64–66 ms.
+
+The change (plexus-ui FRAME-50): the boot draws the layout, then fills each section in a task of its own
+(a `MessageChannel` message — `scheduler.yield()`'s continuation runs before the queued answers, measured:
+acks after the whole mount); every section drawn at boot is held (`data-plexus-held`, `content-visibility:
+hidden`) until the snapshots running when the mount settled are answered, or 100 ms — so a frame drawn
+meanwhile lays out the frame alone and the rows' arrival sets off the real layout; the expression engine
+is made while the route's modules are on the wire. The ack wait on the page's clock (a probe of the
+page's frames, median of 5): `tickets.list` 45–47 → 3–5 ms at 10³, 64–66 → 3 ms at 10⁶; the first ack
+(`ui.watch`) 30 → 6 ms.
+
+`node perf/pages-probe.mjs --seed N --no-build`, before (../plexus-ui main 3bf3572) and after (FRAME-50),
+interleaved, three runs each, the machine at load 3–8:
+
+| run | 10³ before | 10³ after | 10⁶ before | 10⁶ after |
+|---|---|---|---|---|
+| 1 | 0.154 s | 0.122 s | 0.174 s | 0.157 s |
+| 2 | 0.164 s | 0.126 s | 0.174 s | 0.151 s |
+| 3 | 0.151 s | 0.122 s | 0.188 s | 0.155 s |
+
+Left at 10⁶: PERF-22's gate in `nav-facets` and `filters-saved` (asked at once when no undrawn board is on
+the page a tick after their mount) assumed the sections mount in one task; now `board-rows-sv` mounts
+after them, so `nav.facets` is asked during the mount and its ~270 frames (~30 ms at 10⁶) run between the
+turns — a turn waits out a stream of frames still arriving. With the gate held by hand (the probe
+answering that check as "a board to come"), the first row at 10⁶ was 144 against 168 ms on the same probe.
+`tests/pages_browser.mjs --group all` on this engine: 99 pass, one fails for that reason —
+`the_navs_sections_ask_after_the_first_rows` (nav.facets sent +102.8, the list +134.5), green on main's
+engine. The gate is menger's to move to something the host says (the contract now says a section's
+component must not assume its siblings are on the page when it mounts); until it moves, this engine is
+not for v2.
