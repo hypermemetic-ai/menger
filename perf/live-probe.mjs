@@ -99,7 +99,10 @@ for (let i = 0; i <= runs; i++) {
   const ask = frames.sent.find((f) => f[1] === "tickets.list");
   const sub = ask && frames.recv.find((r) => r[3] === ask[2] && r[4] != null)?.[4];
   const of_list = (type) => (sub == null ? null : frames.recv.find((r) => r[1] === sub && r[2] === type)?.[0] ?? null);
-  Object.assign(mark, { first_call: frames.sent[0]?.[0] ?? null, list_sent: ask?.[0] ?? null, list_first_data: of_list("data"), list_done: of_list("done") });
+  const ack = ask && frames.recv.find((r) => r[3] === ask[2] && r[4] != null)?.[0];
+  // The first `live` snapshot: not the host's own (ui.*), not a changes stream.
+  const snap = frames.sent.find((f) => f[1] && !f[1].startsWith("ui.") && !f[1].endsWith(".watch") && !f[1].endsWith("call_unsub"));
+  Object.assign(mark, { first_call: snap?.[0] ?? null, list_sent: ask?.[0] ?? null, list_acked: ack ?? null, list_first_data: of_list("data"), list_done: of_list("done") });
   for (const m of await page.evaluate(() => performance.getEntriesByType("mark").map((m) => [m.name, m.startTime]))) if (m[0].startsWith("plexus-ui:")) mark[m[0]] ??= m[1];
   if (i > 0) { firsts.push(first); ttfbs.push(nav.ttfb); sockets.push(opened.length ? opened[0] - t0 : null); marks.push(mark); last = { res, nav, first }; }
   await ctx.close();
@@ -114,18 +117,31 @@ console.log(`  socket made +${ms(median(of("socket_made")))} ms, open +${ms(medi
 // FRAME-17: the table — each step's median and each run's, on the page's clock.
 const steps = [
   ["the boot done (socket open, wasm instantiated)", (m) => (m.socket_open == null || m.wasm_instantiated == null ? null : Math.max(m.socket_open, m.wasm_instantiated))],
-  ["the first call sent", (m) => m.first_call],
+  ["the first `live` snapshot sent", (m) => m.first_call],
   ["`tickets.list` sent", (m) => m.list_sent],
+  ["`tickets.list` acknowledged", (m) => m.list_acked],
   ["`tickets.list` answered (its first data)", (m) => m.list_first_data],
   ["`tickets.list` answered (its done)", (m) => m.list_done],
   ["the nav drawn", (m) => m.nav_drawn],
   ["the first titled row", (m) => m.first_row],
+];
+// The gaps the acceptance and the owner read: each a difference, its median and every run's.
+const gap = (a, b) => (m) => (m[a] == null || m[b] == null ? null : m[a] - m[b]);
+const gaps = [
+  ["`tickets.list` sent − the socket open (acceptance: ≤ 20 ms)", gap("list_sent", "socket_open")],
+  ["the ack wait: `tickets.list` sent → acknowledged (PLEXUS-10)", gap("list_acked", "list_sent")],
+  ["acknowledged → its first data", gap("list_first_data", "list_acked")],
+  ["the stream: first data → done (PERF-15)", gap("list_done", "list_first_data")],
+  ["the draw: `plexus-ui:first-row` − `plexus-ui:first-answer` (acceptance: ≤ 20 ms)", gap("plexus-ui:first-row", "plexus-ui:first-answer")],
+  ["done → the first titled row", gap("first_row", "list_done")],
 ];
 const hostMarks = [...new Set(marks.flatMap((m) => Object.keys(m).filter((k) => k.startsWith("plexus-ui:"))))].sort((a, b) => median(of(a)) - median(of(b)));
 for (const k of hostMarks) steps.push([`\`${k}\``, (m) => m[k]]);
 console.log("| mark | median | runs |\n| -- | -- | -- |");
 for (const [what, f] of steps) { const xs = marks.map((m) => f(m) ?? null); console.log(`| ${what} | +${ms(median(xs))} ms | ${xs.map(ms).join(", ")} |`); }
 if (!hostMarks.length) console.log("  (the engine sets no plexus-ui:* marks: a release before FRAME-17)");
+console.log("| gap | median | runs |\n| -- | -- | -- |");
+for (const [what, f] of gaps) { const xs = marks.map((m) => f(m)); console.log(`| ${what} | ${ms(median(xs))} ms | ${xs.map(ms).join(", ")} |`); }
 const kind = (n) => n.includes("engine.wasm") ? "engine.wasm" : n.includes("engine.js") ? "engine.js" : n.includes("host.js") ? "host.js" : n.includes("/components") ? "components" : n.includes("manifest") ? "manifest" : "other";
 const by = {}; for (const r of last.res) (by[kind(r.name)] ||= []).push(r);
 const requests = Object.fromEntries(Object.entries(by).map(([k, rs]) => [k, rs.length]));
