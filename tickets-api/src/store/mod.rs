@@ -3148,6 +3148,9 @@ impl Store {
             }
         }
         let conn = Connection::open(path)?;
+        // RUN-36: a file a newer menger stored (v2's form 16) is refused
+        // here, before anything below writes to it.
+        stored::refuse_newer(&conn)?;
         // WAL + synchronous=FULL: an acknowledged commit survives SIGKILL.
         // SCALE-14: WAL is also what lets the read connections read beside
         // the writer instead of behind it.

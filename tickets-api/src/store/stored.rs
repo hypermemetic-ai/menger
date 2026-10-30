@@ -884,6 +884,31 @@ pub(super) fn state(conn: &Connection) -> rusqlite::Result<State> {
     })
 }
 
+/// RUN-36: a file stamped with a form newer than this build's — v2's form 16
+/// (V2-4), which a newer menger wrote — is refused before anything touches
+/// it. Read as its own (to [`state`] a form not older is current), its cells
+/// would be misread, and the open's migrations would write into what the
+/// newer build keeps: a uid minted, the journal mode set, a table made. So
+/// the open reads the stamp first, writes nothing, and names both forms.
+pub(super) fn refuse_newer(conn: &Connection) -> anyhow::Result<()> {
+    let table: bool = conn.query_row(
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'derived_state'",
+        [],
+        |r| r.get::<_, i64>(0).map(|n| n > 0),
+    )?;
+    if !table {
+        return Ok(());
+    }
+    let form: Option<i64> = conn.query_row("SELECT form FROM derived_state WHERE one = 1", [], |r| r.get(0)).optional()?;
+    match form {
+        Some(form) if form > FORM => anyhow::bail!(
+            "the database is stored in form {form}, newer than this build's {FORM}: a newer menger wrote it \
+             (v2's form 16 is V2-4's) — refused, and nothing in it was changed"
+        ),
+        _ => Ok(()),
+    }
+}
+
 /// Says, in the caller's transaction, whether the stored derived state is
 /// behind the tickets.
 pub(super) fn mark_stale(conn: &Connection, stale: bool) -> rusqlite::Result<()> {
