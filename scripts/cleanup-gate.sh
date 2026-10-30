@@ -53,7 +53,8 @@
 #               /tmp/claude-UID/ such a directory is a session's scratch.)
 #
 # — and it is refused if it is /, $HOME, any of those roots itself (a scratch
-# root too: one MENGER_SCRATCH_DIRS names that is such a root refuses the run), under
+# root too: one MENGER_SCRATCH_DIRS names that is such a root refuses the run,
+# or is skipped by --sweep), under
 # ~/.local/share/menger, a repository's main checkout, publish.sh's stage
 # (.menger-publish), in use by a process (its cwd or an open file) or by a
 # cargo holding its lock, the directory you are in, or named with a `..`. A
@@ -66,7 +67,10 @@
 # was modified for the idle threshold and nothing holds it — and RUN-34's
 # ui8-work directories in the scratch roots, idle an hour. The threshold
 # drops as the disk fills: 6 h (--idle-hours), 1 h at 75% used, 15 min at
-# 90%. What it keeps is said (`kept`), never refused: a sweep exits 0.
+# 90%. What it keeps is said (`kept`), not refused; a candidate of any other
+# shape (never expected: a symlink into a worktree, say) is refused and the
+# sweep exits 2, else 0. A bad scratch root is said on stderr and skipped, so
+# the sweep still runs (--path, --list and NAME exit 1 on one instead).
 #
 # CLEANUP_GATE_ROOT=DIR (tests only; DIR must lie below /tmp/) moves every
 # root into DIR — DIR/home is $HOME, DIR/tmp is /tmp — so the tests run on a
@@ -114,7 +118,7 @@ if [[ -n ${CLEANUP_GATE_ROOT:-} ]]; then
   [[ $R0 == "$TMP0"/?*/?* ]] || { echo "cleanup-gate: CLEANUP_GATE_ROOT must lie at least two levels below /tmp (got $R0)" >&2; exit 1; }
   H=$R0/home TMPR=$R0/tmp
 else
-  H=$(readlink -f -- "$HOME") TMPR=$(readlink -f /tmp)
+  R0="" H=$(readlink -f -- "$HOME") TMPR=$(readlink -f /tmp)
 fi
 WS=$H/dev/controlflow/hypermemetic
 CT=$H/.cache/cargo-target
@@ -133,19 +137,41 @@ is_root() { case $1 in /|"$H"|"$WS"|"$CT"|"$CB"|"$SCR"|"$TMPR"|"$H/.cache"|"$H/d
 
 # RUN-34: the scratch roots a ui8-work directory lives in — menger-perf-scratch
 # in ~/.cache by name, and each of MENGER_SCRATCH_DIRS (absolute, colon-separated).
-# One that is a root, an ancestor of $HOME, or under menger's data refuses the run.
-SCRATCH_ROOTS=("$(real "$H/.cache/menger-perf-scratch")")
-IFS=: read -r -a _sd <<<"${MENGER_SCRATCH_DIRS:-}"
+# Each, its symlinks resolved, must be no root, no ancestor of $HOME, not in
+# the workspace or menger's data (and under a test root, under it). A bad
+# default root is dropped with a line on stderr; a bad MENGER_SCRATCH_DIRS
+# entry refuses the run (exit 1), except under --sweep, which says it and
+# goes on without it — the hourly timer must not stop sweeping over one line.
+scratch_root_bad() { # PATH → why it may not be a scratch root (empty: it may)
+  local d=$1 r
+  [[ $d == *$'\n'* ]] && { echo 'a newline in it'; return; }
+  [[ $d == /* ]] || { echo 'not an absolute path'; return; }
+  case "/$d/" in */../*|*/./*) echo 'named with . or ..'; return ;; esac
+  r=$(real "$d")
+  if is_root "$r" || [[ $H == "$r"/* || $r == "$DATA"/* ]]; then echo 'a root, never a scratch root'; return; fi
+  if [[ $r == "$WS"/* ]]; then echo 'in the workspace, never a scratch root'; return; fi
+  if [[ -n ${R0:-} && $r != "$R0"/* ]]; then echo "outside the test root $R0"; return; fi
+}
+SCRATCH_ROOTS=()
+_d=$H/.cache/menger-perf-scratch
+if _why=$(scratch_root_bad "$_d") && [[ -n $_why ]]; then
+  printf 'cleanup-gate: %s → %s — %s; not a scratch root\n' "$_d" "$(real "$_d")" "$_why" >&2
+else SCRATCH_ROOTS+=("$(real "$_d")"); fi
+_sd=()
+[[ -n ${MENGER_SCRATCH_DIRS:-} ]] && mapfile -d: -t _sd < <(printf '%s' "$MENGER_SCRATCH_DIRS")
 for _d in "${_sd[@]}"; do
   [[ -n $_d ]] || continue
-  [[ $_d == /* ]] || { printf 'cleanup-gate: MENGER_SCRATCH_DIRS names %s — not an absolute path\n' "$_d" >&2; exit 1; }
-  _r=$(real "$_d")
-  if is_root "$_r" || [[ $H == "$_r"/* || $_r == "$DATA"/* ]]; then
-    printf 'cleanup-gate: MENGER_SCRATCH_DIRS names %s — a root, never a scratch root\n' "$_d" >&2; exit 1
+  _why=$(scratch_root_bad "$_d")
+  if [[ -n $_why ]]; then
+    printf 'cleanup-gate: MENGER_SCRATCH_DIRS names %s — %s\n' "${_d//$'\n'/\\n}" "$_why" >&2
+    [[ $sweep == 1 ]] && continue
+    exit 1
   fi
-  SCRATCH_ROOTS+=("$_r")
+  SCRATCH_ROOTS+=("$(real "$_d")")
 done
-unset _sd _d _r
+unset _sd _d _why
+# a work directory's own name: mkdtemp's ui8-<prefix>-XXXXXX, nothing else (no newline, no space)
+ui8_name() { [[ $1 =~ ^ui8-[A-Za-z0-9._-]+$ ]]; }
 is_scratch_root() { local s; for s in "${SCRATCH_ROOTS[@]}"; do [[ $1 == "$s" ]] && return 0; done; return 1; }
 UI8_MARKS=(tickets.db ui.db admin.key)
 has_ui8_marks() { local m; for m in "${UI8_MARKS[@]}"; do [[ -f $1/$m ]] || return 1; done; }
@@ -246,12 +272,24 @@ remove_path() {
   elif [[ -f $r && $(dirname "$r") == "$PLOGS" && $(basename "$r") =~ ^([0-9]{8}T[0-9]{6}Z)-.+\.log$ ]]; then
     if [[ -e $PLOGS/${BASH_REMATCH[1]}.red ]]; then refuse "$shown" "a red run's log (kept: $PLOGS/${BASH_REMATCH[1]}.red)"; return; fi
     shape=pipeline-log
-  elif [[ -d $r && $(basename "$r") == ui8-?* ]] && is_scratch_root "$(dirname "$r")"; then
+  elif [[ -d $r ]] && ui8_name "$(basename "$r")" && is_scratch_root "$(dirname "$r")"; then
     if ! has_ui8_marks "$r"; then refuse "$shown" "a ui8 directory without the throwaway's marks (${UI8_MARKS[*]})"; return; fi
     shape=ui8-work
   else
     refuse "$shown" 'not a leftover shape (worktree, ws-scratch, target, target-part, cargo-build, scratch-db, session, sweep, pipeline-log, ui8-work)'; return
   fi
+  # the sweep takes build output and work directories, nothing else, whatever named it
+  if [[ $sweep == 1 ]]; then
+    case $shape in cargo-build|target|target-part|pipeline-log|ui8-work) ;;
+      *) refuse "$shown" "a $shape, and the sweep takes only build output, pipeline logs and ui8-work"; return ;;
+    esac
+  fi
+  # what rm -r takes must not be, or cross, a mount
+  case $shape in target|target-part|cargo-build|session|ws-scratch|sweep|ui8-work)
+    if [[ -d $r ]] && { mountpoint -q -- "$r" 2>/dev/null || [[ $(stat -c %d -- "$r" 2>/dev/null) != "$(stat -c %d -- "$(dirname "$r")" 2>/dev/null)" ]]; }; then
+      refuse "$shown" 'a mount point, never removed'; return
+    fi ;;
+  esac
   local busy="" idle=$idle_min
   # RUN-34: a work directory waits an hour, by path or by the sweep, whatever --idle-hours says
   [[ $shape == ui8-work ]] && idle=60
@@ -355,6 +393,7 @@ ui8_dirs() { local s f
   for s in "${SCRATCH_ROOTS[@]}"; do
     for f in "$s"/ui8-?*; do
       [[ -e $f || -L $f ]] || continue
+      ui8_name "$(basename "$f")" || continue   # one path per line: a name with a newline never passes
       [[ $1 == all ]] || { [[ -d $f && ! -L $f ]] && has_ui8_marks "$f"; } || continue
       printf '%s\n' "$f"
     done
@@ -406,7 +445,11 @@ if [[ $sweep == 1 ]]; then
 elif [[ $list == 1 ]]; then
   run_all < <(candidates | sort -u)
 elif [[ $mode == path ]]; then
-  run_all < <(printf '%s\n' "${args[@]}")
+  # each path whole: one with a newline in it is refused, never read as two
+  for p in "${args[@]}"; do
+    if [[ $p == *$'\n'* ]]; then refuse "${p//$'\n'/\\n}" 'named with a newline'; continue; fi
+    run_all <<<"$p"
+  done
 else
   for n in "${args[@]}"; do
     found=$(paths_for_name "$n")

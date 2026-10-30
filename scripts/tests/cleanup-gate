@@ -371,8 +371,6 @@ there "ui8: … the root's own files" "$PS/menger-perf.db"; there "ui8: … and 
 MENGER_SCRATCH_DIRS="$OS:$H" cg "ui8: \$HOME named a scratch root refuses the run" 1 --yes --path "$PS/ui8-pages-young"
 has "ui8: … and says which" "$out" "MENGER_SCRATCH_DIRS names $H — a root"; there "ui8: … touching nothing" "$PS/ui8-pages-young"
 MENGER_SCRATCH_DIRS=relative/dir cg "ui8: a relative scratch root refuses the run" 1 --list; has "ui8: relative said" "$out" "not an absolute path"
-MENGER_SCRATCH_DIRS=$H cg "ui8: the env refuses a root as a scratch root" 1 --sweep; has "ui8: \$HOME said" "$out" "MENGER_SCRATCH_DIRS"
-MENGER_SCRATCH_DIRS="/" cg "ui8: / is no scratch root" 1 --sweep; has "ui8: / said" "$out" "MENGER_SCRATCH_DIRS"
 has "ui8: install.sh says the timer runs its installed copy, and which" "$(<"$(dirname "$HERE")/sweep/install.sh")" "the timer runs this installed copy"
 has "ui8: the timer reads its own env file" "$(<"$(dirname "$HERE")/sweep/menger-sweep.service")" "EnvironmentFile=-%h/.config/menger/sweep.env"
 
@@ -388,6 +386,88 @@ refused "ui8: a symlink named ui8 out of the root" "not a leftover shape" --path
 cg "ui8: the sweep leaves the unmarked" 0 --yes --sweep
 there "ui8: unmarked, there" "$PS/ui8-pages-bare/notes.md"; there "ui8: a db alone, there" "$PS/ui8-notes/tickets.db"
 there "ui8: the file, there" "$PS/ui8-file"; there "ui8: the link's target, there" "$T/elsewhere/wt"
+
+# the review's cases (RUN-34): a scratch root's own rules, and what the sweep may never take
+bad_env() { local name=$1 why=$2 val=$3
+  MENGER_SCRATCH_DIRS=$val cg "ui8: $name refuses --list" 1 --list; has "ui8: $name said" "$out" "$why"
+  MENGER_SCRATCH_DIRS=$val cg "ui8: $name refuses --path" 1 --path "$PS/ui8-pages-young"; there "ui8: $name, nothing touched" "$PS/ui8-pages-young"
+}
+bad_env "\$HOME" "a root, never a scratch root" "$H"
+bad_env "/" "a root, never a scratch root" "/"
+bad_env "a .. entry" "named with . or .." "$OS/../other-scratch"
+bad_env "a newline" "a newline in it" "$OS"$'\n'"$UK"
+bad_env "~/.cache" "a root, never a scratch root" "$H/.cache"
+bad_env "an ancestor of \$HOME" "a root, never a scratch root" "$T"
+bad_env "a dir in the workspace" "in the workspace" "$WS/.scratchy"
+bad_env "a dir outside the test root" "outside the test root" "/var/tmp"
+# under --sweep a bad entry is said and skipped: the rest is swept
+bd fa/8888888888888888; aged '8 hours ago' "$CB/fa"
+ui8 "$OS/ui8-probe-d"; aged '2 hours ago' "$OS/ui8-probe-d"
+MENGER_SCRATCH_DIRS="$H:$OS:/bad"$'\n'"/x" cg "ui8: a bad env under --sweep still sweeps" 0 --yes --sweep
+has "ui8: … says the bad one" "$out" "MENGER_SCRATCH_DIRS names $H — a root"
+gone "ui8: … still takes cargo-build" "$CB/fa/8888888888888888"
+has "ui8: … the newline entry said, not split" "$out" "a newline in it"; gone "ui8: … and a good root's" "$OS/ui8-probe-d"
+
+# a scratch root with a space in its path
+SP="$T/with space"; ui8 "$SP/ui8-probe-s"; ui8 "$SP/ui8-probe-t"; aged '2 hours ago' "$SP/ui8-probe-s" "$SP/ui8-probe-t"
+MENGER_SCRATCH_DIRS=$SP cg "ui8: a space, by path" 0 --yes --path "$SP/ui8-probe-s"; gone "ui8: a space, by path" "$SP/ui8-probe-s"
+MENGER_SCRATCH_DIRS=$SP cg "ui8: a space, the sweep" 0 --yes --sweep; gone "ui8: a space, the sweep" "$SP/ui8-probe-t"
+
+# a future mtime is young
+ui8 "$PS/ui8-pages-future"; aged '2 hours' "$PS/ui8-pages-future"
+refused "ui8: a future mtime, by path" "modified within 1h" --path "$PS/ui8-pages-future"
+cg "ui8: a future mtime, the sweep" 0 --yes --sweep; has "ui8: … kept" "$out" "$PS/ui8-pages-future — modified within 1h"
+there "ui8: future, there" "$PS/ui8-pages-future/tickets.db"
+
+# a newline in a name: never two paths (one of them $PWD/.victim, a worktree)
+git -C "$M" worktree add -q -b victim "$WS/.victim"
+NL=$PS/$'ui8-a\n.victim'; ui8 "$NL"; aged '2 hours ago' "$NL" "$WS/.victim"
+out=$(cd "$WS" && CLEANUP_GATE_ROOT=$T "$CG" --sweep 2>&1); [[ $? == 0 ]] && ok || bad "ui8: a newline, dry sweep from the workspace: $out"
+hasnt "ui8: a newline: no worktree in a sweep" "$out" "worktree"; hasnt "ui8: … no victim" "$out" ".victim"
+out=$(cd "$WS" && CLEANUP_GATE_ROOT=$T "$CG" --yes --sweep 2>&1); [[ $? == 0 ]] && ok || bad "ui8: a newline, sweep from the workspace: $out"
+there "ui8: the victim worktree stays" "$WS/.victim/f"; there "ui8: the newline dir stays" "$NL/tickets.db"
+out=$(cd "$WS" && CLEANUP_GATE_ROOT=$T "$CG" --list 2>&1)
+hasnt "ui8: --list does not name the newline dir as ui8-work" "$out" "ui8-work   $PS/ui8-a"
+refused "ui8: a newline name by path" "named with a newline" --path "$NL"; there "ui8: … there" "$NL/tickets.db"
+out=$(cd "$WS" && CLEANUP_GATE_ROOT=$T "$CG" --yes --path "$NL" 2>&1); [[ $? == 2 ]] && ok || bad "ui8: a newline path from the workspace: $out"
+hasnt "ui8: … never the worktree it would split into" "$out" "worktree"; there "ui8: … the victim stays" "$WS/.victim/f"
+
+# ui8-* links: to $HOME, to a checkout, to a marked dir elsewhere
+mkdir -p "$T/linked-marked"; ui8 "$T/linked-marked"; aged '2 hours ago' "$T/linked-marked"
+ln -s "$H" "$PS/ui8-pages-tohome"; ln -s "$M" "$PS/ui8-pages-tomain"; ln -s "$T/linked-marked" "$PS/ui8-pages-tomarked"
+refused "ui8: a link to \$HOME" "a root" --path "$PS/ui8-pages-tohome"
+refused "ui8: a link to a checkout" "main checkout" --path "$PS/ui8-pages-tomain"
+refused "ui8: a link to a marked dir elsewhere" "not a leftover shape" --path "$PS/ui8-pages-tomarked"
+cg "ui8: the sweep and the links" 0 --yes --sweep
+hasnt "ui8: the sweep never follows a ui8 link" "$out" "ui8-pages-to"
+there "ui8: \$HOME there" "$H/.local/share/menger/tickets.db"; there "ui8: the checkout there" "$M/f"; there "ui8: the marked dir there" "$T/linked-marked/tickets.db"
+
+# the sweep refuses any shape but build output, pipeline logs and ui8-work
+git -C "$M" worktree add -q -b gate-y "$WS/.gate-y"; ln -s "$WS/.gate-y" "$CT/link-to-wt"
+cg "ui8: the sweep meets a worktree" 2 --yes --sweep
+has "ui8: … refuses it" "$out" "refused  $CT/link-to-wt → $WS/.gate-y — a worktree, and the sweep takes only"
+there "ui8: … the worktree stays" "$WS/.gate-y/f"
+rm -f -- "$CT/link-to-wt"   # the fixture link alone, never what it points at
+
+# the default scratch root as a symlink to $HOME: dropped, and said
+T2=$(mktemp -d "$PARENT/t2.XXXXXX"); mkdir -p "$T2/home/.cache" "$T2/tmp"; ln -s "$T2/home" "$T2/home/.cache/menger-perf-scratch"
+ui8 "$T2/home/ui8-x"; aged '2 hours ago' "$T2/home/ui8-x"
+out=$(CLEANUP_GATE_ROOT=$T2 "$CG" --yes --sweep 2>&1); [[ $? == 0 ]] && ok || bad "ui8: the default root a link: $out"
+has "ui8: the default root a link to \$HOME: said" "$out" "menger-perf-scratch → $T2/home — a root, never a scratch root; not a scratch root"
+there "ui8: … \$HOME/ui8-x stays" "$T2/home/ui8-x/tickets.db"
+out=$(CLEANUP_GATE_ROOT=$T2 "$CG" --yes --path "$T2/home/ui8-x" 2>&1); [[ $? == 2 ]] && ok || bad "ui8: … by path: $out"
+has "ui8: … by path, no shape" "$out" "not a leftover shape"
+CLEANUP_GATE_LOG=/dev/null "$CG" --yes --path "$T2" >/dev/null || bad "ui8: the second test root $T2 was not removed"
+
+# a ui8 dir that is a mount point is never emptied (an unprivileged mount namespace, where there is one)
+mkdir -p "$PS/ui8-pages-mnt"
+if unshare -rm true 2>/dev/null; then
+  # shellcheck disable=SC2016  # expanded inside the namespace
+  out=$(unshare -rm bash -c 'mount -t tmpfs t "$1" && for m in tickets.db ui.db admin.key; do echo x >"$1/$m"; done && touch -d "2 hours ago" "$1"/* "$1" &&
+    CLEANUP_GATE_ROOT="$2" "$3" --yes --path "$1"; echo "rc=$?"; [ -e "$1/tickets.db" ] && echo still-there' _ "$PS/ui8-pages-mnt" "$T" "$CG" 2>&1)
+  has "ui8: a mount point refused" "$out" "a mount point, never removed"; has "ui8: … exit 2" "$out" "rc=2"
+  has "ui8: … its files kept" "$out" "still-there"
+else echo "cleanup-gate: no unprivileged mount namespace here; the mount-point case is not run" >&2; fi
 
 # ── done: the root goes through the script itself (a session's scratch) ───
 printf 'cleanup-gate: %d passed, %d failed\n' "$pass" "$fail"

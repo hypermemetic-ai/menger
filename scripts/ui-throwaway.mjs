@@ -12,11 +12,11 @@
 //   push(server, session, signer, tar)   signed with plexus-ui sign, pushed through `ui push`
 //   playwright()                   Chromium from perf/node_modules (this checkout's, else the main one's)
 //
-// Never removes anything: the caller removes the work directory, or
-// scripts/cleanup-gate.sh does within the hour (RUN-34) — below
-// /tmp/claude-UID/ (`--path DIR`), or in a scratch root: a $TMPDIR named
-// ~/.cache/menger-perf-scratch, or one MENGER_SCRATCH_DIRS names, where the
-// hourly sweep takes a ui8-* directory nothing has held or written for an hour.
+// Never removes anything: the caller removes the work directory. Below
+// /tmp/claude-UID/ the caller removes it by `scripts/cleanup-gate.sh --path
+// DIR`; in a scratch root — a $TMPDIR of ~/.cache/menger-perf-scratch, or
+// one MENGER_SCRATCH_DIRS names — scripts/cleanup-gate.sh takes a ui8-*
+// directory nothing holds once idle an hour, at the next hourly sweep (RUN-34).
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -68,11 +68,12 @@ export function run(cmd, argv, opts = {}) {
 }
 
 /** A work directory `prefix-…` (callers name it `ui8-…`) under $TMPDIR, else
- *  /tmp/claude-1000/. The caller removes it, or `scripts/cleanup-gate.sh`
- *  does: below /tmp/claude-UID/ by `--path DIR` (shape `session`); in a
- *  scratch root (~/.cache/menger-perf-scratch, MENGER_SCRATCH_DIRS) as shape
- *  `ui8-work` once idle an hour — by `--path DIR` or the hourly sweep. The
- *  marks it keys on are the server's tickets.db, ui.db and admin.key. */
+ *  /tmp/claude-1000/. The caller removes it: below /tmp/claude-UID/ by
+ *  `scripts/cleanup-gate.sh --path DIR` (shape `session`; the sweep never
+ *  takes those). In a scratch root (~/.cache/menger-perf-scratch,
+ *  MENGER_SCRATCH_DIRS) it is shape `ui8-work` once idle an hour — taken by
+ *  `--path DIR`, or at the next hourly sweep. The marks it keys on are the
+ *  server's tickets.db, ui.db and admin.key. */
 export function workDir(prefix) {
   // FRAME-14: $TMPDIR when it is set (a seeded million wants more than the
   // tmpfs holds), else /tmp/claude-1000 as before.

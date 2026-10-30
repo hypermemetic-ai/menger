@@ -7,7 +7,7 @@ Type=oneshot
 Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin:/bin
 # RUN-34: the sweep's own settings, if any — MENGER_SCRATCH_DIRS=DIR:DIR, the
 # scratch roots beyond ~/.cache/menger-perf-scratch whose ui8-* work directories
-# it takes (scripts/cleanup-gate.sh's ui8-work)
+# it takes (scripts/cleanup-gate.sh's ui8-work); a bad entry is said and skipped
 EnvironmentFile=-%h/.config/menger/sweep.env
 ExecStart=%h/.local/share/menger-sweep/run
 Nice=19
