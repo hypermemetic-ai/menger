@@ -116,20 +116,39 @@ the owner's.
      names one built already);
    - `ui-prebuild` — `plexus-ui build --prebuild --engine dist/engine`: the
      engine (wasm32, wasm-bindgen);
-   - `contract` (UI-12) — the tickets service's hash of the `menger` just
-     built: the binary is started on two free loopback ports in local mode
-     (no login provider: it makes its own admin key in a scratch data
-     directory, so the build holds no key material), under a scratch `HOME`
-     and `XDG_RUNTIME_DIR`; synapse signs in with that key as `menger-local`
-     and reads `tickets.schema`'s `hash` (`--no-hold`), and the binary is
-     stopped and the scratch removed — always, a failed build too. A binary
-     that exits, does not answer within `MENGER_CONTRACT_WAIT` seconds (60)
-     or answers no hash fails the build, named; the log says the hash;
+   - `ui-uses` (SURFACE-11) — the bundle built once unstamped
+     (`plexus-ui build ui --engine dist/engine --commit menger@<short>`,
+     and the studio's likewise) for its manifest: every method its
+     components use (`components.*.uses`), read from the tar;
+   - `contract` (UI-12, SURFACE-11) — the contract over every service the
+     bundle names, as `ui.push` computes it (`contract_named` in
+     `../plexus-ui/service/src/push.rs`), never the tickets service's hash
+     alone: the `menger` just built is started on two free loopback ports
+     in local mode (no login provider: it makes its own admin key in a
+     scratch data directory, so the build holds no key material), under a
+     scratch `HOME` and `XDG_RUNTIME_DIR`; synapse signs in with that key
+     as `menger-local` and asks `ui contract --uses` the bundle's methods
+     (`--no-hold`, the list comma-separated), then the studio's — a studio
+     naming no service is never asked, and is built unstamped (`studio
+     contract: none` in the log) — and the
+     binary is stopped and the scratch removed — always, a failed build
+     too. A binary that exits, does not answer within
+     `MENGER_CONTRACT_WAIT` seconds (60), or a `ui contract` that answers no
+     hash, a refusal (`unknown_method`) or `null` (a bundle naming no
+     service: the app's) fails the build, named, as does a bundle whose
+     first build left no readable `manifest.json`; the log says each hash and the
+     services it covers (`contract: H over epics, tickets`). A bundle naming
+     the tickets service alone gets the hash `tickets.schema` answered;
    - `ui-build` — `plexus-ui build ui --engine dist/engine --contract HASH
      --commit menger@<short>`: every component compiled in-process, the
      manifest naming that hash as its `contract`, and the tar,
      `dist/ui.tar` (`../plexus-ui/CONTRACT.md`'s bytes), which must hold
      `index.html`; no socket asked;
+   - `studio-build` (STUDIO-2) — the framework's studio,
+     `plexus-ui build ../plexus-ui/studio --name studio --contract HASH`
+     with its own contract over its own uses (over `ui` today), or with no
+     `--contract` when its components name no service, `dist/studio.tar`;
+     a deploy pushes it `--no-live`;
    - `ui-compiler-wasm` — the framework's `../plexus-ui/scripts/ui-compiler-wasm.sh
      dist/ui-compiler.wasm` (rustup's `wasm32-unknown-unknown`; FRAME-7):
      the compiler module. A release of v2 always carries it: no script, a
@@ -142,6 +161,7 @@ the owner's.
    bin/run-menger              its launcher (deploy/launch/run-menger)
    bin/plexus-ui               the tool that built the bundle, and pushes it (not in the image)
    dist/ui.tar                 the UI's bundle, pushed after the deploy
+   dist/studio.tar             the framework's studio, pushed --no-live after it
    dist/ui-compiler.wasm       the compiler module, --ui-compiler
    RELEASE                     release, commit, branch, subject, built, rustc, steps, gate
    SUITE, TESTED               marks, once its suite ran and once test passed it
@@ -204,8 +224,8 @@ pipeline key's seed, read from `MENGER_DEPLOY_KEY_FILE` (`--key-file`, never
 the seed in argv). The
 service keeps a version once per hash (the same bytes again are `new:
 false`) and moves its live pointer in the same write. It answers
-`contract_matches` (UI-11): whether the running tickets service is the one
-the bundle names. Only `true` passes (UI-12) — the push line says
+`contract_matches` (UI-11): whether the running services are the ones the
+bundle names (its hash over the services its `uses` name; SURFACE-11). Only `true` passes (UI-12) — the push line says
 `contract_matches: true`; `null` (a bundle saying `unknown`) or `false` (a
 bundle built against another service, a hand-built tar pushed to another
 release) fails the deploy, named on stderr and in deployments.log, recorded

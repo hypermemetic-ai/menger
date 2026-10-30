@@ -3,8 +3,9 @@
 //
 //   node tests/pages_browser.mjs [--seed N] [--debug] [--no-build] [--headed] [--keep] [--only NAME[,NAME]] [--board rhx,sv]
 //
-// FRAME-14: every test of the board runs on both boards — the rhx one (`#/`,
-// named `NAME`) and the Svelte one (`#/sv/`, svelte/1, named `NAME_sv`),
+// FRAME-14: every test of the board runs on both boards — the rhx one (`#/rhx/`,
+// named `NAME`) and the Svelte one (`#/`, svelte/1, named `NAME_sv`; SURFACE-2:
+// the default since the owner's "I want svelte components", `#/sv/` its alias),
 // which draw the same marks — and `a_section_swaps_to_the_svelte_one` puts
 // each Svelte component in its section of the rhx board by right-click.
 // `--board` runs one of them.
@@ -26,7 +27,7 @@
 // The testing hooks the pages draw (UI-8's body: the named three, and
 // `data-*` attributes for the rest):
 //
-//   /app/ (#/, #/f/:filter)  board-layout: sections `[data-layout=board-layout][data-slot=nav|main|palette]`;
+//   /app/#/rhx/ (#/rhx/f/:filter)  board-layout: sections `[data-layout=board-layout][data-slot=nav|main|palette]`;
 //                       in its own template the filter line, `input[data-filter-input]`, its refusal `[data-filter-refused]`
 //   main: board-rows    `.board-scroll[data-row-height]` (the scrolling element, one fixed pitch in px),
 //                       `.board-row[data-id]` (a row held; its `[data-field=title]`, `[data-field=status]`),
@@ -42,11 +43,12 @@
 //
 // The Svelte board (FRAME-14), the same marks under its own names:
 //
-//   /app/#/sv/ (#/sv/f/:filter)  board-frame, an rhx layout (a section is the host's, and only an
-//                       rhx template marks one): `[data-layout=board-frame][data-slot=top|nav|main|palette]`,
-//                       holding board-layout-sv (the top bar: `input[data-filter-input]`,
-//                       `[data-filter-refused]`), nav-tree-sv, board-rows-sv and jump-palette-sv
-//   #/sv/ticket/:id     ticket-page-sv; its links and chips stay under #/sv/
+//   /app/ (#/, #/f/:filter; #/sv/… the same)  board-frame, an rhx layout (a section is the host's, and only an
+//                       rhx template marks one): `[data-layout=board-frame][data-slot=top|bar|nav|keys|main|bulk|palette]`,
+//                       holding app-top (SURFACE-2), board-layout-sv (the top bar: `input[data-filter-input]`,
+//                       `[data-filter-refused]`), nav-tree-sv, keys-help, board-rows-sv, bulk-bar and jump-palette-sv;
+//                       the rhx board's links and filter line land here (`lands`)
+//   #/ticket/:id        ticket-page-sv (#/sv/ticket/:id too; its links and chips stay under the prefix it was opened at)
 //
 // Exit 0 when every test passed, 1 when one failed, 2 when setup failed.
 import fs from "node:fs";
@@ -61,7 +63,7 @@ const SEED = Number(opt("--seed", "100000"));
 const PROFILE = flag("--debug") ? "debug" : "release";
 const ONLY = opt("--only", null)?.split(",");
 // SURFACE-1: a feature group's cases live in tests/pages/<group>.mjs and run after the board's;
-// `--group NAME` runs that file's cases alone (the board's own are skipped), `--group all` every file.
+// `--group NAME` runs that file's cases alone (the board's own are skipped), `--group all` the board's and every file.
 const GROUP = opt("--group", null);
 let inGroup = false;
 const PAGE = 200; // the board's page
@@ -79,15 +81,18 @@ const ROW_PITCH = 28; // board-rows.rhx's `data-row-height`: both boards scroll 
 // fetches for the board's rows from another version.
 const BOARDS = {
   rhx: {
-    name: "rhx", tag: "", route: "", filterRoute: "#/f/", ticketRoute: "#/ticket/",
+    name: "rhx", tag: "", route: "#/rhx/", filterRoute: "#/rhx/f/", ticketRoute: "#/rhx/ticket/",
     layout: "board-layout", top: "board-layout", nav: "nav-tree", main: "board-rows", palette: "jump-palette", page: "ticket-page",
     sections: [["nav", "nav-tree"], ["main", "board-rows"], ["palette", "jump-palette"]],
     module: "board-rows.json", epics: ["AAAA", "AAAB"],
+    // SURFACE-2: the comparison board's links and its filter line land on the Svelte pages (rhx reads no route
+    // prefix): where they go, not where it is drawn.
+    lands: { filterRoute: "#/f/", ticketRoute: "#/ticket/", layout: "board-frame", top: "board-layout-sv" },
   },
   sv: {
-    name: "sv", tag: "_sv", route: "#/sv/", filterRoute: "#/sv/f/", ticketRoute: "#/sv/ticket/",
+    name: "sv", tag: "_sv", route: "", filterRoute: "#/f/", ticketRoute: "#/ticket/",
     layout: "board-frame", top: "board-layout-sv", nav: "nav-tree-sv", main: "board-rows-sv", palette: "jump-palette-sv", page: "ticket-page-sv",
-    sections: [["top", "board-layout-sv"], ["nav", "nav-tree-sv"], ["main", "board-rows-sv"], ["palette", "jump-palette-sv"]],
+    sections: [["top", "app-top"], ["bar", "board-layout-sv"], ["nav", "nav-tree-sv"], ["facets", "nav-facets"], ["saved", "filters-saved"], ["keys", "keys-help"], ["main", "board-rows-sv"], ["bulk", "bulk-bar"], ["palette", "jump-palette-sv"]],
     module: "board-rows-sv.js", epics: ["AAAC", "AAAD"],
     siblings: ["nav-flat-sv", "nav-children-sv", "ticket-chip-sv"], // FRAME-25: imported by their parents, components in their own right
   },
@@ -182,7 +187,7 @@ async function typeBursts(page, sel, bursts, gap) {
 
 async function test(name, body) {
   if (ONLY && !ONLY.includes(name)) return;
-  if (GROUP && !inGroup) return;
+  if (GROUP && GROUP !== "all" && !inGroup) return;
   const t0 = Date.now();
   try {
     await body();
@@ -621,7 +626,8 @@ async function main() {
         await sleep(500);
         assert(trimmed(await tp.locator("[data-ticket-status]").textContent({ timeout: 1000 })) === t.status, `the status is ${t.status}`);
         assert(trimmed(await tp.locator("[data-ticket-kind]").textContent({ timeout: 1000 })) === t.kind, `the kind is ${t.kind}`);
-        const kids = (await sentCalls(page)).filter((c) => c.method === "tickets.list");
+        // SURFACE-3: the head asks the parent's children too (the siblings, `fields: ["id"]`).
+        const kids = (await sentCalls(page)).filter((c) => c.method === "tickets.list" && c.params.parent === t.id);
         assert(kids.length === 1 && kids[0].params.parent === t.id, `one list { parent: ${t.id} } (${JSON.stringify(kids.map((k) => k.params))})`);
         const bodyEl = tp.locator("[data-ticket-body]");
         const text = await bodyEl.textContent({ timeout: 1000 });
@@ -657,7 +663,8 @@ async function main() {
         for (const [chip, other] of [["parent", parent], ["blocker", blocker]]) {
           const c = tp.locator(`[data-chip=${chip}][data-chip-id="${other.id}"]`);
           assert((await c.count()) === 1, `a ${chip} chip for ${other.id}`);
-          assert((await c.getAttribute("href")) === `${B.ticketRoute}${other.id}`, `the ${chip} chip stays on the ${B.name} board (${await c.getAttribute("href")})`);
+          const L = { ...B, ...B.lands };
+          assert((await c.getAttribute("href")) === `${L.ticketRoute}${other.id}`, `the ${chip} chip goes to ${L.ticketRoute} (${await c.getAttribute("href")})`);
           await eventually(`the ${chip} chip resolves to "${other.title}"`, async () => trimmed(await c.locator("[data-chip-title]").textContent({ timeout: 1000 })) === other.title.trim(), 3_000);
         }
 
@@ -698,9 +705,11 @@ async function main() {
         const atBoot = (await sentCalls(page)).filter((c) => c.method === "tickets.find" || c.method === "tickets.search");
         assert(atBoot.length === 0, `the palette asks nothing before a key (FRAME-16): ${JSON.stringify(atBoot.map((c) => [c.method, c.params]))}`);
         await page.locator("body").click({ position: { x: 5, y: 5 } }).catch(() => {});
-        await page.keyboard.press("/");
+        // SURFACE-2: on the Svelte board `/` is the filter line's and ctrl+k the palette's; the rhx palette still opens on `/`.
+        const opener = B.tag ? "Control+k" : "/";
+        await page.keyboard.press(opener);
         const input = palette(page, B).locator("input[data-palette-input]");
-        await eventually("`/` focuses the palette's field", async () => input.evaluate((e) => e === document.activeElement), 2_000);
+        await eventually(`${opener} focuses the palette's field`, async () => input.evaluate((e) => e === document.activeElement), 2_000);
 
         // Typed at once: one find, after the pause and within its ceiling.
         // FRAME-25: typed in the page; a burst the clock split is typed again,
@@ -757,11 +766,13 @@ async function main() {
 
         // Enter jumps to the first hit, on this board.
         await page.keyboard.press("Enter");
-        await eventually(`Enter goes to ${B.ticketRoute}${zap34[0]}`, async () => (await page.evaluate(() => location.hash)) === `${B.ticketRoute}${zap34[0]}`, 2_000);
+        const L = { ...B, ...B.lands };
+        await eventually(`Enter goes to ${L.ticketRoute}${zap34[0]}`, async () => (await page.evaluate(() => location.hash)) === `${L.ticketRoute}${zap34[0]}`, 2_000);
       });
 
       await onBoard(B, "the_filter_line_filters_the_board_and_the_nav", async () => {
         const filter = "status Ready";
+        const L = { ...B, ...B.lands }; // where the filter line lands
         const expected = summaries("--filter", filter, "--limit", String(PAGE)).map((t) => t.id);
         const { page } = await openPage(B.route);
         await boardUp(page, B);
@@ -769,19 +780,19 @@ async function main() {
         const input = page.locator(`${B.top} input[data-filter-input]`);
         await input.fill(filter, { timeout: 2000 });
         await input.press("Enter");
-        await eventually("the route carries the filter", async () => (await page.evaluate(() => location.hash)) === `${B.filterRoute}status%20Ready`, 2_000);
+        await eventually("the route carries the filter", async () => (await page.evaluate(() => location.hash)) === `${L.filterRoute}status%20Ready`, 2_000);
         await eventually("the board shows the filtered rows", async () => {
-          const shown = await rowIds(main(page, B).locator(".board-row[data-id]"));
+          const shown = await rowIds(main(page, L).locator(".board-row[data-id]"));
           return shown.length > 0 && JSON.stringify(shown) === JSON.stringify(expected.slice(0, shown.length));
         }, 5_000);
         const calls = (await sentCalls(page)).slice(asked);
         assert(calls.some((c) => c.method === "tickets.list" && c.params.filter === filter && c.params.parent == null), `the board's list carries the filter: ${JSON.stringify(calls.filter((c) => c.method === "tickets.list").map((c) => c.params))}`);
         assert(calls.some((c) => c.method === "tickets.nav.counts" && c.params.filter === filter), `nav counts carries the filter: ${JSON.stringify(calls.map((c) => c.method))}`);
 
-        const input2 = page.locator(`${B.top} input[data-filter-input]`);
+        const input2 = page.locator(`${L.top} input[data-filter-input]`);
         await input2.fill("text foo", { timeout: 2000 });
         await input2.press("Enter");
-        const refused = page.locator(`${B.top} [data-filter-refused]`);
+        const refused = page.locator(`${L.top} [data-filter-refused]`);
         await eventually("the refused chunk is shown under the field", async () => trimmed(await refused.textContent({ timeout: 1000 })).length > 0, 5_000);
         const said = await refused.textContent();
         assert(/text/.test(said), `the refusal names the chunk: ${JSON.stringify(said)}`);
@@ -820,7 +831,8 @@ async function main() {
         await eventually("the menu offers the older board", async () => (await menu.locator(`[data-version="${v1.version}"]`).count()) === 1, 3_000);
         assert((await menu.locator(`[data-version="${v2.version}"]`).count()) === 0, "the live version is not offered");
         const fetchedBefore = seen.requests.length;
-        await menu.locator(`[data-version="${v1.version}"]`).click();
+        // SURFACE-2: the menu lists every component of the bundle now, taller than the viewport: its item clicked where it is.
+        await menu.locator(`[data-version="${v1.version}"]`).evaluate((e) => e.click());
         await eventually("the older board draws", async () => (await main(page, B).locator(".board-newer").count()) === 0 && (await main(page, B).locator(B.main).count()) === 1);
         await boardUp(page, B);
         await eventually("v1's sheet swapped in without a reload: the count in --ink", async () => (await countColour()) === "rgb(29, 28, 26)", 3_000);
@@ -870,9 +882,9 @@ async function main() {
           assert((await main(page, R).locator(`${S.main} .board-row[data-id]`).count()) > 0, "the Svelte rows are drawn in the rhx board's main section");
           await eventually("the Svelte nav draws its shortcodes", async () => (await nav(page, R).locator(`${S.nav} [data-nav-group]`).count()) > 0, 5_000);
           await page.locator("body").click({ position: { x: 5, y: 5 } }).catch(() => {});
-          await page.keyboard.press("/");
+          await page.keyboard.press("Control+k");
           const input = palette(page, R).locator(`${S.palette} input[data-palette-input]`);
-          await eventually("`/` focuses the Svelte palette's field", async () => input.evaluate((e) => e === document.activeElement), 2_000);
+          await eventually("ctrl+k focuses the Svelte palette's field", async () => input.evaluate((e) => e === document.activeElement), 2_000);
           await page.keyboard.press("Escape");
           await sameDocument(page, origin, "after the swaps");
           assert(seen.sockets === 1, `one socket for both profiles (${seen.sockets})`);

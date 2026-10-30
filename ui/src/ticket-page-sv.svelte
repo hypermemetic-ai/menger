@@ -1,109 +1,150 @@
-<!-- FRAME-14: ticket-page in real Svelte (svelte/1), ticket-page.rhx's twin —
-     `get` (live on its own status and amend), its title, status, kind,
-     parent, blockers and unlocks as chips, the body as markdown, its
-     children by one `list { parent }`, `set_status` from a menu. FRAME-25:
-     on FRAME-19's bus — the body is `markdown` from plexus-ui/host, the
-     engine's own render and sanitizer (what rhx's `{@html markdown(…)}`
-     draws; no allow-list here), and each chip is ticket-chip-sv, a sibling
-     imported from ui/src and bundled into this module. -->
+<!-- SURFACE-3: the ticket page, a composition (FRAME-29) in real Svelte
+     (svelte/1) — each part of a ticket is a component the host fills into
+     its bound mark (`plexus-ui:<name>`): the head, the body, the relations
+     (children, blockers, subtasks), the commits, the history and the
+     revisions; SURFACE-4's `ticket-edit` and `ticket-actions` placed the same
+     way as marks (`[data-slot][data-component]`), holes until their
+     components are in the bundle. The page reads `get` on `watch` (the spec
+     every part reads: one snapshot, one stream) for its skeleton, its "no
+     such ticket" and a ticket deleted before it opened (`get` answers
+     `deleted`, folded whole); a delete or an undelete while it is open is a
+     revision, read from ticket-revisions' own spec — so it says "deleted"
+     and offers the actions mark (undelete). What a page sends: `get` once
+     for the ticket and once per chip; `list` for the children and the
+     siblings; `subtasks list`; `history`; `revisions list` twice (the
+     newest, the list); five `watch` streams — the ticket, the children, the
+     subtasks, the history and the revisions — since the host shares a
+     stream only between identical specs. Keys (FRAME-36): `e` says `ticket.edit` on the
+     bus (SURFACE-4's edit hears it), `escape` and `g b` go to the board.
+     ticket-page.rhx is the rhx board's page, kept as it was. -->
 <script module>
-  // PERF-15: a row is the four fields drawn, not the whole summary row.
-  const FIELDS = ["id", "title", "kind", "status"];
-  export const uses = ["tickets.get", "tickets.watch", "tickets.list", "tickets.set_status"];
+  export const uses = ["tickets.get", "tickets.watch", "tickets.revisions.list"];
 </script>
 
 <script>
-  import { bus, live, markdown } from "plexus-ui/host";
-  import Chip from "./ticket-chip-sv.svelte";
+  import { bus, live } from "plexus-ui/host";
+  import Head from "plexus-ui:ticket-head";
+  import Body from "plexus-ui:ticket-body";
+  import Relations from "plexus-ui:ticket-relations";
+  import Commits from "plexus-ui:ticket-commits";
+  import History from "plexus-ui:ticket-history";
+  import Revisions from "plexus-ui:ticket-revisions";
 
   let { id } = $props();
   const b = bus();
   const base = location.hash.startsWith("#/sv/") ? "#/sv/" : "#/";
-  const STATUSES = ["Draft", "Pending", "Ready", "Coding", "In Review", "Complete", "Blocked", "Superseded", "Canceled"];
 
   const ticket = live({ snapshot: "tickets.get", params: () => ({ id }), changes: "tickets.watch", key: "id",
-                        on: { amended: "upsert:ticket", status_changed: "upsert:ticket", kind_changed: "upsert:ticket" } });
-  const children = live({ snapshot: "tickets.list", params: () => ({ parent: id, summary: true, limit: 200, fields: FIELDS }), changes: "tickets.watch", key: "id",
-                          on: { created: "upsert:ticket", amended: "upsert:ticket", status_changed: "upsert:ticket", deleted: "remove:ids" } });
-  const shown = $derived($ticket.rows);
-  const kids = $derived($children.rows);
+                        on: { amended: "upsert:ticket", status_changed: "upsert:ticket", kind_changed: "upsert:ticket", updated: "upsert:ticket",
+                              labels_changed: "upsert:ticket", severity_changed: "upsert:ticket", frozen_changed: "upsert:ticket", hidden_changed: "upsert:ticket",
+                              blockers_changed: "upsert:ticket", unlocks_changed: "upsert:ticket", unlocks_removed: "upsert:ticket", parent_changed: "upsert:ticket",
+                              commits_linked: "upsert:ticket", commits_unlinked: "upsert:ticket", revision_restored: "upsert:ticket", deleted: "upsert:." } });
+  // This ticket's newest revision, on `watch { revisions: true }` — the spec
+  // ticket-revisions reads, so one collection: a delete and an undelete are
+  // revisions (`revised { fields: ["deleted"] }`, `["undeleted"]`).
+  const latest = live({ snapshot: "tickets.revisions.list", params: () => ({ id, limit: 1 }), changes: "tickets.watch", changes_params: { revisions: true },
+                        key: "ticket", on: { revised: "upsert:." } });
+  const t = $derived(ticket.rows.find((r) => r.title != null));
+  // Deleted: `get` answered `deleted { ids, tombstones }` (folded whole), or
+  // the newest revision since says so (and no undelete after it).
+  const tombed = $derived(ticket.rows.find((r) => Array.isArray(r.tombstones)));
+  const word = $derived(latest.rows.find((r) => r.ticket === id && Array.isArray(r.fields) && (r.fields.includes("deleted") || r.fields.includes("undeleted"))));
+  const gone = $derived(word ? (word.fields.includes("deleted") ? (tombed?.tombstones?.find((x) => x.id === id) ?? { title: t?.title }) : null)
+                             : tombed ? tombed.tombstones.find((x) => x.id === id) ?? tombed.tombstones[0] ?? {} : null);
+  // `e` says ticket.edit on the bus (SURFACE-4's to hear); the edit mark
+  // flashes (two classes in turn restart it) and the page counts it in
+  // `data-edit-asked` — on the article, never a `data-*` of the mark, which
+  // would cross to its component as a prop.
+  let knocked = $state(0);
+  const loading = $derived(ticket.status === "pending" || (ticket.status === "resyncing" && ticket.rows.length === 0));
 
-  function setStatus(ev) {
-    const status = ev.currentTarget.value;
-    if (status !== "") b.call("tickets.set_status", { id, status }).catch((e) => console.error(`set_status: ${e?.message ?? e}`));
-  }
+  b.keys({
+    e: { to: () => { b.emit("ticket.edit", { id }); knocked += 1; }, label: "edit the ticket" },
+    escape: { to: () => b.navigate(base), label: "back to the board" },
+    "g b": { to: () => b.navigate(base), label: "go to the board" },
+  });
 </script>
 
-<article class="ticket-page" data-ticket={id}>
-  <nav class="crumbs"><a href={base} data-back>← board</a></nav>
-  {#each shown as t (t.id)}
-    <header class="ticket-head">
-      <p class="ticket-code"><span data-ticket-id>{t.id}</span></p>
-      <h1 class="ticket-title" data-ticket-title>{t.title}</h1>
-      <div class="ticket-meta">
-        <span class="tag status" data-status={t.status} data-ticket-status>{t.status}</span>
-        <span class="tag kind" data-ticket-kind>{t.kind}</span>
-        <label class="status-menu">set status
-          <select data-status-menu onchange={setStatus}>
-            <option value="">…</option>
-            {#each STATUSES as s}<option value={s}>{s}</option>{/each}
-          </select>
-        </label>
+<article class="ticket-page" data-surface="ticket-page" data-ticket={id} data-edit-asked={knocked}>
+  <nav class="crumbs">
+    <a href={base} data-back>← board</a>
+    <span class="keys" aria-hidden="true"><kbd>e</kbd> edit<i class="sep"></i><kbd>esc</kbd> board<i class="sep"></i><kbd>[</kbd><kbd>]</kbd> siblings<i class="sep"></i><kbd>?</kbd> keys</span>
+  </nav>
+  {#if gone}
+    <section class="tp">
+      <div class="gone" data-deleted>
+        <p class="gone-line"><span class="badge">deleted</span> <strong>{id}</strong> was deleted{gone.title ? ` — ${gone.title}` : ""}. Its body is kept 30 days; undelete brings it back.</p>
+        <div class="hole" data-mark="ticket-actions" data-slot="ticket-actions" data-component="ticket-actions" data-id={id}></div>
       </div>
-      <div class="chips">
-        {#if t.parent != null}<Chip id={t.parent} kind="parent"/>{/if}
-        {#each t.blocked_by ?? [] as bid (bid)}<Chip id={bid} kind="blocker"/>{/each}
-        {#each t.unlocks ?? [] as u (u)}<Chip id={u} kind="unlocks"/>{/each}
+    </section>
+  {:else if loading}
+    <div class="tp skeleton" data-loading aria-busy="true">
+      <div class="wide"><i class="bone short"></i><i class="bone title"></i><i class="bone third"></i></div>
+      <div class="main"><i class="bone"></i><i class="bone"></i><i class="bone half"></i><i class="bone"></i></div>
+      <div class="side"><i class="bone"></i><i class="bone half"></i><i class="bone"></i></div>
+    </div>
+  {:else if !t}
+    <p class="tp empty" data-empty data-not-found>No ticket {id} here{ticket.message ? ` — ${ticket.message}` : ""}.</p>
+  {:else}
+    <div class="tp">
+      <div class="cell head"><Head id={id}/></div>
+      <div class="cell main">
+        <Body id={id}/>
+        <div class="hole" class:heard={knocked % 2 === 1} class:heard-again={knocked > 0 && knocked % 2 === 0} data-mark="ticket-edit" data-slot="ticket-edit" data-component="ticket-edit" data-id={id}></div>
+        <Relations id={id}/>
       </div>
-    </header>
-    <div class="ticket-body" data-ticket-body>{@html markdown(t.body)}</div>
-  {/each}
-  {#if $ticket.status === "live" && shown.length === 0}<p class="empty" data-not-found>No ticket {id} here.</p>{/if}
-  <section class="ticket-children">
-    <h2>Children</h2>
-    <ul>
-      {#each kids as c (c.id)}
-        <li><a data-ticket-child={c.id} data-status={c.status} href={base + "ticket/" + c.id}><span class="row-id">{c.id}</span> <span class="row-title">{c.title}</span> <span class="tag">{c.status}</span></a></li>
-      {/each}
-    </ul>
-    {#if $children.status === "live" && kids.length === 0}<p class="empty">none</p>{/if}
-  </section>
+      <aside class="cell side">
+        <div class="hole" data-mark="ticket-actions" data-slot="ticket-actions" data-component="ticket-actions" data-id={id}></div>
+        <Commits id={id}/>
+        <History id={id}/>
+      </aside>
+      <div class="cell revs"><Revisions id={id}/></div>
+    </div>
+  {/if}
 </article>
 
 <style>
-  .ticket-page { max-width: 860px; margin: 0 auto; padding: 16px 20px 40px; color: var(--ink); font-family: var(--font-text); font-size: var(--text-size); }
-  .crumbs { margin-bottom: 12px; font-size: 12px; }
-  .crumbs a { color: var(--muted); text-decoration: none; border-radius: var(--radius-sm); }
-  .crumbs a:hover { color: var(--accent); }
-  .crumbs a:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-  .ticket-code { margin: 0; font-size: 12px; color: var(--accent); }
-  .ticket-title { margin: 4px 0 10px; font-family: var(--font-display); font-size: 22px; line-height: 1.25; font-weight: var(--weight-strong); }
-  .ticket-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12px; color: var(--muted); }
-  .tag { display: inline-block; padding: 0 7px; font-size: 11px; line-height: 18px; color: var(--muted); border: var(--border) solid var(--line); border-radius: var(--radius-md); }
-  .tag.status { border-color: transparent; background: var(--st-draft-bg); color: var(--st-draft-fg); }
-  .tag.status[data-status=Draft] { background: var(--st-draft-bg); color: var(--st-draft-fg); }
-  .tag.status[data-status=Pending] { background: var(--st-pending-bg); color: var(--st-pending-fg); }
-  .tag.status[data-status=Ready] { background: var(--st-ready-bg); color: var(--st-ready-fg); }
-  .tag.status[data-status=Coding] { background: var(--st-coding-bg); color: var(--st-coding-fg); }
-  .tag.status[data-status="In Review"] { background: var(--st-in-review-bg); color: var(--st-in-review-fg); }
-  .tag.status[data-status=Complete] { background: var(--st-complete-bg); color: var(--st-complete-fg); }
-  .tag.status[data-status=Blocked] { background: var(--st-blocked-bg); color: var(--st-blocked-fg); }
-  .tag.status[data-status=Superseded] { background: var(--st-superseded-bg); color: var(--st-superseded-fg); }
-  .tag.status[data-status=Canceled] { background: var(--st-canceled-bg); color: var(--st-canceled-fg); }
-  .status-menu { display: flex; gap: 6px; align-items: center; }
-  .status-menu select { padding: 1px 4px; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); }
-  .status-menu select:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
-  .ticket-body { padding-top: 10px; font-family: var(--sans); line-height: 1.55; overflow-wrap: anywhere; border-top: var(--border) solid var(--line); }
-  .ticket-body :global(a) { color: var(--accent); text-decoration: underline; }
-  .ticket-body :global(pre) { overflow: auto; padding: 8px 10px; font-family: var(--font-text); background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius); }
-  .ticket-body :global(code) { font-family: var(--font-text); }
-  .ticket-children h2 { margin: 22px 0 6px; font-size: 11px; font-weight: var(--weight-medium); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
-  .ticket-children ul { list-style: none; margin: 0; padding: 0; }
-  .ticket-children a { display: flex; gap: 10px; align-items: baseline; padding: 4px 6px; color: var(--ink); text-decoration: none; border-radius: var(--radius); transition: background-color var(--motion-fast) var(--ease); }
-  .ticket-children a:hover { background: var(--hover); }
-  .ticket-children a:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
-  .row-id { flex: none; color: var(--accent); }
-  .row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .empty { color: var(--muted); }
+  .ticket-page { min-height: 100%; color: var(--ink); background: var(--bg); font-family: var(--font-text); font-size: var(--text-size); }
+  .ticket-page .crumbs { position: sticky; top: 0; z-index: 4; display: flex; gap: 14px; align-items: center; padding: 10px max(28px, calc((100% - 1284px) / 2)); font-size: 12px; background: var(--bg); border-bottom: var(--border) solid var(--line); }
+  .ticket-page .crumbs a { color: var(--muted); text-decoration: none; border-radius: var(--radius-sm); transition: color var(--motion-fast) var(--ease); }
+  .ticket-page .crumbs a:hover { color: var(--accent); }
+  .ticket-page .crumbs a:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .ticket-page .keys { display: flex; gap: 5px; align-items: center; margin-left: auto; font-size: 11px; color: var(--muted); }
+  .ticket-page .sep { display: inline-block; width: 8px; }
+  .ticket-page kbd { display: inline-block; min-width: 16px; padding: 0 4px; font-family: var(--font-text); font-size: 10px; line-height: 15px; text-align: center; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-bottom-width: 2px; border-radius: var(--radius-sm); }
+  .ticket-page .tp { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 0 36px; align-items: start; max-width: 1340px; margin: 0 auto; padding: 16px 28px 48px; }
+  .ticket-page .head { grid-column: 1 / -1; grid-row: 1; }
+  .ticket-page .main { grid-column: 1; grid-row: 3 / span 2; min-width: 0; }
+  .ticket-page .side { grid-column: 2; grid-row: 3; min-width: 0; }
+  .ticket-page .revs { grid-column: 2; grid-row: 4; min-width: 0; }
+  .ticket-page .revs:has(:global([data-open="true"])) { grid-column: 1 / -1; grid-row: 2; }
+  .ticket-page .hole { margin-top: 14px; }
+  .ticket-page .side > .hole { margin-top: 0; }
+  .ticket-page .hole:empty { display: flex; align-items: center; min-height: 34px; padding: 6px 10px; border: var(--border) dashed var(--tree-line); border-radius: var(--radius); }
+  .ticket-page .hole:empty::before { content: "<" attr(data-component) " id/>"; font-size: 11px; color: var(--muted); }
+  .ticket-page .hole.heard { animation: heard var(--motion-flash) var(--ease); }
+  .ticket-page .hole.heard-again { animation: heard-again var(--motion-flash) var(--ease); }
+  @keyframes heard-again { from { background: var(--sel); border-color: var(--accent); } to { background: transparent; } }
+  @keyframes heard { from { background: var(--sel); border-color: var(--accent); } to { background: transparent; } }
+  .ticket-page .skeleton .wide { grid-column: 1 / -1; padding-bottom: 14px; }
+  .ticket-page .skeleton .main, .ticket-page .skeleton .side { grid-row: 2; }
+  .ticket-page .bone { display: block; width: 100%; height: 10px; margin: 6px 0; background: var(--skeleton); border-radius: var(--radius-sm); animation: breathe var(--motion-pulse) var(--ease) infinite alternate; }
+  .ticket-page .bone.short { width: 90px; }
+  .ticket-page .bone.title { width: 55%; height: 24px; margin: 10px 0; }
+  .ticket-page .bone.third { width: 33%; }
+  .ticket-page .bone.half { width: 50%; }
+  @keyframes breathe { from { opacity: 1; } to { opacity: .45; } }
+  .ticket-page .empty { display: block; color: var(--muted); }
+  .ticket-page .gone { grid-column: 1 / -1; padding: 14px 16px; background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius-lg); }
+  .ticket-page .gone-line { margin: 0 0 10px; }
+  .ticket-page .badge { padding: 0 6px; font-size: 10px; line-height: 16px; text-transform: uppercase; letter-spacing: .06em; color: var(--warn); border: var(--border) dashed var(--warn); border-radius: var(--radius-sm); }
+  @media (max-width: 960px) {
+    .ticket-page .tp { grid-template-columns: minmax(0, 1fr); padding: 12px 16px 40px; }
+    .ticket-page .head, .ticket-page .main, .ticket-page .side, .ticket-page .revs, .ticket-page .revs:has(:global([data-open="true"])) { grid-column: 1; grid-row: auto; }
+    .ticket-page .keys { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ticket-page .bone, .ticket-page .hole.heard, .ticket-page .hole.heard-again { animation: none; }
+    .ticket-page .crumbs a { transition: none; }
+  }
 </style>

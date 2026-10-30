@@ -41,7 +41,7 @@
 //!   `--node-modules` to the tool.
 //! - FRAME-14: the board in both profiles — each of its five components as
 //!   `<name>.rhx` and as real Svelte, `<name>-sv.svelte` (one name is one
-//!   source); the Svelte board drawn at `#/sv/…` in an rhx frame whose
+//!   source); the Svelte board drawn at `#/` (SURFACE-2; `#/sv/…` its alias, the rhx one at `#/rhx/`) in an rhx frame whose
 //!   sections hold the Svelte ones, the rhx ones `slots.json`'s defaults.
 //! - FRAME-25: the Svelte board rides FRAME-19's bus — no timer of its own
 //!   beside a `live`, no sanitizer or markdown of its own (`markdown` from
@@ -1021,12 +1021,17 @@ fn draws_tag(src: &str, name: &str) -> bool {
 }
 
 /// The siblings a svelte/1 source imports (FRAME-19: `import X from
-/// "./<name>.svelte"`, `src/<name>.svelte` beside it), by name.
+/// "./<name>.svelte"`, `src/<name>.svelte` beside it) and the components it
+/// places by their bound marks (FRAME-29: `import X from "plexus-ui:<name>"`),
+/// by name.
 fn svelte_imports(src: &str) -> Vec<String> {
     src.lines()
         .filter(|l| l.trim_start().starts_with("import "))
         .filter_map(|l| l.rsplit_once(" from ").map(|(_, r)| r))
-        .filter_map(|r| r.trim().trim_end_matches(';').trim_matches(|c| c == '"' || c == '\'').strip_prefix("./")?.strip_suffix(".svelte").map(str::to_string))
+        .filter_map(|r| {
+            let r = r.trim().trim_end_matches(';').trim_matches(|c| c == '"' || c == '\'');
+            r.strip_prefix("./").and_then(|r| r.strip_suffix(".svelte")).or_else(|| r.strip_prefix("plexus-ui:")).map(str::to_string)
+        })
         .collect()
 }
 
@@ -1036,7 +1041,8 @@ fn svelte_imports(src: &str) -> Vec<String> {
 /// component, a name with two sources (FRAME-14: one name is one source),
 /// and a component nothing reaches (a route, a slot's layout or default, or
 /// a `<name` tag in a reached rhx source, or a sibling a reached svelte/1
-/// source imports, `import X from "./<name>.svelte"` — FRAME-19, FRAME-25).
+/// source imports, `import X from "./<name>.svelte"` — FRAME-19, FRAME-25 —
+/// or places by its bound mark, `import X from "plexus-ui:<name>"` — FRAME-29).
 fn ui_breaks(sources: &[(String, String)], routes: &str, slots: &str) -> Vec<String> {
     let mut out = Vec::new();
     let routes: Value = serde_json::from_str(routes).unwrap_or_else(|e| panic!("routes.json: {e}"));
@@ -1233,8 +1239,11 @@ const BOARD_SIBLINGS: [&str; 3] = ["nav-flat", "nav-children", "ticket-chip"];
 /// FRAME-14: the frame the Svelte board is drawn in — an rhx layout, since a
 /// section is the host's and only an rhx template marks one (`<slot name>`;
 /// a svelte/1 module mounts no section, plexus-ui@40aa390). Its sections
-/// hold the Svelte components: `top` the Svelte half of `board-layout` (the
-/// top bar and its filter line), then the nav, the board and the palette.
+/// hold the Svelte components: `top` the app's top (app-top, SURFACE-2), `bar`
+/// the Svelte half of `board-layout` (the top bar and its filter line), then
+/// the nav, the facets (nav-facets) and the saved filters (filters-saved,
+/// SURFACE-6) under it, the board's keymap (keys-help), the board, the bulk
+/// bar under it (bulk-bar, SURFACE-5) and the palette.
 const SV_FRAME: &str = "board-frame";
 
 /// What FRAME-14 finds missing from the board's two profiles, given the
@@ -1242,7 +1251,7 @@ const SV_FRAME: &str = "board-frame";
 /// a component without its `.rhx` or its real `-sv.svelte`; a route of
 /// either board that is not there; a section default that is not the rhx
 /// one on the rhx board, or not the Svelte one in the frame; a frame that
-/// marks not all four of its sections.
+/// marks not all nine of its sections.
 fn board_breaks(sources: &[(String, String)], routes: &str, slots: &str) -> Vec<String> {
     let mut out = Vec::new();
     let text = |f: &str| sources.iter().find(|(n, _)| n == f).map(|(_, t)| t.as_str());
@@ -1257,10 +1266,15 @@ fn board_breaks(sources: &[(String, String)], routes: &str, slots: &str) -> Vec<
         }
     }
     let routes: Value = serde_json::from_str(routes).unwrap_or_else(|e| panic!("routes.json: {e}"));
+    // SURFACE-2: the Svelte board is the default (owner, 2026-10-30), the rhx
+    // one the comparison at #/rhx/, and #/sv/ the Svelte board's alias.
     for (route, want) in [
-        ("#/", "board-layout"),
-        ("#/f/:filter", "board-layout"),
-        ("#/ticket/:id", "ticket-page"),
+        ("#/", SV_FRAME),
+        ("#/f/:filter", SV_FRAME),
+        ("#/ticket/:id", "ticket-page-sv"),
+        ("#/rhx/", "board-layout"),
+        ("#/rhx/f/:filter", "board-layout"),
+        ("#/rhx/ticket/:id", "ticket-page"),
         ("#/sv/", SV_FRAME),
         ("#/sv/f/:filter", SV_FRAME),
         ("#/sv/ticket/:id", "ticket-page-sv"),
@@ -1272,7 +1286,7 @@ fn board_breaks(sources: &[(String, String)], routes: &str, slots: &str) -> Vec<
     }
     let slots: Value = serde_json::from_str(slots).unwrap_or_else(|e| panic!("slots.json: {e}"));
     let rhx = [("nav", "nav-tree"), ("main", "board-rows"), ("palette", "jump-palette")];
-    let sv = [("top", "board-layout-sv"), ("nav", "nav-tree-sv"), ("main", "board-rows-sv"), ("palette", "jump-palette-sv")];
+    let sv = [("top", "app-top"), ("bar", "board-layout-sv"), ("nav", "nav-tree-sv"), ("facets", "nav-facets"), ("saved", "filters-saved"), ("keys", "keys-help"), ("main", "board-rows-sv"), ("bulk", "bulk-bar"), ("palette", "jump-palette-sv")];
     for (layout, want) in [("board-layout", &rhx[..]), (SV_FRAME, &sv[..])] {
         for (slot, component) in want {
             let have = slots.get(layout).and_then(|l| l.get(slot)).and_then(Value::as_str);
@@ -1305,8 +1319,8 @@ fn board_breaks(sources: &[(String, String)], routes: &str, slots: &str) -> Vec<
 }
 
 /// FRAME-14: menger's board in real Svelte beside the rhx one — each of the
-/// five as `<name>.rhx` and `<name>-sv.svelte`, the Svelte board at `#/sv/`,
-/// `#/sv/f/:filter` and `#/sv/ticket/:id`, the rhx ones the defaults
+/// five as `<name>.rhx` and `<name>-sv.svelte`, the Svelte board at `#/`
+/// (SURFACE-2; `#/sv/…` its alias), the rhx one at `#/rhx/`, the rhx ones the defaults
 /// (`slots.json`); a right-click puts a Svelte one in a section of the rhx
 /// board (tests/pages_browser.mjs). FRAME-13's `svelte_is_not_in_menger_yet`
 /// went with it: its time has come.
@@ -1315,18 +1329,18 @@ fn each_board_component_has_both_profiles() {
     // The check, on what it is given first.
     let sv = "<script module>\n  export const uses = [];\n</script>\n<p/>\n";
     let mut good: Vec<(String, String)> = BOARD.iter().chain(BOARD_SIBLINGS.iter()).flat_map(|n| [(format!("{n}.rhx"), "<p/>".to_string()), (format!("{n}-sv.svelte"), sv.to_string())]).collect();
-    good.push((format!("{SV_FRAME}.rhx"), r#"<slot name="top" filter={filter}/><slot name="nav"/><slot name="main"/><slot name="palette"/>"#.into()));
-    let routes = r##"{ "#/": "board-layout", "#/f/:filter": "board-layout", "#/ticket/:id": "ticket-page", "#/sv/": "board-frame", "#/sv/f/:filter": "board-frame", "#/sv/ticket/:id": "ticket-page-sv" }"##;
-    let slots = r#"{ "board-layout": { "nav": "nav-tree", "main": "board-rows", "palette": "jump-palette" }, "board-frame": { "top": "board-layout-sv", "nav": "nav-tree-sv", "main": "board-rows-sv", "palette": "jump-palette-sv" } }"#;
+    good.push((format!("{SV_FRAME}.rhx"), r#"<slot name="top" filter={filter}/><slot name="bar"/><slot name="nav"/><slot name="facets"/><slot name="saved"/><slot name="keys"/><slot name="main"/><slot name="bulk"/><slot name="palette"/>"#.into()));
+    let routes = r##"{ "#/": "board-frame", "#/f/:filter": "board-frame", "#/ticket/:id": "ticket-page-sv", "#/rhx/": "board-layout", "#/rhx/f/:filter": "board-layout", "#/rhx/ticket/:id": "ticket-page", "#/sv/": "board-frame", "#/sv/f/:filter": "board-frame", "#/sv/ticket/:id": "ticket-page-sv" }"##;
+    let slots = r#"{ "board-layout": { "nav": "nav-tree", "main": "board-rows", "palette": "jump-palette" }, "board-frame": { "top": "app-top", "bar": "board-layout-sv", "nav": "nav-tree-sv", "facets": "nav-facets", "saved": "filters-saved", "keys": "keys-help", "main": "board-rows-sv", "bulk": "bulk-bar", "palette": "jump-palette-sv" } }"#;
     assert_eq!(board_breaks(&good, routes, slots), Vec::<String>::new());
     let chipless: Vec<(String, String)> = good.iter().filter(|(f, _)| f != "ticket-chip-sv.svelte").cloned().collect();
     assert_eq!(board_breaks(&chipless, routes, slots), ["ui/src/ticket-chip-sv.svelte is missing (the Svelte ticket-chip)"]);
     let mut bad = good.clone();
     bad.retain(|(f, _)| f != "nav-tree-sv.svelte" && f != "board-rows.rhx");
     bad.iter_mut().filter(|(f, _)| f == "jump-palette-sv.svelte").for_each(|(_, t)| *t = "<script>\n</script>\n<p/>\n".into());
-    let swapped = r#"{ "board-layout": { "nav": "nav-tree", "main": "board-rows-sv", "palette": "jump-palette" }, "board-frame": { "top": "board-layout-sv", "nav": "nav-tree-sv", "main": "board-rows-sv", "palette": "jump-palette-sv" } }"#;
+    let swapped = r#"{ "board-layout": { "nav": "nav-tree", "main": "board-rows-sv", "palette": "jump-palette" }, "board-frame": { "top": "app-top", "bar": "board-layout-sv", "nav": "nav-tree-sv", "facets": "nav-facets", "saved": "filters-saved", "keys": "keys-help", "main": "board-rows-sv", "bulk": "bulk-bar", "palette": "jump-palette-sv" } }"#;
     assert_eq!(
-        board_breaks(&bad, r##"{ "#/": "board-layout", "#/f/:filter": "board-layout", "#/ticket/:id": "ticket-page", "#/sv/": "board-frame", "#/sv/ticket/:id": "ticket-page" }"##, swapped),
+        board_breaks(&bad, r##"{ "#/": "board-frame", "#/f/:filter": "board-frame", "#/ticket/:id": "ticket-page-sv", "#/rhx/": "board-layout", "#/rhx/f/:filter": "board-layout", "#/rhx/ticket/:id": "ticket-page", "#/sv/": "board-frame", "#/sv/ticket/:id": "ticket-page" }"##, swapped),
         [
             "ui/src/board-rows.rhx is missing (the rhx board-rows)",
             "ui/src/nav-tree-sv.svelte is missing (the Svelte nav-tree)",
@@ -1337,12 +1351,12 @@ fn each_board_component_has_both_profiles() {
         ]
     );
     let frameless: Vec<(String, String)> = good.iter().filter(|(f, _)| f != "board-frame.rhx").cloned().chain([("board-frame.rhx".to_string(), r#"<slot name="nav"/>"#.to_string())]).collect();
-    assert_eq!(board_breaks(&frameless, routes, slots).len(), 3, "a frame that marks one section of four");
+    assert_eq!(board_breaks(&frameless, routes, slots).len(), 8, "a frame that marks one section of nine");
     let busy: Vec<(String, String)> = good
         .iter()
         .filter(|(f, _)| f != "board-frame.rhx")
         .cloned()
-        .chain([("board-frame.rhx".to_string(), "<script>\n  prop(\"filter\");\n  let n = live(#{ snapshot: \"tickets.nav.counts\", key: \"shortcode\" });\n</script>\n<div class=\"board-layout\"><filter-line filter={filter}/><slot name=\"top\"/><slot name=\"nav\"/><slot name=\"main\"/><slot name=\"palette\"/></div>".to_string())])
+        .chain([("board-frame.rhx".to_string(), "<script>\n  prop(\"filter\");\n  let n = live(#{ snapshot: \"tickets.nav.counts\", key: \"shortcode\" });\n</script>\n<div class=\"board-layout\"><filter-line filter={filter}/><slot name=\"top\"/><slot name=\"bar\"/><slot name=\"nav\"/><slot name=\"facets\"/><slot name=\"saved\"/><slot name=\"keys\"/><slot name=\"main\"/><slot name=\"bulk\"/><slot name=\"palette\"/></div>".to_string())])
         .collect();
     assert_eq!(
         board_breaks(&busy, routes, slots),
@@ -1434,14 +1448,17 @@ type Wants = (&'static str, &'static [(&'static str, usize)], &'static [&'static
 /// FRAME-25's wants of the board's sources: the palette's two lives on
 /// `when` and `debounce_ms: 80`; the rows' window moved through the handle's
 /// `update` (`params: () =>`, `debounce_ms: 20`, never a collection remade
-/// in a `$derived`); the ticket page's body through `markdown`, its chips
-/// imported and none drawn inline, its collections followed, not remade (a
-/// route to it is an `update(props)`); the nav's Flat and children imported
-/// and none drawn inline.
-const BUS_WANTS: [Wants; 4] = [
+/// in a `$derived`); the ticket page composed of its parts by their marks
+/// (SURFACE-3), its collections followed, not remade (a route to it is an
+/// `update(props)`) — its body through `markdown`, its head's chips imported
+/// and none drawn inline; the nav's Flat and children imported and none
+/// drawn inline.
+const BUS_WANTS: [Wants; 6] = [
     ("jump-palette-sv.svelte", &[("debounce_ms: 80", 2), ("when:", 2)], &[], &[]),
     ("board-rows-sv.svelte", &[("debounce_ms: 20", 1), ("params: () =>", 1)], &["$derived(b.live(", "$derived(live("], &[]),
-    ("ticket-page-sv.svelte", &[("{@html markdown(", 1)], &["data-chip-id", "{#snippet chip", "$derived(b.live(", "$derived(live("], &["ticket-chip-sv"]),
+    ("ticket-page-sv.svelte", &[], &["data-chip-id", "{#snippet chip", "$derived(b.live(", "$derived(live("], &["ticket-head", "ticket-body"]),
+    ("ticket-body.svelte", &[("{@html markdown(", 1)], &["$derived(b.live(", "$derived(live("], &[]),
+    ("ticket-head.svelte", &[], &["data-chip-id", "{#snippet chip", "$derived(b.live(", "$derived(live("], &["ticket-chip-sv"]),
     ("nav-tree-sv.svelte", &[], &["data-nav-flat-row", "data-nav-row", "\"tickets.list\""], &["nav-flat-sv", "nav-children-sv"]),
 ];
 
@@ -1500,7 +1517,7 @@ fn bus_breaks(sources: &[(String, String)]) -> Vec<String> {
         let have = svelte_imports(&code);
         for i in imports {
             if !have.iter().any(|h| h == i) {
-                out.push(format!("ui/src/{f}: imports no ./{i}.svelte"));
+                out.push(format!("ui/src/{f}: imports no ./{i}.svelte and no plexus-ui:{i}"));
             }
         }
     }
@@ -1524,12 +1541,15 @@ fn the_svelte_board_rides_the_bus() {
     assert!(each_over_store("{#each ($rows).rows as r}") && each_over_store("{#each $rows.rows as r (r.id)}") && !each_over_store("{#each list as r (r.id)}{#each STATUSES as s}"));
     assert!(imports_host_markdown("import {\n  live,\n  markdown,\n} from 'plexus-ui/host';") && !imports_host_markdown("import { markdown } from \"./mine.js\";\nimport { live } from \"plexus-ui/host\";"));
     assert_eq!(svelte_imports("import fromage from \"./ticket-chip-sv.svelte\";"), ["ticket-chip-sv"]);
+    assert_eq!(svelte_imports("import Head from \"plexus-ui:ticket-head\";"), ["ticket-head"]);
     let head = "<script module>\n  export const uses = [];\n</script>\n";
     let palette = format!("{head}<script>\n  // the hand-made setTimeout( went\n  import {{ live }} from \"plexus-ui/host\";\n  const found = live({{ snapshot: \"tickets.find\", params: () => ({{ query: q }}), key: \"id\", when: () => q.length > 0, debounce_ms: 80 }});\n  const searched = live({{ snapshot: \"tickets.search\", params: () => ({{ query: q }}), key: \"id\", when: () => q.length > 0, debounce_ms: 80 }});\n  const hits = $derived($found.rows);\n</script>\n{{#each hits as f (f.id)}}<a href=\"https://x\">{{f.id}}</a>{{/each}}\n");
     let rows = format!("{head}<script>\n  import {{ live }} from \"plexus-ui/host\";\n  const rows = live({{ snapshot: \"tickets.list\", params: () => ({{ at }}), key: \"id\", debounce_ms: 20 }});\n</script>\n");
-    let page = format!("{head}<script>\n  import {{ live, markdown }} from \"plexus-ui/host\";\n  import Chip from \"./ticket-chip-sv.svelte\";\n</script>\n<!-- no DOMParser, no allow-list, no data-chip-id -->\n<div>{{@html markdown(t.body)}}</div><Chip id={{p}}/><svelte:element this={{\"h\" + n}}>x</svelte:element>\n");
+    let page = format!("{head}<script>\n  import {{ live }} from \"plexus-ui/host\";\n  import Head from \"plexus-ui:ticket-head\";\n  import Body from \"plexus-ui:ticket-body\";\n</script>\n<!-- no DOMParser, no allow-list, no data-chip-id -->\n<Head id={{id}}/><Body id={{id}}/><svelte:element this={{\"h\" + n}}>x</svelte:element>\n");
+    let body = format!("{head}<script>\n  import {{ live, markdown }} from \"plexus-ui/host\";\n</script>\n<div>{{@html markdown(t.body)}}</div>\n");
+    let chips = format!("{head}<script>\n  import Chip from \"./ticket-chip-sv.svelte\";\n</script>\n<Chip id={{p}}/>\n");
     let nav = format!("{head}<script>\n  import NavFlat from \"./nav-flat-sv.svelte\";\n  import NavChildren from \"./nav-children-sv.svelte\";\n</script>\n");
-    let good = given(&[("jump-palette-sv.svelte", &palette), ("board-rows-sv.svelte", &rows), ("ticket-page-sv.svelte", &page), ("nav-tree-sv.svelte", &nav), ("x.rhx", "{#each $x as y}DOMParser")]);
+    let good = given(&[("jump-palette-sv.svelte", &palette), ("board-rows-sv.svelte", &rows), ("ticket-page-sv.svelte", &page), ("ticket-body.svelte", &body), ("ticket-head.svelte", &chips), ("nav-tree-sv.svelte", &nav), ("x.rhx", "{#each $x as y}DOMParser")]);
     assert_eq!(bus_breaks(&good), Vec::<String>::new());
     let old_palette = format!("{head}<script>\n  import {{ bus }} from \"plexus-ui/host\";\n  const b = bus();\n  const NONE = {{ subscribe: (fn) => (fn({{ rows: [] }}), () => {{}}) }};\n  const found = $derived(asked ? b.live({{ snapshot: \"tickets.find\", params: {{ query: asked }}, key: \"id\" }}) : NONE);\n  function typed(ev) {{ clearTimeout(timer); timer = setTimeout(() => (asked = q), 80); }}\n</script>\n{{#each $found.rows as f (f.id)}}{{f.id}}{{/each}}\n");
     let old_rows = format!("{head}<script>\n  import {{ bus }} from \"plexus-ui/host\";\n  const b = bus();\n  const rows = $derived(b.live({{ snapshot: \"tickets.list\", params: {{ at: win.at }}, key: \"id\", debounce_ms: 20 }}));\n</script>\n");
@@ -1556,7 +1576,10 @@ fn the_svelte_board_rides_the_bus() {
         "ui/src/ticket-page-sv.svelte: an {@html …} not of markdown(…): HTML reaches the page only through the bus's sanitized render",
         "ui/src/ticket-page-sv.svelte: markdown( not imported from plexus-ui/host",
         "ui/src/ticket-page-sv.svelte: a store subscribed or stood in by hand (`.subscribe(`): the face's live is the store",
-        "ui/src/ticket-page-sv.svelte: says `{@html markdown(` 0 time(s), not 1",
+        "ui/src/ticket-page-sv.svelte: imports no ./ticket-head.svelte and no plexus-ui:ticket-head",
+        "ui/src/ticket-page-sv.svelte: imports no ./ticket-body.svelte and no plexus-ui:ticket-body",
+        "ui/src/ticket-body.svelte is missing",
+        "ui/src/ticket-head.svelte is missing",
         "ui/src/ticket-page-sv.svelte: says `data-chip-id`, which the bus or a sibling now does",
         "ui/src/ticket-page-sv.svelte: says `{#snippet chip`, which the bus or a sibling now does",
     ];
@@ -1593,14 +1616,29 @@ fn shell_fn<'a>(script: &'a str, name: &str) -> Vec<(usize, &'a str)> {
 /// `.svelte`, a check for `node` that dies saying `svelte/1`; a check that
 /// `node_modules/svelte` and `node_modules/esbuild` are there that dies
 /// naming `npm ci` (how they are installed: in `../plexus-ui`); and the
-/// build naming `--node-modules`. The checks' lines, or every reason.
-fn node_check(body: &[(usize, &str)]) -> Result<(usize, usize), String> {
+/// build naming `--node-modules`. SURFACE-11: the build may be a call of
+/// the helper `ui_bundle` (its lines `helper`), whose own tool call names
+/// `--node-modules`; the first build, the helper's or the tool's, is the one
+/// the checks must come before. The checks' lines, or every reason.
+fn node_check(body: &[(usize, &str)], helper: &[(usize, &str)]) -> Result<(usize, usize), String> {
+    const TOOL: &str = "\"$UI_TOOL\" build \"$BUILD/ui\"";
     let code: Vec<&(usize, &str)> = body.iter().filter(|(_, l)| !l.trim_start().starts_with('#')).collect();
-    let (build, line) = code
+    let calls = |l: &str| l.contains(TOOL) || l.trim_start().starts_with("ui_bundle ") || l.contains("&& ui_bundle ") || l.contains("; ui_bundle ");
+    let (build, call) = code
         .iter()
-        .find(|(_, l)| l.contains("\"$UI_TOOL\" build \"$BUILD/ui\""))
+        .find(|(_, l)| calls(l))
         .map(|(n, l)| (*n, *l))
-        .ok_or_else(|| "build_v2 has no \"$UI_TOOL\" build \"$BUILD/ui\"".to_string())?;
+        .ok_or_else(|| "build_v2 has no \"$UI_TOOL\" build \"$BUILD/ui\" and no ui_bundle call".to_string())?;
+    let line = if call.contains(TOOL) {
+        call
+    } else {
+        helper
+            .iter()
+            .filter(|(_, l)| !l.trim_start().starts_with('#'))
+            .find(|(_, l)| l.contains(TOOL))
+            .map(|(_, l)| *l)
+            .ok_or_else(|| format!("build_v2 calls ui_bundle at line {build}, and ui_bundle has no {TOOL}"))?
+    };
     let mut why = Vec::new();
     let mut find = |what: &str, hit: &dyn Fn(&str) -> bool| match code.iter().find(|(_, l)| hit(l)) {
         None => {
@@ -1622,7 +1660,7 @@ fn node_check(body: &[(usize, &str)]) -> Result<(usize, usize), String> {
         &|l| l.contains(".svelte") && l.contains("node_modules/svelte") && l.contains("node_modules/esbuild") && l.contains("die") && l.contains("npm ci"),
     );
     if !line.contains("--node-modules") {
-        why.push(format!("the tool's build at line {build} names no --node-modules"));
+        why.push(format!("the tool's build (called at line {build}) names no --node-modules"));
     }
     if why.is_empty() {
         Ok((node, modules))
@@ -1641,22 +1679,34 @@ fn the_build_host_has_node() {
     // The check, on what it is given first.
     let given = |s: &'static str| s.lines().enumerate().map(|(n, l)| (n + 1, l)).collect::<Vec<_>>();
     let good = "build_v2() {\n  if compgen -G \"$BUILD/ui/src/*.svelte\" >/dev/null; then command -v node >/dev/null || die \"ui-build: svelte/1 needs node\"; fi\n  if compgen -G \"$BUILD/ui/src/*.svelte\" >/dev/null; then [[ -d $NM/node_modules/svelte && -d $NM/node_modules/esbuild ]] || die \"run npm ci in ../plexus-ui\"; fi\n  (cd \"$BUILD\" && \"$UI_TOOL\" build \"$BUILD/ui\" --node-modules \"$NM\" -o x)\n";
-    assert_eq!(node_check(&given(good)), Ok((2, 3)));
+    assert_eq!(node_check(&given(good), &[]), Ok((2, 3)));
     let late = "build_v2() {\n  (cd \"$BUILD\" && \"$UI_TOOL\" build \"$BUILD/ui\" --node-modules x -o x)\n  if compgen -G \"$BUILD/ui/src/*.svelte\" >/dev/null; then command -v node >/dev/null || die \"svelte/1 needs node\"; fi\n  if compgen -G \"$BUILD/ui/src/*.svelte\" >/dev/null; then [[ -d node_modules/svelte && -d node_modules/esbuild ]] || die \"npm ci\"; fi\n";
     assert_eq!(
-        node_check(&given(late)),
+        node_check(&given(late), &[]),
         Err("build_v2 checks for node when ui/src holds a .svelte, saying svelte/1 (a line with the .svelte test, command -v node, die and svelte/1) at line 3, after the tool builds the UI at line 2; build_v2 checks node_modules/svelte and node_modules/esbuild when ui/src holds a .svelte, naming npm ci (a line with the .svelte test, both, die and npm ci) at line 4, after the tool builds the UI at line 2".to_string())
     );
     let mute = "build_v2() {\n  # command -v node .svelte die svelte/1\n  need node\n  (cd \"$BUILD\" && \"$UI_TOOL\" build \"$BUILD/ui\" -o x)\n";
-    let why = node_check(&given(mute)).expect_err("a comment, or a bare `need node`, is no check");
+    let why = node_check(&given(mute), &[]).expect_err("a comment, or a bare `need node`, is no check");
     assert!(why.contains("never checks for node") && why.contains("never checks node_modules") && why.contains("names no --node-modules"), "{why}");
+    // SURFACE-11: the build through the helper — the checks before its first call, --node-modules in the helper
+    let helper = "ui_bundle() { # LOG CONTRACT\n  (cd \"$BUILD\" && \"$UI_TOOL\" build \"$BUILD/ui\" --engine e --node-modules \"$NM\" -o x) >>\"$1\" 2>&1\n";
+    let via = "build_v2() {\n  if compgen -G \"$BUILD/ui/src/*.svelte\" >/dev/null; then command -v node >/dev/null || die \"ui-build: svelte/1 needs node\"; fi\n  if compgen -G \"$BUILD/ui/src/*.svelte\" >/dev/null; then [[ -d $NM/node_modules/svelte && -d $NM/node_modules/esbuild ]] || die \"run npm ci in ../plexus-ui\"; fi\n  ui_bundle \"$lr\" \"\" || die x\n  ui_bundle \"$lr\" \"$CONTRACT\" || die x\n";
+    assert_eq!(node_check(&given(via), &given(helper)), Ok((2, 3)));
+    let via_late = "build_v2() {\n  ui_bundle \"$lr\" \"\" || die x\n  if compgen -G \"$BUILD/ui/src/*.svelte\" >/dev/null; then command -v node >/dev/null || die \"svelte/1 needs node\"; fi\n  if compgen -G \"$BUILD/ui/src/*.svelte\" >/dev/null; then [[ -d node_modules/svelte && -d node_modules/esbuild ]] || die \"npm ci\"; fi\n";
+    let why = node_check(&given(via_late), &given(helper)).expect_err("checks after the helper's first build");
+    assert!(why.contains("after the tool builds the UI at line 2"), "{why}");
+    let bare = "ui_bundle() {\n  (cd \"$BUILD\" && \"$UI_TOOL\" build \"$BUILD/ui\" -o x)\n";
+    let why = node_check(&given(via), &given(bare)).expect_err("a helper naming no --node-modules");
+    assert!(why.contains("names no --node-modules"), "{why}");
+    assert!(node_check(&given(via), &[]).expect_err("no helper").contains("ui_bundle has no"));
     let script = "x() {\n  a\n}\nbuild_v2() {\n  b\n  c\n}\ny() {\n}\n";
     assert_eq!(shell_fn(script, "build_v2"), [(4, "build_v2() {"), (5, "  b"), (6, "  c")]);
 
     let pipeline = std::fs::read_to_string(root().join("deploy/pipeline")).expect("deploy/pipeline");
     let body = shell_fn(&pipeline, "build_v2");
     assert!(!body.is_empty(), "deploy/pipeline has build_v2");
-    if let Err(why) = node_check(&body) {
+    let helper = shell_fn(&pipeline, "ui_bundle");
+    if let Err(why) = node_check(&body, &helper) {
         panic!("FRAME-13: the build host has Node when the UI holds svelte/1 — {why}");
     }
 }

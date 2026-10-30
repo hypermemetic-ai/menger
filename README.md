@@ -256,8 +256,13 @@ child behind its gate, so a page's one socket reaches it
 `examples/shop`). menger links the library and builds no binary of that
 name (`tests/apart.rs`). The tool assumes no service: menger's calls to it
 name `--service menger` (`deploy/pipeline`'s push), and a contract asked of
-a service is its `ui.contract` — menger's, one service named, is
-`tickets.schema`'s hash, as the pipeline stamps it.
+a service is its `ui.contract` — the hash over every service the
+bundle's `uses` name (one service: its schema's own hash). The pipeline
+stamps each bundle so (SURFACE-11): it reads the methods from the
+manifest of a first, unstamped build, asks the menger it just built `ui
+contract --uses` them, and builds again with `--contract` — the app over
+`tickets` and every other service its components name, the studio over
+`ui` — and its log names the services each contract covers.
 
 One process registers these on the `menger` service (`src/builder.rs`), all
 behind plexus-core's gate; menger's own are declared on the frame
@@ -712,10 +717,12 @@ against a tenant that is not menger (`../plexus-ui/service/tests`); menger's
   every component's `uses` is looked up in the service it names through the
   seam (an unmounted service or a missing method: `unknown_method`, naming
   the `service`); the manifest's `contract` is compared with the hash of the
-  services named — one service, its schema's own hash (menger's bundles name
-  `tickets` alone: `tickets.schema`'s, which `plexus-ui build
-  --contract-from URL` stamps, or `--contract HASH` as given — UI-12: the
-  pipeline's build reads it from the binary it built and passes it so;
+  services named — one service, its schema's own hash, several a hash over
+  each (a bundle naming `tickets` alone: `tickets.schema`'s; one naming
+  `epics` or `ui` beside it, another), which `plexus-ui build
+  --contract-from URL` stamps, or `--contract HASH` as given — UI-12,
+  SURFACE-11: the pipeline's build asks the binary it built `ui contract
+  --uses` the methods the bundle's manifest names and passes the answer so;
   `unknown`, the build's without either flag and never accepted as
   `--contract`'s value, answers `contract_matches: null`, as a manifest
   naming no service does; UI-11). The row and the live pointer move together. The same
@@ -753,7 +760,10 @@ against a tenant that is not menger (`../plexus-ui/service/tests`); menger's
 - **Who may**: viewers and editors `versions`, `watch`, `slots list`,
   `routes list`; editors `routes set`, `routes clear`, `author`; a
   `deployer` `push` (V2-7: a deploy pushes as the pipeline key); `rollback`,
-  `preview`, `slots set`, `slots clear` are the admin's.
+  `preview`, `slots set`, `slots clear` are the admin's. Every write
+  (`push`, `author`, `rollback`, `preview`, `slots set|clear`, `routes
+  set|clear`) wants its grant held on `*`: the UI has no scope, and a grant
+  held on a scope alone is refused `forbidden` naming the scope (FRAME-43).
 - **Signing and pushing** a bundle: `plexus-ui sign KEYFILE TAR` prints the
   signature; `plexus-ui push --url ws://… --key NAME TAR` signs in as the key
   and pushes it (FRAME-8: `../plexus-ui`'s tool, `scripts/plexus-ui` here;
@@ -849,11 +859,24 @@ FRAME-14: the board is in two profiles. Beside each of the five board
 components above (`board-layout`, `board-rows`, `nav-tree`, `ticket-page`,
 `jump-palette`) is its real Svelte twin, `src/<name>-sv.svelte` (`svelte/1`:
 compiled at build in Node, `--node-modules ../plexus-ui/node_modules`), with
-the same calls and the same DOM marks. The real Svelte board is at `#/sv/`,
-`#/sv/f/:filter` and `#/sv/ticket/:id`; it is drawn in `board-frame.rhx`, an
-rhx layout that only places four sections (a section is the host's, and only
-an rhx template marks one), whose defaults are the svelte/1 ones — `top` holds
-`board-layout-sv`, the top bar and its filter line. The rhx components stay
+the same calls and the same DOM marks. SURFACE-2 (owner, 2026-10-30: "I want
+svelte components"): the real Svelte board is the default, at `#/`,
+`#/f/:filter` and `#/ticket/:id` (`#/sv/…` its alias), and the rhx board the
+comparison at `#/rhx/`, `#/rhx/f/:filter` and `#/rhx/ticket/:id`. The Svelte
+board is drawn in `board-frame.rhx`, an rhx layout that only places its
+sections (a section is the host's, and only an rhx template marks one), whose
+defaults are the svelte/1 ones — `top` the app's top (`app-top`: the epic,
+the live count, search, the links, the palette's button), `bar`
+`board-layout-sv` (the top bar and its filter line), `nav`, `keys` the
+board's keymap (`keys-help`), `main`, `bulk` the bulk bar (`bulk-bar`,
+hearing the rows' `board.selected`) and `palette`. The rhx board at `#/rhx/`
+is the comparison, and its links and filter line land on the real Svelte pages
+(`#/ticket/:id`, `#/f/:filter`) by design: rhx reads no route prefix. The board's keys are `board-rows-sv`'s (FRAME-36's
+`bus.keys`: `j`/`k`, `enter`, `x`, `shift+x`, `c`, `/` the filter line,
+`g b`, `g r`, `g w`, `escape`; `ctrl+k` the palette's own; `?` the host's
+overlay), its selection
+`[data-selected]` and `[data-checked]`, said on the bus as `board.selected
+{ ids }` and `board.focus { id }`. The rhx components stay
 the defaults of `board-layout`'s sections; a right-click on one puts the
 real Svelte twin there (`ui slots set`), and `ui slots clear` takes it back.
 FRAME-25: the real Svelte twins ride FRAME-19's bus as the rhx ones do — the
