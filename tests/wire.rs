@@ -3117,3 +3117,48 @@ async fn a_page_over_the_frame_budget_is_several_rows_frames() {
         }
     }
 }
+
+/// PLEXUS-12's test, kept by PERF-20 (a call is its own task, so calls on
+/// one socket overlap): one socket asks for a long list and then for
+/// `health`; `health` is done before the list is, and each call's items
+/// come in the order they were sent, `done` last.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_second_call_on_one_socket_overlaps_the_first_s_stream() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    answer(&client, "tickets.create", json!({"epic": "OV", "title": "root", "kind": "scope"})).await;
+    for i in 0..1000 {
+        answer(&client, "tickets.create", json!({"epic": "OV", "title": format!("t{i}")})).await;
+    }
+    let began = std::time::Instant::now();
+    let drain = move |mut sub: Subscription<Value>| async move {
+        let mut items = Vec::new();
+        while let Some(item) = sub.next().await {
+            let item = item.unwrap();
+            let done = item["type"] == "done";
+            items.push(item);
+            if done {
+                break;
+            }
+        }
+        (began.elapsed(), items)
+    };
+    let list = tokio::spawn(drain(call(&client, "tickets.list", json!({"limit": 10000})).await));
+    let health = tokio::spawn(drain(call(&client, "tickets.health", json!({})).await));
+    let ((list_at, list), (health_at, health)) = (list.await.unwrap(), health.await.unwrap());
+    println!("one socket: health done at {health_at:?}, the 1,001-row list done at {list_at:?}");
+    assert!(health_at < list_at, "health ({health_at:?}) waited for the list ({list_at:?})");
+    for items in [&list, &health] {
+        let (done, rest) = items.split_last().unwrap();
+        assert_eq!(done["type"], "done", "done last");
+        assert!(rest.iter().all(|i| i["type"] == "data"), "{rest:?}");
+    }
+    // v2: a page comes as `rows { items }` events (PERF-15), each item a ticket.
+    let seqs: Vec<u64> = list
+        .iter()
+        .flat_map(|i| i["content"]["items"].as_array().cloned().unwrap_or_else(|| vec![i["content"].clone()]))
+        .filter_map(|c| c.get("ticket").and_then(|t| t["seq"].as_u64()).or_else(|| c["summary"]["seq"].as_u64()))
+        .collect();
+    assert_eq!(seqs.len(), 1001, "every row");
+    assert!(seqs.windows(2).all(|w| w[0] < w[1]), "the rows in the order they were sent");
+}

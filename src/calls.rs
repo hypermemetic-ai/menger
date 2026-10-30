@@ -20,10 +20,12 @@
 //!   call open and none begun for that long is closed. An app holds its
 //!   `watch` open, so it is never idle; a script's socket closes itself.
 //!
-//! What it cannot see — a connection that never makes a call, a peer gone
-//! silent under an open watch (a WebSocket ping), and the message size
-//! (jsonrpsee's 10 MB default) — is the transport's accept loop, beside
-//! AUTH-11's liveness and AUTH-12's quotas: ACCESS-29's divergence note.
+//! What it cannot see is the transport's (PERF-20, plexus-transport's own
+//! socket loop): a connection that never makes a call is closed by the
+//! transport's idle limit, which `--idle-timeout-secs` sets too (RPC-5); a
+//! peer gone silent under an open watch is found by its pings; a message
+//! over 10 MiB is refused there — beside AUTH-11's liveness and AUTH-12's
+//! quotas: ACCESS-29's divergence note.
 //! Over stdio or a plain HTTP request there is no connection, and nothing
 //! is counted.
 
