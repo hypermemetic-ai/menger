@@ -1,6 +1,9 @@
-<!-- SURFACE-7: one row of the ready set that arrived live — `entered` names
-     its id alone, so the row reads the ticket (`get`, live on its own
-     changes) and draws as work-ready's rows do, flashing in. work-ready
+<!-- SURFACE-7: one row of the ready set, the board's row — kind mark, id,
+     title, the parent as a ticket-chip mark, severity bars, status chip.
+     work-ready hands it `row` when the answer carried the ticket; a row that
+     arrived live (`entered` names the id alone) is read here: `get`, live
+     on its own changes while `live` (work-ready keeps at most a few live:
+     each holds a get and a watch), else read once. It flashes in. work-ready
      imports it; it is a component in its own right too. -->
 <script module>
   export const uses = ["tickets.get", "tickets.watch"];
@@ -10,23 +13,26 @@
   import { live } from "plexus-ui/host";
   import TicketChip from "plexus-ui:ticket-chip";
 
-  let { id } = $props();
-  const t = live({ snapshot: "tickets.get", params: () => ({ id }), changes: "tickets.watch", key: "id",
-                   on: { amended: "upsert:ticket", status_changed: "upsert:ticket", kind_changed: "upsert:ticket", updated: "upsert:ticket", severity_changed: "upsert:ticket" } });
-  const shown = $derived(t.rows.filter((r) => r.title != null));
+  let { id, row = null, live: watching = true } = $props();
+  const held = live({ snapshot: "tickets.get", params: () => ({ id }), changes: "tickets.watch", key: "id", when: () => row == null && watching,
+                      on: { amended: "upsert:ticket", status_changed: "upsert:ticket", kind_changed: "upsert:ticket", updated: "upsert:ticket", severity_changed: "upsert:ticket" } });
+  const once = live({ snapshot: "tickets.get", params: () => ({ id }), key: "id", when: () => row == null && !watching });
+  const t = $derived(watching ? held : once);
+  // A `not_found` answer is a row of its id alone: no title.
+  const shown = $derived(row != null ? [row] : t.rows.filter((r) => r.title != null));
 </script>
 
 {#each shown as r (r.id)}
-  <a class="board-row arrived" data-id={r.id} data-status={r.status} data-arrived href={"#/ticket/" + r.id}>
+  <a class="board-row" class:arrived={row == null} data-id={r.id} data-status={r.status} data-arrived={row == null ? (watching ? "live" : "once") : undefined} href={"#/ticket/" + r.id}>
     <i class="kmark" data-kind={r.kind} aria-hidden="true"></i>
     <span class="row-id" data-field="id">{r.id}</span>
     <span class="row-title" data-field="title">{r.title}</span>
     <span class="row-parent" data-field="parent">{#if r.parent}<TicketChip id={r.parent} kind="parent"/>{/if}</span>
-    <span class="sev" data-field="severity" data-sev={r.severity ?? ""}><i></i><i></i><i></i></span>
+    <span class="sev" data-field="severity" data-sev={r.severity ?? ""} title={r.severity ?? "no severity"}><i></i><i></i><i></i></span>
     <span class="row-status" data-field="status">{r.status}</span>
   </a>
 {/each}
-{#if t.status === "pending"}
+{#if row == null && t.status === "pending"}
   <div class="board-row" data-id={id} data-loading aria-busy="true"><i></i><span class="row-id">{id}</span><span class="row-skel"></span></div>
 {/if}
 

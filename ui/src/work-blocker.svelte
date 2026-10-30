@@ -1,7 +1,8 @@
 <!-- SURFACE-7: one ticket beside another in the order of work — a chip live
      on its own id (`get`, `watch`): its status moves it, and done (Complete,
      Superseded, Canceled) it draws nothing, so it drops out of what holds or
-     what is held. An id that names no ticket is a dangling chip.
+     what is held. An id that names no ticket is a dangling chip. `live`
+     false (past work-blockers' cap) reads it once: no watch held.
      work-blockers imports it; it is a component in its own right too. -->
 <script module>
   const DONE = ["Complete", "Superseded", "Canceled"];
@@ -11,9 +12,11 @@
 <script>
   import { live } from "plexus-ui/host";
 
-  let { id, side = "blocker" } = $props();
-  const t = live({ snapshot: "tickets.get", params: () => ({ id }), changes: "tickets.watch", key: "id",
-                   on: { status_changed: "upsert:ticket", amended: "upsert:ticket", updated: "upsert:ticket", kind_changed: "upsert:ticket", deleted: "remove:ids" } });
+  let { id, side = "blocker", live: watching = true } = $props();
+  const held = live({ snapshot: "tickets.get", params: () => ({ id }), changes: "tickets.watch", key: "id", when: () => watching,
+                      on: { status_changed: "upsert:ticket", amended: "upsert:ticket", updated: "upsert:ticket", kind_changed: "upsert:ticket", deleted: "remove:ids" } });
+  const once = live({ snapshot: "tickets.get", params: () => ({ id }), key: "id", when: () => !watching });
+  const t = $derived(watching ? held : once);
   // A `not_found` answer is a row of its id alone: no title.
   const real = $derived(t.rows.filter((r) => r.title != null));
   const open = $derived(real.filter((r) => !DONE.includes(r.status)));
@@ -21,7 +24,7 @@
 
 <span class="wb-one" data-surface="work-blocker">
   {#each open as r (r.id)}
-    <a class="chip" data-id={r.id} data-side={side} data-status={r.status} href={"#/ticket/" + r.id} title={`${r.id} ${r.title} · ${r.status}`}>
+    <a class="chip" data-id={r.id} data-side={side} data-live={watching ? "1" : "0"} data-status={r.status} href={"#/ticket/" + r.id} title={`${r.id} ${r.title} · ${r.status}`}>
       <i class="kmark" data-kind={r.kind} aria-hidden="true"></i>
       <span class="chip-code">{r.id}</span>
       <span class="chip-title" data-field="title">{r.title}</span>

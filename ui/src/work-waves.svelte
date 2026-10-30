@@ -29,17 +29,25 @@
   const mode = $derived(to ? "to" : id ? "under" : chosen.length ? "in" : "pick");
   const target = $derived(mode === "to" ? to : id);
 
-  const groups = live({ snapshot: "tickets.nav.groups", params: {}, key: "shortcode", on: { group: "upsert:group" } });
+  const groups = live({ snapshot: "tickets.nav.groups", params: {}, key: "shortcode", on: { group: "upsert:group" },
+                        when: () => mode === "in" || mode === "pick" });
+  // The rows are the answer's events less `type`: `placed { summary,
+  // placement, waiting_on }`, `wave_cycle { ids }`, `not_found { id }`. The
+  // spec's key is consulted only by a fold of a changes stream, which these
+  // reads have none of; it is `id`, never the summary object, and each placed
+  // row is given its `id` (the summary's) below, so a fold added later keys
+  // on the ticket.
   const all = live({ snapshot: "tickets.work.waves", params: () => ({ epics: chosen, kinds: [...kinds] }),
-                     key: "summary", when: () => mode === "in", on: { placed: "upsert:.", wave_cycle: "upsert:." } });
+                     key: "id", when: () => mode === "in", on: { placed: "upsert:.", wave_cycle: "upsert:.", not_found: "upsert:." } });
   const under = live({ snapshot: "tickets.work.waves_under", params: () => ({ id, kinds: [...kinds] }),
-                       key: "summary", when: () => mode === "under", on: { placed: "upsert:.", wave_cycle: "upsert:." } });
+                       key: "id", when: () => mode === "under", on: { placed: "upsert:.", wave_cycle: "upsert:.", not_found: "upsert:." } });
   const upto = live({ snapshot: "tickets.work.waves_to", params: () => ({ id: to, kinds: [...kinds] }),
-                      key: "summary", when: () => mode === "to", on: { placed: "upsert:.", wave_cycle: "upsert:." } });
+                      key: "id", when: () => mode === "to", on: { placed: "upsert:.", wave_cycle: "upsert:.", not_found: "upsert:." } });
   const C = $derived(mode === "to" ? upto : mode === "under" ? under : all);
   const status = $derived(mode === "pick" ? "live" : C.status);
   const rows = $derived(mode === "pick" ? [] : C.rows);
-  const placed = $derived(rows.filter((r) => r.summary));
+  const placed = $derived(rows.filter((r) => r.summary).map((r) => ({ ...r, id: r.summary.id })));
+  const missing = $derived(rows.find((r) => !r.summary && !r.ids && r.id != null)?.id ?? null);
   const cycles = $derived(rows.filter((r) => r.ids));
 
   // The lanes in the answer's order (waves ascending, then the missing), each
@@ -115,7 +123,11 @@
     {:else if status === "pending"}
       <div class="lanes" data-loading aria-busy="true"><div class="lane skel"><i></i><i></i><i></i></div><div class="lane skel"><i></i><i></i></div></div>
     {:else if status === "live" && G.lanes.length === 0}
-      <p class="ww-empty" data-empty>{mode === "in" ? `Nothing waits in ${chosen.join(", ")} for these kinds.` : rows.length === 0 ? `No ticket ${target} here, or nothing of these kinds.` : "Nothing waits here for these kinds."}</p>
+      {#if missing != null}
+        <p class="ww-empty" data-empty data-not-found={missing}>No ticket {missing} here.</p>
+      {:else}
+        <p class="ww-empty" data-empty>{mode === "in" ? `Nothing waits in ${chosen.join(", ")} for these kinds.` : mode === "under" ? `Nothing under ${target} waits, for these kinds.` : `Nothing waits before ${target}, for these kinds.`}</p>
+      {/if}
     {:else if G.lanes.length}
       <div class="lanes" data-dim={hot ? "1" : "0"} role="presentation" onmouseleave={() => (hot = "")}>
         {#each G.edges as e (e.from + ">" + e.to)}
@@ -125,11 +137,11 @@
           <section class="lane" data-wave={k}>
             <h2 class="lane-head">{#if k === "missing"}missing blocker{:else}wave <b>{k}</b>{/if} · {G.by.get(k).length}</h2>
             <div class="lane-chips">
-              {#each G.by.get(k) as r (r.summary.id)}
+              {#each G.by.get(k) as r (r.id)}
                 <a class="chip" data-id={r.summary.id} data-status={r.summary.status} data-kind={r.summary.kind}
                    data-on={hot === r.summary.id ? "1" : "0"} data-rel={touches(r) ? "1" : "0"}
                    href={"#/ticket/" + r.summary.id} title={`${r.summary.id} ${r.summary.title} · ${r.summary.status}`}
-                   onmouseenter={() => (hot = r.summary.id)} onfocus={() => (hot = r.summary.id)}>
+                   onmouseenter={() => (hot = r.summary.id)} onfocus={() => (hot = r.summary.id)} onblur={() => { if (hot === r.summary.id) hot = ""; }}>
                   <i class="kmark" data-kind={r.summary.kind} aria-hidden="true"></i>
                   <span class="chip-code">{r.summary.id}</span>
                   <span class="chip-title" data-field="title">{r.summary.title}</span>

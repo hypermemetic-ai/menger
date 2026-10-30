@@ -67,6 +67,8 @@ export default async (ctx) => {
       // The unfiltered set draws rows too, and the dark scheme paints them.
       await page.evaluate(() => (location.hash = "#/ready"));
       await eventually("#/ready draws rows", async () => (await rows.count()) > 0, 15_000);
+      // Past 200 the head says the cut: the first 200 by id, of how many.
+      await eventually("the cut-off is said with the count", async () => Number(await W.locator("[data-approx]").getAttribute("data-approx", { timeout: 500 })) > 200, 10_000);
       const light = await rows.first().locator("[data-field=status]").evaluate((e) => getComputedStyle(e).backgroundColor);
       await page.evaluate(() => document.documentElement.setAttribute("data-theme", "dark"));
       const dark = await rows.first().locator("[data-field=status]").evaluate((e) => getComputedStyle(e).backgroundColor);
@@ -143,7 +145,7 @@ export default async (ctx) => {
       assert(!(await ids(chips)).includes(lone), "only what must happen first");
       assert((await W.locator("[data-mode]").getAttribute("data-mode")) === "to", "the mode is said");
       await page.evaluate(() => (location.hash = "#/waves/NOPE-404"));
-      await eventually("an unknown ticket is the empty sentence", async () => (await W.locator("[data-empty]").count()) === 1, 10_000);
+      await eventually("an unknown ticket is its own sentence", async () => (await W.locator('[data-empty][data-not-found="NOPE-404"]').count()) === 1, 10_000);
     } finally {
       await context.close();
     }
@@ -155,16 +157,19 @@ export default async (ctx) => {
     const b2 = create("WRKE", "second blocker", "--kind", "build", "--parent", root);
     const t = create("WRKE", "the one held", "--kind", "build", "--parent", root, "--blocked-by", `${b1},${b2}`);
     const after = create("WRKE", "what it holds", "--kind", "build", "--parent", root, "--blocked-by", t);
-    // SURFACE-3 places the mark in the ticket page; until it does, the
-    // component's own route mounts it.
+    // SURFACE-3 places the mark in the ticket page (`[data-mark=work-blockers]`):
+    // where the page draws it, it must be filled; only a page without it (v2
+    // before SURFACE-3) falls back to the component's own route.
     const { page, context } = await openPage(`#/ticket/${t}`);
     try {
+      await eventually("the ticket page is drawn", async () => (await page.locator("[data-ticket-title]").count()) > 0, 15_000);
       let W = page.locator("[data-surface=work-blockers]");
-      const placed = await eventually("the ticket page's mark", async () => (await W.count()) === 1, 4_000).then(() => true, () => false);
-      if (!placed) {
-        console.log("     work-blockers is not yet in the ticket page (SURFACE-3 places the mark): mounted by #/blockers/:id");
+      if ((await page.locator("[data-mark=work-blockers]").count()) > 0) {
+        await eventually("the ticket page's work-blockers mark is filled", async () => (await page.locator("[data-mark=work-blockers] [data-surface=work-blockers]").count()) === 1, 10_000);
+        W = page.locator("[data-mark=work-blockers] [data-surface=work-blockers]");
+      } else {
+        console.log("     the ticket page draws no [data-mark=work-blockers] (SURFACE-3 places it): mounted by #/blockers/:id");
         await page.evaluate((r) => (location.hash = r), `#/blockers/${t}`);
-        W = page.locator("[data-surface=work-blockers]");
       }
       const side = (s) => W.locator(`[data-side=${s}] [data-surface=work-blocker] .chip[data-id]`);
       await eventually("both blockers drawn", async () => (await ids(side("blocker"))).sort().join() === [b1, b2].sort().join(), 15_000);
@@ -182,6 +187,15 @@ export default async (ctx) => {
       status(b2, "Complete");
       status(b3, "Canceled");
       await eventually("no open blockers: the empty sentence", async () => W.locator("[data-side=blocker] [data-empty]").isVisible(), 10_000);
+      // Each live chip holds a get and a watch: past 24 the rest are read once, said as "+N".
+      const many = Array.from({ length: 26 }, (_, i) => create("WRKE", `blocker ${i + 1} of many`, "--kind", "build", "--parent", root));
+      const big = create("WRKE", "held by many", "--kind", "build", "--parent", root, "--blocked-by", many.join(","));
+      await page.evaluate((r) => (location.hash = r), `#/blockers/${big}`);
+      const chips = page.locator("[data-surface=work-blockers] [data-side=blocker] [data-surface=work-blocker] .chip[data-id]");
+      await eventually("all 26 drawn", async () => (await chips.count()) === 26, 15_000);
+      const live = await chips.evaluateAll((els) => els.map((e) => e.getAttribute("data-live")).join(""));
+      assert(live === "1".repeat(24) + "00", `the first 24 live, the rest once: ${live}`);
+      assert((await page.locator("[data-surface=work-blockers] [data-field=more]").getAttribute("data-approx")) === "2", "+2 not live, said");
     } finally {
       await context.close();
     }
