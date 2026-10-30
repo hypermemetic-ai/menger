@@ -73,7 +73,8 @@ pub struct ShellConfig {
 /// STUDIO-2: who opens `/studio/`, and the module the studio compiles in.
 #[derive(Clone)]
 pub struct Studio {
-    /// Whether a session's identity may open it (menger: [`studio_may`]).
+    /// Whether a session's identity may open it (menger: the framework's
+    /// `routes::may_author` over the hub's gate — `ui.author` held on `*`).
     pub may: Arc<dyn Fn(&plexus_core::plexus::AuthContext) -> bool + Send + Sync>,
     /// `--ui-compiler`'s bytes, served at `/studio/ui-compiler.wasm`.
     pub compiler: Option<Vec<u8>>,
@@ -546,9 +547,3 @@ mod tests {
 
 }
 
-/// STUDIO-2: who opens the studio — the gate's own answer to "does this
-/// session hold `ui.author` (an editor's grant) on `*`": memberships, teams,
-/// `everyone` and a session's ceiling all counted, as for a call.
-pub fn studio_may(gate: &plexus_auth_core::grants::Gate, ctx: &plexus_core::plexus::AuthContext) -> bool {
-    gate.held_on(ctx, &plexus_auth_core::grants::Grant::new("ui.author")).iter().any(|s| s.is_everywhere())
-}

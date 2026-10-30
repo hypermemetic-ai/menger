@@ -328,4 +328,10 @@ async fn the_studio_is_mounted_for_the_admin_and_editors() {
     assert!(g.first().is_some_and(|e| e.get("error_kind").is_none()), "editor on KILN: {g:?}");
     let narrow = support::mint_session_for(&NARROW, m.ws).await;
     assert_eq!(m.get("/studio/", Some(&narrow)).await.status(), 403, "an editor on KILN alone");
+    // STUDIO-6: the admin's own key, its session capped at editor@KILN-1 —
+    // a ceiling the gate holds it to: refused too, the module with it.
+    let capped = support::mint_session_with(&support::ADMIN, m.ws, json!({ "ceiling": ["editor@KILN-1"] })).await;
+    assert_eq!(m.get("/studio/", Some(&capped)).await.status(), 403, "the admin capped at editor@KILN-1");
+    assert_eq!(m.get("/studio/ui-compiler.wasm", Some(&capped)).await.status(), 403);
+    assert_eq!(m.get("/studio/", Some(&mine)).await.status(), 200, "the admin uncapped");
 }

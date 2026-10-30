@@ -563,7 +563,8 @@ async fn run(args: Args) -> anyhow::Result<()> {
     let hub = build_rpc_ui(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, ui).await?;
 
     local::log_activations(&hub);
-    let studio_gate = hub.gate().cloned();
+    // STUDIO-2/6: who opens /studio/ is the framework's rule over the hub's gate.
+    let studio_may = hub.gate().cloned().map(plexus_ui_service::routes::may_author);
 
     // DIST-3: the wiring shared with `menger::local` (the library's
     // no-login server) lives there; the flags' variations stay here.
@@ -633,7 +634,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
             // UI-3: `/app/` and `/app/<hash>/…` from the ui service's store.
             ui: Some(ui_store),
             // STUDIO-2: /studio/ for a session holding ui.author on * (the gate's answer).
-            studio: Some(shell::Studio { may: std::sync::Arc::new(move |ctx| studio_gate.as_ref().is_some_and(|g| shell::studio_may(g, ctx))), compiler: studio_module }),
+            studio: Some(shell::Studio { may: std::sync::Arc::new(move |ctx| studio_may.as_ref().is_some_and(|may| may(ctx))), compiler: studio_module }),
             framing: shell::Framing {
                 ancestors: args.frame_ancestor.iter().map(|o| shell::check_origin(o)).collect::<Result<_, _>>().map_err(|e| anyhow::anyhow!("--frame-ancestor: {e}"))?,
                 live: args.live_origin.as_deref().map(shell::check_origin).transpose().map_err(|e| anyhow::anyhow!("--live-origin: {e}"))?,
