@@ -60,6 +60,10 @@ const opt = (name, dflt) => (args.includes(name) ? args[args.indexOf(name) + 1] 
 const SEED = Number(opt("--seed", "100000"));
 const PROFILE = flag("--debug") ? "debug" : "release";
 const ONLY = opt("--only", null)?.split(",");
+// SURFACE-1: a feature group's cases live in tests/pages/<group>.mjs and run after the board's;
+// `--group NAME` runs that file's cases alone (the board's own are skipped), `--group all` every file.
+const GROUP = opt("--group", null);
+let inGroup = false;
 const PAGE = 200; // the board's page
 const HELD_MAX = 2_500; // rows held after a scroll
 const CREATE_MS = 100; // a created ticket's frame → its row and count
@@ -178,6 +182,7 @@ async function typeBursts(page, sel, bursts, gap) {
 
 async function test(name, body) {
   if (ONLY && !ONLY.includes(name)) return;
+  if (GROUP && !inGroup) return;
   const t0 = Date.now();
   try {
     await body();
@@ -878,6 +883,19 @@ async function main() {
           await eventually(`clear puts ${rhx} back in ${slot}`, async () => (await section(page, R, slot).locator(rhx).count()) === 1, 5_000);
         }
       });
+    }
+    // SURFACE-1: the groups' cases, each file given the runner's helpers.
+    const groupsDir = path.join(path.dirname(new URL(import.meta.url).pathname), "pages");
+    const groupFiles = fs.existsSync(groupsDir) ? fs.readdirSync(groupsDir).filter((f) => f.endsWith(".mjs")).sort() : [];
+    const wanted = GROUP && GROUP !== "all" ? groupFiles.filter((f) => f === `${GROUP}.mjs`) : groupFiles;
+    if (GROUP && GROUP !== "all" && !wanted.length) throw new Error(`--group ${GROUP}: no tests/pages/${GROUP}.mjs (have: ${groupFiles.join(", ") || "none"})`);
+    inGroup = true;
+    const ctx = { test, assert, eventually, sleep, typeBursts, openPage, marked, sameDocument, sy, summaries, extentsNow, groupsNow,
+      section, main, nav, palette, rowIds, attrs, boardUp, BOARDS, server, token, session, v1, v2, pages, fs, path };
+    for (const f of wanted) {
+      console.log(`group ${f.replace(/\.mjs$/, "")}`);
+      const m = await import(path.join(groupsDir, f));
+      await m.default(ctx);
     }
   } finally {
     if (results.some((r) => !r.ok)) {
