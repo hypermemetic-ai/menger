@@ -731,7 +731,7 @@ against a tenant that is not menger (`../plexus-ui/service/tests`); menger's
   a seed file made at first start, 0600; the image's
   `/data/ui-author.key`; none: `no_signer`) — and pushed through the push's
   own steps; it answers `authored { version, base, components, live, new,
-  contract_matches, signer, signature }`. rhx only: Svelte is the tool's build.
+  contract_matches, signer, signature }`. rhx only: a `svelte/1` component comes through the tool's build (Node), which the service does not have.
 - **`rollback --to <hash>`** moves the pointer to a kept version;
   **`preview`** serves one to the caller's own sessions; **`versions`**
   lists them; **`watch`** says `live` on each move, `slot_changed` on each
