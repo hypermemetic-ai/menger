@@ -92,7 +92,7 @@ const BOARDS = {
   sv: {
     name: "sv", tag: "_sv", route: "", filterRoute: "#/f/", ticketRoute: "#/ticket/",
     layout: "board-frame", top: "board-layout-sv", nav: "nav-tree-sv", main: "board-rows-sv", palette: "jump-palette-sv", page: "ticket-page-sv",
-    sections: [["top", "app-top"], ["bar", "board-layout-sv"], ["nav", "nav-tree-sv"], ["keys", "keys-help"], ["main", "board-rows-sv"], ["bulk", "bulk-bar"], ["palette", "jump-palette-sv"]],
+    sections: [["top", "app-top"], ["bar", "board-layout-sv"], ["nav", "nav-tree-sv"], ["facets", "nav-facets"], ["saved", "filters-saved"], ["keys", "keys-help"], ["main", "board-rows-sv"], ["bulk", "bulk-bar"], ["palette", "jump-palette-sv"]],
     module: "board-rows-sv.js", epics: ["AAAC", "AAAD"],
     siblings: ["nav-flat-sv", "nav-children-sv", "ticket-chip-sv"], // FRAME-25: imported by their parents, components in their own right
   },

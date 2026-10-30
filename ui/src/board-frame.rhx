@@ -4,8 +4,9 @@
   // its sections and nothing else (tests/apart.rs holds it to that). SURFACE-2:
   // the Svelte board is the default (`#/`, `#/f/:filter`; `#/sv/…` kept as
   // aliases); `top` the app's top (app-top), `bar` the Svelte top bar and
-  // its filter line (board-layout-sv), then the nav column — the nav and
-  // the board's keymap (keys-help) — the board with the bulk bar under it
+  // its filter line (board-layout-sv), then the nav column — the nav, the
+  // facets (nav-facets) and the saved filters (filters-saved, compact; SURFACE-6)
+  // and the board's keymap (keys-help) — the board with the bulk bar under it
   // (bulk-bar, SURFACE-5: it hears `board.selected`), and the palette
   // (ui/slots.json the defaults). A section is placed only with its default:
   // one with none costs the first row ~0.3 s (SURFACE-2's probe). The route
@@ -19,6 +20,8 @@
   <div class="board-body">
     <div class="board-side">
       <slot name="nav" filter={filter}/>
+      <slot name="facets" filter={filter}/>
+      <slot name="saved" filter={filter} compact="true"/>
       <slot name="keys"/>
     </div>
     <div class="board-main">

@@ -235,6 +235,9 @@ async fn saved_names_over_the_wire_list_count_refuse_and_move_a_watch() {
     assert_eq!((renamed["filter"]["name"].as_str(), renamed["renamed_from"].as_str()), (Some("Plexus pending"), Some("Plexus-Ready")));
     let said = watch_until(&mut plain, "filter_saved").await;
     assert_eq!(said.last().unwrap()["renamed_from"], "Plexus-Ready", "{said:?}");
+    // SURFACE-6: and the old name said gone, right after the new row.
+    let said = watch_until(&mut plain, "filter_deleted").await;
+    assert_eq!(said, [json!({"type": "filter_deleted", "name": "Plexus-Ready"})], "the rename's delete comes next");
     assert_eq!(listed(&client, "saved \"plexus pending\"").await.unwrap(), ["PLEXUS-1", "PLEXUS-2", "PLEXUS-4"]);
     assert!(listed(&client, "saved Plexus-Ready").await.unwrap_err().contains("no saved filter named \"Plexus-Ready\""));
     let gone = one(&client, "tickets.filters.delete", json!({"name": "plexus pending"})).await;

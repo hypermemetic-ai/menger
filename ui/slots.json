@@ -11,6 +11,8 @@
     "top": "app-top",
     "bar": "board-layout-sv",
     "nav": "nav-tree-sv",
+    "facets": "nav-facets",
+    "saved": "filters-saved",
     "keys": "keys-help",
     "main": "board-rows-sv",
     "bulk": "bulk-bar",

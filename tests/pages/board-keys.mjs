@@ -202,10 +202,12 @@ export default async (ctx) => {
     const k = await lastKey(page);
     assert(k.prevented === true && k.reached === false, `/ is the host's: ${JSON.stringify(k)}`);
     assert((await page.locator("input[data-palette-input]").count()) === 0, "/ does not open the palette (ctrl+k does, the palette's own)");
-    const focused = await page.evaluate(() => document.activeElement?.matches?.("input[data-filter-input]") ?? false);
-    if (!focused) console.log("     skip the filter line's focus: `/` says filter.focus on the bus, and the filter line (board-layout-sv, SURFACE-6) takes it — waits on SURFACE-6");
+    // `/` says filter.focus on the bus, and the filter line (filter-line-sv, SURFACE-6) takes it.
+    await eventually("/ focuses the filter line", async () => page.evaluate(() => document.activeElement?.matches?.("input[data-filter-input]") ?? false), 2_000);
     const typed = await page.locator("input[data-filter-input]").inputValue();
     assert(typed === "", `the / was typed nowhere: ${JSON.stringify(typed)}`);
+    // Out of the line, so the board's keys are the board's again.
+    await page.evaluate(() => document.activeElement?.blur?.());
     // escape clears the selection.
     await page.keyboard.press("j");
     await eventually("j selected a row", async () => (await selected(page)).length === 1, 2_000);
