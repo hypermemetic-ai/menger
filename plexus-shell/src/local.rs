@@ -18,10 +18,9 @@
 //! (synapse, a native client) is admitted as always.
 
 use crate::ShellConfig;
-use jsonrpsee::server::ServerHandle;
 use plexus_core::plexus::DynamicHub;
 use plexus_transport::websocket::{serve_websocket_with, UpgradeOptions};
-use plexus_transport::WebSocketConfig;
+use plexus_transport::{ServerHandle, WebSocketConfig};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::oneshot;
