@@ -1833,7 +1833,8 @@ async fn component_docs_over_the_wire() {
 /// `error` each, a no-op `close` answers `input`, and `list`'s filters
 /// hold. ACCESS-14: at their paths under `tickets.inputs`, and an answer's
 /// source is the server's (ACCESS-3 #12) — `api` for a call that proves no
-/// one, whatever the caller sends.
+/// one; a caller's `source` is no parameter, so a call that says one is
+/// refused at dispatch and writes nothing (MACRO-31, MACRO-33).
 #[tokio::test]
 async fn inputs_over_the_wire() {
     let port = start_server().await;
@@ -1873,10 +1874,15 @@ async fn inputs_over_the_wire() {
     assert_eq!(inputs(json!({})).await, vec![json!({"type": "input", "input": declared})]);
 
     // Answer: a typed value, recorded with its source and rationale — the
-    // source the server's: a caller's `source` is no parameter (ignored).
+    // source the server's: a caller's `source` is no parameter, refused at
+    // dispatch (MACRO-31) with nothing written — the answer after it is the
+    // history's first entry and the watch's one event.
     let value = json!({"type": "choice", "option": "archive"});
+    let says_source = json!({"ticket": "ask-2", "input": "landing", "value": value, "rationale": "holds are real", "source": "app"});
+    let refused = invalid(&client, "tickets.inputs.answer", says_source).await;
+    assert!(refused.contains("unknown field `source`"), "{refused}");
     let evs = collect(
-        call(&client, "tickets.inputs.answer", json!({"ticket": "ask-2", "input": "landing", "value": value, "rationale": "holds are real", "source": "app"}))
+        call(&client, "tickets.inputs.answer", json!({"ticket": "ask-2", "input": "landing", "value": value, "rationale": "holds are real"}))
             .await,
     )
     .await;
@@ -1898,8 +1904,11 @@ async fn inputs_over_the_wire() {
     assert_eq!(watch_until(&mut mine, "input_changed").await, vec![json!({"type": "input_changed", "input": answered})]);
 
     // INPUT-9: a clear is recorded in the history with its source — the
-    // server's (ACCESS-14), as an answer's.
-    let evs = collect(call(&client, "tickets.inputs.clear", json!({"ticket": "ASK-2", "input": "landing", "source": "app"})).await).await;
+    // server's (ACCESS-14), as an answer's; one that says a `source` is
+    // refused at dispatch and clears nothing (the clear after it changes).
+    let refused = invalid(&client, "tickets.inputs.clear", json!({"ticket": "ASK-2", "input": "landing", "source": "app"})).await;
+    assert!(refused.contains("unknown field `source`"), "{refused}");
+    let evs = collect(call(&client, "tickets.inputs.clear", json!({"ticket": "ASK-2", "input": "landing"})).await).await;
     assert_eq!((evs.len(), evs[0]["type"].as_str()), (1, Some("input_changed")), "{evs:?}");
     assert_eq!((&evs[0]["input"]["state"], &evs[0]["input"]["answer"]), (&json!("open"), &Value::Null));
     assert_eq!((&evs[0]["input"]["history"][1]["action"], &evs[0]["input"]["history"][1]["source"]), (&json!("cleared"), &json!("api")));
