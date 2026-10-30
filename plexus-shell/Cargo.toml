@@ -45,7 +45,8 @@ anyhow = { version = "1", optional = true }
 # by version from crates.io once published.
 plexus-core = { path = "../../plexus-core", version = "0.6.1", optional = true }
 plexus-transport = { path = "../../plexus-transport", version = "0.5.1", default-features = false, optional = true }
-jsonrpsee = { version = "0.26", features = ["server"], optional = true }
+# PERF-20: jsonrpsee-core's method table (RpcModule); the socket is plexus-transport's.
+jsonrpsee = { version = "0.26", features = ["server-core"], optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

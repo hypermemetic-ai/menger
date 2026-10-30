@@ -585,6 +585,10 @@ async fn run(args: Args) -> anyhow::Result<()> {
             // BIDIR-8: the transport counts each connection's calls.
             max_calls_per_connection: args.max_calls_per_connection,
         })
+        // RPC-5 (PERF-20): --idle-timeout-secs reaches the socket that never
+        // makes a call too — the transport closes it; menger's sweep keeps
+        // the ones that did (src/calls.rs). Pings find a dead peer.
+        .with_socket_limits(plexus_transport::SocketLimits { idle_timeout: limits.idle, ..Default::default() })
         .with_allowed_hosts(hosts(ws_port));
     tracing::info!("WebSocket: ws://{}", std::net::SocketAddr::new(args.bind, ws_port));
     // IDENTITY-29: only menger's own pages may open the socket from a
@@ -639,7 +643,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
                 }
                 let validator = wired.gate.clone().map(|g| g as Arc<dyn plexus_core::plexus::SessionValidator>);
                 let bridge = plexus_transport::plexus_transport_mcp::McpBridge::new(plexus_transport::ServiceUpstream::new(service.clone(), validator), mcp);
-                tracing::info!("MCP:       {public}/mcp — the login's callers: a session or a key proof as the Bearer");
+                tracing::info!("MCP:       {public}/mcp — the login's callers: a session or a key proof in the Authorization header");
                 plexus_transport::plexus_transport_mcp::router(bridge)
             }),
         };
