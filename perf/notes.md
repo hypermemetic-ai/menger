@@ -833,13 +833,23 @@ interleaved, three runs each, the machine at load 3–8:
 | 2 | 0.164 s | 0.126 s | 0.174 s | 0.151 s |
 | 3 | 0.151 s | 0.122 s | 0.188 s | 0.155 s |
 
-Left at 10⁶: PERF-22's gate in `nav-facets` and `filters-saved` (asked at once when no undrawn board is on
-the page a tick after their mount) assumed the sections mount in one task; now `board-rows-sv` mounts
-after them, so `nav.facets` is asked during the mount and its ~270 frames (~30 ms at 10⁶) run between the
-turns — a turn waits out a stream of frames still arriving. With the gate held by hand (the probe
-answering that check as "a board to come"), the first row at 10⁶ was 144 against 168 ms on the same probe.
-`tests/pages_browser.mjs --group all` on this engine: 99 pass, one fails for that reason —
-`the_navs_sections_ask_after_the_first_rows` (nav.facets sent +102.8, the list +134.5), green on main's
-engine. The gate is menger's to move to something the host says (the contract now says a section's
-component must not assume its siblings are on the page when it mounts); until it moves, this engine is
-not for v2.
+PERF-22's gate in `nav-facets` and `filters-saved` (asked at once when no undrawn board was on the
+page a tick after their mount) assumed the sections mount in one task; on the turns `board-rows-sv`
+mounts after them, `nav.facets` went out during the mount, its ~270 frames (~30 ms at 10⁶) ran between
+the turns, and `the_navs_sections_ask_after_the_first_rows` failed. Now the three nav components take
+`after` — a bus topic heard before their first call, none: at once — and board-frame passes
+`after="board.drawn"` to the facets and the saved filters; `#/filters`, `#/facets/:filter`,
+`#/counts/:filter` and the sheet's tiles pass none. Nothing is guessed from the page (a remount after
+the board drew finds `[data-drawn]` and asks). `tests/pages_browser.mjs --group all`: 100 / 100 on main's
+engine and on FRAME-50's. The probe again with it, the same pairs (load 1.5–14; the loaded runs marked):
+
+| run | 10³ before | 10³ after | 10⁶ before | 10⁶ after |
+|---|---|---|---|---|
+| 1 | 0.167 s (load 6) | 0.123 s | 0.168 s | 0.137 s |
+| 2 | 0.150 s | 0.118 s | 0.313 s (load 14) | 0.155 s (load 14) |
+| 3 | 0.153 s | 0.120 s | 0.245 s (load 14) | 0.140 s |
+| 4 | | | 0.210 s (load 12) | 0.171 s (load 12) |
+| 5 | | | 0.180 s (load 12) | 0.180 s (load 10) |
+
+In a quiet window the first row is 150–153 → 118–120 ms at 10³ and 168 → 137–140 ms at 10⁶ (the 144 the
+gate held by hand had shown).

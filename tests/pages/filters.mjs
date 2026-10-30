@@ -18,7 +18,8 @@
 //       `input[data-filter-input]`, `[data-filter-check=ok|refused]`
 //       (`[data-refused]`), saved names offered as `[data-complete=<name>]`
 //   PERF-22: the board's `[data-board][data-surface=board-rows]` gains `[data-drawn]` once its first
-//       answer is drawn (and says `board.drawn` on the bus); the nav's facets and saved filters ask then
+//       answer is drawn (and says `board.drawn` on the bus); the nav's facets and saved filters ask then —
+//       FRAME-50: because the frame places them with `after="board.drawn"`, never from a look at the page
 import { sentCalls } from "../../scripts/ui-throwaway.mjs";
 
 export default async (ctx) => {
@@ -39,7 +40,9 @@ export default async (ctx) => {
   // PERF-22: the rows are what the person waits for. On the board the nav's
   // facets (nav.facets) and saved filters (filters.list) ask once the board's
   // first rows are drawn — after the first tickets.list answer, never beside
-  // it; on a page of their own, at once.
+  // it; on a page of their own, at once. FRAME-50: the frame says so
+  // (`after="board.drawn"` on their slots); a page of their own passes no
+  // `after` — so it holds whether the sections mount in one task or in turns.
   await test("the_navs_sections_ask_after_the_first_rows", async () => {
     const mark = (page, name) => page.evaluate((name) => performance.getEntriesByType("mark").find((e) => e.name === name)?.startTime ?? null, name);
     {
@@ -64,7 +67,8 @@ export default async (ctx) => {
       }
     }
     for (const [route, method, drawn] of [["#/filters", "tickets.filters.list", '[data-surface=filters-saved] [data-id="Needs you"]'],
-                                         ["#/facets/kind%20build", "tickets.nav.facets", "[data-surface=nav-facets] [data-facet]"]]) {
+                                         ["#/facets/kind%20build", "tickets.nav.facets", "[data-surface=nav-facets] [data-facet]"],
+                                         ["#/counts/kind%20build", "tickets.nav.counts", "[data-surface=nav-counts] [data-field=count]"]]) {
       const { page, context } = await openPage(route);
       try {
         await eventually(`${route} drawn`, async () => (await page.locator(drawn).count()) > 0, 5000);

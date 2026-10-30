@@ -11,6 +11,8 @@
   // (ui/slots.json the defaults). A section is placed only with its default:
   // one with none costs the first row ~0.3 s (SURFACE-2's probe). The route
   // gives the filter (`#/` none, `#/f/:filter` the text); every section gets it.
+  // FRAME-50: the facets and the saved filters wait for `board.drawn` (`after`):
+  // a section cannot assume the board beside it is mounted yet.
   prop("filter");
 </script>
 
@@ -20,8 +22,8 @@
   <div class="board-body">
     <div class="board-side">
       <slot name="nav" filter={filter}/>
-      <slot name="facets" filter={filter}/>
-      <slot name="saved" filter={filter} compact="true"/>
+      <slot name="facets" filter={filter} after="board.drawn"/>
+      <slot name="saved" filter={filter} compact="true" after="board.drawn"/>
       <slot name="keys"/>
     </div>
     <div class="board-main">
