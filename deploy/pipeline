@@ -382,15 +382,18 @@ cmd_build() {
     say "gate: none (--no-gate) — the suite runs after the deploy to test"
   fi
 
-  step "release build"
+  # RUN-39 (PERF-6; PERF-1's `profiles`): a release is the perf build — `[profile.perf]`, "the one
+  # build that perf runs and releases use" — so the binary prod runs is the one the suite's bench
+  # holds to its goldens, which were taken from that build.
+  step "release build (the perf profile)"
   lr=$(log_path build-release); say "log: $lr"
-  (cd "$BUILD" && cargo build --release -p menger -p menger-diagrams > "$lr" 2>&1) \
+  (cd "$BUILD" && cargo build --profile perf -p menger -p menger-diagrams > "$lr" 2>&1) \
     || { red_run; die "release build failed — $lr"; }
   lr=$(log_path build-trunk); say "log: $lr"
   (cd "$BUILD/frontend" && CARGO_TARGET_DIR=$BUILD/frontend/target trunk build --release >"$lr" 2>&1) || { red_run; die "trunk build failed — $lr"; }
   # What goes into the release was built now, from this commit, and is whole.
   local f
-  for f in "$BUILD/target/release/menger" "$BUILD/target/release/menger-diagrams"; do
+  for f in "$BUILD/target/perf/menger" "$BUILD/target/perf/menger-diagrams"; do
     [[ -s $f ]] || die "release build: $f is missing or empty"
   done
   compgen -G "$BUILD/frontend/dist/*.wasm" >/dev/null || die "trunk build: no wasm in $BUILD/frontend/dist"
@@ -402,7 +405,7 @@ cmd_build() {
   id=$(date -u +%Y%m%dT%H%M%SZ)-$short
   stage=$RELEASES/$id.tmp
   mkdir -p "$stage/bin" "$stage/diagrams-node"
-  cp "$BUILD/target/release/menger" "$BUILD/target/release/menger-diagrams" "$stage/bin/"
+  cp "$BUILD/target/perf/menger" "$BUILD/target/perf/menger-diagrams" "$stage/bin/"
   cp "$REPO/deploy/launch/run-menger" "$REPO/deploy/launch/run-diagrams" "$stage/bin/"
   chmod 0755 "$stage/bin/"*
   cp -r "$BUILD/frontend/dist" "$stage/app"
@@ -413,6 +416,7 @@ cmd_build() {
     echo "subject:   $(git -C "$REPO" log -1 --format=%s "$sha")"
     echo "built:     $(date -u +%FT%TZ)"
     echo "rustc:     $(rustc --version)"
+    echo "profile:   perf (RUN-39: the build the bench measures)"
     echo "gate:      $gate"
   } > "$stage/RELEASE"
   chmod -R a-w "$stage"
@@ -810,7 +814,7 @@ suite_line() { # REL → what its SUITE says, one line
 # profile, held to its golden (plexus-bench's scripts/gate.sh: the scenarios,
 # `plexus-bench check`, a red scenario run once more before it counts). A red
 # marks the release `suite failed` as a red test does (DEPLOY-52). schema.*
-# measure the release's own bin/menger. MENGER_BENCH_DIR names the
+# measure the release's own bin/menger (RUN-39: the perf build, as its goldens were taken). MENGER_BENCH_DIR names the
 # plexus-bench checkout (default: beside the repository; `none` skips it, and
 # the SUITE line says so); MENGER_BENCH_TARGET its cargo target.
 BENCH_DIR=${MENGER_BENCH_DIR:-$(dirname "$REPO")/plexus-bench}

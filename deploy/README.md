@@ -107,11 +107,13 @@ Review ("Automatic test", below); prod is the owner's.
 2. **Gate** — only without `--no-gate`: `cargo test --workspace` and the
    frontend's native tests at that commit. Red: no release. The runner builds
    with `--no-gate` (DEPLOY-52): the suite runs after the deploy (step 5).
-3. **Release.** `cargo build --release` (menger, menger-diagrams), `trunk
+3. **Release.** `cargo build --profile perf` (menger, menger-diagrams — RUN-39:
+   a release is the perf build, `[profile.perf]`, "the one build that perf runs
+   and releases use", PERF-6), `trunk
    build --release`, `npm ci` for the diagrams Node program, assembled into
    `~/.local/share/menger-deploy/releases/<UTC time>-<sha>/` — `bin/` (the two
    binaries and their launchers), `app/`, `diagrams-node/`, and `RELEASE`
-   (commit, subject, build time, toolchain, `gate:` — the counts, or `none`
+   (commit, subject, build time, toolchain, `profile: perf`, `gate:` — the counts, or `none`
    when the suite comes after). Read-only; never rebuilt. Prod runs exactly
    the bytes test ran. The newest ten, and those test and prod run (and ran
    last before), are kept.
@@ -135,7 +137,8 @@ Review ("Automatic test", below); prod is the owner's.
    `scripts/gate.sh` runs every PERF scenario under the perf profile and
    `plexus-bench check` against the goldens (a red scenario is run once more
    before it counts; a red taken on a busy machine is said, not failed), with
-   `schema.*` measuring the release's own `bin/menger`. A red bench marks the
+   `schema.*` measuring the release's own `bin/menger` — the perf build, as the
+   goldens were taken from it (RUN-39). A red bench marks the
    release `failed … — bench red; log …` and logs `suite test <release>
    failed bench`, as a red test does; green, the `SUITE` line ends `; bench
    <check's verdict>`. `MENGER_BENCH_DIR` names the checkout (default
