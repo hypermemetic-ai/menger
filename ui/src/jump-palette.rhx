@@ -1,10 +1,11 @@
 <script>
   // UI-8: the jump palette — `/` opens it; `find` after 80 ms of quiet, the
   // newest query only, its hits first and `search`'s best below; Enter
-  // jumps to the first, Escape closes.
+  // jumps to the first, Escape closes. FRAME-16: neither asks anything
+  // until there is a query (`when: state.q`).
   state(#{ open: false, q: "" });
-  let found = live(#{ snapshot: "tickets.find", params: #{ query: state.q, limit: 12 }, key: "id", debounce_ms: 80 });
-  let searched = live(#{ snapshot: "tickets.search", params: #{ query: state.q, limit: 8 }, key: "id", debounce_ms: 80 });
+  let found = live(#{ snapshot: "tickets.find", params: #{ query: state.q, limit: 12 }, key: "id", debounce_ms: 80, when: state.q });
+  let searched = live(#{ snapshot: "tickets.search", params: #{ query: state.q, limit: 8 }, key: "id", debounce_ms: 80, when: state.q });
   fn keyed(state, ev) {
     if ev.key == "/" && !state.open && ev.target.tag != "input" && ev.target.tag != "textarea" && ev.target.tag != "select" { state.open = true; }
     else if ev.key == "Escape" && state.open { state.open = false; state.q = ""; }
