@@ -486,9 +486,17 @@ is app-test on release 20261029T220735Z-68c5c3c, 2026-10-30 00:10Z, from this ma
 | | first titled row (three runs' medians) | TTFB | socket open · wasm instantiated | socket first | requests by kind |
 |---|---|---|---|---|---|
 | before | 0.886 s (886, 888, 884 ms) | 55–62 ms | +256–263 ms · +199–209 ms | 0 of 15 | engine.js 1, host.js 1, engine.wasm 1 (578 KiB gzip), manifest 1, components 22 |
-| after | — (filled after the deploy, the same hour) | | | | |
+| after | 0.448 s (448, 504, 425 ms) | 60–64 ms | +160–187 ms · +171–195 ms | 9 of 15 | engine.js 1, host.js 1, engine.wasm 1 (441 KiB brotli of 1,927 KiB), manifest 1, components 1 (5 KiB brotli of 61 KiB) |
 
 On "before" the boot's last file (the components) is done near +350 ms and the board's `list`
 leaves at +480–570 ms (scratch breakdown, two loads): what the parallel boot can take off is the
 socket → manifest → components chain after the wasm (~150 ms); what follows the components is the
 mount and the calls.
+
+"After" is app-test on release 20261030T001645Z-ea9ce72, 2026-10-30 00:28Z, the same hour, the
+same machine: the first titled row halves (0.886 s → 0.448 s). The socket now opens at +160–187 ms
+instead of +256 ms and the wasm instantiates at +171–195 ms: the two race, and the socket wins 9 of
+15. Every boot file leaves at +63–69 ms (the preload links) and the last of them is back by +141–187
+ms; the components are one request of 5 KiB instead of 22. The tail is wider (two loads of 15 at
+0.9 s, both with the wasm instantiated late at +434–468 ms: the network, not the boot). What is
+left between +190 ms and the row at +450 ms is the mount and the board's calls — the next ticket.
