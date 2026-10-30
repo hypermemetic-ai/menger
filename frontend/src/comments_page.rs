@@ -132,7 +132,8 @@ pub(crate) fn rows(all: &[Comment], f: &Filter, under_ids: Option<&HashSet<u64>>
 
 /// Where a row goes back to: its page, naming it (`?comment=<id>`).
 pub(crate) fn link(c: &Comment) -> String {
-    let route = &c.anchor.route;
+    // TICKETS-36: a page named by its key goes by its uid when the app knows it.
+    let route = &crate::links::anchor_href(&c.anchor.route);
     let sep = if route.contains('?') { '&' } else { '?' };
     format!("{route}{sep}comment={}", c.id)
 }
@@ -324,7 +325,7 @@ fn row(c: Comment) -> impl IntoView {
         <li class="crow" data-comment-id=id.to_string() data-state=c.state.as_str()>
             <div class="chead">
                 <a class="cplace" href=href title=format!("{} — {}", c.anchor.route, c.anchor.path)>{c.anchor.label.clone()}</a>
-                {ticket.map(|t| view! { <a class="code" href=format!("#/ticket/{t}")>{t.clone()}</a> })}
+                {ticket.map(|t| view! { <a class="code" href=crate::links::ticket_href(&t)>{t.clone()}</a> })}
                 <span class="cstate" data-state=c.state.as_str()>{c.state.as_str()}</span>
                 <span class="cwho">{c.author.clone()}</span>
                 <span class="cwhen" title=fmt_unix(c.at)>{fmt_relative(now_unix(), c.at)}</span>

@@ -55,7 +55,7 @@ pub(crate) const LABEL: &str = "Conversation";
 /// The anchor of a comment on `ticket` as a whole.
 pub(crate) fn anchor(ticket: &str) -> Anchor {
     Anchor {
-        route: format!("#/ticket/{ticket}"),
+        route: crate::links::anchor_route(ticket),
         path: PATH.to_string(),
         label: LABEL.to_string(),
         excerpt: String::new(),

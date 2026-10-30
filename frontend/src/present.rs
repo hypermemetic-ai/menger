@@ -711,7 +711,7 @@ fn refocus_dialog() {
 fn set_route_full(on: bool) {
     let w = dom::window();
     let hash = w.location().hash().unwrap_or_default();
-    if wants_full(&hash) == on || !hash.starts_with("#/ticket/") {
+    if wants_full(&hash) == on || !crate::links::is_ticket_route(&hash) {
         return;
     }
     let next = with_full(&hash, on);

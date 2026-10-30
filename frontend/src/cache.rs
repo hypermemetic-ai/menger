@@ -57,7 +57,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use leptos::prelude::*;
-use menger_tickets_api::{Placement, TicketSummary};
+use menger_tickets_api::{Placement, TicketSummary, Uid};
 
 /// A row as the cache keeps it — and as a view reads it, through a handle.
 pub(crate) type RowSignal = ArcRwSignal<TicketSummary>;
@@ -80,6 +80,75 @@ thread_local! {
     /// SCALE-26: how many rows are held, as a signal — set after the map
     /// changes size, never while it is borrowed.
     static HELD: ArcRwSignal<usize> = ArcRwSignal::new(0);
+
+    /// TICKETS-36: what the app has learned of uids ([`learn`]).
+    static UIDS: RefCell<Uids> = RefCell::new(Uids::default());
+}
+
+/// TICKETS-36: every key's uid (and title, when a row said it) and every
+/// uid's key, learned from each row the cache is handed and each ticket a
+/// row names (`uid_of`) — kept when the rows go, so a link to a ticket no
+/// view holds is still by its uid. Never more than [`UIDS_MAX`] keys: past
+/// that it starts again (a link then falls back to its name, which the app
+/// resolves).
+#[derive(Default)]
+struct Uids {
+    of_key: HashMap<String, (Uid, Option<String>)>,
+    key_of: HashMap<Uid, String>,
+}
+
+/// How many keys [`Uids`] holds at most.
+const UIDS_MAX: usize = 100_000;
+
+/// TICKETS-36: learn `t`'s uid and title, and the uid of each ticket it
+/// names. A row from a server before uids teaches nothing.
+pub(crate) fn learn(t: &TicketSummary) {
+    UIDS.with(|u| {
+        let mut u = u.borrow_mut();
+        if u.of_key.len() >= UIDS_MAX {
+            *u = Uids::default();
+        }
+        if t.uid.is_some() {
+            u.of_key.insert(t.id.to_string(), (t.uid, Some(t.title.clone())));
+            u.key_of.insert(t.uid, t.id.to_string());
+        }
+        for (key, uid) in t.uid_of.iter().filter(|(_, uid)| uid.is_some()) {
+            u.of_key.entry(key.to_string()).or_insert((*uid, None));
+            u.key_of.entry(*uid).or_insert_with(|| key.to_string());
+        }
+    });
+}
+
+/// TICKETS-36: learn one ticket's uid, key and title from what is not a
+/// row — a choice on the collision page, its parent.
+pub(crate) fn learn_pair(uid: Uid, key: &str, title: &str) {
+    if uid.is_none() || key.is_empty() {
+        return;
+    }
+    UIDS.with(|u| {
+        let mut u = u.borrow_mut();
+        u.of_key.entry(key.to_string()).or_insert((uid, Some(title.to_string())));
+        u.key_of.entry(uid).or_insert_with(|| key.to_string());
+    });
+}
+
+/// TICKETS-36: the uid of the ticket keyed `key`, if the app has met it.
+pub(crate) fn uid_of(key: &str) -> Option<String> {
+    UIDS.with(|u| u.borrow().of_key.get(key).map(|(uid, _)| uid.to_string()))
+}
+
+/// TICKETS-36: the title of the ticket keyed `key` — its row's, if held
+/// (the freshest), else the last one a row said.
+pub(crate) fn title_of(key: &str) -> Option<String> {
+    get(key)
+        .map(|r| r.with_untracked(|t| t.title.clone()))
+        .or_else(|| UIDS.with(|u| u.borrow().of_key.get(key).and_then(|(_, title)| title.clone())))
+}
+
+/// TICKETS-36: the key of the ticket whose uid is `uid` (case-blind), if the
+/// app has met it.
+pub(crate) fn key_of(uid: &str) -> Option<String> {
+    UIDS.with(|u| u.borrow().key_of.get(uid.to_ascii_lowercase().as_str()).cloned())
 }
 
 /// The held count, set to what the map holds now if it moved.
@@ -104,6 +173,7 @@ fn write(sig: &RowSignal, t: TicketSummary) {
 /// and whether the id is new to the cache. Never writes a signal while the
 /// map is borrowed — a write can run code that looks a row up.
 fn hold_quiet(t: TicketSummary) -> (RowSignal, bool) {
+    learn(&t);
     let held = ROWS.with(|rows| {
         rows.borrow_mut().get_mut(t.id.as_str()).map(|e| {
             e.holds += 1;
@@ -198,6 +268,7 @@ pub(crate) fn forget(id: &str) {
 /// A `watch` event's ticket: applied to the row if the cache holds it,
 /// dropped otherwise. True when the cache holds it.
 pub(crate) fn put(t: TicketSummary) -> bool {
+    learn(&t);
     match get(&t.id) {
         Some(sig) => {
             write(&sig, t);

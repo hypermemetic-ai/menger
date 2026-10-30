@@ -45,7 +45,7 @@ fn go(ticket: &str, view: View, target: RwSignal<Option<Target>>) {
         _ => None,
     };
     chat_pane::open_view(ticket, view);
-    let _ = dom::window().location().set_hash(&chat_pane::with_chat(&format!("#/ticket/{ticket}"), chat));
+    let _ = dom::window().location().set_hash(&chat_pane::with_chat(&crate::links::ticket_href(ticket), chat));
 }
 
 /// The item's count — the reader's unread there — and its key.

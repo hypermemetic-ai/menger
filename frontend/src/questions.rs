@@ -902,7 +902,7 @@ pub(crate) fn Panel() -> impl IntoView {
                     view! {
                         <div class="ag" data-ticket-id=id.clone()>
                             <div class="agh">
-                                <a class="id" href=format!("#/ticket/{id}") on:click=move |_| open.set(false)>{id.clone()}</a>
+                                <a class="id" href=crate::links::ticket_href(&id) on:click=move |_| open.set(false)>{id.clone()}</a>
                                 <span class="t">{title}</span>
                                 <span class="n">{more}</span>
                             </div>

@@ -1707,7 +1707,8 @@ async fn ask_list(source: &Source, lensed: Option<&str>, after: Option<String>, 
 /// deep link's chain.
 async fn get_summary(id: &str) -> Option<TicketSummary> {
     let client = session::client()?;
-    client.get_all(crate::typed::typed(id).ok()?).await.ok()?.into_iter().find_map(|ev| match ev {
+    // TICKETS-36: by its uid — a key may be a name that fits two.
+    client.get_all(crate::typed::ticket(id).ok()?).await.ok()?.into_iter().find_map(|ev| match ev {
         TicketsEvent::Ticket { ticket } => Some(TicketSummary::from(ticket)),
         _ => None,
     })
@@ -4199,7 +4200,8 @@ fn leaf_row(
     };
     // ACT-3: whether the row is in the selection — `aria-selected`.
     let picked = selection::is_picked(id.clone());
-    let href = format!("#/ticket/{id}");
+    // TICKETS-36: by its uid.
+    let href = move || ticket.with(crate::links::row_href);
     // SDLC-13: a kind changes (`set_kind`), so the row reads it as it reads
     // the status — one memo, which the glyph, its title and the row's
     // `data-kind` (its tint) follow.

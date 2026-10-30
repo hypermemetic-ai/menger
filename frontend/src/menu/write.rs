@@ -74,7 +74,9 @@ fn typed_args(
     String,
 > {
     use crate::typed::opt;
-    Ok((opt(a.title)?, opt(a.kind)?, opt(a.status)?, opt(a.parent)?, opt(a.severity)?, some_list(a.block)?, some_list(a.unblock)?, some_list(a.label)?, some_list(a.unlabel)?))
+    // TICKETS-36: a ticket the menu names (a parent, a blocker) by its uid.
+    let tickets = |v: Option<Vec<String>>| v.filter(|v| !v.is_empty()).map(crate::typed::tickets).transpose();
+    Ok((opt(a.title)?, opt(a.kind)?, opt(a.status)?, crate::typed::ticket_opt(a.parent)?, opt(a.severity)?, tickets(a.block)?, tickets(a.unblock)?, some_list(a.label)?, some_list(a.unlabel)?))
 }
 
 /// Send `call` — `change` to `ids` — and put what went wrong in the banner.
@@ -98,23 +100,24 @@ pub(crate) fn send(call: Call, change: Change, last_error: RwSignal<Option<Strin
         let source = Some(menger_tickets_api::vocab::CallerSource::App);
         // ACCESS-8: the menu's text as the parameter types, at the edge.
         let asked = async {
-            use crate::typed::{many, typed};
+            // TICKETS-36: each ticket by its uid — a key may be a name that fits two.
+            use crate::typed::{many, ticket, tickets};
             Ok::<_, String>(match call {
                 Call::Update(id, args) => {
                     let (title, kind, status, parent, severity, block, unblock, _, _) = typed_args(args)?;
-                    client.update_all(typed(&id)?, title, None, kind, status, parent, severity, block, unblock, None, source, None).await
+                    client.update_all(ticket(&id)?, title, None, kind, status, parent, severity, block, unblock, None, source, None).await
                 }
                 Call::Many(ids, args) => {
                     let (_, kind, status, parent, severity, block, unblock, label, unlabel) = typed_args(args)?;
                     client
-                        .update_many_all(Some(many(ids)?), None, None, None, kind, status, parent, severity, block, unblock, label, unlabel, None, None, source, None)
+                        .update_many_all(Some(tickets(ids)?), None, None, None, kind, status, parent, severity, block, unblock, label, unlabel, None, None, source, None)
                         .await
                 }
-                Call::Label { id, add, remove } => client.label_all(Some(typed(&id)?), None, some_list(Some(add))?, some_list(Some(remove))?).await,
-                Call::Commits(id, commits) => client.commits().link_all(Some(typed(&id)?), None, many(commits)?).await,
+                Call::Label { id, add, remove } => client.label_all(Some(ticket(&id)?), None, some_list(Some(add))?, some_list(Some(remove))?).await,
+                Call::Commits(id, commits) => client.commits().link_all(Some(ticket(&id)?), None, many(commits)?).await,
                 Call::Assign { ids, add } => match ids.as_slice() {
-                    [id] => client.assign_all(Some(typed(id)?), None, Some(many(add)?), None, source, None).await,
-                    _ => client.assign_all(None, Some(many(ids)?), Some(many(add)?), None, source, None).await,
+                    [id] => client.assign_all(Some(ticket(id)?), None, Some(many(add)?), None, source, None).await,
+                    _ => client.assign_all(None, Some(tickets(ids)?), Some(many(add)?), None, source, None).await,
                 },
                 Call::SetStatus(..) => unreachable!("sent above"),
             })

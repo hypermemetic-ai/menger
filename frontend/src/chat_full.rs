@@ -202,7 +202,7 @@ pub(crate) fn set_full(on: bool) {
 fn keep_url(on: bool) {
     let w = dom::window();
     let hash = w.location().hash().unwrap_or_default();
-    if !hash.starts_with("#/ticket/") || full_in(&hash) == on {
+    if !crate::links::is_ticket_route(&hash) || full_in(&hash) == on {
         return;
     }
     if let Ok(h) = w.history() {
@@ -281,7 +281,7 @@ pub(crate) fn Session(ticket: Signal<Option<String>>) -> impl IntoView {
         let full = full.clone();
         move || {
             let hash = dom::window().location().hash().unwrap_or_default();
-            let on = full_in(&hash) && chat_pane::chat_in(&hash).is_some() && hash.starts_with("#/ticket/");
+            let on = full_in(&hash) && chat_pane::chat_in(&hash).is_some() && crate::links::is_ticket_route(&hash);
             if full.get_untracked() != on {
                 full.set(on);
             }
@@ -384,7 +384,7 @@ fn SessionView(s: Shown) -> impl IntoView {
                     if other {
                         // CHAT-14: a direct message or a group opens in #/chats.
                         let to = match &tk {
-                            Some(tk) => format!("/ticket/{tk}?chat={id}&full"),
+                            Some(tk) => format!("{}?chat={id}&full", crate::links::ticket_href(tk)),
                             None => format!("/chats/{id}"),
                         };
                         let _ = dom::window().location().set_hash(&to);
@@ -449,7 +449,7 @@ fn SessionView(s: Shown) -> impl IntoView {
             more.set(false);
             let Some(id) = chat_id else { return };
             let w = dom::window();
-            let url = format!("{}{}#/ticket/{t}?chat={id}&full", w.location().origin().unwrap_or_default(), w.location().pathname().unwrap_or_default());
+            let url = format!("{}{}{}?chat={id}&full", w.location().origin().unwrap_or_default(), w.location().pathname().unwrap_or_default(), crate::links::ticket_href(&t));
             let _ = w.navigator().clipboard().write_text(&url);
         }
     };
@@ -600,7 +600,7 @@ fn TicketBeside(ticket: String, split: RwSignal<Split>) -> impl IntoView {
                 <dl class="stfields">
                     <div><dt>"status"</dt><dd><span class=crate::st_class(&status)>{status.clone()}</span></dd></div>
                     <div><dt>"kind"</dt><dd>{t.kind.to_string()}</dd></div>
-                    {t.parent.clone().map(|p| view! { <div><dt>"parent"</dt><dd><a class="tchip" href=format!("#/ticket/{p}")>{p.to_string()}</a></dd></div> })}
+                    {t.parent.clone().map(|p| view! { <div><dt>"parent"</dt><dd><a class="tchip" href=crate::links::ticket_href(&p)>{p.to_string()}</a></dd></div> })}
                     {(!t.commits.is_empty()).then(|| view! { <div><dt>"commits"</dt><dd class="mono">{t.commits.iter().map(ToString::to_string).collect::<Vec<_>>().join(" ")}</dd></div> })}
                 </dl>
             }
@@ -613,7 +613,7 @@ fn TicketBeside(ticket: String, split: RwSignal<Split>) -> impl IntoView {
             on:pointerdown=drag on:pointermove=moving on:pointerup=dropped></div>
         <aside class="sticket" aria-label=format!("{ticket}, beside the chat")>
             <div class="sthead">
-                <a class="tchip" href=format!("#/ticket/{ticket}")>{ticket.clone()}</a>
+                <a class="tchip" href=crate::links::ticket_href(&ticket)>{ticket.clone()}</a>
                 <span class="muted">"the ticket, beside the chat"</span>
                 <button type="button" class="px" aria-label="hide the ticket" on:click=move |_| { split.update(|s| s.open = false); keep_split(split.get_untracked()); }>"×"</button>
             </div>

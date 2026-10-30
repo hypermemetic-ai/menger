@@ -296,7 +296,7 @@ fn Waiting(project: String, last: Memo<Option<String>>) -> impl IntoView {
                         {way}
                         <ul class="drows">
                             {w.listed.into_iter().map(|t| {
-                                let href = format!("#/ticket/{}", t.id);
+                                let href = crate::links::row_href(&t);
                                 view! {
                                     <li data-ticket-id=t.id.to_string()>
                                         <a class="code" href=href.clone()>{t.id.to_string()}</a>
@@ -419,7 +419,7 @@ fn Lane(project: String, from: String, to: String) -> impl IntoView {
                     view! {
                         <ul class="drows lrows">
                             {list.into_iter().map(|t| {
-                                let href = format!("#/ticket/{}", t.id);
+                                let href = crate::links::row_href(&t);
                                 view! {
                                     <li data-ticket-id=t.id.to_string()>
                                         <a class="code" href=href.clone()>{t.id.to_string()}</a>
@@ -665,7 +665,7 @@ fn deploy_view(r: Row, picked: Option<u64>) -> impl IntoView {
         let n = if all.get() { shown.len() } else { CARRIED.min(shown.len()) };
         shown[..n]
             .iter()
-            .map(|t| view! { <a class="code" href=format!("#/ticket/{t}") data-ticket-id=t.clone()>{t.clone()}</a> })
+            .map(|t| view! { <a class="code" href=crate::links::ticket_href(t) data-ticket-id=t.clone()>{t.clone()}</a> })
             .collect_view()
     };
     let rollback = (state == DeployState::RolledBack).then(|| {
@@ -748,7 +748,7 @@ fn request_view(r: Row, picked: Option<u64>) -> impl IntoView {
     let chips = carried
         .iter()
         .take(CARRIED)
-        .map(|t| view! { <a class="code" href=format!("#/ticket/{t}") data-ticket-id=t.clone()>{t.clone()}</a> })
+        .map(|t| view! { <a class="code" href=crate::links::ticket_href(t) data-ticket-id=t.clone()>{t.clone()}</a> })
         .collect_view();
     view! {
         <li class=format!("ddeploy dreq {cls}") class:picked=picked == Some(d.id) data-deploy=d.id data-state="requested" data-request=state.as_str() data-webhook=q.webhook.as_str()>
@@ -916,7 +916,7 @@ fn Queue(project: String, name: String) -> impl IntoView {
                     <p class="dsub">{format!("Moves in — {n} ticket{}:", if n == 1 { "" } else { "s" })}</p>
                     <ul class="drows dqmoves">
                         {list.into_iter().map(|t| {
-                            let href = format!("#/ticket/{}", t.id);
+                            let href = crate::links::row_href(&t);
                             view! {
                                 <li data-ticket-id=t.id.to_string()>
                                     <a class="code" href=href.clone()>{t.id.to_string()}</a>

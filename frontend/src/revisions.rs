@@ -175,7 +175,7 @@ pub(crate) fn rev_row(r: Revision, latest: u32, picked: RwSignal<Vec<u32>>) -> i
             {current.then_some(view! { <span class="cur">"current"</span> })}
             {r.message.clone().map(|m| view! { <span class="msg">{m}</span> })}
             {r.cause.clone().map(|c| {
-                let href = format!("#/ticket/{c}");
+                let href = crate::links::ticket_href(&c);
                 view! { <span class="cause">"with "<a class="code" href=href data-ticket-id=c.clone()>{c.clone()}</a></span> }
             })}
         </li>
@@ -320,7 +320,7 @@ pub(crate) fn DiffPanel(id: String, #[prop(into)] from: Signal<u32>, #[prop(into
     Effect::new(move |_| {
         let (from, to, text) = (from.get(), to.get(), text.get());
         let Some(client) = session::client() else { return };
-        let Ok(t) = crate::typed::typed(&id) else { return };
+        let Ok(t) = crate::typed::ticket(&id) else { return };
         let n = asked.get_value().wrapping_add(1);
         asked.set_value(n);
         answer.set(None);
@@ -408,10 +408,10 @@ pub(crate) fn Version(id: String, rev: u32) -> impl IntoView {
         let id = id.clone();
         let Some(client) = session::client() else { return view! { <p class="loading">"connecting…"</p> }.into_any() };
         spawn_local(async move {
-            let Ok(t) = crate::typed::typed(&id) else { return };
+            let Ok(t) = crate::typed::ticket(&id) else { return };
             let got = client.revisions().get_all(t, rev).await.map_err(|e| format!("{e:?}")).and_then(|evs| at_of(evs).map(Ok)).unwrap_or_else(Err);
             at.try_set(Some(got));
-            if let Ok(t) = crate::typed::typed(&id) {
+            if let Ok(t) = crate::typed::ticket(&id) {
                 if let Ok(evs) = client.revisions().list_all(t, None, Some(1)).await {
                     if let Some(l) = listed_of(evs) {
                         latest.try_set(l.latest);
@@ -547,9 +547,9 @@ pub(crate) fn RestorePanel(id: String, rev: u32) -> impl IntoView {
         let id = id.clone();
         if let Some(client) = session::client() {
             spawn_local(async move {
-                let Ok(t) = crate::typed::typed(&id) else { return };
+                let Ok(t) = crate::typed::ticket(&id) else { return };
                 // The latest against `rev`: what restoring it changes.
-                let list = match crate::typed::typed(&id) {
+                let list = match crate::typed::ticket(&id) {
                     Ok(t2) => client.revisions().list_all(t2, None, Some(1)).await.ok().and_then(listed_of),
                     Err(_) => None,
                 };
@@ -584,7 +584,7 @@ pub(crate) fn RestorePanel(id: String, rev: u32) -> impl IntoView {
             let msg = message.get_untracked();
             busy.set(true);
             spawn_local(async move {
-                let Ok(t) = crate::typed::typed(&id) else { return };
+                let Ok(t) = crate::typed::ticket(&id) else { return };
                 let fields = crate::typed::many(fields.iter()).ok();
                 let msg = crate::typed::opt(Some(msg)).ok().flatten();
                 let src = crate::typed::typed("app").ok();

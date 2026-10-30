@@ -2424,7 +2424,7 @@ fn nav_row(r: &NavRow, d: usize, toggle: Option<(bool, Box<dyn Fn() + 'static>)>
         <div class="fc-nr" class:hold=!r.matched style=format!("--d:{d}") data-nrow=r.id.clone()>
             {tw}
             <span class="fc-gl" data-kind=r.kind.clone()>{crate::nav::kind_glyph(&r.kind)}</span>
-            <a href=format!("#/ticket/{}", r.id) class="fc-id">{r.id.clone()}</a>
+            <a href=crate::links::ticket_href(&r.id) class="fc-id">{r.id.clone()}</a>
             <span class="fc-tt">{r.title.clone()}</span>
             {(r.below > 0).then(|| view! { <span class="fc-bl" title=format!("{} matches below", r.below)>{r.below}</span> })}
             <span class=format!("{} fc-st", st_class(&r.status))>{r.status.clone()}</span>

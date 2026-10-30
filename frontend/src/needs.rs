@@ -79,7 +79,7 @@ pub(crate) const NOT_CANCELED: &str = "not status Canceled";
 /// Where an input is answered: its ticket's page, its frame scrolled to the
 /// input (COMP-14's `?anchor=`, the element with the input's id).
 pub(crate) fn answer_href(ticket: &str, input: &str) -> String {
-    format!("#/ticket/{ticket}?anchor={input}")
+    format!("{}?anchor={input}", crate::links::ticket_href(ticket))
 }
 
 /// The header's title for `n` waiting.

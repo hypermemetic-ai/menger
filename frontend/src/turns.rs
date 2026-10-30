@@ -287,7 +287,8 @@ pub(crate) fn chip_codes(html: &str) -> String {
 pub(crate) fn live_chip(name: &str) -> Option<String> {
     use menger_tickets_api::chat_tickets::{parse_name, Form};
     let (form, codes) = parse_name(name)?;
-    let one = |c: &str| format!("<a class=\"tchip live\" data-ticket=\"{c}\" href=\"#/ticket/{c}\">{c}</a>");
+    // TICKETS-36: a name the message wrote, resolved on open.
+    let one = |c: &str| format!("<a class=\"tchip live\" data-ticket=\"{c}\" href=\"{}\">{c}</a>", crate::links::name_href(c));
     Some(match form {
         Form::One => one(name),
         Form::Range | Form::Set => {
@@ -315,7 +316,7 @@ fn chip_text(text: &str) -> String {
             let lead = &word[..word.find(w).unwrap_or(0)];
             let tail = &word[word.find(w).unwrap_or(0) + w.len()..];
             out.push_str(lead);
-            out.push_str(&format!("<a class=\"tchip\" href=\"#/ticket/{w}\">{w}</a>"));
+            out.push_str(&format!("<a class=\"tchip\" href=\"{}\">{w}</a>", crate::links::name_href(w)));
             out.push_str(tail);
         } else {
             out.push_str(word);
@@ -351,7 +352,7 @@ pub(crate) fn quoted(body: &str) -> String {
 
 /// A turn's link: the ticket with the chat open at the message.
 pub(crate) fn turn_link(ticket: &str, chat: u64, message: u64) -> String {
-    format!("#/ticket/{ticket}?chat={chat}&at={message}")
+    format!("{}?chat={chat}&at={message}", crate::links::ticket_href(ticket))
 }
 
 /// The waiting line under the last turn: who waits on `await_message`, and

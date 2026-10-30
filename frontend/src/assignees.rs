@@ -85,7 +85,7 @@ pub(crate) async fn assign(id: String, add: Vec<String>, remove: Vec<String>) ->
     let add = (!add.is_empty()).then_some(crate::typed::many(add)?);
     let remove = (!remove.is_empty()).then_some(crate::typed::many(remove)?);
     let source = Some(crate::typed::typed("app")?);
-    let events = client.assign_all(Some(crate::typed::typed(&id)?), None, add, remove, source, None).await.map_err(|e| session::describe(&e))?;
+    let events = client.assign_all(Some(crate::typed::ticket(&id)?), None, add, remove, source, None).await.map_err(|e| session::describe(&e))?;
     for ev in events {
         match ev {
             TicketsEvent::AssigneesChanged { ticket, .. } => {

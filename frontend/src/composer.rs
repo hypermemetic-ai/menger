@@ -956,7 +956,7 @@ pub(crate) fn Composer(props: Props) -> impl IntoView {
                 let c = codes.get();
                 (!c.is_empty()).then(|| view! {
                     <div class="cstrip codes"><span class="muted">"in this message"</span>
-                        {c.into_iter().map(|code| view! { <a class="tchip" href=format!("#/ticket/{code}")>{code.clone()}</a> }).collect_view()}
+                        {c.into_iter().map(|code| view! { <a class="tchip" href=crate::links::name_href(&code)>{code.clone()}</a> }).collect_view()}
                     </div>
                 })
             }}

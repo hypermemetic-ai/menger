@@ -226,8 +226,9 @@ mod tests {
     #[test]
     fn a_chip_shows_no_callout_and_the_menu_is_a_sheet() {
         let css = crate::tokens_lint::app_css();
-        assert!(css.contains(r##":is([data-ticket-id], a[href^="#/ticket/"]) { -webkit-touch-callout: none; }"##));
-        assert!(css.contains(r##":is([data-ticket-id]:not(section), a[href^="#/ticket/"]) { -webkit-user-select: none; user-select: none; }"##));
+        // TICKETS-36: a link by uid is a chip too.
+        assert!(css.contains(r##":is([data-ticket-id], a[href^="#/ticket/"], a[href^="#/t/"]) { -webkit-touch-callout: none; }"##));
+        assert!(css.contains(r##":is([data-ticket-id]:not(section), a[href^="#/ticket/"], a[href^="#/t/"]) { -webkit-user-select: none; user-select: none; }"##));
         assert!(css.contains(":is(#tmenu, #tagmenu, #dmenu)[data-sheet] {"), "DEPLOY-47: the deployment menu is a sheet too");
         let sdk = include_str!("../../sdk/menger-sdk.js");
         assert!(sdk.contains("'[data-ticket-id], m-ticket { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }'"));

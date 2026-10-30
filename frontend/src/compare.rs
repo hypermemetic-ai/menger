@@ -389,7 +389,7 @@ fn keep(ticket: &str, set: &[Item]) {
 fn route(set: Option<&[Item]>) {
     let w = dom::window();
     let hash = w.location().hash().unwrap_or_default();
-    if !hash.starts_with("#/ticket/") {
+    if !crate::links::is_ticket_route(&hash) {
         return;
     }
     let next = with_hash(&hash, set);

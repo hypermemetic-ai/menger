@@ -203,11 +203,7 @@ pub(crate) fn remove(text: &str, hash: &str) -> String {
 /// The ticket an image for a comment at `anchor` is put for: the element's,
 /// else the page's (`#/ticket/X`); none on the app.
 pub(crate) fn ticket_of(anchor: &Anchor) -> Option<String> {
-    anchor.ticket.clone().filter(|t| !t.trim().is_empty()).or_else(|| {
-        let rest = anchor.route.trim().strip_prefix("#/ticket/")?;
-        let id = rest.split(['?', '#']).next().unwrap_or(rest).trim();
-        (!id.is_empty()).then(|| id.to_string())
-    })
+    anchor.ticket.clone().filter(|t| !t.trim().is_empty()).or_else(|| crate::links::anchor_ticket(&anchor.route))
 }
 
 /// Why a file is not sent — the server's rule, said before anything goes.

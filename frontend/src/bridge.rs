@@ -1762,4 +1762,21 @@ mod tests {
         let got = held_to(vec![TicketsEvent::Ticket { ticket: tkt("KILN-1") }], &me, Some("KILN-1".into()));
         assert!(matches!(&got[..], [TicketsEvent::Ticket { ticket }] if ticket.id == "KILN-1"), "{got:?}");
     }
+
+    /// TICKETS-36 (IDENTITY-36's reach): a frame's `get` by uid or by
+    /// address is asked as written — the name says no shortcode — and its
+    /// answer admitted by the answered ticket's own shortcode, as a `get` by
+    /// id is: inside the reach, the ticket; outside, `not_found`.
+    #[test]
+    fn a_frame_s_get_by_uid_or_address_is_held_to_the_answered_shortcode() {
+        let kiln = Reach::only("KILN");
+        for name in ["7k3mq2xa", "/t/7k3mq2xa/KILN-1-x", "hypermemetic:MENGER/KILN-1", "OTHER/KILN-1"] {
+            assert_eq!(parse_call("get", &format!(r#"{{"id":"{name}"}}"#)), Ok(Call::Get { id: name.into() }), "{name}");
+            assert!(matches!(scope_call(Call::Get { id: name.into() }, Some(&kiln)), Ok(Scoped::Call(Call::Get { .. }))), "{name}: asked");
+            let inside = held_to(vec![TicketsEvent::Ticket { ticket: tkt("KILN-1") }], &kiln, Some(name.into()));
+            assert!(matches!(&inside[..], [TicketsEvent::Ticket { ticket }] if ticket.id == "KILN-1"), "{name}: {inside:?}");
+            let outside = held_to(vec![TicketsEvent::Ticket { ticket: tkt("OTHER-1") }], &kiln, Some(name.into()));
+            assert!(matches!(&outside[..], [TicketsEvent::NotFound { .. }]), "{name}: {outside:?}");
+        }
+    }
 }

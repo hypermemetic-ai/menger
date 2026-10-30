@@ -455,7 +455,7 @@ fn opt_view(o: Opt) -> impl IntoView {
 
 fn row_view(r: Row) -> impl IntoView {
     let Row { ticket, id, kind, state, question, options, recommendation, answer, history } = r;
-    let href = format!("#/ticket/{ticket}");
+    let href = crate::links::ticket_href(&ticket);
     let (data_ticket, data_input) = (ticket.clone(), id.clone());
     let question = match question {
         Some(q) => view! { <div class="iq">{q}</div> }.into_any(),

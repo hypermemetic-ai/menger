@@ -317,7 +317,7 @@ pub(crate) fn Cards(body: String) -> impl IntoView {
 fn Card(row: RowSignal, focus: Option<String>) -> impl IntoView {
     let row = RwSignal::from(row);
     let id = row.with_untracked(|t| t.id.to_string());
-    let href = format!("#/ticket/{id}");
+    let href = row.with_untracked(crate::links::row_href);
     let status = Memo::new(move |_| row.with(|t| t.status));
     let kind = Memo::new(move |_| row.with(|t| t.kind));
     let err = RwSignal::new(None::<String>);

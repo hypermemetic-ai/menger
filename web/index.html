@@ -114,8 +114,8 @@ function render() {
         `<option ${s === t.status ? "selected" : ""}>${s}</option>`).join("");
       const flash = t.id === lastTouched ? ' class="flash"' : "";
       // MFE-7 universal click-through: every rendered ticket links to the
-      // app's ticket page at its deep-link URL (/app/#/ticket/{id}).
-      const href = `/app/#/ticket/${t.id}`;
+      // app's ticket page. TICKETS-36: at its uid (/app/#/t/{uid}/{ID}-{slug}).
+      const href = ticketHref(t);
       const status = t.kind === "doc"
         ? `<span class="doc-chip">${esc(t.status)}</span>`
         : `<select data-id="${t.id}">${opts}</select>`;
@@ -127,6 +127,30 @@ function render() {
 }
 
 function esc(s) { const d = document.createElement("span"); d.textContent = s; return d.innerHTML; }
+
+// TICKETS-36: a ticket's link is its uid, as the app makes it
+// (frontend/src/links.rs): /app/#/t/{uid}/{ID}-{slug} — the id as a row
+// shows it, the title in lower-case ASCII words, cut at a word to 48. Only
+// the uid is read. A ticket with no uid (a server before TICKETS-35) is
+// linked by its id, which the app resolves.
+function slug(title) {
+  const words = String(title).normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[ßæœøđłþðı]/gi, c => ({ "ß": "ss", "æ": "ae", "œ": "oe", "ø": "o", "đ": "d", "ł": "l", "þ": "th", "ð": "d", "ı": "i" })[c.toLowerCase()])
+    .toLowerCase().replace(/['\u2019\u02bc]/g, "").split(/[^a-z0-9]+/).filter(Boolean);
+  let out = "";
+  for (const w of words) {
+    const room = out ? 48 - out.length - 1 : 48;
+    if (w.length > room) { if (!out) out = w.slice(0, 48); break; }
+    out = out ? `${out}-${w}` : w;
+  }
+  return out;
+}
+function shownId(id) { const m = /^([^.]+)\.\d+-(.+)$/.exec(id); return m ? `${m[1]}-${m[2]}` : id; }
+function ticketHref(t) {
+  if (!t.uid) return `/app/#/ticket/${t.id}`;
+  const s = slug(t.title);
+  return `/app/#/t/${t.uid}/${shownId(t.id)}${s ? "-" + s : ""}`;
+}
 
 function onItem(item) {
   if (item.type === "error") { log(`error: ${item.message}`); return; }
