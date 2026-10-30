@@ -35,11 +35,14 @@
 //!   source, and README / AGENTS.md / deploy/README.md say Svelte only of
 //!   real Svelte (`svelte/1`, FRAME-13) or of what rhx borrowed.
 //! - FRAME-13: real Svelte (`svelte/1`) is the framework's tool's — it
-//!   compiles a `.svelte` in Node at build. menger has none until FRAME-14
-//!   (`ui/src` holds no `.svelte`), and `deploy/pipeline`'s `build_v2` checks
+//!   compiles a `.svelte` in Node at build; `deploy/pipeline`'s `build_v2` checks
 //!   for `node` and for svelte and esbuild in `../plexus-ui/node_modules`
 //!   (`npm ci` there) before it builds a UI that holds one, and names
 //!   `--node-modules` to the tool.
+//! - FRAME-14: the board in both profiles — each of its five components as
+//!   `<name>.rhx` and as real Svelte, `<name>-sv.svelte` (one name is one
+//!   source); the Svelte board drawn at `#/sv/…` in an rhx frame whose
+//!   sections hold the Svelte ones, the rhx ones `slots.json`'s defaults.
 //! - FRAME-9: `tether/` takes `plexus-login` from the sibling, as
 //!   plexus-substrate (which tether takes) does — one `plexus-login` in its
 //!   graph, never menger's tree's.
@@ -992,14 +995,35 @@ fn svelte_files(root: &Path, dirs: &[&str]) -> Vec<String> {
     out
 }
 
-/// What FRAME-11 finds wrong with a UI — its components (name → source),
-/// `routes.json` and `slots.json` as text: a name the routes or slots give
-/// that is no component, and a component nothing reaches (a route, a slot's
-/// layout or default, or a `<name` tag in a reached component's source).
-fn ui_breaks(components: &[(String, String)], routes: &str, slots: &str) -> Vec<String> {
+/// Whether `text` is a real Svelte component as `svelte/1` takes one: its
+/// module script declares the methods it uses (`<script module> export
+/// const uses = [...]`), which the tool requires.
+fn real_svelte(text: &str) -> bool {
+    text.contains("<script module>") && text.contains("export const uses")
+}
+
+/// Whether `src` draws the component `name` as a tag — `<name` followed by
+/// a space, `/` or `>`, so `<b-rows-sv` is not `<b-rows`.
+fn draws_tag(src: &str, name: &str) -> bool {
+    let open = format!("<{name}");
+    src.match_indices(&open).any(|(at, _)| src[at + open.len()..].starts_with(|c: char| c.is_whitespace() || c == '/' || c == '>'))
+}
+
+/// What FRAME-11 finds wrong with a UI — its sources (a file name in
+/// `ui/src`, `<name>.rhx` or `<name>.svelte`, and its text), `routes.json`
+/// and `slots.json` as text: a name the routes or slots give that is no
+/// component, a name with two sources (FRAME-14: one name is one source),
+/// and a component nothing reaches (a route, a slot's layout or default, or
+/// a `<name` tag in a reached rhx source; a svelte/1 module imports nothing,
+/// so it reaches nothing).
+fn ui_breaks(sources: &[(String, String)], routes: &str, slots: &str) -> Vec<String> {
     let mut out = Vec::new();
     let routes: Value = serde_json::from_str(routes).unwrap_or_else(|e| panic!("routes.json: {e}"));
     let slots: Value = serde_json::from_str(slots).unwrap_or_else(|e| panic!("slots.json: {e}"));
+    let components: Vec<(String, &str, &str)> = sources
+        .iter()
+        .filter_map(|(f, text)| f.strip_suffix(".rhx").or_else(|| f.strip_suffix(".svelte")).map(|n| (n.to_string(), f.as_str(), text.as_str())))
+        .collect();
     let mut named: Vec<(String, &str)> = routes.as_object().into_iter().flatten().filter_map(|(_, v)| v.as_str().map(|n| (n.to_string(), "routes.json"))).collect();
     for (layout, sections) in slots.as_object().into_iter().flatten() {
         named.push((layout.clone(), "slots.json"));
@@ -1007,28 +1031,36 @@ fn ui_breaks(components: &[(String, String)], routes: &str, slots: &str) -> Vec<
     }
     let mut seen = Vec::new();
     named.retain(|(n, _)| if seen.contains(n) { false } else { seen.push(n.clone()); true });
-    let have = |n: &str| components.iter().any(|(c, _)| c == n);
+    let have = |n: &str| components.iter().any(|(c, _, _)| c == n);
     for (n, file) in &named {
         if !have(n) {
-            out.push(format!("{file} names {n}, and ui/src holds no {n}.rhx"));
+            out.push(format!("{file} names {n}, and ui/src holds no {n}.rhx or {n}.svelte"));
         }
     }
-    // Reached: what is named, then each tag of a reached source, to a fixpoint.
+    let mut twice: Vec<&str> = Vec::new();
+    for (c, _, _) in &components {
+        if !twice.contains(&c.as_str()) && components.iter().filter(|(d, _, _)| d == c).count() > 1 {
+            twice.push(c);
+            out.push(format!("ui/src holds {c}.rhx and {c}.svelte: one name is one source"));
+        }
+    }
+    // Reached: what is named, then each tag of a reached rhx source, to a fixpoint.
     let mut reached: Vec<String> = named.into_iter().map(|(n, _)| n).collect();
     let mut at = 0;
     while at < reached.len() {
-        if let Some((_, src)) = components.iter().find(|(c, _)| *c == reached[at]) {
-            for (c, _) in components {
-                if !reached.contains(c) && src.contains(&format!("<{c}")) {
+        let here = reached[at].clone();
+        for (_, _, src) in components.iter().filter(|(c, f, _)| *c == here && f.ends_with(".rhx")) {
+            for (c, _, _) in &components {
+                if !reached.contains(c) && draws_tag(src, c) {
                     reached.push(c.clone());
                 }
             }
         }
         at += 1;
     }
-    for (c, _) in components {
+    for (c, f, _) in &components {
         if !reached.contains(c) {
-            out.push(format!("ui/src/{c}.rhx: no route, slot or reached component uses it"));
+            out.push(format!("ui/src/{f}: no route, slot or reached component uses it"));
         }
     }
     out
@@ -1107,11 +1139,20 @@ fn the_dialect_is_rhx() {
     let given = |c: &[(&str, &str)]| c.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect::<Vec<_>>();
     let routes = r##"{ "#/": "a-layout", "#/x": "x-page" }"##;
     let slots = r#"{ "a-layout": { "main": "b-rows" } }"#;
-    assert!(ui_breaks(&given(&[("a-layout", "<slot name=\"main\"/>"), ("b-rows", "<c-chip id={x}/>"), ("c-chip", "<p/>"), ("x-page", "<p/>")]), routes, slots).is_empty());
+    assert!(ui_breaks(&given(&[("a-layout.rhx", "<slot name=\"main\"/>"), ("b-rows.rhx", "<c-chip id={x}/>"), ("c-chip.rhx", "<p/>"), ("x-page.rhx", "<p/>")]), routes, slots).is_empty());
     assert_eq!(
-        ui_breaks(&given(&[("a-layout", "<p/>"), ("b-rows", "<p/>"), ("d-lost", "<p/>")]), routes, slots),
-        ["routes.json names x-page, and ui/src holds no x-page.rhx", "ui/src/d-lost.rhx: no route, slot or reached component uses it"]
+        ui_breaks(&given(&[("a-layout.rhx", "<p/>"), ("b-rows.rhx", "<p/>"), ("d-lost.rhx", "<p/>")]), routes, slots),
+        ["routes.json names x-page, and ui/src holds no x-page.rhx or x-page.svelte", "ui/src/d-lost.rhx: no route, slot or reached component uses it"]
     );
+    // FRAME-14: a name may be real Svelte's; one name is one source; a
+    // svelte/1 module reaches nothing; `<b-rows-sv` is not `<b-rows`.
+    let sv = "<script module>\n  export const uses = [];\n</script>\n<p/>\n";
+    assert!(ui_breaks(&given(&[("a-layout.rhx", "<p/>"), ("b-rows.svelte", sv), ("x-page.rhx", "<p/>")]), routes, slots).is_empty());
+    assert_eq!(
+        ui_breaks(&given(&[("a-layout.rhx", "<b-rows-sv/>"), ("b-rows.rhx", "<p/>"), ("b-rows.svelte", sv), ("b-rows-sv.svelte", sv), ("c-chip.rhx", "<p/>"), ("x-page.svelte", "<c-chip id={x}/>")]), routes, slots),
+        ["ui/src holds b-rows.rhx and b-rows.svelte: one name is one source", "ui/src/c-chip.rhx: no route, slot or reached component uses it"]
+    );
+    assert!(real_svelte(sv) && !real_svelte("<script>\n  prop(\"id\");\n</script>\n<p/>\n"));
     assert_eq!(svelte_said("rhx: Svelte's template subset with Rhai folds.\n\nA `.svelte` file is real Svelte (`svelte/1`, FRAME-13) or refused.\n"), []);
     assert_eq!(
         svelte_said("Components are a Svelte-like subset. Files are\n`ui/src/*.svelte`.\n\n```svelte\n<p/>\n```\n- the Svelte subset (real Svelte aside)\n"),
@@ -1119,19 +1160,24 @@ fn the_dialect_is_rhx() {
     );
 
     let root = root();
-    let mut broken: Vec<String> = svelte_files(&root, &["ui", "tests"]).into_iter().map(|f| format!("{f}: a source named .svelte that is rhx")).collect();
+    let read = |f: &str| std::fs::read_to_string(root.join(f)).unwrap_or_else(|e| panic!("{f}: {e}"));
+    // A `.svelte` is real Svelte (svelte/1) in ui/src, and nowhere else under ui/ or tests/.
+    let mut broken: Vec<String> = svelte_files(&root, &["ui", "tests"])
+        .into_iter()
+        .filter(|f| Path::new(f).parent() != Some(Path::new("ui/src")) || !real_svelte(&read(f)))
+        .map(|f| format!("{f}: a source named .svelte that is not real Svelte (svelte/1, in ui/src: <script module> export const uses = [...])"))
+        .collect();
 
     let src = root.join("ui/src");
-    let components: Vec<(String, String)> = names_in(&src)
+    let sources: Vec<(String, String)> = names_in(&src)
         .into_iter()
-        .filter_map(|f| f.strip_suffix(".rhx").map(str::to_string))
-        .map(|n| {
-            let text = std::fs::read_to_string(src.join(format!("{n}.rhx"))).unwrap();
-            (n, text)
+        .filter(|f| f.ends_with(".rhx") || f.ends_with(".svelte"))
+        .map(|f| {
+            let text = std::fs::read_to_string(src.join(&f)).unwrap();
+            (f, text)
         })
         .collect();
-    let read = |f: &str| std::fs::read_to_string(root.join(f)).unwrap_or_else(|e| panic!("{f}: {e}"));
-    broken.extend(ui_breaks(&components, &read("ui/routes.json"), &read("ui/slots.json")));
+    broken.extend(ui_breaks(&sources, &read("ui/routes.json"), &read("ui/slots.json")));
 
     for doc in ["README.md", "AGENTS.md", "deploy/README.md"] {
         broken.extend(svelte_said(&read(doc)).into_iter().map(|(n, s)| format!("{doc}:{n}: {s}")));
@@ -1144,14 +1190,115 @@ fn the_dialect_is_rhx() {
     assert!(broken.is_empty(), "FRAME-11: the dialect is rhx, and Svelte is said only of real Svelte:\n  {}", broken.join("\n  "));
 }
 
-/// FRAME-13: real Svelte (`svelte/1`) is the framework's from FRAME-13 on,
-/// and menger has none of it yet — its first Svelte components are
-/// FRAME-14's (the board in real Svelte). Until then `ui/src` holds no
-/// `.svelte`, so a release of menger needs no Node to build its UI.
+/// FRAME-14: the board's five components, each in both profiles — rhx's
+/// `<name>.rhx` and real Svelte's `<name>-sv.svelte` (one name is one
+/// source, so the Svelte one is named apart; `-sv` the one suffix).
+const BOARD: [&str; 5] = ["board-layout", "board-rows", "nav-tree", "ticket-page", "jump-palette"];
+
+/// FRAME-14: the frame the Svelte board is drawn in — an rhx layout, since a
+/// section is the host's and only an rhx template marks one (`<slot name>`;
+/// a svelte/1 module mounts no section, plexus-ui@40aa390). Its sections
+/// hold the Svelte components: `top` the Svelte half of `board-layout` (the
+/// top bar and its filter line), then the nav, the board and the palette.
+const SV_FRAME: &str = "board-frame";
+
+/// What FRAME-14 finds missing from the board's two profiles, given the
+/// sources in `ui/src` (file name → text), `routes.json` and `slots.json`:
+/// a component without its `.rhx` or its real `-sv.svelte`; a route of
+/// either board that is not there; a section default that is not the rhx
+/// one on the rhx board, or not the Svelte one in the frame; a frame that
+/// marks not all four of its sections.
+fn board_breaks(sources: &[(String, String)], routes: &str, slots: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let text = |f: &str| sources.iter().find(|(n, _)| n == f).map(|(_, t)| t.as_str());
+    for n in BOARD {
+        if text(&format!("{n}.rhx")).is_none() {
+            out.push(format!("ui/src/{n}.rhx is missing (the rhx {n})"));
+        }
+        match text(&format!("{n}-sv.svelte")) {
+            None => out.push(format!("ui/src/{n}-sv.svelte is missing (the Svelte {n})")),
+            Some(t) if !real_svelte(t) => out.push(format!("ui/src/{n}-sv.svelte is not real Svelte (svelte/1: <script module> export const uses = [...])")),
+            Some(_) => {}
+        }
+    }
+    let routes: Value = serde_json::from_str(routes).unwrap_or_else(|e| panic!("routes.json: {e}"));
+    for (route, want) in [
+        ("#/", "board-layout"),
+        ("#/f/:filter", "board-layout"),
+        ("#/ticket/:id", "ticket-page"),
+        ("#/sv/", SV_FRAME),
+        ("#/sv/f/:filter", SV_FRAME),
+        ("#/sv/ticket/:id", "ticket-page-sv"),
+    ] {
+        let have = routes.get(route).and_then(Value::as_str);
+        if have != Some(want) {
+            out.push(format!("routes.json: {route} draws {}, not {want}", have.unwrap_or("nothing")));
+        }
+    }
+    let slots: Value = serde_json::from_str(slots).unwrap_or_else(|e| panic!("slots.json: {e}"));
+    let rhx = [("nav", "nav-tree"), ("main", "board-rows"), ("palette", "jump-palette")];
+    let sv = [("top", "board-layout-sv"), ("nav", "nav-tree-sv"), ("main", "board-rows-sv"), ("palette", "jump-palette-sv")];
+    for (layout, want) in [("board-layout", &rhx[..]), (SV_FRAME, &sv[..])] {
+        for (slot, component) in want {
+            let have = slots.get(layout).and_then(|l| l.get(slot)).and_then(Value::as_str);
+            if have != Some(component) {
+                out.push(format!("slots.json: {layout}'s {slot} defaults to {}, not {component}", have.unwrap_or("nothing")));
+            }
+        }
+    }
+    match text(&format!("{SV_FRAME}.rhx")) {
+        None => out.push(format!("ui/src/{SV_FRAME}.rhx is missing (the rhx frame the Svelte board is drawn in)")),
+        Some(t) => {
+            for (slot, _) in sv {
+                if !t.contains(&format!("<slot name=\"{slot}\"")) {
+                    out.push(format!("ui/src/{SV_FRAME}.rhx marks no section {slot} (<slot name=\"{slot}\" …/>)"));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// FRAME-14: menger's board in real Svelte beside the rhx one — each of the
+/// five as `<name>.rhx` and `<name>-sv.svelte`, the Svelte board at `#/sv/`,
+/// `#/sv/f/:filter` and `#/sv/ticket/:id`, the rhx ones the defaults
+/// (`slots.json`); a right-click puts a Svelte one in a section of the rhx
+/// board (tests/pages_browser.mjs). FRAME-13's `svelte_is_not_in_menger_yet`
+/// went with it: its time has come.
 #[test]
-fn svelte_is_not_in_menger_yet() {
-    let found = svelte_files(&root(), &["ui/src"]);
-    assert!(found.is_empty(), "FRAME-14 brings menger's first svelte/1 components; until then ui/src holds none: {found:?}");
+fn each_board_component_has_both_profiles() {
+    // The check, on what it is given first.
+    let sv = "<script module>\n  export const uses = [];\n</script>\n<p/>\n";
+    let mut good: Vec<(String, String)> = BOARD.iter().flat_map(|n| [(format!("{n}.rhx"), "<p/>".to_string()), (format!("{n}-sv.svelte"), sv.to_string())]).collect();
+    good.push((format!("{SV_FRAME}.rhx"), r#"<slot name="top" filter={filter}/><slot name="nav"/><slot name="main"/><slot name="palette"/>"#.into()));
+    let routes = r##"{ "#/": "board-layout", "#/f/:filter": "board-layout", "#/ticket/:id": "ticket-page", "#/sv/": "board-frame", "#/sv/f/:filter": "board-frame", "#/sv/ticket/:id": "ticket-page-sv" }"##;
+    let slots = r#"{ "board-layout": { "nav": "nav-tree", "main": "board-rows", "palette": "jump-palette" }, "board-frame": { "top": "board-layout-sv", "nav": "nav-tree-sv", "main": "board-rows-sv", "palette": "jump-palette-sv" } }"#;
+    assert_eq!(board_breaks(&good, routes, slots), Vec::<String>::new());
+    let mut bad = good.clone();
+    bad.retain(|(f, _)| f != "nav-tree-sv.svelte" && f != "board-rows.rhx");
+    bad.iter_mut().filter(|(f, _)| f == "jump-palette-sv.svelte").for_each(|(_, t)| *t = "<script>\n</script>\n<p/>\n".into());
+    let swapped = r#"{ "board-layout": { "nav": "nav-tree", "main": "board-rows-sv", "palette": "jump-palette" }, "board-frame": { "top": "board-layout-sv", "nav": "nav-tree-sv", "main": "board-rows-sv", "palette": "jump-palette-sv" } }"#;
+    assert_eq!(
+        board_breaks(&bad, r##"{ "#/": "board-layout", "#/f/:filter": "board-layout", "#/ticket/:id": "ticket-page", "#/sv/": "board-frame", "#/sv/ticket/:id": "ticket-page" }"##, swapped),
+        [
+            "ui/src/board-rows.rhx is missing (the rhx board-rows)",
+            "ui/src/nav-tree-sv.svelte is missing (the Svelte nav-tree)",
+            "ui/src/jump-palette-sv.svelte is not real Svelte (svelte/1: <script module> export const uses = [...])",
+            "routes.json: #/sv/f/:filter draws nothing, not board-frame",
+            "routes.json: #/sv/ticket/:id draws ticket-page, not ticket-page-sv",
+            "slots.json: board-layout's main defaults to board-rows-sv, not board-rows",
+        ]
+    );
+    let frameless: Vec<(String, String)> = good.iter().filter(|(f, _)| f != "board-frame.rhx").cloned().chain([("board-frame.rhx".to_string(), r#"<slot name="nav"/>"#.to_string())]).collect();
+    assert_eq!(board_breaks(&frameless, routes, slots).len(), 3, "a frame that marks one section of four");
+
+    // Then menger's.
+    let root = root();
+    let src = root.join("ui/src");
+    let sources: Vec<(String, String)> = names_in(&src).into_iter().filter(|f| f.ends_with(".rhx") || f.ends_with(".svelte")).map(|f| (f.clone(), std::fs::read_to_string(src.join(&f)).unwrap())).collect();
+    let read = |f: &str| std::fs::read_to_string(root.join(f)).unwrap_or_else(|e| panic!("{f}: {e}"));
+    let broken = board_breaks(&sources, &read("ui/routes.json"), &read("ui/slots.json"));
+    assert!(broken.is_empty(), "FRAME-14: the board in both profiles, rhx the default:\n  {}", broken.join("\n  "));
 }
 
 /// The lines of the shell function `name` in `script`, each with its number:

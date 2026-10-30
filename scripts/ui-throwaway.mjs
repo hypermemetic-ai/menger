@@ -66,7 +66,9 @@ export function run(cmd, argv, opts = {}) {
 
 /** A work directory under /tmp/claude-1000/ named `prefix-…`. */
 export function workDir(prefix) {
-  const base = "/tmp/claude-1000";
+  // FRAME-14: $TMPDIR when it is set (a seeded million wants more than the
+  // tmpfs holds), else /tmp/claude-1000 as before.
+  const base = process.env.TMPDIR || "/tmp/claude-1000";
   fs.mkdirSync(base, { recursive: true });
   return fs.mkdtempSync(path.join(base, `${prefix}-`));
 }
@@ -78,6 +80,9 @@ export function build(profile) {
   run("cargo", ["build", ...p, "-p", "menger", "--bin", "menger"], quiet);
   run(TOOL, ["--help"], quiet);
 }
+
+/** FRAME-14: where the tool finds svelte and esbuild for a svelte/1 build — ../plexus-ui's (`npm ci` there). */
+export const NODE_MODULES = path.join(REPO, "..", "plexus-ui", "node_modules");
 
 /** The plexus-ui tool (FRAME-8): ../plexus-ui's cli/, built into this checkout's target by scripts/plexus-ui. */
 export const TOOL = path.join(REPO, "scripts", "plexus-ui");
@@ -99,7 +104,10 @@ export function bundle(work, name, { edit, engine } = {}) {
     engine = path.join(work, "engine");
     if (!fs.existsSync(path.join(engine, "engine.wasm"))) run(TOOL, ["build", "--prebuild", "--engine", engine], quiet);
   }
-  run(TOOL, ["build", ui, "--engine", engine, "-o", tar], quiet);
+  // FRAME-14: ui/src holds svelte/1 components, compiled in Node with
+  // ../plexus-ui's svelte and esbuild (`npm ci` there); a copy `edit` made
+  // under the work directory finds no node_modules above it.
+  run(TOOL, ["build", ui, "--engine", engine, "--node-modules", NODE_MODULES, "-o", tar], quiet);
   const manifest = run("tar", ["-xOf", tar, "manifest.json"]);
   return { tar, engine, manifest, version: run("sha256sum", [tar]).split(" ")[0] };
 }

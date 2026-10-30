@@ -1,11 +1,15 @@
 #!/usr/bin/env node
 // UI-8: the ladder's browser rows for v2 — the first pages on the engine.
 //
-//   node perf/pages-probe.mjs [--seed N] [--runs 5] [--timeout-ms 30000] [--debug] [--no-build] [--headed] [--keep]
+//   node perf/pages-probe.mjs [--seed N] [--runs 5] [--path /app/] [--timeout-ms 30000] [--debug] [--no-build] [--headed] [--keep]
+//
+// `--path` (FRAME-14) is what each load opens, the board by its route:
+// `/app/` (the default) the rhx board, `/app/#/sv/` the Svelte one
+// (svelte/1). Both draw the same marks, so one probe reads either.
 //
 // A throwaway menger seeded N (default 10⁶; release build), the bundle
 // from plexus-ui build pushed to it (scripts/ui-throwaway.mjs, as
-// tests/pages_browser.mjs does), then `--runs` cold loads of /app/, each
+// tests/pages_browser.mjs does), then `--runs` cold loads of `--path`, each
 // in a fresh browser context signed in by cookie:
 //
 //   board first rows painted   navigation start (the page's own time origin)
@@ -34,6 +38,7 @@ const PROFILE = flag("--debug") ? "debug" : "release";
 const FIRST_ROWS_MS = 300;
 const MEMORY_BYTES = 10 * 1000 * 1000;
 const RUN_TIMEOUT_MS = Number(opt("--timeout-ms", "30000"));
+const PATH = opt("--path", "/app/");
 
 const median = (xs) => {
   const s = [...xs].sort((a, b) => a - b);
@@ -47,7 +52,7 @@ const mib = (b) => `${(b / 1024 / 1024).toFixed(1)} MiB`;
 
 async function main() {
   const work = workDir("ui8-probe");
-  console.error(`work: ${work} · seed ${SEED} · ${RUNS} runs · ${PROFILE}`);
+  console.error(`work: ${work} · seed ${SEED} · ${RUNS} runs · ${PROFILE} · ${PATH}`);
   if (!flag("--no-build")) build(PROFILE);
   const b = bundle(work, "probe");
   const adminKey = path.join(work, "admin.key");
@@ -73,7 +78,7 @@ async function main() {
       await context.addCookies(sessionCookies(server.origin, token));
       await context.addInitScript(INIT);
       const page = await context.newPage();
-      await page.goto(`${server.origin}/app/`);
+      await page.goto(`${server.origin}${PATH}`);
       const deadline = Date.now() + RUN_TIMEOUT_MS;
       let got = null;
       while (Date.now() < deadline) {
@@ -107,9 +112,9 @@ async function main() {
   const each = runs.map((r) => (r.firstRow == null ? "never" : `${r.firstRow.toFixed(0)}`)).join(", ");
   const ok = painted.length === runs.length && first <= FIRST_ROWS_MS && memory <= MEMORY_BYTES;
   console.log(
-    `| ${magnitude(SEED)} | v2 · board first rows painted | ${painted.length ? `${(first / 1000).toFixed(3)} s` : "never"} (median of ${RUNS}: ${each} ms) | wasm ${Number.isFinite(memory) ? mib(memory) : "unknown"} · ${Number.isFinite(held) ? held : 0} rows held | ${ok ? "within" : "over"} 0.3 s / 10 MB |`,
+    `| ${magnitude(SEED)} | v2 · board first rows painted${PATH === "/app/" ? "" : ` · ${PATH}`} | ${painted.length ? `${(first / 1000).toFixed(3)} s` : "never"} (median of ${RUNS}: ${each} ms) | wasm ${Number.isFinite(memory) ? mib(memory) : "unknown"} · ${Number.isFinite(held) ? held : 0} rows held | ${ok ? "within" : "over"} 0.3 s / 10 MB |`,
   );
-  console.log(JSON.stringify({ seed: SEED, runs, first_rows_ms: first, wasm_bytes: memory, rows_held: held, ok }));
+  console.log(JSON.stringify({ seed: SEED, path: PATH, runs, first_rows_ms: first, wasm_bytes: memory, rows_held: held, ok }));
   process.exit(ok ? 0 : 1);
 }
 

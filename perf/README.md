@@ -35,11 +35,13 @@ is the Python sheets' throwaway server and signed-in socket.
 
 ```sh
 node perf/pages-probe.mjs --seed 1000 --runs 1 --debug   # small; the default is 10⁶, release, 5 runs
+node perf/pages-probe.mjs --path '/app/#/sv/'           # FRAME-14: the Svelte board (svelte/1)
 ```
 
 A throwaway menger seeded N, the bundle from `plexus-ui build` pushed to
-it, then cold loads of `/app/`, each in a fresh browser context signed in by
-cookie. Budgets: first rows ≤ 0.3 s and wasm memory ≤ 10 MB at a million;
+it, then cold loads of `--path` (default `/app/`, the rhx board; `/app/#/sv/`
+the Svelte one, FRAME-14 — both draw the same marks), each in a fresh
+browser context signed in by cookie. Budgets: first rows ≤ 0.3 s and wasm memory ≤ 10 MB at a million;
 exit 1 past one, 2 when setup failed.
 
 ## The concurrency ladder — `concurrency.mjs` (PERF-12)
