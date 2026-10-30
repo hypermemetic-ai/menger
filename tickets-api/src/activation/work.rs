@@ -78,8 +78,10 @@ impl WorkActivation {
         filter: Option<FilterText>,
         /// The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC).
         tz: Option<Zone>,
+        /// Only these summary-row fields, e.g. id,title,kind,status — each row then carries them and its id (optional; implies summary).
+        fields: Option<Vec<SummaryField>>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        crate::store::reading_as(user.principal_text(), ready_stream(self.store.clone(), user, ReadyAsk { epic, after, limit, summary, filter, tz }))
+        crate::store::reading_as(user.principal_text(), ready_stream(self.store.clone(), user, ReadyAsk { epic, after, limit, summary, filter, tz, fields }))
     }
 
     /// The order of work: each ticket of the shortcodes placed in its wave over the whole blocked_by graph (or missing_blocker, or done) with what it waits on, then the wave counts.

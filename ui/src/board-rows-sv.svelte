@@ -11,6 +11,8 @@
      the handle's getter, `rows.rows`, not the store's `$rows.rows`: a row a
      change leaves alone is the same object, so only the changed row renders. -->
 <script module>
+  // PERF-15: a row is the four fields drawn, not the whole summary row.
+  const FIELDS = ["id", "title", "kind", "status"];
   export const uses = ["tickets.nav.extents", "tickets.watch", "tickets.nav.counts", "tickets.list"];
 </script>
 
@@ -30,7 +32,7 @@
   let first = $state(0);
   let win = $state({ after: null, at: null });
   const rows = live({ snapshot: "tickets.list",
-    params: () => ({ summary: true, limit: PAGE, filter: filter ?? null, after: win.after, at: win.at }),
+    params: () => ({ summary: true, limit: PAGE, fields: FIELDS, filter: filter ?? null, after: win.after, at: win.at }),
     changes: "tickets.watch", changes_params: () => ({ filter: filter ?? null }), key: "id",
     on: { created: "upsert:ticket", status_changed: "upsert:ticket", amended: "upsert:ticket",
           kind_changed: "upsert:ticket", labels_changed: "upsert:ticket", deleted: "remove:ids" },

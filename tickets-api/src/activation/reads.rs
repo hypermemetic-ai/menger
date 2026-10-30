@@ -83,12 +83,16 @@ pub(super) struct ListAsk {
     pub(super) at: Option<u64>,
     pub(super) keep: Option<TicketRef>,
     pub(super) tz: Option<Zone>,
+    /// PERF-15: the summary row's fields to keep (summary rows implied).
+    pub(super) fields: Option<Vec<SummaryField>>,
 }
 
 /// `list` — a page of the caller's tickets: by epic, status and parent, or
 /// (FILTER-4) from the cells under a filter or at a position.
 pub(super) fn list_stream(store: Arc<Store>, caller: VerifiedUser, ask: ListAsk) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-    let ListAsk { epic, status, parent, after, limit, summary, filter, at, keep, tz } = ask;
+    let ListAsk { epic, status, parent, after, limit, summary, filter, at, keep, tz, fields } = ask;
+    // PERF-15: `fields` thins the summary rows, so it asks for them.
+    let summary = Some(summary.unwrap_or(false) || fields.is_some());
     let (epic, parent) = (epic.map(String::from), parent.map(String::from));
     let limit = Some(crate::limits::page(limit, crate::limits::LIST_PAGE_DEFAULT, crate::limits::LIST_PAGE_MAX));
     stream! {
@@ -124,7 +128,7 @@ pub(super) fn list_stream(store: Arc<Store>, caller: VerifiedUser, ask: ListAsk)
             let keep = filter.is_some().then(|| keep.map(String::from)).flatten();
             let q = Filtered { lens, epic, status, parent, keep };
             if summary.unwrap_or(false) {
-                for ev in page_events(store.filtered_page(&caller, &q, after.as_deref(), at, limit)) {
+                for ev in page_events(store.filtered_page(&caller, &q, after.as_deref(), at, limit), fields.as_deref()) {
                     yield ev;
                 }
             } else {
@@ -144,7 +148,7 @@ pub(super) fn list_stream(store: Arc<Store>, caller: VerifiedUser, ask: ListAsk)
                 after: after.as_deref(),
                 limit,
             });
-            for ev in page_events(page) {
+            for ev in page_events(page, fields.as_deref()) {
                 yield ev;
             }
         } else {
@@ -165,12 +169,15 @@ pub(super) struct ReadyAsk {
     pub(super) summary: Option<bool>,
     pub(super) filter: Option<FilterText>,
     pub(super) tz: Option<Zone>,
+    /// PERF-15: as `list`'s.
+    pub(super) fields: Option<Vec<SummaryField>>,
 }
 
 /// `ready_set` — what can start now, in the caller's reach; under a
 /// filter, `ready and (filter)` from the cells.
 pub(super) fn ready_stream(store: Arc<Store>, caller: VerifiedUser, ask: ReadyAsk) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-    let ReadyAsk { epic, after, limit, summary, filter, tz } = ask;
+    let ReadyAsk { epic, after, limit, summary, filter, tz, fields } = ask;
+    let summary = Some(summary.unwrap_or(false) || fields.is_some());
     let epic = epic.map(String::from);
     stream! {
         let filter = match asked(&store, &caller, filter.as_deref()) {
@@ -196,7 +203,7 @@ pub(super) fn ready_stream(store: Arc<Store>, caller: VerifiedUser, ask: ReadyAs
             Ok(Some(q)) => {
                 let q = Filtered { lens: q.lens.with_clock(clock), ..q };
                 if summary.unwrap_or(false) {
-                    for ev in page_events(store.ready_filtered_page(&caller, &q, after.as_deref(), limit)) {
+                    for ev in page_events(store.ready_filtered_page(&caller, &q, after.as_deref(), limit), fields.as_deref()) {
                         yield ev;
                     }
                 } else {
@@ -211,7 +218,7 @@ pub(super) fn ready_stream(store: Arc<Store>, caller: VerifiedUser, ask: ReadyAs
             Ok(None) => {}
         }
         if summary.unwrap_or(false) {
-            for ev in page_events(store.ready_page(&caller, epic.as_deref(), after.as_deref(), limit)) {
+            for ev in page_events(store.ready_page(&caller, epic.as_deref(), after.as_deref(), limit), fields.as_deref()) {
                 yield ev;
             }
         } else {
@@ -236,6 +243,7 @@ pub(super) fn find_stream(
     limit: Option<u32>,
     filter: Option<FilterText>,
     tz: Option<Zone>,
+    fields: Option<Vec<SummaryField>>,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     let limit = Some(limit.unwrap_or(FIND_LIMIT));
     let page = asked(&store, &caller, filter.as_deref()).map_err(StoreError::Filter).and_then(|filter| match zoned_lens(&store, &caller, filter.as_ref(), tz.as_deref())? {
@@ -243,10 +251,11 @@ pub(super) fn find_stream(
         Some(lens) => store.find_filtered(&caller, &query, &lens, after.as_deref(), limit),
         None => store.find_page(&caller, &query, after.as_deref(), limit),
     });
-    futures::stream::iter(page_events(page))
+    futures::stream::iter(page_events(page, fields.as_deref()))
 }
 
-/// `search` — SEARCH-2's hits in the caller's reach, then `searched`.
+/// `search` — SEARCH-2's hits in the caller's reach (PERF-15: one `rows`),
+/// then `searched`.
 pub(super) fn search_stream(
     store: Arc<Store>,
     caller: VerifiedUser,
@@ -276,8 +285,9 @@ pub(super) fn search_stream(
         let limit = Some(limit.unwrap_or(SEARCH_LIMIT).min(SEARCH_MAX));
         match store.search(&caller, &query, lens, limit, offset).await {
             Ok(SearchPage { hits, matched, next, words }) => {
-                for hit in hits {
-                    yield TicketsEvent::Hit { summary: hit.summary, title: hit.title, snippet: hit.snippet, corrected: hit.corrected };
+                // PERF-15: the page's hits one `rows` event.
+                for ev in rows_events(hits.into_iter().map(|hit| Row::Hit { summary: hit.summary, title: hit.title, snippet: hit.snippet, corrected: hit.corrected }).collect()) {
+                    yield ev;
                 }
                 yield TicketsEvent::Searched { matched, next, words };
             }
@@ -337,13 +347,13 @@ pub(super) fn tree_events(store: &Store, caller: &VerifiedUser, ask: TreeAsk) ->
     tree_page_events(store.tree_page(caller, &q, after.as_deref(), limit))
 }
 
-/// A listing the overview answers whole (`groups`, `extents`,
-/// `components`): `f`'s events, once the caller's reach is one a read can
+/// A listing the overview answers whole (`groups`, `extents`): `f`'s rows
+/// as one `rows` event (PERF-15), once the caller's reach is one a read can
 /// be made of — else its refusal. Answered at the call, from the cache.
-pub(super) fn listed(store: &Store, caller: &VerifiedUser, f: impl FnOnce(&Store, &VerifiedUser) -> Vec<TicketsEvent>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+pub(super) fn listed(store: &Store, caller: &VerifiedUser, f: impl FnOnce(&Store, &VerifiedUser) -> Vec<Row>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     let events = match caller.read_filter() {
         Err(message) => vec![TicketsEvent::Error { message }],
-        Ok(_) => f(store, caller),
+        Ok(_) => rows_events(f(store, caller)),
     };
     futures::stream::iter(events)
 }

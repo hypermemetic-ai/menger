@@ -1014,6 +1014,90 @@ impl WatchEnd {
     }
 }
 
+/// PERF-15: a summary row as a page carries it — the whole row, or (a call
+/// that asked `fields`) only those keys and the `id`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(untagged)]
+pub enum SummaryRow {
+    Whole(TicketSummary),
+    Fields(serde_json::Map<String, serde_json::Value>),
+}
+
+impl SummaryRow {
+    /// `row` thinned to `fields` and its `id`; every field when `fields` is
+    /// `None`.
+    pub fn of(row: TicketSummary, fields: Option<&[crate::vocab::SummaryField]>) -> Self {
+        let Some(fields) = fields else { return Self::Whole(row) };
+        let serde_json::Value::Object(mut all) = serde_json::to_value(&row).unwrap_or_default() else { return Self::Whole(row) };
+        let mut kept = serde_json::Map::new();
+        for key in std::iter::once("id").chain(fields.iter().map(|f| f.as_str())) {
+            if let Some(v) = all.remove(key) {
+                kept.insert(key.to_string(), v);
+            }
+        }
+        Self::Fields(kept)
+    }
+
+    /// The row's id.
+    pub fn id(&self) -> Option<&str> {
+        match self {
+            Self::Whole(r) => Some(r.id.as_str()),
+            Self::Fields(m) => m.get("id").and_then(|v| v.as_str()),
+        }
+    }
+}
+
+/// PERF-15: one row of a page — each serialized exactly as the per-row event
+/// it stands for (`summary`, `ticket`, `node`, `hit`, `group`, `extent`,
+/// `count`), so a page's `rows { items }` is those events in one frame.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Row {
+    /// A summary row (`list`, `work.ready` with `summary`; `find`).
+    Summary { summary: SummaryRow },
+    /// A whole ticket (`list`, `work.ready` without `summary`).
+    Ticket { ticket: Ticket },
+    /// A row of `nav.tree`, as [`TicketsEvent::Node`].
+    Node { summary: TicketSummary, matched: bool, below: u64 },
+    /// A `search` match, as [`TicketsEvent::Hit`].
+    Hit { summary: TicketSummary, title: Vec<Marked>, snippet: Vec<Marked>, corrected: bool },
+    /// A shortcode's roll-up (`nav.groups`), as [`TicketsEvent::Group`].
+    Group { group: Group },
+    /// Where a shortcode ends (`nav.extents`), as [`TicketsEvent::Extent`].
+    Extent {
+        epic: Code,
+        #[serde(default)]
+        shortcode: ShortcodeId,
+        last_seq: u32,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        holes: Vec<u32>,
+    },
+    /// A shortcode's matches (`nav.counts`), as [`TicketsEvent::Count`].
+    Count {
+        epic: Code,
+        #[serde(default)]
+        shortcode: ShortcodeId,
+        held: u64,
+    },
+}
+
+impl Row {
+    /// The per-row event this row stands for — `None` for a thinned summary
+    /// row (`fields`), which no single event carries.
+    pub fn into_event(self) -> Option<TicketsEvent> {
+        Some(match self {
+            Row::Summary { summary: SummaryRow::Whole(summary) } => TicketsEvent::Summary { summary },
+            Row::Summary { summary: SummaryRow::Fields(_) } => return None,
+            Row::Ticket { ticket } => TicketsEvent::Ticket { ticket },
+            Row::Node { summary, matched, below } => TicketsEvent::Node { summary, matched, below },
+            Row::Hit { summary, title, snippet, corrected } => TicketsEvent::Hit { summary, title, snippet, corrected },
+            Row::Group { group } => TicketsEvent::Group { group },
+            Row::Extent { epic, shortcode, last_seq, holes } => TicketsEvent::Extent { epic, shortcode, last_seq, holes },
+            Row::Count { epic, shortcode, held } => TicketsEvent::Count { epic, shortcode, held },
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TicketsEvent {
@@ -1036,6 +1120,14 @@ pub enum TicketsEvent {
     /// `work.ready` yield per row instead of `ticket` when the call asked
     /// for `summary`, and what `find` always yields (SCALE-6).
     Summary { summary: TicketSummary },
+    /// PERF-15: a page's rows in one event — what every paged read (`list`,
+    /// `work.ready`, `nav.tree`, `find`, `search`) and the board's listings
+    /// (`nav.groups`, `nav.extents`, `nav.counts`) answer, then their one
+    /// trailing event (`page`, `searched`; none for a listing) and `done`:
+    /// one frame for the rows, not one per row. Each item is the per-row
+    /// event it stands for, serialized as that event is. A watch never
+    /// sends one: each change is its own event.
+    Rows { items: Vec<Row> },
     /// MNG-9: where a `list` / `work.ready` / `find` walk stands, yielded once as
     /// the last data event of the call. `next` is the cursor to pass as
     /// the next call's `after` — `null` when nothing more matches, which

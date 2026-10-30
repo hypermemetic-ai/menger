@@ -3,6 +3,8 @@
      when it opens (its roll-up stays live on the row above). nav-tree-sv
      imports it; it is a component in its own right too. -->
 <script module>
+  // PERF-15: a row is the four fields drawn, not the whole summary row.
+  const FIELDS = ["id", "title", "kind", "status"];
   export const uses = ["tickets.list"];
 </script>
 
@@ -11,7 +13,7 @@
 
   let { parent } = $props();
   const base = location.hash.startsWith("#/sv/") ? "#/sv/" : "#/";
-  const kids = live({ snapshot: "tickets.list", params: () => ({ parent, summary: true, limit: 200 }), key: "id" });
+  const kids = live({ snapshot: "tickets.list", params: () => ({ parent, summary: true, limit: 200, fields: FIELDS }), key: "id" });
   const list = $derived($kids.rows);
 </script>
 

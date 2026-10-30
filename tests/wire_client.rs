@@ -170,7 +170,21 @@ fn created(events: Vec<TicketsEvent>) -> Ticket {
 
 /// The rows of a paged call (MNG-9): every event but the trailing `page`,
 /// which is asserted to be there exactly once.
+/// PERF-15: a page's `rows` as the typed per-row events it carries (each
+/// `Row::into_event`), in place — the one `rows` asserted to be there.
+fn flat(events: Vec<TicketsEvent>) -> Vec<TicketsEvent> {
+    assert!(events.iter().any(|e| matches!(e, TicketsEvent::Rows { .. })), "a page's rows are one rows event: {events:?}");
+    events
+        .into_iter()
+        .flat_map(|e| match e {
+            TicketsEvent::Rows { items } => items.into_iter().map(|r| r.into_event().expect("a whole row")).collect(),
+            e => vec![e],
+        })
+        .collect()
+}
+
 fn rows(events: Vec<TicketsEvent>) -> Vec<TicketsEvent> {
+    let events = flat(events);
     let pages = events
         .iter()
         .filter(|e| matches!(e, TicketsEvent::Page { .. }))
@@ -298,7 +312,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // -- list replays current state, paged (MNG-9) ---------------------------
     let listed = rows(
         client
-            .list_all(Some(p("WIRE")), None, None, None, None, None, None, None, None, None)
+            .list_all(Some(p("WIRE")), None, None, None, None, None, None, None, None, None, None)
             .await
             .expect("list"),
     );
@@ -307,10 +321,10 @@ async fn the_wire_assertions_through_the_generated_client() {
     // -- find (SCALE-6) -----------------------------------------------------
     // The generated client's `find`: typed `summary` rows, then the page.
     let found = client
-        .find_all(p(" OVER the "), None, None, None, None)
+        .find_all(p(" OVER the "), None, None, None, None, None)
         .await
         .expect("find");
-    match found.as_slice() {
+    match flat(found).as_slice() {
         [TicketsEvent::Summary { summary }, TicketsEvent::Page { next: None, remaining: 0, first: None }] => {
             assert_eq!(summary.id, "WIRE-1");
             assert_eq!(summary.title, "first over the wire");
@@ -318,17 +332,17 @@ async fn the_wire_assertions_through_the_generated_client() {
         other => panic!("expected one `summary` and the page, got {other:?}"),
     }
     assert!(
-        rows(client.find_all(p("zzz"), None, Some(2), None, None).await.expect("find")).is_empty(),
+        rows(client.find_all(p("zzz"), None, Some(2), None, None, None).await.expect("find")).is_empty(),
         "nothing matches"
     );
 
     // -- FILTER-15: find under a filter, and member -------------------------
     // WIRE-1 is Ready: a filter that does not admit it hides it from find.
     assert!(
-        rows(client.find_all(p(" OVER the "), None, None, Some(p("status Draft")), None).await.expect("find")).is_empty(),
+        rows(client.find_all(p(" OVER the "), None, None, Some(p("status Draft")), None, None).await.expect("find")).is_empty(),
         "the filter does not admit it"
     );
-    assert_eq!(rows(client.find_all(p(" OVER the "), None, None, Some(p("ready")), None).await.expect("find")).len(), 1);
+    assert_eq!(rows(client.find_all(p(" OVER the "), None, None, Some(p("ready")), None, None).await.expect("find")).len(), 1);
     let members = client
         .nav()
         .member_all(vec![p("WIRE-1"), p("NOPE-1"), p("wire-1")], p("status Ready"), None)
@@ -363,7 +377,7 @@ async fn the_wire_assertions_through_the_generated_client() {
         .expect("promote DG-1");
     let ready = rows(
         client
-            .work().ready_all(Some(p("DG")), None, None, None, None, None)
+            .work().ready_all(Some(p("DG")), None, None, None, None, None, None)
             .await
             .expect("ready_set"),
     );
@@ -413,7 +427,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     }
     let children = ids(rows(
         client
-            .list_all(None, None, Some(p("PA-1")), None, None, None, None, None, None, None)
+            .list_all(None, None, Some(p("PA-1")), None, None, None, None, None, None, None, None)
             .await
             .expect("list by parent"),
     ));
@@ -524,7 +538,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // Server and watch-only mirror agree on the ready set, computed two ways.
     let server_ready = ids(rows(
         client
-            .work().ready_all(Some(p("WIRE")), None, None, None, None, None)
+            .work().ready_all(Some(p("WIRE")), None, None, None, None, None, None)
             .await
             .expect("ready_set"),
     ));
@@ -554,6 +568,7 @@ async fn the_wire_assertions_through_the_generated_client() {
         .nav()
         .groups_all()
         .await
+        .map(flat)
         .expect("groups")
         .into_iter()
         .map(|event| match event {
@@ -588,6 +603,7 @@ async fn the_wire_assertions_through_the_generated_client() {
         .nav()
         .extents_all()
         .await
+        .map(flat)
         .expect("extents")
         .into_iter()
         .map(|event| match event {
@@ -709,8 +725,9 @@ async fn placements_and_paths_decode_typed_through_the_generated_client() {
         ]
     );
     let rows: Vec<_> = client
-        .list_all(Some(p("PT")), None, None, None, None, Some(true), None, None, None, None)
+        .list_all(Some(p("PT")), None, None, None, None, Some(true), None, None, None, None, None)
         .await
+        .map(flat)
         .expect("list")
         .into_iter()
         .filter_map(|e| match e {

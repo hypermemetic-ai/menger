@@ -48,7 +48,8 @@ const route = opt("--path", "/");
 const token = readFileSync(tokenFile, "utf8").trim();
 const req = createRequire(path.join(here, "package.json"));
 const { chromium } = await import(req.resolve("playwright").replace(/index\.js$/, "index.mjs"));
-const cookieName = origin.startsWith("https://") ? "__Host-menger_session" : "menger_session";
+// A throwaway's shell (http) names its cookie by its port (scripts/throwaway-login.mjs).
+const cookieName = origin.startsWith("https://") ? "__Host-menger_session" : `menger_session_${new URL(origin).port || 80}`;
 
 const MARKS = `(() => {
   const log = (window.__probe = {});

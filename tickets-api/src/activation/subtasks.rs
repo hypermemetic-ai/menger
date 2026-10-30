@@ -93,9 +93,12 @@ impl SubtasksActivation {
         /// At most this many (default 1000, at most 10000; optional).
         limit: Option<u32>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        listed(&self.store, &user, move |store, user| {
-            let limit = Some(crate::limits::page(limit, crate::limits::LIST_PAGE_DEFAULT, crate::limits::LIST_PAGE_MAX));
-            page_events(store.page(user, PageQuery { epic: None, status: None, parent: Some(parent.as_str()), after: after.as_deref(), limit })).collect()
-        })
+        // PERF-15: one `rows`, then the page — as `listed`, the reach first.
+        let limit = Some(crate::limits::page(limit, crate::limits::LIST_PAGE_DEFAULT, crate::limits::LIST_PAGE_MAX));
+        let events: Vec<TicketsEvent> = match user.read_filter() {
+            Err(message) => vec![TicketsEvent::Error { message }],
+            Ok(_) => page_events(self.store.page(&user, PageQuery { epic: None, status: None, parent: Some(parent.as_str()), after: after.as_deref(), limit }), None).collect(),
+        };
+        futures::stream::iter(events)
     }
 }

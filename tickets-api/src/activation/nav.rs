@@ -19,7 +19,7 @@
 //! hub indexes no child).
 #![allow(clippy::too_many_arguments)]
 
-use crate::types::TicketsEvent;
+use crate::types::{Row, TicketsEvent};
 use crate::vocab::{Cursor, FilterText, ShortcodeRef, TicketRef, Zone};
 #[cfg(feature = "server")]
 use super::{counts_stream, facets_stream, listed, member_events, tree_events, TreeAsk};
@@ -81,7 +81,7 @@ impl NavActivation {
         // ORG-13: the shortcodes of the epic the caller is in.
         let me = user.principal_text();
         listed(&self.store, &user, move |store, user| {
-            store.groups(user).into_iter().filter(|g| store.in_current_era(&me, &g.shortcode)).map(|group| TicketsEvent::Group { group }).collect()
+            store.groups(user).into_iter().filter(|g| store.in_current_era(&me, &g.shortcode)).map(|group| Row::Group { group }).collect()
         })
     }
 
@@ -105,7 +105,7 @@ impl NavActivation {
         let me = user.principal_text();
         listed(&self.store, &user, move |store, user| {
             let mine = store.extents_holed(user).into_iter().filter(|(sc, ..)| store.in_current_era(&me, sc));
-            mine.map(|(shortcode, epic, last_seq, holes)| TicketsEvent::Extent { epic, shortcode, last_seq, holes }).collect()
+            mine.map(|(shortcode, epic, last_seq, holes)| Row::Extent { epic, shortcode, last_seq, holes }).collect()
         })
     }
 

@@ -12,7 +12,7 @@
                         on: #{ extent: "upsert:.", created: "upsert:ticket" } });
   let counts = live(#{ snapshot: "tickets.nav.counts", params: #{ filter: filter }, key: "shortcode", on: #{ count: "upsert:." } });
   let rows = live(#{ snapshot: "tickets.list",
-                     params: #{ summary: true, limit: 200, filter: filter, after: state.after, at: state.at },
+                     params: #{ summary: true, limit: 200, fields: ["id", "title", "kind", "status"], filter: filter, after: state.after, at: state.at },
                      changes: "tickets.watch", changes_params: #{ filter: filter },
                      key: "id", debounce_ms: 20,
                      on: #{ created: "upsert:ticket", status_changed: "upsert:ticket", amended: "upsert:ticket",

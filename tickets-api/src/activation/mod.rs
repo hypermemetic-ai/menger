@@ -33,10 +33,10 @@
 //! a struct.
 #![allow(clippy::too_many_arguments)]
 
-use crate::types::{Kind, Severity, Status, TicketsEvent};
+use crate::types::{Kind, Row, Severity, Status, SummaryRow, TicketsEvent};
 // ACCESS-8: every parameter a type (MACRO-12's `typed_params` holds it).
 use crate::vocab::{
-    Body, CallerSource, Cursor, DeleteChildren, FilterText, Label, MengerPath, Message, Query, SeverityChange, ShortcodeRef, TicketRef, Title, Zone,
+    Body, CallerSource, Cursor, DeleteChildren, FilterText, Label, MengerPath, Message, Query, SeverityChange, ShortcodeRef, SummaryField, TicketRef, Title, Zone,
 };
 use crate::address::OrgId;
 // ACCESS-48: what `not_found` / `ambiguous` echo.
@@ -108,6 +108,9 @@ mod sight;
 mod update;
 #[cfg(feature = "server")]
 use events::*;
+/// PERF-15: what one `rows` event carries at most.
+#[cfg(feature = "server")]
+pub use events::ROWS_BUDGET;
 #[cfg(feature = "server")]
 use sight::*;
 #[cfg(feature = "server")]
@@ -379,8 +382,10 @@ impl TicketsActivation {
         keep: Option<TicketRef>,
         /// The time zone a history filter's days are read in (today, yesterday, this week, a date): an IANA name, e.g. Europe/Berlin, UTC, or an offset, e.g. +02:00 (optional; default UTC).
         tz: Option<Zone>,
+        /// Only these summary-row fields, e.g. id,title,kind,status — each row then carries them and its id (optional; implies summary).
+        fields: Option<Vec<SummaryField>>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        crate::store::reading_as(user.principal_text(), list_stream(self.store.clone(), user, ListAsk { epic, status, parent, after, limit, summary, filter, at, keep, tz }))
+        crate::store::reading_as(user.principal_text(), list_stream(self.store.clone(), user, ListAsk { epic, status, parent, after, limit, summary, filter, at, keep, tz, fields }))
     }
 
     /// Set a ticket's status (not a doc's: a doc has no lifecycle); Canceled cancels its open descendants in the same write, and leaving Canceled may restore them (restore_children).
@@ -948,8 +953,10 @@ impl TicketsActivation {
         filter: Option<FilterText>,
         /// The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC).
         tz: Option<Zone>,
+        /// Only these summary-row fields, e.g. id,title,kind,status — each row then carries them and its id (optional).
+        fields: Option<Vec<SummaryField>>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        find_stream(self.store.clone(), user, query, after, limit, filter, tz)
+        find_stream(self.store.clone(), user, query, after, limit, filter, tz, fields)
     }
 
     /// Search inside tickets: the tickets whose title or body holds every word of the query (prefixes and typos too), best first, each with the passage that matched; optionally under a filter, paged with offset + limit.

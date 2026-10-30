@@ -284,3 +284,61 @@ impl FromStr for AmendedField {
         }
     }
 }
+
+/// PERF-15: a field of the summary row (`TicketSummary`) a page may be thinned
+/// to — `list`, `work.ready` and `find` take `fields` (`id,title,kind,status`:
+/// the board's four), and each row then carries those and its `id`, nothing
+/// else. Its wire spelling is the row's own key.
+macro_rules! summary_fields {
+    ($($v:ident => $s:literal),+ $(,)?) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+        #[serde(rename_all = "snake_case")]
+        pub enum SummaryField { $($v),+ }
+
+        impl SummaryField {
+            /// Every field, in the row's order.
+            pub const ALL: &'static [SummaryField] = &[$(SummaryField::$v),+];
+
+            /// The wire spelling — the summary row's key.
+            pub const fn as_str(self) -> &'static str {
+                match self { $(SummaryField::$v => $s),+ }
+            }
+        }
+
+        impl FromStr for SummaryField {
+            type Err = String;
+            fn from_str(s: &str) -> Result<Self, String> {
+                match s.trim().to_ascii_lowercase().as_str() {
+                    $($s => Ok(SummaryField::$v),)+
+                    other => Err(format!("field '{other}': a summary row's field — {}", [$($s),+].join(", "))),
+                }
+            }
+        }
+    };
+}
+
+summary_fields!(
+    Id => "id", Epic => "epic", Shortcode => "shortcode", Address => "address", Seq => "seq", Title => "title",
+    Status => "status", Kind => "kind", Severity => "severity", Parent => "parent", ParentHidden => "parent_hidden",
+    ChildCount => "child_count", BlockedBy => "blocked_by", Unlocks => "unlocks", HiddenBlockedBy => "hidden_blocked_by",
+    HiddenUnlocks => "hidden_unlocks", Commits => "commits", Path => "path", Placement => "placement", Labels => "labels",
+    Archived => "archived", Frozen => "frozen", Hidden => "hidden", CreatedUnix => "created_unix", UpdatedUnix => "updated_unix",
+);
+
+lenient!(SummaryField);
+
+impl fmt::Display for SummaryField {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl JsonSchema for SummaryField {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "SummaryField".into()
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let values: Vec<&'static str> = SummaryField::ALL.iter().map(|f| f.as_str()).collect();
+        schemars::json_schema!({ "type": "string", "description": "A field of the summary row (TicketSummary's keys)", "enum": values })
+    }
+}

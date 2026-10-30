@@ -80,7 +80,13 @@ and one JSON line. On app-test before PERF-15 (976 tickets, 83 shortcodes) the
 board's calls are 465 frames and ~247 KB — `tickets.list` 203 frames and
 149 KB, `nav.groups`, `nav.extents` and `nav.counts` 85 apiece — and the
 stream row (first data → done) 40–130 ms; with a page one `rows` frame the
-list is three frames and that row ~0. The hand gate is three runs of five, the release before
+list is three frames and that row ~0. The bytes column counts what each
+call's socket received under its request id and subscription: a call's ack,
+its items, and — a page's unsubscribes being calls of their own —
+`menger.call_unsub`'s replies under that name; a watch's row counts its
+traffic until the page closes. For the stream row on a local throwaway, run
+`live-probe.mjs --origin http://127.0.0.1:SHELL` against it
+(`pages-probe.mjs` has no first-data → done mark). The hand gate is three runs of five, the release before
 and after, in the same hour.
 
 ## The concurrency ladder — `concurrency.mjs` (PERF-12)

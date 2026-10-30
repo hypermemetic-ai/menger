@@ -1,6 +1,6 @@
 <script>
   state(#{ seen: "" });
-  let rows = live(#{ snapshot: "tickets.list", params: #{ summary: true, limit: 200 },
+  let rows = live(#{ snapshot: "tickets.list", params: #{ summary: true, limit: 200, fields: ["id", "title", "kind", "status"] },
                      changes: "tickets.watch", key: "id",
                      on: #{ created: "upsert:ticket", amended: "upsert:ticket", deleted: "remove:ids" } });
   fn scrolled(state, ev) { state.seen = "scroll " + ev.scroll_top + "/" + ev.scroll_height + "/" + ev.client_height; state }

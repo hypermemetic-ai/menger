@@ -5,6 +5,8 @@
      there is no query (`when`), the typing coalesced by `debounce_ms` in the
      host's registry; no timer of its own. -->
 <script module>
+  // PERF-15: a row is the four fields drawn, not the whole summary row.
+  const FIELDS = ["id", "title", "kind", "status"];
   export const uses = ["tickets.find", "tickets.search"];
 </script>
 
@@ -16,7 +18,7 @@
 
   let open = $state(false);
   let q = $state("");
-  const found = live({ snapshot: "tickets.find", params: () => ({ query: q, limit: 12 }), key: "id", when: () => q.length > 0, debounce_ms: 80 });
+  const found = live({ snapshot: "tickets.find", params: () => ({ query: q, limit: 12, fields: FIELDS }), key: "id", when: () => q.length > 0, debounce_ms: 80 });
   const searched = live({ snapshot: "tickets.search", params: () => ({ query: q, limit: 8 }), key: "id", when: () => q.length > 0, debounce_ms: 80 });
   const hits = $derived($found.rows);
   const best = $derived($searched.rows);

@@ -18,7 +18,9 @@
 //! A build that moves a method updates the fixture deliberately, its calls
 //! only: ACCESS-16 moved `groups`, `extents`, `tree`, `counts`, `facets` and
 //! `member` to `tickets.nav.<method>` — the six `call`s renamed, every item
-//! they answer byte for byte as before.
+//! they answer byte for byte as before. PERF-15 put a page's rows in one
+//! `rows` event: the collector reads it as the rows it carries, so the fixture
+//! did not move.
 
 
 /// ACCESS-24: the test provider — every server runs `key`, every client is its `--admin`.
@@ -75,6 +77,13 @@ async fn collect(mut sub: Subscription<Value>) -> Vec<Value> {
         let item = item.unwrap();
         match item["type"].as_str() {
             Some("done") => return out,
+            // PERF-15: a page's `rows` round-trips as itself (the `Rows`
+            // variant), then reads as the per-row events it carries, in place
+            // — the fixture is the same items, byte for byte.
+            Some("data") if item["content"]["type"] == "rows" => {
+                round_trip("tickets", &item["content"]);
+                out.extend(item["content"]["items"].as_array().cloned().unwrap_or_default());
+            }
             Some("data") => out.push(item["content"].clone()),
             other => panic!("unexpected stream item type {other:?}: {item}"),
         }

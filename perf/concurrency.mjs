@@ -263,7 +263,8 @@ class Rpc {
     const c = this.subs.get(msg.params?.subscription);
     if (!c) return;
     const item = msg.params.result;
-    if (item?.type === "data") c.items.push(item.content);
+    // PERF-15: a page's `rows` as the per-row events it carries.
+    if (item?.type === "data") c.items.push(...(item.content?.type === "rows" ? item.content.items : [item.content]));
     else if (item?.type === "error") { c.items.push({ type: "error", ...item }); }
     if (item?.type === "done" || item?.type === "error") { this.subs.delete(msg.params.subscription); this.calls.delete(c.id); c.resolve(c.items); }
   }

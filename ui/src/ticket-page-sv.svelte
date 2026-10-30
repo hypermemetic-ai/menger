@@ -7,6 +7,8 @@
      draws; no allow-list here), and each chip is ticket-chip-sv, a sibling
      imported from ui/src and bundled into this module. -->
 <script module>
+  // PERF-15: a row is the four fields drawn, not the whole summary row.
+  const FIELDS = ["id", "title", "kind", "status"];
   export const uses = ["tickets.get", "tickets.watch", "tickets.list", "tickets.set_status"];
 </script>
 
@@ -21,7 +23,7 @@
 
   const ticket = live({ snapshot: "tickets.get", params: () => ({ id }), changes: "tickets.watch", key: "id",
                         on: { amended: "upsert:ticket", status_changed: "upsert:ticket", kind_changed: "upsert:ticket" } });
-  const children = live({ snapshot: "tickets.list", params: () => ({ parent: id, summary: true, limit: 200 }), changes: "tickets.watch", key: "id",
+  const children = live({ snapshot: "tickets.list", params: () => ({ parent: id, summary: true, limit: 200, fields: FIELDS }), changes: "tickets.watch", key: "id",
                           on: { created: "upsert:ticket", amended: "upsert:ticket", status_changed: "upsert:ticket", deleted: "remove:ids" } });
   const shown = $derived($ticket.rows);
   const kids = $derived($children.rows);

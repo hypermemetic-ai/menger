@@ -2,7 +2,7 @@
   // UI-8: the nav's Flat — one page of `list { filter, summary, limit: 200 }`
   // in the store's order (v1's FILTER-20).
   prop("filter");
-  let flat = live(#{ snapshot: "tickets.list", params: #{ filter: filter, summary: true, limit: 200 }, key: "id" });
+  let flat = live(#{ snapshot: "tickets.list", params: #{ filter: filter, summary: true, limit: 200, fields: ["id", "title", "kind", "status"] }, key: "id" });
 </script>
 
 <ul class="nav-flat" data-nav-flat>

@@ -2,7 +2,7 @@
   // UI-8: an open shortcode in the nav — one page of its root's children,
   // asked once when it opens (its roll-up stays live on the row above).
   prop("parent");
-  let kids = live(#{ snapshot: "tickets.list", params: #{ parent: parent, summary: true, limit: 200 }, key: "id" });
+  let kids = live(#{ snapshot: "tickets.list", params: #{ parent: parent, summary: true, limit: 200, fields: ["id", "title", "kind", "status"] }, key: "id" });
 </script>
 
 <ul class="nav-children" data-nav-children={parent}>

@@ -94,6 +94,13 @@ async fn call(client: &WsClient, method: &str, params: Value) -> Subscription<Va
         .expect("subscribe")
 }
 
+/// PERF-15: a page's first row — the first item of its `rows` (or the
+/// event itself, when it is none).
+fn first_row(item: Value) -> Value {
+    let ev = content(item);
+    if ev["type"] == "rows" { ev["items"][0].clone() } else { ev }
+}
+
 /// Unwraps a PlexusStreamItem, returning the activation event inside `data`.
 fn content(item: Value) -> Value {
     assert_eq!(item["type"], "data", "expected data item, got {item}");
@@ -139,7 +146,11 @@ async fn collect(mut sub: Subscription<Value>) -> Vec<Value> {
         let item = item.unwrap();
         match item["type"].as_str() {
             Some("done") => return out,
-            Some("data") => out.push(item["content"].clone()),
+            // PERF-15: a page's `rows` read as the per-row events it carries.
+            Some("data") => match item["content"].clone() {
+                c if c["type"] == "rows" => out.extend(c["items"].as_array().cloned().unwrap_or_default()),
+                c => out.push(c),
+            },
             other => panic!("unexpected stream item type {other:?}: {item}"),
         }
     }
@@ -223,7 +234,7 @@ async fn health_create_list_watch_over_the_wire() {
 
     // list replays current state
     let mut sub = call(&client, "tickets.list", json!({})).await;
-    let ev = content(sub.next().await.unwrap().unwrap());
+    let ev = first_row(sub.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "ticket");
     assert_eq!(ev["ticket"]["id"], "WIRE-1");
 }
@@ -1142,7 +1153,7 @@ async fn reads_survive_db_location_unavailable() {
     assert_eq!(ev["ticket"], created, "get returns full data from the cache");
 
     let mut sub = call(&client, "tickets.list", json!({})).await;
-    let ev = content(sub.next().await.unwrap().unwrap());
+    let ev = first_row(sub.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "ticket");
     assert_eq!(ev["ticket"], created, "list returns full data from the cache");
 
@@ -1214,7 +1225,7 @@ async fn concurrent_reads_complete_under_mutation_stream() {
             let client = connect(port).await;
             for _ in 0..10 {
                 let mut sub = call(&client, "tickets.list", json!({"epic": "LOAD"})).await;
-                let ev = content(sub.next().await.unwrap().unwrap());
+                let ev = first_row(sub.next().await.unwrap().unwrap());
                 assert_eq!(ev["type"], "ticket");
 
                 let mut sub = call(&client, "tickets.get", json!({"id": "LOAD-1"})).await;
@@ -2751,7 +2762,7 @@ async fn an_unknown_parameter_is_refused_before_the_method_runs() {
     let m = invalid(&client, "tickets.list", json!({"sumary": true})).await;
     assert_eq!(
         m,
-        "Invalid params: unknown field `sumary`; tickets.list takes: after, at, epic, filter, keep, limit, parent, status, summary, tz"
+        "Invalid params: unknown field `sumary`; tickets.list takes: after, at, epic, fields, filter, keep, limit, parent, status, summary, tz"
     );
     let m = invalid(&client, "tickets.list", json!({"summary": true, "limt": 1})).await;
     assert!(m.contains("unknown field `limt`"), "{m}");
@@ -2826,6 +2837,13 @@ fn one_rows_frame(what: &str, frames: &[Value], trailing: Option<&str>) -> Vec<V
     frames[0]["content"]["items"].as_array().unwrap_or_else(|| panic!("{what}: rows carries items: {}", frames[0])).clone()
 }
 
+/// The keys of a build's summary row (a doc has no `placement`; the flags
+/// and hidden counts are omitted when unset).
+const SUMMARY_KEYS: [&str; 18] = [
+    "address", "blocked_by", "child_count", "commits", "created_unix", "epic", "id", "kind", "labels", "parent", "placement", "seq", "severity",
+    "shortcode", "status", "title", "unlocks", "updated_unix",
+];
+
 /// `n` tickets in `epic`: its scope root, then `n - 1` builds under it,
 /// titled `row 2` … `row n`.
 async fn seed_rows(client: &WsClient, epic: &str, n: usize) {
@@ -2854,6 +2872,16 @@ async fn a_list_page_is_one_frame() {
     assert_eq!((items[0]["summary"]["id"].as_str(), items[199]["summary"]["id"].as_str()), (Some("ONE-1"), Some("ONE-200")), "in the store's order");
     assert_eq!(fs[1]["content"], json!({"type": "page", "next": "ONE-200", "remaining": 100}), "the page after the rows, as it was");
     assert!(!frame_kinds(&fs).iter().any(|k| k == "data:summary" || k == "data:ticket"), "no per-row frame");
+    let keys: std::collections::BTreeSet<&str> = items[1]["summary"].as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(keys, SUMMARY_KEYS.iter().copied().collect(), "a build's summary row carries every field it did: {}", items[1]);
+
+    // An empty page: one empty `rows`, then the page. A refusal: the error
+    // alone, no `rows`.
+    let fs = frames(&client, "tickets.list", json!({"summary": true, "epic": "NONE"})).await;
+    assert!(one_rows_frame("list of an empty shortcode", &fs, Some("page")).is_empty());
+    assert_eq!(fs[1]["content"], json!({"type": "page", "next": null, "remaining": 0}));
+    let fs = frames(&client, "tickets.list", json!({"summary": true, "after": "ZZZ-9"})).await;
+    assert_eq!(frame_kinds(&fs), ["data:error", "done"], "a cursor naming no ticket: its error, no rows");
 
     let fs = frames(&client, "tickets.list", json!({"limit": 50, "after": "ONE-200"})).await;
     let items = one_rows_frame("list { limit: 50, after }", &fs, Some("page"));
@@ -2883,8 +2911,7 @@ async fn a_ready_page_is_one_frame() {
     let items = one_rows_frame("work.ready { summary, limit: 200 }", &fs, Some("page"));
     assert_eq!(items.len(), 200);
     assert!(items.iter().all(|i| i["type"] == "summary" && i["summary"]["status"] == "Ready"), "{}", items[0]);
-    assert_eq!(fs[1]["content"]["type"], "page");
-    assert!(fs[1]["content"]["next"].is_string(), "more after the page: {}", fs[1]);
+    assert_eq!(fs[1]["content"], json!({"type": "page", "next": "RDY-201", "remaining": 99}), "the page after the rows, as it was");
 }
 
 /// PERF-15: `nav.tree { parent, filter, limit: 200 }` — one `rows` frame of
@@ -2899,8 +2926,14 @@ async fn a_tree_page_is_one_frame() {
     let fs = frames(&client, "tickets.nav.tree", json!({"parent": "TRE-1", "filter": "kind build", "limit": 200})).await;
     let items = one_rows_frame("nav.tree { parent, filter, limit: 200 }", &fs, Some("page"));
     assert_eq!(items.len(), 200);
-    assert_eq!(items[0], json!({"type": "node", "summary": items[0]["summary"].clone(), "matched": true, "below": 0}), "a node item as the node event was");
+    // The node's summary is TRE-2's whole summary row, as `list` gives it.
+    let one = frames(&client, "tickets.list", json!({"summary": true, "after": "TRE-1", "limit": 1})).await;
+    let listed = one_rows_frame("list after TRE-1", &one, Some("page"));
+    assert_eq!(items[0]["summary"], listed[0]["summary"], "the node's row is the summary row, every field");
     assert_eq!(items[0]["summary"]["id"], "TRE-2");
+    assert_eq!(items[0]["matched"], true);
+    assert_eq!(items[0]["below"], 0);
+    assert_eq!(items[0].as_object().unwrap().len(), 4, "a node item is type, summary, matched, below: {}", items[0]);
     assert_eq!(fs[1]["content"], json!({"type": "page", "next": "TRE-201", "remaining": 99}));
 }
 
@@ -2916,8 +2949,8 @@ async fn a_find_page_is_one_frame() {
     let items = one_rows_frame("find { query, limit: 200 }", &fs, Some("page"));
     assert_eq!(items.len(), 200);
     assert!(items.iter().all(|i| i["type"] == "summary"), "{}", items[0]);
-    assert_eq!(items[0]["summary"]["id"], "FND-2", "the root's title has no `row`");
-    assert_eq!(fs[1]["content"]["type"], "page");
+    assert_eq!((items[0]["summary"]["id"].as_str(), items[199]["summary"]["id"].as_str()), (Some("FND-2"), Some("FND-201")), "the root's title has no `row`");
+    assert_eq!(fs[1]["content"], json!({"type": "page", "next": "FND-201", "remaining": 99}), "the page after the rows, as it was");
 }
 
 /// PERF-15: `search { query, limit: 100 }` — one `rows` frame of `hit`
@@ -2933,7 +2966,12 @@ async fn a_search_page_is_one_frame() {
     let items = one_rows_frame("search { query, limit: 100 }", &fs, Some("searched"));
     assert_eq!(items.len(), 100);
     assert!(items.iter().all(|i| i["type"] == "hit" && i["summary"]["id"].is_string() && i.get("snippet").is_some()), "{}", items[0]);
-    assert_eq!(fs[1]["content"]["matched"], 299);
+    assert_eq!(fs[1]["content"], json!({"type": "searched", "matched": 299, "next": 100, "words": [{"word": "row", "also": []}]}), "searched after the rows, as it was");
+
+    // No hit: one empty `rows`, then `searched`.
+    let fs = frames(&client, "tickets.search", json!({"query": "zebra"})).await;
+    assert!(one_rows_frame("search with no hit", &fs, Some("searched")).is_empty());
+    assert_eq!(fs[1]["content"]["matched"], 0);
 }
 
 /// PERF-15: the board's whole listings — `nav.groups`, `nav.extents`,
@@ -2957,28 +2995,124 @@ async fn the_boards_listings_are_one_frame() {
     assert_eq!(fs[0]["content"]["items"][0], json!({"type": "count", "epic": "LA", "shortcode": "LA", "held": 4}), "a count item as the count event was");
 }
 
-/// PERF-15: a watch is not a page — each change is still its own frame,
-/// the per-row `created` (and the transition after it) as before; nothing
-/// on a watch is ever a `rows`.
+/// PERF-15: a watch is not a page — each change is still its own frame:
+/// three creates, a status change and a delete are `created` ×3,
+/// `status_changed`, `deleted`, one frame each (with the transitions and
+/// roll-ups they always brought), and nothing on a watch is ever a `rows`.
+/// (The watch is opened and given a moment, as every watch test here does:
+/// its subscription answers before its store subscription is polled.)
 #[tokio::test]
 async fn a_watch_still_sends_one_ticket_per_change() {
     let port = start_server().await;
     let client = connect(port).await;
     answer(&client, "tickets.create", json!({"epic": "WCH", "title": "the root", "kind": "scope"})).await;
     let mut watch = call(&client, "tickets.watch", json!({})).await;
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
     for i in 2..=4 {
         answer(&client, "tickets.create", json!({"epic": "WCH", "title": format!("row {i}"), "kind": "build"})).await;
     }
-    let mut created = Vec::new();
-    while created.len() < 3 {
-        let item = tokio::time::timeout(Duration::from_secs(10), watch.next()).await.expect("a change").expect("open").unwrap();
+    answer(&client, "tickets.set_status", json!({"id": "WCH-2", "status": "Ready"})).await;
+    let gone = answer(&client, "tickets.delete", json!({"ids": ["WCH-4"]})).await;
+    assert_eq!(gone["type"], "deleted", "{gone}");
+    let mut seen = Vec::new();
+    while !seen.iter().any(|(k, _): &(String, Value)| k == "deleted") {
+        let item = tokio::time::timeout(Duration::from_secs(10), watch.next()).await.unwrap_or_else(|_| panic!("no deleted after {seen:?}")).expect("open").unwrap();
         assert_eq!(item["type"], "data", "{item}");
-        let ev = &item["content"];
-        assert_ne!(ev["type"], "rows", "a watch never batches: {ev}");
-        if ev["type"] == "created" {
-            created.push(ev["ticket"]["id"].as_str().unwrap().to_string());
+        let ev = item["content"].clone();
+        seen.push((ev["type"].as_str().unwrap_or("?").to_string(), ev));
+    }
+    assert!(!seen.iter().any(|(k, _)| k == "rows"), "a watch never batches: {seen:?}");
+    let changes: Vec<(String, String)> = seen
+        .iter()
+        .filter(|(k, _)| matches!(k.as_str(), "created" | "status_changed" | "deleted"))
+        .map(|(k, ev)| (k.clone(), ev["ticket"]["id"].as_str().or(ev["ids"][0].as_str()).unwrap_or("?").to_string()))
+        .collect();
+    let want = [("created", "WCH-2"), ("created", "WCH-3"), ("created", "WCH-4"), ("status_changed", "WCH-2"), ("deleted", "WCH-4")];
+    assert_eq!(changes, want.map(|(k, id)| (k.to_string(), id.to_string())), "one frame per change, in order");
+}
+
+/// PERF-15: thin rows — `fields` keeps those keys of each summary row and
+/// its `id`, nothing else; without it every row is whole, as before; and
+/// `fields` alone asks for summary rows. A name not a summary row's field is
+/// refused by its type, before the method runs.
+#[tokio::test]
+async fn a_summary_page_carries_only_the_fields_asked() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    seed_rows(&client, "THN", 300).await;
+
+    let fs = frames(&client, "tickets.list", json!({"summary": true, "limit": 200, "fields": ["id", "title", "kind", "status"]})).await;
+    let items = one_rows_frame("list { summary, limit: 200, fields }", &fs, Some("page"));
+    assert_eq!(items.len(), 200);
+    for i in &items {
+        let keys: std::collections::BTreeSet<&str> = i["summary"].as_object().unwrap().keys().map(String::as_str).collect();
+        assert_eq!(keys, ["id", "kind", "status", "title"].into_iter().collect(), "the four and nothing else: {i}");
+    }
+    assert_eq!(items[1], json!({"type": "summary", "summary": {"id": "THN-2", "title": "row 2", "kind": "build", "status": "Draft"}}));
+    assert_eq!(fs[1]["content"], json!({"type": "page", "next": "THN-200", "remaining": 100}), "the page as without fields");
+
+    let thin = frames(&client, "tickets.list", json!({"limit": 3, "fields": ["title"]})).await;
+    assert_eq!(one_rows_frame("list { fields } without summary", &thin, Some("page"))[2], json!({"type": "summary", "summary": {"id": "THN-3", "title": "row 3"}}), "fields asks for summary rows; the id is always kept");
+
+    let whole = frames(&client, "tickets.list", json!({"summary": true, "limit": 3})).await;
+    let whole = one_rows_frame("list { summary } without fields", &whole, Some("page"));
+    let keys: std::collections::BTreeSet<&str> = whole[1]["summary"].as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(keys, SUMMARY_KEYS.iter().copied().collect(), "without fields: the whole row");
+
+    for (method, params) in [("tickets.work.ready", json!({"fields": ["id"]})), ("tickets.find", json!({"query": "row", "limit": 2, "fields": ["id", "status"]}))] {
+        let fs = frames(&client, method, params).await;
+        let items = one_rows_frame(method, &fs, Some("page"));
+        assert!(items.iter().all(|i| i["summary"].as_object().unwrap().keys().all(|k| k == "id" || k == "status")), "{method}: thinned: {items:?}");
+    }
+
+    let m = invalid(&client, "tickets.list", json!({"summary": true, "fields": ["id", "bogus"]})).await;
+    assert!(m.contains("fields") && m.contains("bogus"), "refused naming the parameter and the name: {m}");
+}
+
+/// PERF-15: a page whose rows are past [`ROWS_BUDGET`] (1 MiB) is several
+/// `rows` frames, then the page, then `done` — so three 4 MiB bodies
+/// (12 MiB: past the transport's 10 MB message cap as one frame) cross,
+/// each ticket in one frame, every id once and in order; and six 300 KiB
+/// bodies cross in frames each within the budget.
+#[tokio::test]
+async fn a_page_over_the_frame_budget_is_several_rows_frames() {
+    const BUDGET: usize = menger_tickets_api::activation::ROWS_BUDGET;
+    assert_eq!(BUDGET, 1 << 20);
+    let port = start_server().await;
+    let client = WsClientBuilder::default()
+        .set_headers(support::admin_headers(port))
+        .max_request_size(64 << 20)
+        .max_response_size(64 << 20)
+        .build(format!("ws://127.0.0.1:{port}"))
+        .await;
+    let client = match client {
+        Ok(c) => c,
+        Err(_) => connect(port).await,
+    };
+    for (epic, n, body) in [("BIG", 3usize, 4 << 20), ("MID", 6, 300 << 10)] {
+        answer(&client, "tickets.create", json!({"epic": epic, "title": "the root", "kind": "scope"})).await;
+        for i in 2..=n + 1 {
+            let ev = answer(&client, "tickets.create", json!({"epic": epic, "title": format!("big {i}"), "kind": "build", "body": "x".repeat(body)})).await;
+            assert_eq!(ev["type"], "created", "{}", ev["type"]);
         }
     }
-    assert_eq!(created, ["WCH-2", "WCH-3", "WCH-4"], "one created frame per ticket, in order");
+    for (epic, n) in [("BIG", 4usize), ("MID", 7)] {
+        let fs = frames(&client, "tickets.list", json!({"epic": epic})).await;
+        let kinds = frame_kinds(&fs);
+        let rows: Vec<&Value> = fs.iter().filter(|f| f["content"]["type"] == "rows").collect();
+        assert!(rows.len() >= 2, "{epic}: several rows frames: {kinds:?}");
+        assert_eq!(&kinds[rows.len()..], ["data:page", "done"], "{epic}: the rows, then the page, then done");
+        let mut ids = Vec::new();
+        for f in &rows {
+            let items = f["content"]["items"].as_array().unwrap();
+            let bytes: usize = items.iter().map(|i| serde_json::to_vec(i).unwrap().len()).sum();
+            assert!(items.len() == 1 || bytes <= BUDGET, "{epic}: a frame of {} items is {bytes} B, over the budget", items.len());
+            assert!(serde_json::to_vec(f).unwrap().len() < 10_000_000, "{epic}: every frame under the transport's cap");
+            ids.extend(items.iter().map(|i| i["ticket"]["id"].as_str().unwrap().to_string()));
+        }
+        assert_eq!(ids, (1..=n).map(|i| format!("{epic}-{i}")).collect::<Vec<_>>(), "{epic}: every id once, in order");
+        if epic == "MID" {
+            assert!(rows.iter().all(|f| f["content"]["items"].as_array().unwrap().iter().map(|i| serde_json::to_vec(i).unwrap().len()).sum::<usize>() <= BUDGET), "MID: every frame within the budget");
+        }
+    }
 }

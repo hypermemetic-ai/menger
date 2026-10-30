@@ -83,7 +83,11 @@ async fn collect(mut sub: Subscription<Value>) -> Vec<Value> {
         let item = item.unwrap();
         match item["type"].as_str() {
             Some("done") => return out,
-            Some("data") => out.push(item["content"].clone()),
+            // PERF-15: a page's `rows` read as the per-row events it carries.
+            Some("data") => match item["content"].clone() {
+                c if c["type"] == "rows" => out.extend(c["items"].as_array().cloned().unwrap_or_default()),
+                c => out.push(c),
+            },
             other => panic!("unexpected stream item type {other:?}: {item}"),
         }
     }

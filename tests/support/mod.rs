@@ -160,7 +160,11 @@ pub async fn call(c: &WsClient, method: &str, params: serde_json::Value) -> Vec<
     let mut out = Vec::new();
     while let Ok(Some(Ok(item))) = tokio::time::timeout(Duration::from_secs(5), s.next()).await {
         match item["type"].as_str() {
-            Some("data") => out.push(item["content"].clone()),
+            // PERF-15: a page's `rows` read as the per-row events it carries.
+            Some("data") => match item["content"].clone() {
+                c if c["type"] == "rows" => out.extend(c["items"].as_array().cloned().unwrap_or_default()),
+                c => out.push(c),
+            },
             Some("error") => {
                 out.push(item);
                 break;

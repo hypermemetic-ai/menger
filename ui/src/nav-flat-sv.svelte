@@ -3,6 +3,8 @@
      nav-tree-sv imports it (bundled into that module, on its bus); it is a
      component in its own right too. -->
 <script module>
+  // PERF-15: a row is the four fields drawn, not the whole summary row.
+  const FIELDS = ["id", "title", "kind", "status"];
   export const uses = ["tickets.list"];
 </script>
 
@@ -11,7 +13,7 @@
 
   let { filter = null } = $props();
   const base = location.hash.startsWith("#/sv/") ? "#/sv/" : "#/";
-  const flat = live({ snapshot: "tickets.list", params: () => ({ filter: filter ?? null, summary: true, limit: 200 }), key: "id" });
+  const flat = live({ snapshot: "tickets.list", params: () => ({ filter: filter ?? null, summary: true, limit: 200, fields: FIELDS }), key: "id" });
   const list = $derived($flat.rows);
 </script>
 
