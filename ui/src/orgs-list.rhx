@@ -1,0 +1,54 @@
+<script>
+  // SURFACE-9: the organizations the reader holds a role in — `orgs.list`,
+  // one `org { name, aliases, roots, shortcodes, tickets }` each, in the
+  // order they were made. A one-shot read: the organizations have no watch.
+  let orgs = live(#{ snapshot: "orgs.list", params: #{}, key: "name", on: #{} });
+</script>
+
+<section class="orgs-list" data-surface="orgs-list">
+  <nav class="crumbs"><a href="#/" data-back>← board</a></nav>
+  <header class="head">
+    <h1>Organizations</h1>
+    {#if orgs.status != "live"}<span class="state" data-loading={orgs.status}>{orgs.status}</span>{/if}
+  </header>
+  <div class="rows">
+    {#each orgs as o (o.name)}
+      <div class="row" data-id={o.name}>
+        <span class="name" data-field="name">{o.name}</span>
+        <span class="meta"><span data-field="tickets">{o.tickets}</span> tickets</span>
+        <span class="meta"><span data-field="shortcodes">{o.shortcodes}</span> shortcodes</span>
+        <span class="aliases" data-field="aliases">{if o.aliases.len() == 0 { "" } else { "was " + o.aliases.reduce(|a, b| if a == "" { b } else { a + ", " + b }, "") }}</span>
+        <span class="roots" data-field="roots">{#each o.roots as r (r)}<span class="chip">{r.split(":")[r.split(":").len() - 1]}</span>{/each}</span>
+      </div>
+    {/each}
+    {#if orgs.status == "pending"}<div class="row skeleton" data-loading><span></span></div>{/if}
+    {#if orgs.status == "live" && orgs.rows.len() == 0}<p class="empty" data-empty>You hold a role in no organization.</p>{/if}
+    {#if orgs.status == "error" || orgs.status == "refused"}<p class="refused" data-refused>refused: {orgs.message}</p>{/if}
+  </div>
+</section>
+
+<style>
+  :scope { display: block; }
+  .orgs-list { max-width: 860px; margin: 0 auto; padding: 16px 20px 40px; color: var(--ink); font-family: var(--font-text); font-size: var(--text-size); }
+  .crumbs { margin-bottom: 12px; font-size: 12px; }
+  .crumbs a { color: var(--muted); border-radius: var(--radius-sm); }
+  .crumbs a:hover { color: var(--accent); }
+  .crumbs a:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .head { display: flex; gap: 14px; align-items: baseline; margin-bottom: 12px; }
+  .head h1 { margin: 0; font-family: var(--font-display); font-size: 22px; font-weight: var(--weight-strong); }
+  .state { margin-left: auto; font-size: 11px; color: var(--muted); }
+  .rows { border-top: var(--border) solid var(--line); }
+  .row { display: grid; grid-template-columns: minmax(120px, auto) auto auto auto minmax(0, 1fr); gap: 14px; align-items: center; min-height: var(--pitch); padding: 4px 8px; border-bottom: var(--border) solid var(--line); transition: background-color var(--motion-fast) var(--ease); }
+  .row:hover { background: var(--hover); }
+  .name { color: var(--accent); font-weight: var(--weight-medium); }
+  .meta, .aliases { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .meta span { color: var(--ink); }
+  .roots { display: flex; flex-wrap: wrap; gap: 4px; }
+  .chip { padding: 0 7px; font-size: 11px; line-height: 18px; color: var(--chip-fg); background: var(--chip-bg); border: var(--border) solid var(--chip-line); border-radius: var(--radius-pill); }
+  .skeleton span { display: block; height: 10px; width: 40%; background: var(--skeleton); border-radius: var(--radius-sm); animation: breathe var(--motion-pulse) var(--ease) infinite alternate; }
+  .empty { color: var(--muted); }
+  .refused { color: var(--warn); }
+  @keyframes breathe { from { opacity: .55; } to { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { .row { transition: none; } .skeleton span { animation: none; } }
+  @media (max-width: 720px) { .row { grid-template-columns: 1fr auto; } .aliases, .roots { display: none; } }
+</style>

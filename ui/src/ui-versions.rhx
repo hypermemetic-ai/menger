@@ -1,0 +1,196 @@
+<script>
+  // SURFACE-9: the releases — every kept version of the UI (`ui.versions`,
+  // newest first) with the live one marked, kept live by `ui.watch`: its
+  // `live { version }` names a hash and no row, so the moves are a
+  // collection of their own (`moves`, keyed by `version`), the last one the
+  // live pointer, and a version pushed since the page opened is drawn from
+  // its move until the list is read again. The contract the tickets
+  // service stamps and the one over every service the app reaches
+  // (`ui.contract`), the routes (`ui.routes.list`, kept by `route_changed`)
+  // and the sections (`ui.slots.list`) as tables. For an admin: rollback
+  // (a confirm, then the watch's move is the answer) and preview (/app/
+  // serves that version to the caller's own sessions; a link to it, and a
+  // clear). A reader who is not an admin sees both disabled, and the role
+  // `auth.requires` names for them.
+  state(#{ confirm: (), rolled: (), previewed: (), refused_for: (), refused: "" });
+  let versions = live(#{ snapshot: "ui.versions", params: #{}, changes: "ui.watch", key: "hash", on: #{} });
+  let moves = live(#{ snapshot: "ui.versions", params: #{}, changes: "ui.watch", key: "version", on: #{ live: "upsert:." } });
+  let door = live(#{ snapshot: "auth.whoami", params: #{}, key: "principal", on: #{} });
+  let needs = live(#{ snapshot: "auth.requires", params: #{ method: "ui.rollback" }, key: "method", on: #{} });
+  let stamped = live(#{ snapshot: "ui.contract", params: #{ uses: ["tickets.list"] }, key: "contract", on: #{} });
+  let reached = live(#{ snapshot: "ui.contract", params: #{ uses: ["tickets.list", "epics.list", "orgs.list", "members.mine", "session.whoami", "auth.whoami", "ui.versions"] }, key: "contract", on: #{} });
+  let routes = live(#{ snapshot: "ui.routes.list", params: #{}, changes: "ui.watch", key: "pattern", on: #{ route_changed: "upsert:." } });
+  let slots = live(#{ snapshot: "ui.slots.list", params: #{}, key: "slot", on: #{} });
+  fn ask_rollback(state, ev) { state.confirm = ev.target.data.hash; state }
+  fn cancel(state, ev) { state.confirm = (); state }
+  fn rollback(state, ev) {
+    let to = ev.target.data.hash;
+    // FRAME-37: answer fold "rolled_back"
+    call("ui.rollback", #{ to: to });
+    state.refused_for = ();
+    state.rolled = to;
+    state.confirm = ();
+    state
+  }
+  fn preview(state, ev) {
+    let v = ev.target.data.hash;
+    // FRAME-37: answer fold "previewed"
+    call("ui.preview", #{ version: v });
+    state.refused_for = ();
+    state.previewed = v;
+    state
+  }
+  fn clear_preview(state, ev) {
+    // FRAME-37: answer fold "previewed"
+    call("ui.preview", #{});
+    state.previewed = ();
+    state
+  }
+  // FRAME-37's answers, ev = #{ method, params, ok, events, message }: a
+  // refusal (`refused { reason, message }`, unknown_version; the gate's
+  // forbidden) is said on the version's row; until then the watch's move is
+  // rollback's answer and a preview is the link.
+  fn rolled_back(state, ev) {
+    if !ev.ok { state.refused_for = ev.params.to; state.refused = ev.message; state.rolled = (); }
+    state
+  }
+  fn previewed(state, ev) {
+    if !ev.ok { state.refused_for = if ev.params.version == () { "preview" } else { ev.params.version }; state.refused = ev.message; state.previewed = (); }
+    state
+  }
+</script>
+
+<section class="ui-versions" data-surface="ui-versions">
+  <nav class="crumbs"><a href="#/" data-back>← board</a></nav>
+  {#each [if moves.rows.len() > 0 { moves.rows[moves.rows.len() - 1].version } else { versions.rows.filter(|v| v.live == true).reduce(|a, v| v.hash, "") }] as cur (cur)}
+  {#each [door.rows.len() > 0 && door.rows[0].memberships.some(|m| m.role == "admin" && m.scope == "*")] as admin (admin)}
+  <header class="head">
+    <h1>Releases</h1>
+    <p class="now">live: <strong class="mono" data-field="live">{if cur == "" { "none" } else { cur.sub_string(0, 12) }}</strong></p>
+    {#if versions.status != "live"}<span class="state" data-loading={versions.status}>{versions.status}</span>{/if}
+  </header>
+
+  <dl class="card">
+    <dt>the tickets service's contract</dt><dd class="mono" data-field="contract">{#each stamped as c (c.contract)}{c.contract}{/each}</dd>
+    <dt>over every service the app reaches</dt><dd class="mono" data-field="reached">{#each reached as c (c.contract)}{c.contract}{/each}</dd>
+    {#if stamped.status == "error" || stamped.status == "refused"}<dt>refused</dt><dd class="refused" data-refused>{stamped.message}</dd>{/if}
+  </dl>
+
+  {#if state.rolled != ()}
+    <p class="answer" data-field="answer">{if cur == state.rolled { "rolled back: " + state.rolled.sub_string(0, 12) + " is live" } else { "rollback to " + state.rolled.sub_string(0, 12) + " asked…" }}</p>
+  {/if}
+  {#if state.previewed != ()}
+    <p class="answer" data-field="preview">previewing <span class="mono">{state.previewed.sub_string(0, 12)}</span> in your own sessions — <a href="/app/" target="_blank" rel="noopener">open /app/</a>
+      <button class="act" data-action="ui.preview" data-clear="" on:click={clear_preview}>clear</button></p>
+  {/if}
+  {#if !admin && door.status == "live"}
+    <p class="note" data-field="needs">rollback and preview are held by {#each needs as n (n.method)}{n.roles.reduce(|a, b| if a == "" { b } else { a + ", " + b }, "")}{/each}; you read</p>
+  {/if}
+
+  <h2>Versions</h2>
+  <div class="rows">
+    {#each moves.rows.filter(|m| !versions.rows.some(|v| v.hash == m.version)) as m (m.version)}
+      <div class="row new" data-id={m.version} data-live={m.version == cur}>
+        <span class="mono hash">{m.version.sub_string(0, 12)}</span>
+        <span class="meta">pushed since you opened this page</span>
+        <span></span><span></span>
+        <span class="tags">{#if m.version == cur}<span class="tag live">live</span>{/if}</span>
+        <span class="acts"></span>
+      </div>
+    {/each}
+    {#each versions as v (v.hash)}
+      <div class="row" data-id={v.hash} data-live={v.hash == cur} data-matches={stamped.rows.some(|c| c.contract == v.contract)}>
+        <span class="mono hash" title={v.hash}>{v.hash.sub_string(0, 12)}</span>
+        <span class="meta" data-field="name">{if v.name == () { "the app" } else { v.name }}</span>
+        <span class="meta mono" data-field="stamped">{if v.contract == () { "no contract" } else { v.contract }}</span>
+        <span class="meta" data-field="pushed" title={v.pushed_by}>{"at " + v.pushed_at + (if v.commit == () { "" } else { " · " + v.commit }) + " · by " + v.pushed_by}</span>
+        <span class="tags">
+          {#if v.hash == cur}<span class="tag live">live</span>{/if}
+          {#if v.authored}<span class="tag" data-field="authored">authored</span>{/if}
+          {#if v.name != ()}<span class="tag">{v.name}</span>{/if}
+        </span>
+        <span class="acts">
+          {#if admin}
+            {#if state.confirm == v.hash}
+              <button class="act warn" data-action="ui.rollback" data-confirm="" data-hash={v.hash} on:click={rollback}>make it live</button>
+              <button class="act" data-cancel="" on:click={cancel}>cancel</button>
+            {:else}
+              {#if v.hash != cur}<button class="act" data-action="ui.rollback" data-hash={v.hash} on:click={ask_rollback}>rollback</button>{/if}
+            {/if}
+            <button class="act" data-action="ui.preview" data-hash={v.hash} on:click={preview}>preview</button>
+            {#if state.refused_for == v.hash}<span class="refused" data-refused>refused: {state.refused}</span>{/if}
+          {:else}
+            <button class="act" data-action="ui.rollback" disabled="">rollback</button>
+            <button class="act" data-action="ui.preview" disabled="">preview</button>
+          {/if}
+        </span>
+      </div>
+    {/each}
+    {#if versions.status == "pending"}<div class="row skeleton" data-loading><span></span></div>{/if}
+    {#if versions.status == "live" && versions.rows.len() == 0 && moves.rows.len() == 0}<p class="empty" data-empty>No version is kept: nothing was pushed.</p>{/if}
+    {#if versions.status == "error" || versions.status == "refused"}<p class="refused" data-refused>refused: {versions.message}</p>{/if}
+  </div>
+
+  <h2>Routes</h2>
+  <div class="rows" data-field="routes">
+    {#each routes as r (r.pattern)}
+      <div class="row table" data-id={r.pattern}><span class="mono" data-field="pattern">{r.pattern}</span><span data-field="component">{if r.component == () { "(the manifest's)" } else { r.component }}</span><span class="meta">{if r["default"] == () { "" } else { "over " + r["default"] }}</span></div>
+    {/each}
+    {#if routes.status == "live" && routes.rows.len() == 0}<p class="empty" data-empty>No route set over the manifest's.</p>{/if}
+  </div>
+
+  <h2>Sections</h2>
+  <div class="rows" data-field="slots">
+    {#each slots as s (s.layout + "/" + s.slot)}
+      <div class="row table" data-id={s.layout + "/" + s.slot}><span class="mono" data-field="slot">{s.layout + " · " + s.slot}</span><span data-field="component">{s.component}</span><span class="meta">{if s["default"] == () { "" } else { "over " + s["default"] }}{if s.follow == () { "" } else { " · follows " + s.follow }}</span></div>
+    {/each}
+    {#if slots.status == "live" && slots.rows.len() == 0}<p class="empty" data-empty>Every section holds its default.</p>{/if}
+  </div>
+  {/each}
+  {/each}
+</section>
+
+<style>
+  :scope { display: block; }
+  .ui-versions { max-width: 980px; margin: 0 auto; padding: 16px 20px 40px; color: var(--ink); font-family: var(--font-text); font-size: var(--text-size); }
+  .crumbs { margin-bottom: 12px; font-size: 12px; }
+  .crumbs a { color: var(--muted); border-radius: var(--radius-sm); }
+  .crumbs a:hover { color: var(--accent); }
+  .crumbs a:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .head { display: flex; gap: 14px; align-items: baseline; margin-bottom: 12px; }
+  .head h1 { margin: 0; font-family: var(--font-display); font-size: 22px; font-weight: var(--weight-strong); }
+  .now { margin: 0; color: var(--muted); }
+  .now strong { color: var(--live); font-weight: var(--weight-medium); }
+  .state { margin-left: auto; font-size: 11px; color: var(--muted); }
+  h2 { margin: 22px 0 6px; font-size: 11px; font-weight: var(--weight-medium); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .card { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; padding: 10px 14px; background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius-lg); }
+  .card dt { color: var(--muted); }
+  .card dd { margin: 0; }
+  .mono { font-family: var(--font-text); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .answer, .note { margin: 10px 0 0; }
+  .answer a { color: var(--accent); text-decoration: underline; }
+  .note { color: var(--muted); font-size: 12px; }
+  .rows { border-top: var(--border) solid var(--line); }
+  .row { display: grid; grid-template-columns: 110px minmax(0, 1fr) 140px minmax(0, 1fr) auto auto; gap: 12px; align-items: center; min-height: var(--pitch); padding: 3px 8px; border-bottom: var(--border) solid var(--line); transition: background-color var(--motion-fast) var(--ease); }
+  .row.table { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); }
+  .row:hover { background: var(--hover); }
+  .row[data-live=true] { background: var(--row-sel); box-shadow: inset 2px 0 0 var(--live); }
+  .row.new { background: var(--sel); }
+  .row[data-matches=false] [data-field=stamped] { color: var(--warn); }
+  .hash { color: var(--accent); }
+  .meta { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tags, .acts { display: flex; gap: 6px; justify-content: flex-end; }
+  .tag { padding: 0 7px; font-size: 11px; line-height: 18px; color: var(--chip-fg); background: var(--chip-bg); border: var(--border) solid var(--chip-line); border-radius: var(--radius-pill); }
+  .tag.live { color: var(--st-complete-fg); background: var(--st-complete-bg); border-color: transparent; }
+  .act { padding: 1px 8px; font-size: 12px; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; transition: background-color var(--motion-fast) var(--ease); }
+  .act:hover { background: var(--hover); }
+  .act:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .act.warn { color: var(--warn); }
+  .act:disabled { color: var(--disabled); background: none; cursor: not-allowed; }
+  .refused { color: var(--warn); font-size: 12px; }
+  .skeleton span { display: block; height: 10px; width: 40%; background: var(--skeleton); border-radius: var(--radius-sm); animation: breathe var(--motion-pulse) var(--ease) infinite alternate; }
+  .empty { margin: 6px 8px; color: var(--muted); }
+  @keyframes breathe { from { opacity: .55; } to { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { .row, .act { transition: none; } .skeleton span { animation: none; } }
+  @media (max-width: 720px) { .row { grid-template-columns: 1fr auto; } .meta, .tags { display: none; } }
+</style>
