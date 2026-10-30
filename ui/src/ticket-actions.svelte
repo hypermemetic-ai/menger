@@ -38,7 +38,7 @@
 <script>
   import { bus, live } from "plexus-ui/host";
 
-  let { id } = $props();
+  let { id, sheet = null } = $props();
   const b = bus();
 
   const ticket = live({ snapshot: "tickets.get", params: () => ({ id }), changes: "tickets.watch", key: "id",
@@ -291,7 +291,7 @@
 {/snippet}
 
 <section class="ticket-actions" data-surface="ticket-actions" data-ticket={id}>
-  {#if ticket.status === "pending"}
+  {#if sheet === "loading" || ticket.status === "pending"}
     <div class="skel" data-loading><span class="bar"></span><span class="bar short"></span><span class="bar"></span></div>
   {/if}
   {#if t && !gone}
@@ -514,25 +514,28 @@
   .tag[data-status="Blocked"] { background: var(--st-blocked-bg); color: var(--st-blocked-fg); }
   .tag[data-status="Superseded"] { background: var(--st-superseded-bg); color: var(--st-superseded-fg); }
   .tag[data-status="Canceled"] { background: var(--st-canceled-bg); color: var(--st-canceled-fg); }
+  .tag[data-status="Draft"] { background: var(--st-draft-bg); color: var(--st-draft-fg); }
+  .tag[data-status="Epic"] { background: var(--st-epic-bg); color: var(--st-epic-fg); }
+  .tag[data-status="Doc"] { background: var(--st-doc-bg); color: var(--st-doc-fg); }
   .btn { display: inline-flex; gap: 5px; align-items: center; padding: 1px 10px; font-size: 12px; line-height: 20px; white-space: nowrap; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; transition: background-color var(--motion-fast) var(--ease); }
-  .btn:hover { background: var(--hover); border-color: var(--muted); }
-  .btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .btn:hover, .btn:global([data-sheet~=hover]) { background: var(--hover); border-color: var(--muted); }
+  .btn:focus-visible, .btn:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
   .btn.primary { color: var(--bg); background: var(--accent); border-color: var(--accent); }
-  .btn.primary:hover { opacity: .88; }
+  .btn.primary:hover, .btn.primary:global([data-sheet~=hover]) { opacity: .88; }
   .btn.danger { color: var(--bg); background: var(--warn); border-color: var(--warn); }
-  .btn.danger:hover { opacity: .88; }
-  .btn:disabled, .btn:disabled:hover { color: var(--disabled); background: var(--card); border-color: var(--line); cursor: not-allowed; opacity: 1; }
-  .btn[aria-pressed="true"] { color: var(--accent); background: var(--sel); border-color: var(--accent); }
+  .btn.danger:hover, .btn.danger:global([data-sheet~=hover]) { opacity: .88; }
+  .btn:disabled, .btn:disabled:hover, .btn:global([data-sheet~=disabled]), .btn:disabled:global([data-sheet~=hover]), .btn:global([data-sheet~=disabled]):hover, .btn:global([data-sheet~=disabled]):global([data-sheet~=hover]) { color: var(--disabled); background: var(--card); border-color: var(--line); cursor: not-allowed; opacity: 1; }
+  .btn[aria-pressed="true"], .btn:global([data-sheet~=checked]) { color: var(--accent); background: var(--sel); border-color: var(--accent); }
   .btn[data-refused-on="true"] { color: var(--warn); border-color: var(--warn); }
   .btn.ghost { color: var(--muted); background: none; border-color: transparent; }
-  .btn.ghost:hover { color: var(--ink); background: var(--hover); }
+  .btn.ghost:hover, .btn.ghost:global([data-sheet~=hover]) { color: var(--ink); background: var(--hover); }
   .x { margin-left: 2px; padding: 0 3px; font-size: 12px; line-height: 14px; color: var(--muted); background: none; border: 0; border-radius: var(--radius-sm); cursor: pointer; }
-  .x:hover { color: var(--warn); background: var(--hover); }
-  .x:focus-visible { outline: 2px solid var(--focus); }
+  .x:hover, .x:global([data-sheet~=hover]) { color: var(--warn); background: var(--hover); }
+  .x:focus-visible, .x:global([data-sheet~=focus]) { outline: 2px solid var(--focus); }
   .in { min-width: 0; padding: 3px 8px; font-size: 12px; line-height: 18px; color: var(--ink); background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius); transition: border-color var(--motion-fast) var(--ease); }
   .in::placeholder { color: var(--muted); }
-  .in:hover { border-color: var(--muted); }
-  .in:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px var(--sel); }
+  .in:hover, .in:global([data-sheet~=hover]) { border-color: var(--muted); }
+  .in:focus, .in:global([data-sheet~=focus]) { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px var(--sel); }
   .in[aria-invalid="true"] { border-color: var(--warn); }
   .label { display: inline-flex; align-items: center; padding: 0 8px; font-size: 11px; line-height: 18px; color: var(--chip-fg); background: var(--chip-bg); border: var(--border) solid var(--chip-line); border-radius: var(--radius-pill); }
   .refused { margin: 5px 0 0; font-size: 11px; line-height: 1.4; color: var(--warn); }

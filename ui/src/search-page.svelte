@@ -26,7 +26,7 @@
   import { bus, live } from "plexus-ui/host";
   import Palette from "plexus-ui:jump-palette-sv";
 
-  let { q = null, filter = null } = $props();
+  let { q = null, filter = null, sheet = null } = $props();
   const b = bus();
 
   // The page's offset belongs to its query and filter: a route to another
@@ -80,7 +80,7 @@
     <div class="sp-grid">
       <section class="panel sp-sec find" data-method="tickets.find">
         <h2>ids and titles <b data-count="find">{found.rows.length}</b></h2>
-        {#if found.status === "pending"}<div class="sp-loading" data-loading><i></i><i></i><i></i></div>{/if}
+        {#if sheet === "loading" || found.status === "pending"}<div class="sp-loading" data-loading><i></i><i></i><i></i></div>{/if}
         {#each found.rows as f (f.id)}
           <a class="res" data-result="find" data-id={f.id} data-status={f.status} href={"#/ticket/" + f.id}>
             <i class="kmark" data-kind={f.kind}></i>
@@ -121,14 +121,14 @@
   .search-page { min-height: 100vh; min-height: 100dvh; background: var(--bg); max-width: 1180px; margin: 0 auto; padding: 16px 20px 40px; color: var(--ink); font-family: var(--font-text); font-size: var(--text-size); }
   .search-page .crumbs { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; font-size: 12px; }
   .search-page .crumbs a { color: var(--muted); text-decoration: none; border-radius: var(--radius-sm); }
-  .search-page .crumbs a:hover { color: var(--accent); }
-  .search-page .crumbs a:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .search-page .crumbs a:hover, .search-page .crumbs a:global([data-sheet~=hover]) { color: var(--accent); }
+  .search-page .crumbs a:focus-visible, .search-page .crumbs a:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
   .search-page .jump { margin-left: auto; }
   .search-page kbd { display: inline-block; min-width: 18px; padding: 0 5px; font: 11px/17px var(--font-text); text-align: center; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-bottom-width: 2px; border-radius: var(--radius-sm); }
   .search-page .btn { padding: 3px 10px; font: inherit; font-size: 12px; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; transition: border-color var(--motion-fast) var(--ease), background-color var(--motion-fast) var(--ease); }
-  .search-page .btn:hover:not(:disabled) { border-color: var(--muted); background: var(--hover); }
-  .search-page .btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-  .search-page .btn:disabled { color: var(--disabled); cursor: default; }
+  .search-page .btn:hover:not(:disabled), .search-page .btn:global([data-sheet~=hover]):not(:disabled) { border-color: var(--muted); background: var(--hover); }
+  .search-page .btn:focus-visible, .search-page .btn:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .search-page .btn:disabled, .search-page .btn:global([data-sheet~=disabled]) { color: var(--disabled); cursor: default; }
   .search-page .panel { background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius-lg); }
   .search-page .sp-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 0 0 4px; }
   .search-page .sp-head h1 { margin: 0; font-family: var(--font-display); font-size: 20px; font-weight: var(--weight-strong); }
@@ -136,8 +136,8 @@
   .search-page .sp-filter { display: flex; gap: 6px; align-items: center; font-size: 11px; color: var(--muted); }
   .search-page .sp-filter code { padding: 0 6px; color: var(--ink); background: var(--chip-bg); border: var(--border) solid var(--chip-line); border-radius: var(--radius-pill); }
   .search-page .sp-filter button { padding: 0 6px; font: inherit; font-size: 11px; color: var(--muted); background: none; border: 0; cursor: pointer; text-decoration: underline; }
-  .search-page .sp-filter button:hover { color: var(--ink); }
-  .search-page .sp-filter button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .search-page .sp-filter button:hover, .search-page .sp-filter button:global([data-sheet~=hover]) { color: var(--ink); }
+  .search-page .sp-filter button:focus-visible, .search-page .sp-filter button:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
   .search-page .sp-refused { margin: 8px 0 0; font-size: 12px; color: var(--warn); }
   .search-page .sp-corrected { margin: 6px 0 0; font-size: 11px; color: var(--muted); }
   .search-page .sp-grid { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 20px; align-items: start; margin-top: 12px; }
@@ -148,9 +148,9 @@
   .search-page .sp-sec h2 .m { margin-left: auto; text-transform: none; letter-spacing: 0; }
   .search-page .res { display: grid; grid-template-columns: 10px 92px minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; padding: 7px 12px; color: var(--ink); text-decoration: none; border-bottom: var(--border) solid var(--line); transition: background-color var(--motion-fast) var(--ease); }
   .search-page .res:last-of-type { border-bottom: 0; }
-  .search-page .res:hover { background: var(--hover); }
-  .search-page .res:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
-  .search-page .res[data-selected] { background: var(--row-sel); box-shadow: inset 3px 0 0 var(--accent); }
+  .search-page .res:hover, .search-page .res:global([data-sheet~=hover]) { background: var(--hover); }
+  .search-page .res:focus-visible, .search-page .res:global([data-sheet~=focus]) { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
+  .search-page .res[data-selected], .search-page .res:global([data-sheet~=selected]) { background: var(--row-sel); box-shadow: inset 3px 0 0 var(--accent); }
   .search-page .find .res { grid-template-columns: 10px 84px minmax(0, 1fr); }
   .search-page .row-id { color: var(--accent); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; }
   .search-page .row-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -163,10 +163,14 @@
   .search-page [data-status=Blocked] .row-status { background: var(--st-blocked-bg); color: var(--st-blocked-fg); }
   .search-page [data-status=Superseded] .row-status { background: var(--st-superseded-bg); color: var(--st-superseded-fg); }
   .search-page [data-status=Canceled] .row-status { background: var(--st-canceled-bg); color: var(--st-canceled-fg); }
+  .search-page [data-status="Draft"] .row-status { background: var(--st-draft-bg); color: var(--st-draft-fg); }
+  .search-page [data-status="Epic"] .row-status { background: var(--st-epic-bg); color: var(--st-epic-fg); }
+  .search-page [data-status="Doc"] .row-status { background: var(--st-doc-bg); color: var(--st-doc-fg); }
   .search-page .kmark { display: inline-block; width: 8px; height: 8px; flex: none; background: var(--kind-build); border-radius: 50%; }
   .search-page .kmark[data-kind=scope] { background: var(--kind-scope); border-radius: var(--radius-xs); transform: rotate(45deg) scale(.85); }
   .search-page .kmark[data-kind=gap] { background: var(--kind-gap); border-radius: 0; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
   .search-page .kmark[data-kind=spike] { background: none; border: 2px solid var(--kind-spike); }
+  .search-page .kmark[data-kind=doc] { width: 7px; height: 9px; background: none; border: var(--border) solid var(--kind-doc); border-radius: var(--radius-xs); }
   .search-page .kmark[data-kind=execution] { background: var(--kind-execution); border-radius: var(--radius-xs); }
   .search-page .snip { grid-column: 3 / -1; color: var(--muted); font-family: var(--sans); line-height: 1.5; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
   .search-page mark { color: var(--ink); background: var(--sel); box-shadow: inset 0 -2px 0 var(--accent); border-radius: var(--radius-xs); padding: 0 1px; }

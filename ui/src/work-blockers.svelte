@@ -18,7 +18,7 @@
   import { live } from "plexus-ui/host";
   import One from "./work-blocker.svelte";
 
-  let { id } = $props();
+  let { id, sheet = null } = $props();
   const blockers = live({ snapshot: "tickets.work.blockers", params: () => ({ id }), key: "id", on: { hidden_blockers: "upsert:." } });
   // The ticket page's `get` spec, exactly (SURFACE-3, ticket-head.svelte): a spec's key includes its `on`.
   const me = live({ snapshot: "tickets.get", params: () => ({ id }), changes: "tickets.watch", key: "id",
@@ -38,7 +38,7 @@
 <section class="work-blockers" data-surface="work-blockers" data-ticket={id}>
   <div class="wb-side" data-side="blocker">
     <h3 class="wb-h">blocked by</h3>
-    {#if blockers.status === "pending" && me.status === "pending"}
+    {#if sheet === "loading" || (blockers.status === "pending" && me.status === "pending")}
       <span class="wb-skel" data-loading aria-busy="true"></span>
     {:else}
       <div class="wb-chips">

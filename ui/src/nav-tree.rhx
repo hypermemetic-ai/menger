@@ -50,17 +50,17 @@
   .nav-tree { display: flex; flex-direction: column; min-height: 100%; padding: 8px 0; background: var(--panel); font-size: var(--text-size); }
   .nav-modes { display: flex; gap: 4px; padding: 0 10px 8px; }
   .nav-mode { padding: 1px 9px; font-size: 11px; color: var(--muted); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; transition: color var(--motion-fast) var(--ease), border-color var(--motion-fast) var(--ease); }
-  .nav-mode:hover { color: var(--ink); }
-  .nav-mode:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-  .nav-mode[aria-pressed=true] { color: var(--accent); border-color: var(--accent); background: var(--sel); }
+  .nav-mode:hover, .nav-mode[data-sheet~=hover] { color: var(--ink); }
+  .nav-mode:focus-visible, .nav-mode[data-sheet~=focus] { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .nav-mode[aria-pressed=true], .nav-mode[data-sheet~=checked] { color: var(--accent); border-color: var(--accent); background: var(--sel); }
   .nav-groups { list-style: none; margin: 0; padding: 0 4px; }
   .nav-group-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto auto; gap: 4px; align-items: center; height: var(--pitch); padding: 0 6px; border-radius: var(--radius); transition: background-color var(--motion-fast) var(--ease); }
-  .nav-group-row:hover { background: var(--hover); }
+  .nav-group-row:hover, .nav-group-row[data-sheet~=hover] { background: var(--hover); }
   .nav-toggle { padding: 0; color: var(--muted); background: none; border: 0; cursor: pointer; }
-  .nav-toggle:focus-visible { outline: 2px solid var(--focus); border-radius: var(--radius-sm); }
+  .nav-toggle:focus-visible, .nav-toggle[data-sheet~=focus] { outline: 2px solid var(--focus); border-radius: var(--radius-sm); }
   .nav-code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); text-decoration: none; font-weight: var(--weight-medium); }
-  .nav-code:hover { color: var(--accent); }
-  .nav-code:focus-visible { outline: 2px solid var(--focus); border-radius: var(--radius-sm); }
+  .nav-code:hover, .nav-code[data-sheet~=hover] { color: var(--accent); }
+  .nav-code:focus-visible, .nav-code[data-sheet~=focus] { outline: 2px solid var(--focus); border-radius: var(--radius-sm); }
   .nav-held { font-size: 11px; color: var(--accent); font-variant-numeric: tabular-nums; }
   .nav-rollup { display: flex; gap: 3px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
   @media (prefers-reduced-motion: reduce) {

@@ -14,7 +14,7 @@
 <script>
   import { live } from "plexus-ui/host";
 
-  let { id } = $props();
+  let { id, sheet = null } = $props();
   const history = live({ snapshot: "tickets.history", params: () => ({ id }), changes: "tickets.watch", key: "transition", on: { transition: "upsert:." } });
   const steps = $derived(history.rows.map((r) => r.transition).filter((x) => x && x.ticket === id).sort((a, z) => z.id - a.id));
   const two = (n) => String(n).padStart(2, "0");
@@ -24,7 +24,7 @@
 
 <section class="ticket-history" data-surface="ticket-history">
   <h2 class="sec">History <span class="n">{steps.length}</span><span class="aside">UTC</span></h2>
-  {#if history.status === "pending"}<div data-loading aria-busy="true"><i class="bone"></i><i class="bone"></i></div>{/if}
+  {#if sheet === "loading" || history.status === "pending"}<div data-loading aria-busy="true"><i class="bone"></i><i class="bone"></i></div>{/if}
   {#if history.status === "error" || history.status === "refused"}<p class="refused" data-refused>{history.message}</p>{/if}
   <ol class="hist">
     {#each steps as h (h.id)}
@@ -55,7 +55,7 @@
   .ticket-history .aside { margin-left: auto; text-transform: none; letter-spacing: 0; }
   .ticket-history .hist { list-style: none; margin: 0; padding: 0 0 0 14px; border-left: var(--border) solid var(--tree-line); }
   .ticket-history .item { position: relative; display: grid; grid-template-columns: 76px 58px minmax(0, 1fr); gap: 6px; align-items: baseline; padding: 4px; font-size: 12px; border-radius: var(--radius); transition: background-color var(--motion-fast) var(--ease); }
-  .ticket-history .item:hover { background: var(--hover); }
+  .ticket-history .item:hover, .ticket-history .item:global([data-sheet~=hover]) { background: var(--hover); }
   .ticket-history .item::before { content: ""; position: absolute; left: -18px; top: 10px; width: 7px; height: 7px; border-radius: 50%; background: var(--bg); border: var(--border) solid var(--tree-line); }
   .ticket-history .item[data-transition=status]::before { background: var(--accent); border-color: var(--accent); }
   .ticket-history .at { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -73,6 +73,9 @@
   .ticket-history .st[data-status=Blocked] { background: var(--st-blocked-bg); color: var(--st-blocked-fg); }
   .ticket-history .st[data-status=Superseded] { background: var(--st-superseded-bg); color: var(--st-superseded-fg); }
   .ticket-history .st[data-status=Canceled] { background: var(--st-canceled-bg); color: var(--st-canceled-fg); }
+  .ticket-history .st[data-status="Draft"] { background: var(--st-draft-bg); color: var(--st-draft-fg); }
+  .ticket-history .st[data-status="Epic"] { background: var(--st-epic-bg); color: var(--st-epic-fg); }
+  .ticket-history .st[data-status="Doc"] { background: var(--st-doc-bg); color: var(--st-doc-fg); }
   .ticket-history .empty { margin: 0; padding: 8px 6px; font-size: 12px; color: var(--muted); }
   .ticket-history .refused { margin: 4px 0; font-size: 11px; color: var(--warn); }
   .ticket-history .bone { display: block; height: 10px; margin: 6px 0; background: var(--skeleton); border-radius: var(--radius-sm); }

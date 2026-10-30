@@ -18,7 +18,7 @@
   import Chip from "./ticket-chip-sv.svelte";
   import Picker from "plexus-ui:ticket-picker";
 
-  let { id } = $props();
+  let { id, sheet = null } = $props();
   const b = bus();
   const KINDS = ["scope", "execution", "build", "gap", "spike", "doc"];
   const SEVERITIES = ["none", "Critical", "High", "Medium", "Low"];
@@ -126,7 +126,7 @@
 {/snippet}
 
 <div class="ticket-edit" data-surface="ticket-edit" data-ticket={id}>
-  {#if ticket.status === "pending"}<div class="skel" data-loading><span class="bar"></span></div>{/if}
+  {#if sheet === "loading" || ticket.status === "pending"}<div class="skel" data-loading><span class="bar"></span></div>{/if}
   {#if t}
     {#if !open}
       <div class="closed">
@@ -231,7 +231,7 @@
   .te-pane-h { display: flex; gap: 8px; padding: 4px 10px; font-size: 11px; color: var(--muted); background: var(--panel); border-bottom: var(--border) solid var(--line); }
   .edited { color: var(--accent); }
   .te-text { display: block; width: 100%; height: 300px; padding: 10px 12px; font-family: var(--font-text); font-size: 12px; line-height: 1.6; color: var(--ink); background: var(--bg); border: 0; resize: none; }
-  .te-text:focus { outline: none; box-shadow: inset 0 0 0 2px var(--sel); }
+  .te-text:focus, .te-text:global([data-sheet~=focus]) { outline: none; box-shadow: inset 0 0 0 2px var(--sel); }
   .te-prev { height: 300px; overflow: auto; padding: 10px 14px; font-size: 14px; }
   .md { font-family: var(--sans); line-height: 1.55; overflow-wrap: anywhere; }
   .md :global(h1), .md :global(h2), .md :global(h3) { margin: 16px 0 4px; font-family: var(--font-display); font-size: 14px; font-weight: var(--weight-strong); color: var(--ink); }
@@ -245,15 +245,15 @@
   .seg { display: inline-flex; flex-wrap: wrap; align-self: flex-start; overflow: hidden; background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); }
   .seg button { display: inline-flex; gap: 5px; align-items: center; padding: 2px 9px; font-size: 12px; line-height: 20px; color: var(--muted); background: none; border: 0; border-right: var(--border) solid var(--line); cursor: pointer; transition: background-color var(--motion-fast) var(--ease); }
   .seg button:last-child { border-right: 0; }
-  .seg button:hover { color: var(--ink); background: var(--hover); }
-  .seg button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
-  .seg button[aria-checked="true"] { color: var(--accent); background: var(--sel); }
+  .seg button:hover, .seg button:global([data-sheet~=hover]) { color: var(--ink); background: var(--hover); }
+  .seg button:focus-visible, .seg button:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: -2px; }
+  .seg button[aria-checked="true"], .seg button:global([data-sheet~=checked]) { color: var(--accent); background: var(--sel); }
   .kmark { display: inline-block; width: 8px; height: 8px; flex: none; background: var(--kind-build); border-radius: 50%; }
   .kmark[data-kind="scope"] { background: var(--kind-scope); border-radius: var(--radius-xs); transform: rotate(45deg) scale(.85); }
   .kmark[data-kind="gap"] { background: var(--kind-gap); border-radius: 0; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
   .kmark[data-kind="spike"] { background: none; border: 2px solid var(--kind-spike); }
   .kmark[data-kind="execution"] { background: var(--kind-execution); border-radius: var(--radius-xs); }
-  .kmark[data-kind="doc"] { width: 7px; height: 9px; background: none; border: var(--border) solid var(--muted); border-radius: 1px; }
+  .kmark[data-kind="doc"] { width: 7px; height: 9px; background: none; border: var(--border) solid var(--kind-doc); border-radius: var(--radius-xs); }
   .sev { display: inline-flex; gap: 2px; align-items: flex-end; width: 14px; height: 12px; flex: none; }
   .sev i { display: block; width: 3px; background: var(--line); border-radius: 1px; }
   .sev i:nth-child(1) { height: 5px; }
@@ -264,20 +264,20 @@
   .sev[data-severity="high"] i { background: var(--sev-high); }
   .sev[data-severity="critical"] i { background: var(--sev-critical); }
   .btn { display: inline-flex; gap: 5px; align-items: center; padding: 1px 10px; font-size: 12px; line-height: 20px; white-space: nowrap; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; transition: background-color var(--motion-fast) var(--ease); }
-  .btn:hover { background: var(--hover); border-color: var(--muted); }
-  .btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .btn:hover, .btn:global([data-sheet~=hover]) { background: var(--hover); border-color: var(--muted); }
+  .btn:focus-visible, .btn:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
   .btn.primary { color: var(--bg); background: var(--accent); border-color: var(--accent); }
-  .btn.primary:hover { opacity: .88; }
-  .btn:disabled, .btn.primary:disabled { color: var(--disabled); background: var(--card); border-color: var(--line); cursor: not-allowed; opacity: 1; }
+  .btn.primary:hover, .btn.primary:global([data-sheet~=hover]) { opacity: .88; }
+  .btn:disabled, .btn.primary:disabled, .btn:global([data-sheet~=disabled]), .btn.primary:global([data-sheet~=disabled]) { color: var(--disabled); background: var(--card); border-color: var(--line); cursor: not-allowed; opacity: 1; }
   .btn.ghost { color: var(--muted); background: none; border-color: transparent; }
-  .btn.ghost:hover { color: var(--ink); background: var(--hover); }
+  .btn.ghost:hover, .btn.ghost:global([data-sheet~=hover]) { color: var(--ink); background: var(--hover); }
   .x { margin-left: 2px; padding: 0 3px; font-size: 12px; line-height: 14px; color: var(--muted); background: none; border: 0; border-radius: var(--radius-sm); cursor: pointer; }
-  .x:hover { color: var(--warn); background: var(--hover); }
-  .x:focus-visible { outline: 2px solid var(--focus); }
+  .x:hover, .x:global([data-sheet~=hover]) { color: var(--warn); background: var(--hover); }
+  .x:focus-visible, .x:global([data-sheet~=focus]) { outline: 2px solid var(--focus); }
   .in { min-width: 0; padding: 3px 8px; font-size: 12px; line-height: 18px; color: var(--ink); background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius); transition: border-color var(--motion-fast) var(--ease); }
   .in::placeholder { color: var(--muted); }
-  .in:hover { border-color: var(--muted); }
-  .in:focus { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px var(--sel); }
+  .in:hover, .in:global([data-sheet~=hover]) { border-color: var(--muted); }
+  .in:focus, .in:global([data-sheet~=focus]) { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px var(--sel); }
   .in[aria-invalid="true"] { border-color: var(--warn); }
   .in.title { font-family: var(--font-display); font-size: 16px; line-height: 24px; font-weight: var(--weight-strong); }
   .refused { margin: 5px 0 0; font-size: 11px; line-height: 1.4; color: var(--warn); }

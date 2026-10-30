@@ -15,6 +15,8 @@
 <script>
   import { untrack } from "svelte";
   import { bus, live } from "plexus-ui/host";
+  // SURFACE-10: the sheet holds the loading state by its mark (data-sheet="loading").
+  let { sheet = null } = $props();
 
   const b = bus();
 
@@ -181,7 +183,7 @@
         {#if refused[e.name]}<span class="refused" data-refused="">refused: {refused[e.name]}</span>{/if}
       </div>
     {/each}
-    {#if $epics.status === "pending"}<div class="row"><span data-loading="">genesis</span></div>{/if}
+    {#if sheet === "loading" || $epics.status === "pending"}<div class="row"><span data-loading="">genesis</span></div>{/if}
     {#if $epics.status === "live" && rows.length === 0}<p class="empty" data-empty="">No epics here.</p>{/if}
     {#if $epics.status === "error" || $epics.status === "refused"}<p class="refused pad" data-refused="">refused: {$epics.message}</p>{/if}
   </div>
@@ -219,17 +221,17 @@
   .state { margin-left: auto; font-size: 11px; color: var(--muted); }
   .notice { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 12px; padding: 6px 10px; background: var(--sel); border: var(--border) solid var(--line); border-radius: var(--radius); }
   .tools { margin: 0 0 8px; font-size: 12px; color: var(--muted); }
-  .tools input:focus-visible { outline: 2px solid var(--focus); }
+  .tools input:focus-visible, .tools input:global([data-sheet~=focus]) { outline: 2px solid var(--focus); }
   .panel { overflow: hidden; background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius-lg); }
   .row { display: grid; grid-template-columns: minmax(120px, 1fr) auto auto auto minmax(0, 1fr) auto; gap: 12px; align-items: center; min-height: var(--pitch); padding: 0 10px; border-bottom: var(--border) solid var(--line); transition: background-color var(--motion-fast) var(--ease); }
   .row:last-child { border-bottom: 0; }
-  .row:hover { background: var(--hover); }
+  .row:hover, .row:global([data-sheet~=hover]) { background: var(--hover); }
   .row[data-current=true] { background: var(--sel); box-shadow: inset 3px 0 0 var(--accent); }
   .row[data-archived=true] .name { color: var(--muted); }
   .row[data-changed=deleted] .name { color: var(--disabled); text-decoration: line-through; }
   .name { justify-self: start; padding: 0; color: var(--accent); background: none; border: 0; cursor: pointer; border-radius: var(--radius-sm); }
-  .name:hover { text-decoration: underline; }
-  .name:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .name:hover, .name:global([data-sheet~=hover]) { text-decoration: underline; }
+  .name:focus-visible, .name:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
   .meta { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
   .meta span { color: var(--ink); }
   .changed { font-style: italic; }
@@ -239,9 +241,9 @@
   .here { font-size: 11px; color: var(--accent); }
   .here.gone { color: var(--muted); }
   .btn { padding: 3px 10px; font-size: 12px; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; transition: border-color var(--motion-fast) var(--ease), background-color var(--motion-fast) var(--ease); }
-  .btn:hover:not(:disabled) { border-color: var(--muted); background: var(--hover); }
-  .btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-  .btn:disabled { color: var(--disabled); cursor: default; }
+  .btn:hover:not(:disabled), .btn:global([data-sheet~=hover]):not(:disabled) { border-color: var(--muted); background: var(--hover); }
+  .btn:focus-visible, .btn:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .btn:disabled, .btn:global([data-sheet~=disabled]) { color: var(--disabled); cursor: default; }
   .refused { grid-column: 1 / -1; margin: 0 0 6px; font-size: 11px; color: var(--warn); }
   .pad { margin: 8px 10px; }
   [data-loading] { color: transparent; background: var(--skeleton); border-radius: var(--radius-sm); }

@@ -69,8 +69,8 @@
 <style>
   .nav-counts { display: inline-flex; align-items: center; font-family: var(--font-text); font-size: 11px; }
   .nc { display: inline-flex; gap: 5px; align-items: center; padding: 0 7px; font: inherit; line-height: 18px; color: var(--chip-fg); background: var(--chip-bg); border: var(--border) solid var(--chip-line); border-radius: var(--radius-pill); cursor: pointer; transition: background-color var(--motion-fast) var(--ease), border-color var(--motion-fast) var(--ease); }
-  .nc:hover { background: var(--hover); border-color: var(--muted); }
-  .nc:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .nc:hover, .nc:global([data-sheet~=hover]) { background: var(--hover); border-color: var(--muted); }
+  .nc:focus-visible, .nc:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
   .nc-n { min-width: 1ch; color: var(--ink); font-weight: var(--weight-bold); font-variant-numeric: tabular-nums; }
   .nc-n[data-empty] { color: var(--muted); font-weight: var(--weight-medium); }
   .nc-n[data-approx]::after { content: "≈"; margin-left: 2px; color: var(--muted); font-weight: var(--weight-medium); }

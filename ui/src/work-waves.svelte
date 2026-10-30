@@ -21,7 +21,7 @@
 <script>
   import { live } from "plexus-ui/host";
 
-  let { epics = null, id = null, to = null } = $props();
+  let { epics = null, id = null, to = null, sheet = null } = $props();
   let kinds = $state(["build", "gap", "spike"]);
   let hot = $state("");
 
@@ -120,7 +120,7 @@
   <div class="ww-scroll">
     {#if mode === "pick"}
       <p class="ww-empty" data-empty>Choose the shortcodes whose order of work to draw.</p>
-    {:else if status === "pending"}
+    {:else if sheet === "loading" || status === "pending"}
       <div class="lanes" data-loading aria-busy="true"><div class="lane skel"><i></i><i></i><i></i></div><div class="lane skel"><i></i><i></i></div></div>
     {:else if status === "live" && G.lanes.length === 0}
       {#if missing != null}
@@ -165,9 +165,9 @@
   .ctl > span { margin-right: 2px; }
   .routes { margin-left: auto; }
   .tog { padding: 1px 9px; font-size: 11px; color: var(--muted); text-decoration: none; background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; transition: color var(--motion-fast) var(--ease), border-color var(--motion-fast) var(--ease); }
-  .tog:hover { color: var(--ink); border-color: var(--muted); }
-  .tog[aria-pressed=true] { color: var(--accent); border-color: var(--accent); background: var(--sel); }
-  .tog:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .tog:hover, .tog:global([data-sheet~=hover]) { color: var(--ink); border-color: var(--muted); }
+  .tog[aria-pressed=true], .tog:global([data-sheet~=checked]) { color: var(--accent); border-color: var(--accent); background: var(--sel); }
+  .tog:focus-visible, .tog:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
   .ww-refused { margin: 0; padding: 6px 24px; font-size: 11px; color: var(--warn); }
   .ww-cycle { margin: 0; padding: 4px 24px; font-size: 11px; color: var(--warn); }
   .ww-scroll { flex: 1; min-height: 0; overflow: auto; position: relative; }
@@ -180,8 +180,8 @@
   .lane-chips { display: flex; flex-direction: column; gap: 8px; }
   .lane.skel i { display: block; height: 26px; margin: 0 0 8px; background: var(--skeleton); border-radius: var(--radius-pill); }
   .chip { box-sizing: border-box; display: flex; gap: 6px; align-items: center; width: 100%; height: 26px; padding: 0 10px 0 8px; font-size: 12px; white-space: nowrap; color: var(--chip-fg); text-decoration: none; background: var(--chip-bg); border: var(--border) solid var(--chip-line); border-radius: var(--radius-pill); cursor: pointer; transition: background-color var(--motion-fast) var(--ease), border-color var(--motion-fast) var(--ease), opacity var(--motion-fast) var(--ease); }
-  .chip:hover { background: var(--hover); border-color: var(--line); }
-  .chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .chip:hover, .chip:global([data-sheet~=hover]) { background: var(--hover); border-color: var(--line); }
+  .chip:focus-visible, .chip:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
   .chip[data-on="1"] { border-color: var(--accent); background: var(--sel); }
   .chip[data-rel="1"] { border-color: var(--accent); }
   .lanes[data-dim="1"] .chip[data-on="0"][data-rel="0"] { opacity: .45; }
@@ -196,6 +196,7 @@
   .kmark[data-kind=scope] { background: var(--kind-scope); border-radius: var(--radius-xs); transform: rotate(45deg) scale(.85); }
   .kmark[data-kind=gap] { background: var(--kind-gap); border-radius: 0; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
   .kmark[data-kind=spike] { background: none; border: 2px solid var(--kind-spike); }
+  .kmark[data-kind=doc] { width: 7px; height: 9px; background: none; border: var(--border) solid var(--kind-doc); border-radius: var(--radius-xs); }
   .kmark[data-kind=execution] { background: var(--kind-execution); border-radius: var(--radius-xs); }
   .st { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--st-draft-fg); }
   .chip[data-status=Pending] .st { background: var(--st-pending-fg); }
@@ -203,6 +204,11 @@
   .chip[data-status=Coding] .st { background: var(--st-coding-fg); }
   .chip[data-status="In Review"] .st { background: var(--st-in-review-fg); }
   .chip[data-status=Complete] .st { background: var(--st-complete-fg); }
+  .chip[data-status="Blocked"] .st { background: var(--st-blocked-fg); }
+  .chip[data-status="Superseded"] .st { background: var(--st-superseded-fg); }
+  .chip[data-status="Canceled"] .st { background: var(--st-canceled-fg); }
+  .chip[data-status="Epic"] .st { background: var(--st-epic-fg); }
+  .chip[data-status="Doc"] .st { background: var(--st-doc-fg); }
   @media (prefers-reduced-motion: reduce) {
     .tog, .chip, .edge { transition: none; }
   }

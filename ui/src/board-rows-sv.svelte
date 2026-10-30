@@ -189,22 +189,22 @@
   .board-status { margin-left: auto; font-size: 11px; color: var(--warn); }
   .board-status::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 5px; vertical-align: 1px; border-radius: 50%; background: var(--warn); }
   .board-scroll { flex: 1; min-height: 0; overflow: auto; position: relative; outline: none; }
-  .board-scroll:focus-visible { box-shadow: inset 0 0 0 2px var(--focus); }
+  .board-scroll:focus-visible, .board-scroll:global([data-sheet~=focus]) { box-shadow: inset 0 0 0 2px var(--focus); }
   .board-space { position: relative; }
   .board-window { position: absolute; left: 0; right: 0; top: 0; will-change: transform; }
   .board-checked { margin-left: 10px; color: var(--accent); }
   .board-checked b { font-weight: var(--weight-bold); }
   .board-line { position: relative; }
   .row-check { position: absolute; z-index: 1; left: 14px; top: 8px; width: 12px; height: 12px; padding: 0; background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-xs); cursor: pointer; transition: border-color var(--motion-fast) var(--ease); }
-  .row-check:hover, .board-row:hover + .row-check { border-color: var(--muted); }
-  .row-check:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-  .board-row[data-checked] + .row-check { background: var(--accent); border-color: var(--accent); }
-  .board-row[data-checked] + .row-check::after { content: ""; position: absolute; left: 3px; top: 0; width: 3px; height: 7px; border: solid var(--bg); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+  .row-check:hover, .board-row:hover + .row-check, .row-check:global([data-sheet~=hover]), .board-row:global([data-sheet~=hover]) + .row-check { border-color: var(--muted); }
+  .row-check:focus-visible, .row-check:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .board-row[data-checked] + .row-check, .board-row:global([data-sheet~=checked]) + .row-check { background: var(--accent); border-color: var(--accent); }
+  .board-row[data-checked] + .row-check::after, .board-row:global([data-sheet~=checked]) + .row-check::after { content: ""; position: absolute; left: 3px; top: 0; width: 3px; height: 7px; border: solid var(--bg); border-width: 0 2px 2px 0; transform: rotate(45deg); }
   .board-row { display: grid; grid-template-columns: 10px 104px minmax(0, 1fr) auto auto; gap: 10px; align-items: center; height: var(--pitch); padding: 0 14px 0 38px; color: var(--ink); text-decoration: none; white-space: nowrap; border-bottom: var(--border) solid var(--line); transition: background-color var(--motion-fast) var(--ease); }
-  .board-row:hover { background: var(--hover); }
-  .board-row:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
-  .board-row[data-checked] { background: var(--sel); }
-  .board-row[data-selected] { background: var(--row-sel); box-shadow: inset 3px 0 0 var(--accent); }
+  .board-row:hover, .board-row:global([data-sheet~=hover]) { background: var(--hover); }
+  .board-row:focus-visible, .board-row:global([data-sheet~=focus]) { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
+  .board-row[data-checked], .board-row:global([data-sheet~=checked]) { background: var(--sel); }
+  .board-row[data-selected], .board-row:global([data-sheet~=selected]) { background: var(--row-sel); box-shadow: inset 3px 0 0 var(--accent); }
   .row-id { color: var(--accent); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; }
   .row-title { overflow: hidden; text-overflow: ellipsis; }
   .row-kind { color: var(--muted); font-size: 11px; }
@@ -218,11 +218,14 @@
   .board-row[data-status=Blocked] .row-status { background: var(--st-blocked-bg); color: var(--st-blocked-fg); }
   .board-row[data-status=Superseded] .row-status { background: var(--st-superseded-bg); color: var(--st-superseded-fg); }
   .board-row[data-status=Canceled] .row-status { background: var(--st-canceled-bg); color: var(--st-canceled-fg); }
+  .board-row[data-status=Epic] .row-status { background: var(--st-epic-bg); color: var(--st-epic-fg); }
+  .board-row[data-status=Doc] .row-status { background: var(--st-doc-bg); color: var(--st-doc-fg); }
   .kmark { display: inline-block; width: 8px; height: 8px; flex: none; background: var(--kind-build); border-radius: 50%; }
   .kmark[data-kind=scope] { background: var(--kind-scope); border-radius: var(--radius-xs); transform: rotate(45deg) scale(.85); }
   .kmark[data-kind=gap] { background: var(--kind-gap); border-radius: 0; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
   .kmark[data-kind=spike] { background: none; border: 2px solid var(--kind-spike); }
   .kmark[data-kind=execution] { background: var(--kind-execution); border-radius: var(--radius-xs); }
+  .kmark[data-kind=doc] { width: 7px; height: 9px; background: none; border: var(--border) solid var(--kind-doc); border-radius: var(--radius-xs); }
   @media (max-width: 720px) {
     .board-row { grid-template-columns: 10px 88px minmax(0, 1fr) auto; }
     .row-kind { display: none; }

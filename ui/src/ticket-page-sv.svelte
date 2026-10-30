@@ -30,7 +30,7 @@
   import History from "plexus-ui:ticket-history";
   import Revisions from "plexus-ui:ticket-revisions";
 
-  let { id } = $props();
+  let { id, sheet = null } = $props();
   const b = bus();
   const base = location.hash.startsWith("#/sv/") ? "#/sv/" : "#/";
 
@@ -56,7 +56,7 @@
   // `data-edit-asked` — on the article, never a `data-*` of the mark, which
   // would cross to its component as a prop.
   let knocked = $state(0);
-  const loading = $derived(ticket.status === "pending" || (ticket.status === "resyncing" && ticket.rows.length === 0));
+  const loading = $derived(sheet === "loading" || ticket.status === "pending" || (ticket.status === "resyncing" && ticket.rows.length === 0));
 
   b.keys({
     e: { to: () => { b.emit("ticket.edit", { id }); knocked += 1; }, label: "edit the ticket" },
@@ -107,8 +107,8 @@
   .ticket-page { min-height: 100%; color: var(--ink); background: var(--bg); font-family: var(--font-text); font-size: var(--text-size); }
   .ticket-page .crumbs { position: sticky; top: 0; z-index: 4; display: flex; gap: 14px; align-items: center; padding: 10px max(28px, calc((100% - 1284px) / 2)); font-size: 12px; background: var(--bg); border-bottom: var(--border) solid var(--line); }
   .ticket-page .crumbs a { color: var(--muted); text-decoration: none; border-radius: var(--radius-sm); transition: color var(--motion-fast) var(--ease); }
-  .ticket-page .crumbs a:hover { color: var(--accent); }
-  .ticket-page .crumbs a:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .ticket-page .crumbs a:hover, .ticket-page .crumbs a:global([data-sheet~=hover]) { color: var(--accent); }
+  .ticket-page .crumbs a:focus-visible, .ticket-page .crumbs a:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
   .ticket-page .keys { display: flex; gap: 5px; align-items: center; margin-left: auto; font-size: 11px; color: var(--muted); }
   .ticket-page .sep { display: inline-block; width: 8px; }
   .ticket-page kbd { display: inline-block; min-width: 16px; padding: 0 4px; font-family: var(--font-text); font-size: 10px; line-height: 15px; text-align: center; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-bottom-width: 2px; border-radius: var(--radius-sm); }
