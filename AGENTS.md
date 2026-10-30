@@ -697,7 +697,10 @@ question.
   leftover and removes nothing. It refuses `/`, `$HOME`, a main checkout, a
   shared target, `~/.local/share/menger`, a dirty worktree and anything in
   use — a refusal is the answer, not a cue for `rm`. Its tests:
-  `scripts/tests/cleanup-gate`.
+  `scripts/tests/cleanup-gate`. **Never `git stash` in a worktree**: a
+  stash is the repository's, shared by every worktree, and another agent's
+  `stash pop` takes yours (PERF-22, 2026-10-30); a work in progress is a
+  commit on your branch.
 - **Tests per ticket are a selection; the suite runs per batch** (CI-3,
   owner 2026-10-18). A ticket's gate is the tests it adds and the nearest
   ones it touches (`cargo test -p <crate> <filter>`, the one wire test, the
