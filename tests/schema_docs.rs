@@ -411,6 +411,11 @@ const UI_ROLES: &[(&str, &str, &str)] = &[
     ("ui", "sessions", "editor"),
     ("ui", "here", "viewer"),
     ("ui", "follow", "viewer"),
+    // FRAME-52: named and tagged versions, and undo as a method.
+    ("ui", "tag", "editor"),
+    ("ui", "history", "viewer"),
+    ("ui", "undo", "editor"),
+    ("ui", "redo", "editor"),
 ];
 
 /// V2-11, acceptance (the table's second row): `ui push --help` says the

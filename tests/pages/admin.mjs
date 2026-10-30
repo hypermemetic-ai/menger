@@ -6,7 +6,9 @@
 // rows `[data-id]` (an epic's name, an organization's name, a grant's `role@scope`,
 // a team's name, a provider's name, a version's hash); fields `[data-field=…]`;
 // actions `[data-action=epics.switch|epics.get|epics.dismiss|auth.requires|
-// session.logout|ui.rollback|ui.preview]`; forms `[data-form=epics.list|
+// session.logout|ui.rollback|ui.preview|ui.tag|ui.undo|ui.redo]`; FRAME-52: a
+// row's `[data-field=label]` and `[data-tag]`s, its `[data-tag-editor]`; the
+// history's `[data-move][data-how]`; forms `[data-form=epics.list|
 // auth.requires]`; a refusal `[data-refused]`; `[data-empty]`.
 //
 // The owner's session (`token`) is an admin on the throwaway; every case
@@ -322,6 +324,59 @@ export default async (ctx) => {
     } finally {
       await as.context.close();
       revoke(viewer.principal, "*");
+    }
+  });
+
+  // FRAME-52: the releases page names and tags a version and undoes the last move.
+  await test("releases_label_tag_and_undo", async () => {
+    const live = () => sy("ui", "versions").find((e) => e.type === "version" && e.live)?.hash;
+    assert(live() === v2.version, "v2 is live as the runner left it");
+    const { page, context } = await openPage("#/releases");
+    const root = page.locator("[data-surface=ui-versions]");
+    try {
+      const row = root.locator(`[data-id="${v1.version}"]`);
+      await eventually("v1 listed, tag offered", async () => (await row.locator("[data-action='ui.tag']:not([disabled])").count()) === 1);
+      await row.locator("[data-action='ui.tag']").first().click();
+      await row.locator("[data-tag-label]").fill("s52 first");
+      await row.locator("[data-tag-tags]").fill("demo, s52");
+      await row.locator("[data-action='ui.tag'][data-save]").click();
+      await eventually("the label on the row", async () => (await row.locator("[data-field=label]").count()) === 1 && (await text(row.locator("[data-field=label]"))) === "s52 first");
+      assert((await row.locator("[data-tag=demo]").count()) === 1 && (await row.locator("[data-tag=s52]").count()) === 1, "the tags on the row");
+      const kept = sy("ui", "versions", "--tag", "s52").filter((e) => e.type === "version");
+      assert(kept.length === 1 && kept[0].hash === v1.version && kept[0].label === "s52 first", `the server keeps them: ${JSON.stringify(kept)}`);
+
+      // FRAME-52b: a tag made elsewhere (an agent) appears on the row from the watch;
+      // the label moved there leaves v1's row.
+      sy("ui", "tag", "--version", v2.version, "--label", "s52 first", "--tags", "s52b");
+      const row2 = root.locator(`[data-id="${v2.version}"]`);
+      await eventually("the agent's tag on v2's row", async () => (await row2.locator("[data-tag=s52b]").count()) === 1 && (await row2.locator("[data-field=label]").count()) === 1);
+      await eventually("the label gone from v1's row", async () => (await row.locator("[data-field=label]").count()) === 0);
+      sy("ui", "tag", "--version", v1.version, "--label", "s52 first");
+      await eventually("and back on v1's", async () => (await row.locator("[data-field=label]").count()) === 1 && (await row2.locator("[data-field=label]").count()) === 0);
+
+      // A move by label from elsewhere: heard, and the history says it.
+      const back = sy("ui", "rollback", "--to", "s52 first");
+      assert(ok(back, "live")?.version === v1.version, `rollback --to a label: ${JSON.stringify(back)}`);
+      const history = root.locator("[data-field=history]");
+      await eventually("the rollback heads the history", async () => (await history.locator("[data-move]").first().getAttribute("data-how")) === "rollback");
+      await eventually("v1 marked live", async () => (await root.locator(`[data-id="${v1.version}"][data-live=true]`).count()) === 1);
+
+      // Undo: the pointer back to v2, kept as an undo; redo offered.
+      await eventually("undo offered", async () => (await history.locator("[data-action='ui.undo']:not([disabled])").count()) === 1);
+      await history.locator("[data-action='ui.undo']").click();
+      // FRAME-52b: by the seq the page showed — one move undone.
+      await eventually("v2 live on the server", async () => live() === v2.version);
+      await eventually("and on the page", async () => (await root.locator(`[data-id="${v2.version}"][data-live=true]`).count()) === 1 && (await root.locator("[data-live=true]").count()) === 1);
+      await eventually("the answer said", async () => (await history.locator("[data-answer=undo]").count()) === 1);
+      await eventually("the undo heads the history", async () => (await history.locator("[data-move]").first().getAttribute("data-how")) === "undo");
+      const h = sy("ui", "history", "--limit", "2").filter((e) => e.type === "move");
+      assert(h[0]?.how === "undo" && h[0].version === v2.version && h[1]?.how === "rollback", `ui.history: ${JSON.stringify(h)}`);
+      await eventually("redo offered", async () => (await history.locator("[data-action='ui.redo']:not([disabled])").count()) === 1);
+    } finally {
+      await context.close();
+      sy("ui", "tag", "--version", v1.version, "--untag", "demo,s52", "--label", "");
+      sy("ui", "tag", "--version", v2.version, "--untag", "s52b");
+      if (live() !== v2.version) sy("ui", "rollback", "--to", v2.version);
     }
   });
 };

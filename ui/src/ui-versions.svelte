@@ -10,10 +10,16 @@
      its answer (`live { version }`, or the refusal's words) is said in the
      row; preview's answer is the link to /app/, and a clear. Anyone else
      sees both disabled, with the roles `auth.requires` names for them.
-     STUDIO-12: the page's title is page-releases's (rhx). -->
+     STUDIO-12: the page's title is page-releases's (rhx). FRAME-52: each
+     row says its label and tags, and an editor (`auth.requires` for
+     `ui.tag`) names and tags it in the row (`ui.tag`); beside it the
+     pointer's history (`ui.history`, read again on every move) with undo and
+     redo (`ui.undo`, `ui.redo`, by the seq shown), the service's rule said on a refusal
+     and on a disabled button (FRAME-52b: `may`, "the admin's"); a tag made
+     elsewhere folded in from the watch's `tagged`. -->
 <script module>
   export const uses = ["ui.versions", "ui.watch", "ui.contract", "ui.routes.list", "ui.slots.list", "ui.rollback", "ui.preview",
-                       "auth.whoami", "auth.requires"];
+                       "ui.tag", "ui.history", "ui.undo", "ui.redo", "auth.whoami", "auth.requires"];
 </script>
 
 <script>
@@ -41,79 +47,105 @@
 
   const door = live({ snapshot: "auth.whoami", params: {}, key: "principal", on: {} });
   const needs = live({ snapshot: "auth.requires", params: { method: "ui.rollback" }, key: "method", on: {} });
+  // FRAME-52: who names, tags and undoes — the roles holding ui.tag.
+  const tagNeeds = live({ snapshot: "auth.requires", params: { method: "ui.tag" }, key: "method", on: {} });
   const stamped = live({ snapshot: "ui.contract", params: { uses: ["tickets.list"] }, key: "contract", on: {} });
   const reached = live({ snapshot: "ui.contract", params: { uses: REACHED }, key: "contract", on: {} });
   const routes = live({ snapshot: "ui.routes.list", params: {}, changes: "ui.watch", key: "pattern", on: { route_changed: "upsert:." } });
   const slots = live({ snapshot: "ui.slots.list", params: {}, key: "slot", on: {} });
 
-  // The live pointer is its own state. `ui.watch`'s `live { version }` names
-  // a hash and no row, and a collection hears a row only when it moves, so
-  // the moves are heard twice over: a generation — every version, keyed by hash,
-  // its `live` folded as `remove:version` — loses the version that went live
-  // (a rollback, a push of bytes kept before), and `firsts` — keyed by
-  // `version`, `upsert:.` — gains a version going live for the first time (a
-  // push). Either sets the pointer and reads the list again: a new generation
-  // (another generation's spec, so another collection, asked anew) whose
-  // snapshot is the list with its `live` mark — so a move back to a version
-  // already moved to is heard as well as the first. FRAME-40's refetch rule
-  // will make this one spec.
+  // FRAME-52b: the live pointer is its own state, moved by the watch's
+  // `live { version, seq }` alone — every move of the pointer is a row of
+  // its own by its `seq` (a move back to a version heard before too), so one
+  // collection keyed by `seq` hears each (SURFACE-9's two listeners went).
+  // Each move sets the pointer, reads the history once, and the list again
+  // only when it names a version the list does not hold (a push).
   let list = $state(null);
   let pointer = $state(null);
   let added = $state(new Set());
-  // The generation now: its handle, its number, and the hashes its snapshot held.
-  let watcher = $state.raw(null);
-  // A generation's name is this instance's own: the host keeps a collection a
-  // few seconds past its last reader, and a remount (a swap) must not be
-  // handed the old instance's generation with its moves folded out.
-  const me = Math.random().toString(36).slice(2, 10);
-  function generation(n) {
-    const h = b.live({ snapshot: "ui.versions", params: {}, changes: "ui.watch", key: "hash",
-                       on: { live: "remove:version", [`generation_${me}_${n}`]: "remove:none" } });
-    watcher = { n, h, base: null };
+  async function readVersions() {
+    const a = await answer(b.call("ui.versions", {}));
+    if (!a.ok) return;
+    const rows = a.events.filter((e) => e?.type === "version");
+    const before = new Set((list ?? []).map((v) => v.hash));
+    added = new Set(list == null ? [] : rows.filter((r) => !before.has(r.hash)).map((r) => r.hash));
+    list = rows;
+    pointer = rows.find((r) => r.live)?.hash ?? null;
   }
-  generation(1);
-  // Read in an effect (the face subscribes while it reads, and lets the old
-  // generation go when the effect moves on to the next one).
+  readVersions();
+  function moved(version) {
+    pointer = version;
+    if (list != null && !list.some((v) => v.hash === version)) readVersions();
+    readHistory();
+  }
+
+  // FRAME-52: the pointer's moves, newest first — read now and once a move.
+  let moves = $state(null);
+  async function readHistory() {
+    const a = await answer(b.call("ui.history", { limit: 20 }));
+    if (a.ok) moves = a.events.filter((e) => e?.type === "move");
+  }
+  readHistory();
+  const steps = live({ snapshot: "ui.history", params: { limit: 1 }, changes: "ui.watch", key: "seq", on: { live: "upsert:." } });
+  let stepSeen = null;
   $effect(() => {
-    const w = watcher;
-    if (!w) return;
-    const status = w.h.status;
-    const rows = w.h.rows;
+    const rows = steps.rows;
     untrack(() => {
-      if (status !== "live") return;
-      if (w.base == null) {
-        const before = new Set((list ?? []).map((v) => v.hash));
-        w.base = rows.map((r) => r.hash);
-        added = new Set(list == null ? [] : w.base.filter((x) => !before.has(x)));
-        list = rows;
-        pointer = rows.find((r) => r.live)?.hash ?? null;
-        return;
-      }
-      const gone = w.base.filter((x) => !rows.some((r) => r.hash === x));
-      if (gone.length) moved(gone[gone.length - 1]);
-    });
-  });
-  const firsts = live({ snapshot: "ui.versions", params: {}, changes: "ui.watch", key: "version", on: { live: "upsert:." } });
-  // Each version heard going live for the first time (the watch says the
-  // pointer as it opens, too); what the collection held at the first read
-  // was heard before this instance.
-  let firstSeen = null;
-  $effect(() => {
-    const rows = firsts.rows;
-    untrack(() => {
-      if (firstSeen == null) { firstSeen = new Set(rows.map((r) => r.version)); return; }
-      const fresh = rows.filter((r) => !firstSeen.has(r.version));
-      for (const r of fresh) firstSeen.add(r.version);
+      const seqs = rows.map((r) => r.seq).filter((x) => x != null);
+      if (stepSeen == null) { stepSeen = new Set(seqs); return; }
+      const fresh = rows.filter((r) => r.seq != null && !stepSeen.has(r.seq)).sort((x, y) => x.seq - y.seq);
+      for (const r of fresh) stepSeen.add(r.seq);
       if (fresh.length) moved(fresh[fresh.length - 1].version);
     });
   });
-  // One move heard twice in one flush (a version going live for the first
-  // time is both a first and a row gone) makes one generation: the second
-  // finds the pointer there and the generation not yet answered.
-  function moved(version) {
-    if (version === pointer && watcher && watcher.base == null) return;
-    pointer = version;
-    generation((watcher?.n ?? 0) + 1);
+  // FRAME-52b: a tag made elsewhere (another session, an agent) — the
+  // watch's `tagged { version, label, tags }`, the latest per version,
+  // folded into the rows (a moved label is said for the version it left).
+  const tags = live({ snapshot: "ui.versions", params: {}, changes: "ui.watch", key: "version", on: { tagged: "upsert:." } });
+  $effect(() => {
+    const rows = tags.rows;
+    untrack(() => {
+      if (!rows.length || list == null) return;
+      const by = new Map(rows.filter((r) => typeof r.version === "string").map((r) => [r.version, r]));
+      list = list.map((v) => (by.has(v.hash) ? { ...v, label: by.get(v.hash).label ?? null, tags: by.get(v.hash).tags ?? [] } : v));
+    });
+  });
+  const undoable = $derived((moves ?? []).find((m) => m.undo) ?? null);
+  const redoable = $derived((moves ?? []).find((m) => m.redo) ?? null);
+  // FRAME-52b: off when this caller may not reverse it, saying whose it is.
+  const stepTitle = (m, which) => (!m ? `nothing to ${which}` : !m.may ? `the admin's: the last move is a ${m.how === "undo" ? "move" : m.how}, and its ${which} is a rollback` : which === "undo" ? `back to ${short(m.from)}: the ${m.how} by ${m.by}` : `forward to ${short(m.from)}`);
+  let stepped = $state(null);
+  async function step(which) {
+    const was = cur;
+    // FRAME-52b: the move shown, by its seq — two undos at once undo one move.
+    const seq = (which === "redo" ? redoable : undoable)?.seq;
+    const params = seq != null ? { seq } : {};
+    stepped = { asked: which };
+    const a = await answer(which === "redo" ? b.call("ui.redo", params) : b.call("ui.undo", params));
+    const l = a.events.find((e) => e?.type === "live");
+    stepped = a.ok && l ? { which, was, live: l.version, label: l.label ?? null } : { which, refused: a.message };
+    if (a.ok && l) pointer = l.version;
+    else readHistory();
+  }
+
+  // FRAME-52: the tag editor, one row at a time.
+  let tagging = $state(null);
+  async function saveTag(v) {
+    const label = tagging.label.trim();
+    const want = tagging.tags.split(/[\s,]+/).map((x) => x.trim().toLowerCase()).filter(Boolean);
+    const had = v.tags ?? [];
+    const params = { version: v.hash, tags: want.filter((x) => !had.includes(x)), untag: had.filter((x) => !want.includes(x)) };
+    if (label && label !== v.label) params.label = label;
+    const a = await answer(b.call("ui.tag", params));
+    const t = a.events.find((e) => e?.type === "tagged");
+    if (a.ok && t) {
+      // A label names one version: moved here, it leaves any other.
+      list = (list ?? []).map((r) => (r.hash === t.version ? { ...r, label: t.label, tags: t.tags } : t.label && r.label === t.label ? { ...r, label: null } : r));
+      tagging = null;
+      answers = { ...answers, [v.hash]: {} };
+    } else {
+      answers = { ...answers, [v.hash]: { refused: a.message } };
+    }
   }
 
   const versions = $derived(list ?? []);
@@ -123,6 +155,8 @@
   // (the service decides where: a refusal is said on the row).
   const admin = $derived(($door.rows[0]?.memberships ?? []).some((m) => ($needs.rows[0]?.roles ?? []).includes(m.role)));
   const roles = $derived(($needs.rows[0]?.roles ?? []).join(", "));
+  const editor = $derived(($door.rows[0]?.memberships ?? []).some((m) => ($tagNeeds.rows[0]?.roles ?? []).includes(m.role)));
+  const named = (h) => versions.find((v) => v.hash === h)?.label ?? short(h);
   const short = (h) => (h ?? "").slice(0, 8);
   const when = (t) => (t ? new Date(t * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "");
   const kept = (v) => v.name != null && v.name !== app;
@@ -163,12 +197,14 @@
       {#each versions as v (v.hash)}
         {@const ans = answers[v.hash] ?? {}}
         <div class="tr" class:flash={added.has(v.hash)} data-id={v.hash} data-live={v.hash === cur} data-matches={$stamped.rows.some((c) => c.contract === v.contract)}>
-          <span class="hash" data-field="version" title={v.hash}>{short(v.hash)}</span>
+          <span class="ver"><span class="hash" data-field="version" title={v.hash}>{short(v.hash)}</span>{#if v.label}<b class="label" data-field="label">{v.label}</b>{/if}{#each v.tags ?? [] as tg (tg)}<span class="pill tag" data-tag={tg}>{tg}</span>{/each}</span>
           <span data-field="name">{v.name ?? "the app"}{#if kept(v)}<span class="pill" data-field="kept" title="a bundle kept by name: never the app">kept</span>{/if}</span>
           <span class="who">{#if v.authored}<span class="pill" data-field="authored">authored</span> by <b>{v.pushed_by}</b> in the studio{:else}pushed by <b>{v.pushed_by}</b>{/if}</span>
           <span class="muted" data-field="pushed" title={v.commit ?? ""}>{when(v.pushed_at)}{v.commit ? ` · ${v.commit}` : ""}</span>
           <span>{#if v.hash === cur}<span class="pill live">live</span>{/if}</span>
           <span class="acts">
+            <button class="btn" data-action="ui.tag" disabled={!editor} title={editor ? "name and tag it" : "an editor's"}
+                    onclick={() => (tagging = tagging?.hash === v.hash ? null : { hash: v.hash, label: v.label ?? "", tags: (v.tags ?? []).join(", ") })}>tag</button>
             <button class="btn" data-action="ui.preview" disabled={!admin || v.hash === cur} onclick={() => preview(v)}>preview</button>
             <button class="btn" data-action="ui.rollback" disabled={!admin || v.hash === cur || kept(v)}
                     title={v.hash === cur ? "already live" : !admin ? "the admin's" : kept(v) ? "a bundle kept by name is never the app" : "make it live"}
@@ -178,6 +214,14 @@
             <div class="ans"><span class="q">make <b class="hash">{short(v.hash)}</b> live? every open page swaps to it.</span>
               <button class="btn primary" data-action="ui.rollback" data-confirm="" onclick={() => rollback(v)}>roll back</button>
               <button class="btn" data-cancel="" onclick={() => (confirm = null)}>keep {short(cur)}</button></div>
+          {/if}
+          {#if tagging?.hash === v.hash}
+            <form class="ans" data-tag-editor={v.hash} onsubmit={(e) => { e.preventDefault(); saveTag(v); }}>
+              <input class="in" placeholder="a label: the loud chip" aria-label="label" bind:value={tagging.label} data-tag-label="" />
+              <input class="in" placeholder="tags: demo, chip" aria-label="tags" bind:value={tagging.tags} data-tag-tags="" />
+              <button class="btn primary" data-action="ui.tag" data-save="">save</button>
+              <button class="btn" type="button" data-cancel="" onclick={() => (tagging = null)}>cancel</button>
+            </form>
           {/if}
           {#if ans.asked}<div class="ans" data-field="answer"><span class="muted">rollback to {short(v.hash)} asked…</span></div>{/if}
           {#if ans.live}<div class="ans" data-field="answer"><span class="landed" data-answer="rolled_back">live {short(ans.was)} → {short(ans.live)} · open pages heard <code>live</code></span></div>{/if}
@@ -197,6 +241,17 @@
         <div class="st"><span>tickets</span><span class="hash" data-field="contract">{#if $stamped.status === "pending"}<span data-loading="">0000000000000000</span>{:else}{$stamped.rows[0]?.contract ?? ""}{/if}</span><span class="src">what a deploy stamps</span></div>
         <div class="st"><span>every service</span><span class="hash">{#if $reached.status === "pending"}<span data-loading="">0000000000000000</span>{:else}{$reached.rows[0]?.contract ?? ""}{/if}</span><span class="src">the services the app names</span></div>
         {#if $stamped.status === "error" || $stamped.status === "refused"}<p class="pad" data-refused="">refused: {$stamped.message}</p>{/if}
+      </section>
+      <section class="panel" data-method="ui.history" data-field="history">
+        <h2>history <span class="m">
+          <button class="btn" data-action="ui.undo" disabled={!undoable?.may} title={stepTitle(undoable, "undo")} onclick={() => step("undo")}>undo</button>
+          <button class="btn" data-action="ui.redo" disabled={!redoable?.may} title={stepTitle(redoable, "redo")} onclick={() => step("redo")}>redo</button></span></h2>
+        {#if stepped?.live}<p class="pad" data-answer={stepped.which}><span class="landed">ui.{stepped.which}: live {short(stepped.was)} → {stepped.label ?? short(stepped.live)} · open pages heard <code>live</code></span></p>{/if}
+        {#if stepped?.refused}<p class="pad" data-refused="">refused: {stepped.refused}</p>{/if}
+        {#each moves ?? [] as m (m.seq)}
+          <div class="st four" data-move={m.seq} data-how={m.how} data-undo={m.undo} data-redo={m.redo}><span class="hash">{m.label ?? short(m.version)}</span><span class="muted">{m.how}</span><span class="muted">{m.from ? `from ${named(m.from)}` : "first"}</span><span class="src">{when(m.at)}</span></div>
+        {/each}
+        {#if moves != null && moves.length === 0}<p class="empty" data-empty="">No move of the pointer is kept.</p>{/if}
       </section>
       <section class="panel" data-method="ui.routes.list" data-field="routes">
         <h2>routes <span class="m">{routes.rows.length}</span></h2>
@@ -227,7 +282,7 @@
   .rv { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 20px; align-items: start; }
   .panel { overflow: hidden; background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius-lg); }
   .side .panel { margin-bottom: 14px; }
-  .th, .tr { display: grid; grid-template-columns: 96px minmax(80px, .8fr) minmax(0, 1.6fr) minmax(0, 1fr) 52px 168px; gap: 0 10px; align-items: center; padding: 0 10px; }
+  .th, .tr { display: grid; grid-template-columns: minmax(96px, 1.2fr) minmax(80px, .8fr) minmax(0, 1.6fr) minmax(0, 1fr) 52px 216px; gap: 0 10px; align-items: center; padding: 0 10px; }
   .th { padding-top: 6px; padding-bottom: 6px; font-size: 11px; font-weight: var(--weight-medium); color: var(--muted); border-bottom: var(--border) solid var(--line); }
   .tr { min-height: 34px; border-bottom: var(--border) solid var(--line); transition: background-color var(--motion-fast) var(--ease); }
   .tr:last-child { border-bottom: 0; }
@@ -235,6 +290,10 @@
   .tr[data-live=true] { background: var(--sel); box-shadow: inset 3px 0 0 var(--accent); }
   .tr > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .hash { color: var(--accent); font-variant-numeric: tabular-nums; }
+  .ver { display: inline-flex; gap: 6px; align-items: baseline; min-width: 0; }
+  .label { font-weight: var(--weight-medium); color: var(--ink); overflow: hidden; text-overflow: ellipsis; }
+  .pill.tag { margin: 0; }
+  .in { padding: 3px 8px; font-size: 12px; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); }
   .who { color: var(--muted); }
   .who b { color: var(--ink); font-weight: var(--weight-medium); }
   .muted { color: var(--muted); }
