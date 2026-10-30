@@ -12,7 +12,9 @@
 //   nav-facets (#/facets/:filter)  `[data-surface=nav-facets]`, chips `[data-facet=<field>][data-value=<v>]`
 //       with `[data-held]`, `[data-selected]` when the filter holds the chip's `data-rule`
 //   nav-counts (#/counts/:filter)  `[data-surface=nav-counts] [data-field=count]`, `[data-refused]`
-//   filter-line (the board's top bar)  `input[data-filter-input]`, `[data-filter-check=ok|refused]`
+//   filters-saved, nav-facets, nav-counts are svelte/1 (owner, 2026-10-30); the marks are the profile's own business
+//   filter-line (the top bar; filter-line.rhx on the rhx board at #/, filter-line-sv on the Svelte one at #/sv/)
+//       `input[data-filter-input]`, `[data-filter-check=ok|refused]`
 //       (`[data-refused]`), saved names offered as `[data-complete=<name>]`
 export default async (ctx) => {
   const { test, assert, eventually, openPage, marked, sameDocument, sy, summaries } = ctx;
@@ -152,57 +154,64 @@ export default async (ctx) => {
     }
     // The filter line: checked on each pause, saved names completed, Escape clears.
     sy("tickets", "filters", "save", "--name", "S6 spikes", "--filter", "kind spike");
-    {
-      const { page, context } = await openPage("");
-      try {
-        const input = () => page.locator("input[data-filter-input]");
-        const check = page.locator("[data-surface=filter-line] [data-filter-check]");
-        await input().fill("k");
-        await page.waitForTimeout(120);
-        assert((await page.locator('[data-surface=filter-line] [data-filter-check=refused]').count()) === 0, "the first key waits its pause too: no one-letter refusal flashes");
-        await input().fill(bad);
-        await eventually("the filter line says the refusal's words", async () => (await check.getAttribute("data-filter-check", { timeout: 500 })) === "refused" && trimmed(await check.textContent()) === said, 3000);
-        assert((await check.getAttribute("data-refused")) !== null, "marked [data-refused]");
-        await input().fill("kind spike");
-        await eventually("ok, and how many", async () => (await check.getAttribute("data-filter-check", { timeout: 500 })) === "ok" && trimmed(await check.locator("[data-field=count]").textContent()) === String(good.count), 3000);
-        await input().fill('kind build or saved "S6 sp');
-        const offer = page.locator('[data-surface=filter-line] [data-complete="S6 spikes"]');
-        await eventually("an open saved \"… offers the saved names", async () => (await offer.count()) === 1, 3000);
-        await offer.click();
-        assert((await hash(page)) === "" || (await hash(page)) === "#/", "a click on a completion applies nothing (Enter applies, a blur does not)");
-        await eventually("the name completes the line", async () => (await input().inputValue()) === 'kind build or saved "S6 spikes"', 3000);
-        // The rhx line draws the field again to set its text (the engine sets `value` as an
-        // attribute) and cannot focus it: `autofocus` on a later-inserted field is the
-        // browser's to ignore, and it does, now and then — FRAME-39's gap.
-        const focused = await page.evaluate(() => document.activeElement?.matches("input[data-filter-input]") ?? false);
-        console.log(`     the rhx field after a completion: ${focused ? "focused" : "not focused (FRAME-39: the engine cannot focus)"}`);
-        await eventually("and the completed line checks ok", async () => (await check.getAttribute("data-filter-check", { timeout: 500 })) === "ok", 3000);
-        await input().press("Escape");
-        await eventually("Escape clears the line", async () => (await input().inputValue()) === "" && (await check.count()) === 0, 3000);
-        assert((await hash(page)) === "" || (await hash(page)) === "#/", "nothing applied, no route moved");
-      } finally {
-        await context.close();
+    // On both boards: the rhx line (filter-line.rhx) and the Svelte one (filter-line-sv, board-layout-sv's).
+    for (const L of [
+      { name: "rhx", route: "", f: "#/f/", home: ["", "#/"], focuses: false },
+      { name: "sv", route: "#/sv/", f: "#/sv/f/", home: ["#/sv/", "#/sv/"], focuses: true },
+    ]) {
+      {
+        const { page, context } = await openPage(L.route);
+        try {
+          const input = () => page.locator("input[data-filter-input]");
+          const check = page.locator("[data-surface=filter-line] [data-filter-check]");
+          await input().fill("k");
+          await page.waitForTimeout(120);
+          assert((await page.locator('[data-surface=filter-line] [data-filter-check=refused]').count()) === 0, "the first key waits its pause too: no one-letter refusal flashes");
+          await input().fill(bad);
+          await eventually(`${L.name}: the filter line says the refusal's words`, async () => (await check.getAttribute("data-filter-check", { timeout: 500 })) === "refused" && trimmed(await check.textContent()) === said, 3000);
+          assert((await check.getAttribute("data-refused")) !== null, "marked [data-refused]");
+          await input().fill("kind spike");
+          await eventually("ok, and how many", async () => (await check.getAttribute("data-filter-check", { timeout: 500 })) === "ok" && trimmed(await check.locator("[data-field=count]").textContent()) === String(good.count), 3000);
+          await input().fill('kind build or saved "S6 sp');
+          const offer = page.locator('[data-surface=filter-line] [data-complete="S6 spikes"]');
+          await eventually("an open saved \"… offers the saved names", async () => (await offer.count()) === 1, 3000);
+          await offer.click();
+          assert(L.home.includes(await hash(page)), `${L.name}: a click on a completion applies nothing (Enter applies, a blur does not)`);
+          await eventually("the name completes the line", async () => (await input().inputValue()) === 'kind build or saved "S6 spikes"', 3000);
+          // The rhx line draws the field again to set its text (the engine sets `value` as an
+          // attribute) and cannot focus it: `autofocus` on a later-inserted field is the
+          // browser's to ignore, and it does, now and then — FRAME-39's gap. The Svelte line
+          // binds the value and keeps the focus.
+          const focused = await page.evaluate(() => document.activeElement?.matches("input[data-filter-input]") ?? false);
+          if (L.focuses) assert(focused, `${L.name}: the field keeps the focus after a completion`);
+          else console.log(`     the ${L.name} field after a completion: ${focused ? "focused" : "not focused (FRAME-39: the engine cannot focus)"}`);
+          await eventually("and the completed line checks ok", async () => (await check.getAttribute("data-filter-check", { timeout: 500 })) === "ok", 3000);
+          await input().press("Escape");
+          await eventually("Escape clears the line", async () => (await input().inputValue()) === "" && (await check.count()) === 0, 3000);
+          assert(L.home.includes(await hash(page)), `${L.name}: nothing applied, no route moved`);
+        } finally {
+          await context.close();
+        }
       }
-    }
-    {
-      const { page, context } = await openPage("#/f/kind%20spike");
-      try {
-        const input = page.locator("input[data-filter-input]");
-        await eventually("the applied filter is on the line", async () => (await input.inputValue({ timeout: 500 })) === "kind spike", 5000);
-        await input.press("Escape");
-        await eventually("Escape on an applied filter clears the route too", async () => (await hash(page)) === "#/" && (await page.locator("input[data-filter-input]").inputValue()) === "", 3000);
-      } finally {
-        await context.close();
+      {
+        const { page, context } = await openPage(`${L.f}kind%20spike`);
+        try {
+          const input = page.locator("input[data-filter-input]");
+          await eventually("the applied filter is on the line", async () => (await input.inputValue({ timeout: 500 })) === "kind spike", 5000);
+          await input.press("Escape");
+          await eventually("Escape on an applied filter clears the route too", async () => (await hash(page)) === L.home[1] && (await page.locator("input[data-filter-input]").inputValue()) === "", 3000);
+        } finally {
+          await context.close();
+        }
       }
     }
   });
 
-  // FRAME-37: a write's own in-band refusal, drawn from its answer fold
-  // (`call(method, params, "fold")`). The cycle is one filters.check cannot
-  // see — `saved "S6 cyc-b"` reads fine alone — and filters.save refuses.
-  const FRAME_37 = false; // turned on at the merge, with the folds' third argument
-  if (!FRAME_37) console.log("skip a_refused_write_is_said_beside_it: waits on FRAME-37");
-  else await test("a_refused_write_is_said_beside_it", async () => {
+  // A write's own in-band refusal, beside it: filters-saved awaits its
+  // `bus.call` (FRAME-37's `{ ok, events, message }`, or today's events with
+  // their `error`). The cycle is one filters.check cannot see — `saved "S6
+  // cyc-b"` reads fine alone — and filters.save refuses.
+  await test("a_refused_write_is_said_beside_it", async () => {
     sy("tickets", "filters", "save", "--name", "S6 cyc-a", "--filter", "kind build");
     sy("tickets", "filters", "save", "--name", "S6 cyc-b", "--filter", 'saved "S6 cyc-a"');
     const refusal = one(sy("tickets", "filters", "save", "--name", "S6 cyc-a", "--filter", 'saved "S6 cyc-b"'), "error")?.message;
