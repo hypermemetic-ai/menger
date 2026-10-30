@@ -22,5 +22,11 @@
   "#/blockers/:id": "work-blockers",
   "#/search": "search-page",
   "#/search/:q": "search-page",
-  "#/search/:q/f/:filter": "search-page"
+  "#/search/:q/f/:filter": "search-page",
+  "#/edit/:id": "ticket-edit",
+  "#/actions/:id": "ticket-actions",
+  "#/epics": "epics-page",
+  "#/orgs": "orgs-list",
+  "#/me": "me-page",
+  "#/releases": "ui-versions"
 }
