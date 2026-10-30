@@ -180,7 +180,7 @@ where it has one (a list in it is `;`-separated).
 
 | group | flags |
 |---|---|
-| run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path`, `--ui-signer`, `--ui-compiler`, `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell` |
+| run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path`, `--ui-signer`, `--ui-compiler`, `--ui-author-key`, `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell` |
 | sign-in | `--auth-provider`, `--admin`, `--public-url`, `--login-button`, `--login-email`, `--login-password`, `--login-forgot`, `--identity`, `--workos-api-key-file`, `--allowed-origin`, `--frame-ancestor` (an origin that may frame the shell's pages; none by default), `--live-origin` (an origin the shell's pages may frame), `--allowed-host`, `--trusted-proxy`, `--return-origin`, `--session-hours` (12), `--session-idle-minutes` (120) |
 | maintenance and testing | `--dev-login`, `--dev-password`, `--dev-idp-ws`, `--dev-user` (all `--env test` only), `--verify-derived`, `--seed-synthetic`, `--seed-value`, `--seed-shape` (`flat`, `nested`), `--seed-into-existing` |
 | limits | `--max-body-bytes` (8 MiB), `--max-calls-per-connection` (256), `--idle-timeout-secs` (900), `--max-connections` (1,024), `--max-connections-per-ip` (256), `--max-connections-per-principal` (64), `--max-anonymous-connections` (128), `--max-anonymous-connections-per-ip` (32) |
@@ -689,7 +689,7 @@ against a tenant that is not menger (`../plexus-ui/service/tests`); menger's
 
 - **Its file** is `ui.db` (`--ui-db-path`, `MENGER_UI_DB_PATH`; default
   beside the tickets file, never the same file): `ui_versions`,
-  `ui_pointer`, `ui_preview`, `ui_slots`.
+  `ui_pointer`, `ui_preview`, `ui_slots`, `ui_routes`.
 - **`push`** takes the bundle (a tar, base64, at most 16 MiB), its manifest
   and a signature: Ed25519 over the bundle's sha256 by a key named with
   `--ui-signer` (`MENGER_UI_SIGNERS`, `;`-separated 64-hex public keys; none:
@@ -716,12 +716,25 @@ against a tenant that is not menger (`../plexus-ui/service/tests`); menger's
   `dist/ui-compiler.wasm`), run in wasmtime with nothing linked, under fuel
   and a memory limit; a module that imports anything is refused at start.
   Without it a push stores the trees as given and says `compiled: false`.
+- **Routes as data** (STUDIO-3): `ui routes list | set | clear` — a hash
+  pattern (`#/two`, `#/ticket/:id`) → a component of the live version, over
+  the manifest's `routes` as `ui slots` is over its `slots`; said on `watch`
+  as `route_changed`, stamped into the page as `<meta name="plexus-routes">`
+  and merged by the engine's router.
+- **`author`** (STUDIO-3): an editor's rhx sources (`--components
+  '[{"name":…,"source":…}]'`) compiled here, added to the live bundle, signed
+  by the ui service's author key — `--ui-author-key` (`MENGER_UI_AUTHOR_KEY`,
+  a seed file made at first start, 0600; the image's
+  `/data/ui-author.key`; none: `no_signer`) — and pushed through the push's
+  own steps; it answers `authored { version, base, components, live, new,
+  contract_matches, signer, signature }`. rhx only: Svelte is the tool's build.
 - **`rollback --to <hash>`** moves the pointer to a kept version;
   **`preview`** serves one to the caller's own sessions; **`versions`**
-  lists them; **`watch`** says `live` on each move and `slot_changed` on each
-  section change, held to its caller by the gate: `watch_closed { reason }`
+  lists them; **`watch`** says `live` on each move, `slot_changed` on each
+  section change and `route_changed` on each route's, held to its caller by the gate: `watch_closed { reason }`
   (`signed_out`, `expired`, `revoked`, `refused`) when it no longer stands.
-- **Who may**: viewers and editors `versions`, `watch`, `slots list`; a
+- **Who may**: viewers and editors `versions`, `watch`, `slots list`,
+  `routes list`; editors `routes set`, `routes clear`, `author`; a
   `deployer` `push` (V2-7: a deploy pushes as the pipeline key); `rollback`,
   `preview`, `slots set`, `slots clear` are the admin's.
 - **Signing and pushing** a bundle: `plexus-ui sign KEYFILE TAR` prints the

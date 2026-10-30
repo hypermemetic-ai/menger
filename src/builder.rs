@@ -62,6 +62,9 @@ pub struct UiSetup {
     /// UI-7: the compiler module (`--ui-compiler`) every push compiles its
     /// sources in; none: the trees are stored as given (`compiled: false`).
     pub compiler: Option<Compiler>,
+    /// STUDIO-3: the key `ui.author` signs an editor's version with
+    /// (`--ui-author-key`); none: every author refused `no_signer`.
+    pub author: Option<plexus_ui_service::AuthorKey>,
 }
 
 impl UiSetup {
@@ -75,12 +78,18 @@ impl UiSetup {
         }
         let store = UiStore::open(path).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
         tracing::info!("ui:        {}", path.display());
-        Ok(Self { store: Arc::new(store), signers, compiler: None })
+        Ok(Self { store: Arc::new(store), signers, compiler: None, author: None })
     }
 
     /// UI-7: pushes compile in `compiler` (`--ui-compiler`).
     pub fn compiling(mut self, compiler: Option<Compiler>) -> Self {
         self.compiler = compiler;
+        self
+    }
+
+    /// STUDIO-3: `ui.author` signs with `key` (`--ui-author-key`).
+    pub fn authoring(mut self, key: Option<plexus_ui_service::AuthorKey>) -> Self {
+        self.author = key;
         self
     }
 
@@ -309,7 +318,7 @@ where
     // UI-7: and its pushes compiled in `--ui-compiler`'s module.
     // FRAME-5: the framework's, its caller the gate's (no access layer of
     // menger's in it).
-    let ui = UiActivation::new(ui.store, ui.signers).compiling(ui.compiler);
+    let ui = UiActivation::new(ui.store, ui.signers).compiling(ui.compiler).authoring(ui.author);
     // FRAME-5: the gate's grants generation moves with the store's count, so
     // a watch held by the gate (`ui.watch`) hears `members.*` too.
     let generation = grants_generation(&store);

@@ -10,7 +10,10 @@
 # its file in the data volume (--ui-db-path: MENGER_UI_DB_PATH, else ui.db
 # beside the database), each key of MENGER_UI_SIGNERS (`;`-separated, 64 hex
 # each: the pipeline's for app-test) as a --ui-signer, and the compiler
-# module as --ui-compiler when the release holds one (UI-5). A release before
+# module as --ui-compiler when the release holds one (UI-5); STUDIO-3: the
+# ui service's author key (--ui-author-key: MENGER_UI_AUTHOR_KEY, else
+# ui-author.key beside the database, made at first start, 0600), which signs
+# what an editor authors in the studio (ui.author). A release before
 # v2 (app/index.html) is started as it always was.
 set -eu
 here=$(dirname "$(readlink -f "$0")")
@@ -24,5 +27,6 @@ if [ -f "$here/../dist/ui.tar" ]; then
   for k in $keys; do [ -n "$k" ] && set -- "$@" --ui-signer "$k"; done
   IFS=$old_ifs
   [ -f "$here/../dist/ui-compiler.wasm" ] && set -- "$@" --ui-compiler "$here/../dist/ui-compiler.wasm"
+  set -- "$@" --ui-author-key "${MENGER_UI_AUTHOR_KEY:-$(dirname "$db")/ui-author.key}"
 fi
 exec "$here/menger" "$@"
