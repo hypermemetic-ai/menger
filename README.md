@@ -643,7 +643,7 @@ scope; every read answers under the caller's filter **and** its scopes.
 
 | role | may |
 |---|---|
-| `viewer` | read under the scope: `tickets`' reads and its children's, `orgs.list`, `epics`' own settings, `ui.versions`, `ui.watch`, `ui.slots.list` |
+| `viewer` | read under the scope: `tickets`' reads and its children's, `orgs.list`, `epics`' own settings, `ui.versions`, `ui.watch`, `ui.slots.list`, `ui.history` |
 | `editor` | also create and change tickets: `tickets`' writes, `commits`, saved filters, `revisions restore`, `subtasks create` |
 | `admin` | every grant: `tickets.delete`, `undelete`, `freeze`, `unfreeze`, `members.*`, `orgs.create`, `auth.role_set`, `auth.grant`, `ui.rollback`, `ui.preview`, `ui.slots.set`, `ui.slots.clear`, and the undo of a push or a rollback (FRAME-52), … |
 | `deployer` | `ui.push` alone — a CI's key (V2-7: the pipeline key) |
@@ -766,7 +766,12 @@ against a tenant that is not menger (`../plexus-ui/service/tests`); menger's
   label, how, by, at, from }`, `how` push, author, rollback, undo or redo;
   **`undo`** moves the pointer back to where the last move found it,
   **`redo`** forward again (a new move ends the redo), each answering `live
-  { version, label, undone }`. An editor undoes an `author`, anyone's;
+  { version, label, undone }`; `--seq` names the move the caller saw marked,
+  refused `not_the_top` once it is not (two undos at once undo one move).
+  `history` always lists the marked rows, with `may` for whether the caller
+  may reverse them; the store keeps the last 1000 moves. `tag --label ""`
+  clears a label, and a moved label is said (`tagged`) for the version it
+  left too. An editor undoes an `author`, anyone's;
   undoing a `push` or a `rollback` is a rollback, the admin's. The studio's
   Undo and Redo and the releases page call these, so an undo survives a
   reload and an agent's reaches every page.

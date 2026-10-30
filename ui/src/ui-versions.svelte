@@ -14,7 +14,9 @@
      row says its label and tags, and an editor (`auth.requires` for
      `ui.tag`) names and tags it in the row (`ui.tag`); beside it the
      pointer's history (`ui.history`, read again on every move) with undo and
-     redo (`ui.undo`, `ui.redo`), the service's rule said on a refusal. -->
+     redo (`ui.undo`, `ui.redo`, by the seq shown), the service's rule said on a refusal
+     and on a disabled button (FRAME-52b: `may`, "the admin's"); a tag made
+     elsewhere folded in from the watch's `tagged`. -->
 <script module>
   export const uses = ["ui.versions", "ui.watch", "ui.contract", "ui.routes.list", "ui.slots.list", "ui.rollback", "ui.preview",
                        "ui.tag", "ui.history", "ui.undo", "ui.redo", "auth.whoami", "auth.requires"];
@@ -52,80 +54,32 @@
   const routes = live({ snapshot: "ui.routes.list", params: {}, changes: "ui.watch", key: "pattern", on: { route_changed: "upsert:." } });
   const slots = live({ snapshot: "ui.slots.list", params: {}, key: "slot", on: {} });
 
-  // The live pointer is its own state. `ui.watch`'s `live { version }` names
-  // a hash and no row, and a collection hears a row only when it moves, so
-  // the moves are heard twice over: a generation — every version, keyed by hash,
-  // its `live` folded as `remove:version` — loses the version that went live
-  // (a rollback, a push of bytes kept before), and `firsts` — keyed by
-  // `version`, `upsert:.` — gains a version going live for the first time (a
-  // push). Either sets the pointer and reads the list again: a new generation
-  // (another generation's spec, so another collection, asked anew) whose
-  // snapshot is the list with its `live` mark — so a move back to a version
-  // already moved to is heard as well as the first. FRAME-40's refetch rule
-  // will make this one spec.
+  // FRAME-52b: the live pointer is its own state, moved by the watch's
+  // `live { version, seq }` alone — every move of the pointer is a row of
+  // its own by its `seq` (a move back to a version heard before too), so one
+  // collection keyed by `seq` hears each (SURFACE-9's two listeners went).
+  // Each move sets the pointer, reads the history once, and the list again
+  // only when it names a version the list does not hold (a push).
   let list = $state(null);
   let pointer = $state(null);
   let added = $state(new Set());
-  // The generation now: its handle, its number, and the hashes its snapshot held.
-  let watcher = $state.raw(null);
-  // A generation's name is this instance's own: the host keeps a collection a
-  // few seconds past its last reader, and a remount (a swap) must not be
-  // handed the old instance's generation with its moves folded out.
-  const me = Math.random().toString(36).slice(2, 10);
-  function generation(n) {
-    const h = b.live({ snapshot: "ui.versions", params: {}, changes: "ui.watch", key: "hash",
-                       on: { live: "remove:version", [`generation_${me}_${n}`]: "remove:none" } });
-    watcher = { n, h, base: null };
+  async function readVersions() {
+    const a = await answer(b.call("ui.versions", {}));
+    if (!a.ok) return;
+    const rows = a.events.filter((e) => e?.type === "version");
+    const before = new Set((list ?? []).map((v) => v.hash));
+    added = new Set(list == null ? [] : rows.filter((r) => !before.has(r.hash)).map((r) => r.hash));
+    list = rows;
+    pointer = rows.find((r) => r.live)?.hash ?? null;
   }
-  generation(1);
-  // Read in an effect (the face subscribes while it reads, and lets the old
-  // generation go when the effect moves on to the next one).
-  $effect(() => {
-    const w = watcher;
-    if (!w) return;
-    const status = w.h.status;
-    const rows = w.h.rows;
-    untrack(() => {
-      if (status !== "live") return;
-      if (w.base == null) {
-        const before = new Set((list ?? []).map((v) => v.hash));
-        w.base = rows.map((r) => r.hash);
-        added = new Set(list == null ? [] : w.base.filter((x) => !before.has(x)));
-        list = rows;
-        pointer = rows.find((r) => r.live)?.hash ?? null;
-        return;
-      }
-      const gone = w.base.filter((x) => !rows.some((r) => r.hash === x));
-      if (gone.length) moved(gone[gone.length - 1]);
-    });
-  });
-  const firsts = live({ snapshot: "ui.versions", params: {}, changes: "ui.watch", key: "version", on: { live: "upsert:." } });
-  // Each version heard going live for the first time (the watch says the
-  // pointer as it opens, too); what the collection held at the first read
-  // was heard before this instance.
-  let firstSeen = null;
-  $effect(() => {
-    const rows = firsts.rows;
-    untrack(() => {
-      if (firstSeen == null) { firstSeen = new Set(rows.map((r) => r.version)); return; }
-      const fresh = rows.filter((r) => !firstSeen.has(r.version));
-      for (const r of fresh) firstSeen.add(r.version);
-      if (fresh.length) moved(fresh[fresh.length - 1].version);
-    });
-  });
-  // One move heard twice in one flush (a version going live for the first
-  // time is both a first and a row gone) makes one generation: the second
-  // finds the pointer there and the generation not yet answered.
+  readVersions();
   function moved(version) {
-    readHistory();
-    if (version === pointer && watcher && watcher.base == null) return;
     pointer = version;
-    generation((watcher?.n ?? 0) + 1);
+    if (list != null && !list.some((v) => v.hash === version)) readVersions();
+    readHistory();
   }
 
-  // FRAME-52: the pointer's moves, newest first, read now and on every
-  // move; and every move said on the watch, a move back included (its
-  // `live` carries the move's `seq`: a row of its own).
+  // FRAME-52: the pointer's moves, newest first — read now and once a move.
   let moves = $state(null);
   async function readHistory() {
     const a = await answer(b.call("ui.history", { limit: 20 }));
@@ -139,21 +93,38 @@
     untrack(() => {
       const seqs = rows.map((r) => r.seq).filter((x) => x != null);
       if (stepSeen == null) { stepSeen = new Set(seqs); return; }
-      const fresh = rows.filter((r) => r.seq != null && !stepSeen.has(r.seq));
+      const fresh = rows.filter((r) => r.seq != null && !stepSeen.has(r.seq)).sort((x, y) => x.seq - y.seq);
       for (const r of fresh) stepSeen.add(r.seq);
       if (fresh.length) moved(fresh[fresh.length - 1].version);
     });
   });
+  // FRAME-52b: a tag made elsewhere (another session, an agent) — the
+  // watch's `tagged { version, label, tags }`, the latest per version,
+  // folded into the rows (a moved label is said for the version it left).
+  const tags = live({ snapshot: "ui.versions", params: {}, changes: "ui.watch", key: "version", on: { tagged: "upsert:." } });
+  $effect(() => {
+    const rows = tags.rows;
+    untrack(() => {
+      if (!rows.length || list == null) return;
+      const by = new Map(rows.filter((r) => typeof r.version === "string").map((r) => [r.version, r]));
+      list = list.map((v) => (by.has(v.hash) ? { ...v, label: by.get(v.hash).label ?? null, tags: by.get(v.hash).tags ?? [] } : v));
+    });
+  });
   const undoable = $derived((moves ?? []).find((m) => m.undo) ?? null);
   const redoable = $derived((moves ?? []).find((m) => m.redo) ?? null);
+  // FRAME-52b: off when this caller may not reverse it, saying whose it is.
+  const stepTitle = (m, which) => (!m ? `nothing to ${which}` : !m.may ? `the admin's: the last move is a ${m.how === "undo" ? "move" : m.how}, and its ${which} is a rollback` : which === "undo" ? `back to ${short(m.from)}: the ${m.how} by ${m.by}` : `forward to ${short(m.from)}`);
   let stepped = $state(null);
   async function step(which) {
     const was = cur;
+    // FRAME-52b: the move shown, by its seq — two undos at once undo one move.
+    const seq = (which === "redo" ? redoable : undoable)?.seq;
+    const params = seq != null ? { seq } : {};
     stepped = { asked: which };
-    const a = await answer(which === "redo" ? b.call("ui.redo", {}) : b.call("ui.undo", {}));
+    const a = await answer(which === "redo" ? b.call("ui.redo", params) : b.call("ui.undo", params));
     const l = a.events.find((e) => e?.type === "live");
     stepped = a.ok && l ? { which, was, live: l.version, label: l.label ?? null } : { which, refused: a.message };
-    if (a.ok && l) moved(l.version);
+    if (a.ok && l) pointer = l.version;
     else readHistory();
   }
 
@@ -273,8 +244,8 @@
       </section>
       <section class="panel" data-method="ui.history" data-field="history">
         <h2>history <span class="m">
-          <button class="btn" data-action="ui.undo" disabled={!editor || !undoable} title={undoable ? `back to ${short(undoable.from)}: the ${undoable.how} by ${undoable.by}` : "nothing to undo"} onclick={() => step("undo")}>undo</button>
-          <button class="btn" data-action="ui.redo" disabled={!editor || !redoable} title={redoable ? `forward to ${short(redoable.from)}` : "nothing to redo"} onclick={() => step("redo")}>redo</button></span></h2>
+          <button class="btn" data-action="ui.undo" disabled={!undoable?.may} title={stepTitle(undoable, "undo")} onclick={() => step("undo")}>undo</button>
+          <button class="btn" data-action="ui.redo" disabled={!redoable?.may} title={stepTitle(redoable, "redo")} onclick={() => step("redo")}>redo</button></span></h2>
         {#if stepped?.live}<p class="pad" data-answer={stepped.which}><span class="landed">ui.{stepped.which}: live {short(stepped.was)} → {stepped.label ?? short(stepped.live)} · open pages heard <code>live</code></span></p>{/if}
         {#if stepped?.refused}<p class="pad" data-refused="">refused: {stepped.refused}</p>{/if}
         {#each moves ?? [] as m (m.seq)}
