@@ -128,12 +128,15 @@ the owner's.
      scratch data directory, so the build holds no key material), under a
      scratch `HOME` and `XDG_RUNTIME_DIR`; synapse signs in with that key
      as `menger-local` and asks `ui contract --uses` the bundle's methods
-     (`--no-hold`, the list comma-separated), then the studio's, and the
+     (`--no-hold`, the list comma-separated), then the studio's — a studio
+     naming no service is never asked, and is built unstamped (`studio
+     contract: none` in the log) — and the
      binary is stopped and the scratch removed — always, a failed build
      too. A binary that exits, does not answer within
      `MENGER_CONTRACT_WAIT` seconds (60), or a `ui contract` that answers no
      hash, a refusal (`unknown_method`) or `null` (a bundle naming no
-     service) fails the build, named; the log says each hash and the
+     service: the app's) fails the build, named, as does a bundle whose
+     first build left no readable `manifest.json`; the log says each hash and the
      services it covers (`contract: H over epics, tickets`). A bundle naming
      the tickets service alone gets the hash `tickets.schema` answered;
    - `ui-build` — `plexus-ui build ui --engine dist/engine --contract HASH
@@ -143,8 +146,9 @@ the owner's.
      `index.html`; no socket asked;
    - `studio-build` (STUDIO-2) — the framework's studio,
      `plexus-ui build ../plexus-ui/studio --name studio --contract HASH`
-     with its own contract over its own uses, `dist/studio.tar`; a deploy
-     pushes it `--no-live`;
+     with its own contract over its own uses (over `ui` today), or with no
+     `--contract` when its components name no service, `dist/studio.tar`;
+     a deploy pushes it `--no-live`;
    - `ui-compiler-wasm` — the framework's `../plexus-ui/scripts/ui-compiler-wasm.sh
      dist/ui-compiler.wasm` (rustup's `wasm32-unknown-unknown`; FRAME-7):
      the compiler module. A release of v2 always carries it: no script, a

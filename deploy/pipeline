@@ -447,8 +447,11 @@ free_port() { # [NOT] → a port on loopback nothing listens on, far from every 
   done
   return 1
 }
-bundle_uses() { # TAR → every method its manifest's components use, once each, sorted, comma-separated
-  tar -xOf "$1" manifest.json 2>/dev/null | jq -r '[.components // {} | .[] | .uses // [] | .[]] | unique | join(",")' 2>/dev/null
+bundle_uses() { # TAR → every method its manifest's components use, once each, sorted, comma-separated ("" for none);
+  # 1 when the tar holds no manifest.json, or one that is no JSON — never read as a bundle naming nothing
+  local m
+  m=$(tar -xOf "$1" manifest.json 2>/dev/null) && [[ -n $m ]] || return 1
+  jq -er '[.components // {} | .[] | .uses // [] | .[]] | unique | join(",")' <<<"$m" 2>/dev/null
 }
 uses_services() { # USES (comma-separated) → the services they name, once each: "epics, tickets"
   jq -rR 'split(",") | map(select(. != "") | split(".")[0]) | unique | join(", ")' <<<"$1"
@@ -547,10 +550,10 @@ build_v2() { # V2-7, FRAME-8: every step on this machine — the release, the to
   step "ui-uses (plexus-ui build, unstamped: the methods the bundle's components use)"
   lr=$(log_path build-ui-uses); say "log: $lr"
   ui_bundle "$lr" "" || { red_run; die "ui-build failed — $lr"; }
-  app_uses=$(bundle_uses "$BUILD/dist/ui.tar")
+  app_uses=$(bundle_uses "$BUILD/dist/ui.tar") || { red_run; die "ui-uses: $BUILD/dist/ui.tar holds no readable manifest.json — $lr"; }
   if [[ $studio == 1 ]]; then
     studio_bundle "$lr" "" "$pu" || { red_run; die "studio-build failed — $lr"; }
-    studio_uses=$(bundle_uses "$BUILD/dist/studio.tar")
+    studio_uses=$(bundle_uses "$BUILD/dist/studio.tar") || { red_run; die "ui-uses: $BUILD/dist/studio.tar (the studio) holds no readable manifest.json — $lr"; }
   fi
   step "contract (ui.contract over the services the bundle names, of the menger just built)"
   lr=$(log_path build-contract); say "log: $lr"

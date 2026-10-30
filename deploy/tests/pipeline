@@ -983,6 +983,8 @@ case $cmd in
       comps=$(jq -c --arg n "$(basename "$f" .rhx)" --argjson u "$u" '. + {($n): {profile: "rhx/1", uses: $u}}' <<<"$comps"); done
     jq -n --arg c "$contract" --arg m "$commit" --arg n "$name" --argjson cs "$comps" '{abi: "engine/1"} + (if $n == "" then {} else {name: $n} end) + {contract: $c, commit: $m, routes: {}, slots: {}, components: $cs}' >"$st/manifest.json"
     mkdir -p "$(dirname "$out")"
+    # STUB_TOOL_BROKEN=app|studio: that bundle's manifest.json is no JSON (SURFACE-11: an unreadable manifest)
+    [[ -n ${STUB_TOOL_BROKEN:-} && $STUB_TOOL_BROKEN == "${name:-app}" ]] && echo 'not json' >"$st/manifest.json"
     tar --mtime=@0 --owner=0 --group=0 --numeric-owner --format=gnu -C "$st" -cf "$out" index.html manifest.json; rm -rf "$st"; echo "$out" ;;
   push)
     url="" as="" keyfile="" commit="" tar="" nolive=""
@@ -1398,6 +1400,27 @@ for how in fail refused; do
   none_made "$T10: the studio's contract read fails ($how)" "$n"
   [[ $(grep -c -- '--contract ' "$STUB_UI_TOOL_LOG") == 0 ]] && ok || bad "$T10: the studio's contract read fails ($how): a bundle stamped all the same"
   stopped "$T10: the studio's contract read fails ($how)"
+done
+# a studio naming no service: built unstamped, never asked, said
+cp "$B/plexus-ui/studio/src/s-page.rhx" "$B/s-page.rhx.away"; printf '<p>s</p>\n' >"$B/plexus-ui/studio/src/s-page.rhx"
+next_second; bb build --branch surface --no-gate
+[[ $code == 0 ]] && ok || bad "$T10: a studio naming no service: build exits 0, got $code: $(tail -n 3 <<<"$err")"
+NR=$(tail -n 1 "$SCRATCH/out")
+same "$T10: a studio naming no service: its manifest says unknown" "$(tar -xOf "$D5/releases/$NR/dist/studio.tar" manifest.json 2>/dev/null | jq -r .contract 2>/dev/null)" "unknown"
+same "$T10: a studio naming no service: the app still stamped over both" "$(contract_of "$NR")" "$BOTH"
+same "$T10: a studio naming no service: ui contract asked once, for the app" "$(grep -c 'menger ui contract' "$STUB_BUILD_SYNAPSE")" 1
+same "$T10: a studio naming no service: no studio build stamped" "$(grep -- '--name studio' "$STUB_UI_TOOL_LOG" | grep -c -- '--contract ')" 0
+has "$T10: a studio naming no service: said" "$err" "studio contract: none"
+mv "$B/s-page.rhx.away" "$B/plexus-ui/studio/src/s-page.rhx"
+# a bundle whose manifest cannot be read: the build fails, naming it, never "names no service" nor a studio shipped unstamped
+for which in app studio; do
+  n=$(ls "$D5/releases" | wc -l)
+  next_second; STUB_TOOL_BROKEN=$which bb build --branch surface --no-gate
+  same "$T10: the $which's manifest unreadable: exits 1" "$code" 1
+  has "$T10: the $which's manifest unreadable: said" "$err" "no readable manifest.json"
+  [[ $err != *"names no service"* ]] && ok || bad "$T10: the $which's manifest unreadable: said as naming no service: $err"
+  none_made "$T10: the $which's manifest unreadable" "$n"
+  same "$T10: the $which's manifest unreadable: nothing started" "$(grep -c . "$STUB_MENGER_RAN")" 0
 done
 
 # ── V2-7 the_image_carries_the_bundle_and_the_flags ────────────────────────
