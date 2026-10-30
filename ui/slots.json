@@ -17,5 +17,49 @@
     "main": "board-rows-sv",
     "bulk": "bulk-bar",
     "palette": "jump-palette-sv"
+  },
+  "page-ticket": {
+    "top": "app-top",
+    "palette": "jump-palette-sv"
+  },
+  "page-new": {
+    "top": "app-top",
+    "palette": "jump-palette-sv"
+  },
+  "page-search": {
+    "top": "app-top",
+    "palette": "jump-palette-sv"
+  },
+  "page-ready": {
+    "top": "app-top",
+    "palette": "jump-palette-sv"
+  },
+  "page-waves": {
+    "top": "app-top",
+    "palette": "jump-palette-sv"
+  },
+  "page-filters": {
+    "top": "app-top",
+    "palette": "jump-palette-sv"
+  },
+  "page-epics": {
+    "top": "app-top",
+    "palette": "jump-palette-sv"
+  },
+  "page-orgs": {
+    "top": "app-top",
+    "palette": "jump-palette-sv"
+  },
+  "page-me": {
+    "top": "app-top",
+    "palette": "jump-palette-sv"
+  },
+  "page-releases": {
+    "top": "app-top",
+    "palette": "jump-palette-sv"
+  },
+  "page-sheet": {
+    "top": "app-top",
+    "palette": "jump-palette-sv"
   }
 }

@@ -7,7 +7,8 @@
      sibling `ticket-picker`s, each drawn as a `ticket-chip`. Create (or
      ctrl+enter, a key the host takes: FRAME-36) awaits `tickets.create`'s
      answer — `created { ticket }` goes to the ticket (its address, for one
-     born outside the genesis epic), a refusal is said under the form. -->
+     born outside the genesis epic), a refusal is said under the form.
+     STUDIO-12: the board link and the title are page-new's (rhx). -->
 <script module>
   export const uses = ["epics.list", "epics.current", "tickets.get", "tickets.create"];
 
@@ -91,8 +92,6 @@
 </script>
 
 <section class="create" data-surface="ticket-create" data-form="tickets.create">
-  <nav class="crumbs"><a href="#/" data-back>← board</a></nav>
-  <h1 class="create-head">New ticket</h1>
   <div class="grid">
     <label class="f"><span class="l">epic</span>
       <select data-field="epic" value={chosen} onchange={(ev) => (epic = ev.currentTarget.value)}>
@@ -157,11 +156,6 @@
 
 <style>
   .create { display: block; max-width: 760px; margin: 0 auto; padding: 16px 20px 40px; color: var(--ink); font-family: var(--font-text); font-size: var(--text-size); }
-  .crumbs { margin-bottom: 12px; font-size: 12px; }
-  .crumbs a { color: var(--muted); text-decoration: none; border-radius: var(--radius-sm); }
-  .crumbs a:hover, .crumbs a:global([data-sheet~=hover]) { color: var(--accent); }
-  .crumbs a:focus-visible, .crumbs a:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
-  .create-head { margin: 0 0 14px; font-family: var(--font-display); font-size: 22px; font-weight: var(--weight-strong); }
   .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
   @media (max-width: 720px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   .f { display: flex; flex-direction: column; gap: 4px; min-width: 0; margin-bottom: 12px; }

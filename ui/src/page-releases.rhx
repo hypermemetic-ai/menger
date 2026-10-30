@@ -1,0 +1,20 @@
+<script>
+  // STUDIO-12: the releases page — an rhx page the studio edits, placing its
+  // svelte/1 component by its mark, the app's top in its `top` section and the palette in its
+  // `palette` section (app-top's jump button and ctrl+k open it)
+  // (app-top by ui/slots.json). #/releases: ui-versions.
+</script>
+
+<section class="page page-releases">
+  <slot name="top" here="releases"/>
+  <header class="page-title"><h1>releases</h1></header>
+  <ui-versions/>
+  <slot name="palette"/>
+</section>
+
+<style>
+  :scope { display: block; }
+  .page-releases { min-height: 100vh; min-height: 100dvh; color: var(--ink); background: var(--bg); font-family: var(--font-text); font-size: var(--text-size); }
+  .page-title { max-width: 1340px; margin: 0 auto; padding: 16px 24px 0; }
+  .page-title h1 { margin: 0; font-family: var(--font-display); font-size: 20px; font-weight: var(--weight-strong); color: var(--ink); }
+</style>

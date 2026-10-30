@@ -162,7 +162,8 @@ export default async (ctx) => {
     try {
       const edit = await opened(page);
       const form = edit.locator("[data-form='tickets.update']");
-      assert((await form.locator("input[data-field=parent]").count()) === 1, "one parent field: the picker's");
+      // STUDIO-12: the picker is a bound mark filled once the form draws it — waited for, as every mark is.
+      await eventually("one parent field: the picker's", async () => (await form.locator("input[data-field=parent]").count()) === 1, 5_000);
       // Its own child as its parent: the store refuses the cycle, said under the form.
       await pick(form, "parent", below);
       await eventually("the pick is the draft", async () => (await form.locator(`[data-field=parent-chosen] [data-chip-id="${below}"]`).count()) === 1);

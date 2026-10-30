@@ -11,7 +11,8 @@
      sorted worst first, so past 200 the head says it is the first 200 by id
      of how many (`data-approx`). A write that moves more than 256 tickets is
      a `recount`, not their entered/left: the list is then marked stale
-     (`data-state="stale"`) until it is read again. -->
+     (`data-state="stale"`) until it is read again.
+     STUDIO-12: the page's title is page-ready's (rhx). -->
 <script module>
   const FIELDS = ["id", "title", "kind", "status", "severity", "parent"];
   const RANK = { Critical: 0, High: 1, Medium: 2, Low: 3 };
@@ -49,7 +50,6 @@
 
 <section class="work-ready" data-surface="work-ready" data-state={stale ? "stale" : ready.status}>
   <header class="wr-head">
-    <h1>ready</h1>
     <span class="wr-count" data-field="count">{rows.length}</span>
     <span class="wr-sub">can start now</span>
     {#if total != null}<span class="wr-approx" data-approx={total}>the first {LIMIT} by id of {total}, worst first among them</span>{/if}
@@ -81,7 +81,6 @@
 <style>
   .work-ready { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; height: 100%; background: var(--bg); color: var(--ink); font-family: var(--font-text); font-size: var(--text-size); }
   .wr-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 14px; background: var(--panel); border-bottom: var(--border) solid var(--line); }
-  .wr-head h1 { margin: 0; font-family: var(--font-display); font-size: 16px; font-weight: var(--weight-strong); }
   .wr-count { color: var(--ink); font-weight: var(--weight-bold); font-variant-numeric: tabular-nums; }
   .wr-sub { color: var(--muted); font-size: 12px; }
   .wr-approx { color: var(--muted); font-size: 11px; }

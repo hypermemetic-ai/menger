@@ -48,7 +48,7 @@
 //                       holding app-top (SURFACE-2), board-layout-sv (the top bar: `input[data-filter-input]`,
 //                       `[data-filter-refused]`), nav-tree-sv, keys-help, board-rows-sv, bulk-bar and jump-palette-sv;
 //                       the rhx board's links and filter line land here (`lands`)
-//   #/ticket/:id        ticket-page-sv (#/sv/ticket/:id too; its links and chips stay under the prefix it was opened at)
+//   #/ticket/:id        page-ticket, the rhx page placing the ticket's Svelte parts (STUDIO-12; #/sv/ticket/:id too)
 //
 // Exit 0 when every test passed, 1 when one failed, 2 when setup failed.
 import fs from "node:fs";
@@ -91,7 +91,7 @@ const BOARDS = {
   },
   sv: {
     name: "sv", tag: "_sv", route: "", filterRoute: "#/f/", ticketRoute: "#/ticket/",
-    layout: "board-frame", top: "board-layout-sv", nav: "nav-tree-sv", main: "board-rows-sv", palette: "jump-palette-sv", page: "ticket-page-sv",
+    layout: "board-frame", top: "board-layout-sv", nav: "nav-tree-sv", main: "board-rows-sv", palette: "jump-palette-sv", page: "page-ticket",
     sections: [["top", "app-top"], ["bar", "board-layout-sv"], ["nav", "nav-tree-sv"], ["facets", "nav-facets"], ["saved", "filters-saved"], ["keys", "keys-help"], ["main", "board-rows-sv"], ["bulk", "bulk-bar"], ["palette", "jump-palette-sv"]],
     module: "board-rows-sv.js", epics: ["AAAC", "AAAD"],
     siblings: ["nav-flat-sv", "nav-children-sv", "ticket-chip-sv"], // FRAME-25: imported by their parents, components in their own right

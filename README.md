@@ -867,7 +867,7 @@ kind and a `--sev-<severity>` for every severity, the diff pair
 motion. A colour is `#rrggbb` or `#rrggbbaa`. `scripts/plexus-ui build`
 passes `--strict-colours`: a literal colour in a component's `<style>` (a
 `#hex`, `rgb(…)`, `hsl(…)`, a named colour) refuses the build, naming its
-file and line. **The sheet** at `#/sheet` (`sheet-page`, `#/sheet/:id` for a
+file and line. **The sheet** at `#/sheet` (`page-sheet` placing `sheet-page`, `#/sheet/:id` for a
 given ticket, else the first `tickets.list --limit 1` answers) places every
 component of `ui/src` by its bound mark, in every state it draws, under
 `data-plexus-theme="light"` and `"dark"` side by side; a state is held
@@ -879,9 +879,9 @@ component to the sheet, every `var(--…)` to a token, every state to its
 alias; `tests/pages/sheet.mjs` draws it and writes `sheet-light.png` and
 `sheet-dark.png`.
 
-FRAME-14: the board is in two profiles. Beside each of the five board
-components above (`board-layout`, `board-rows`, `nav-tree`, `ticket-page`,
-`jump-palette`) is its real Svelte twin, `src/<name>-sv.svelte` (`svelte/1`:
+FRAME-14: the board is in two profiles. Beside each of the four board
+components above (`board-layout`, `board-rows`, `nav-tree`, `jump-palette`)
+is its real Svelte twin, `src/<name>-sv.svelte` (`svelte/1`:
 compiled at build in Node, `--node-modules ../plexus-ui/node_modules`), with
 the same calls and the same DOM marks. SURFACE-2 (owner, 2026-10-30: "I want
 svelte components"): the real Svelte board is the default, at `#/`,
@@ -912,6 +912,27 @@ shortcode's children and a page's chips as svelte/1 siblings
 (`nav-flat-sv`, `nav-children-sv`, `ticket-chip-sv`), each imported by its
 parent and bundled into that module, and each a component in its own right
 with no route or slot of its own; `tests/apart.rs` holds it to that.
+
+STUDIO-12: **a page is an rhx component of components.** Every route but
+the board's draws an rhx page, `src/page-<name>.rhx` — a `<section
+class="page page-<name>">` that places the feature's svelte/1 components
+by their marks (`<search-page q={q} filter={filter}/>`, a bound mark the
+host fills, its props from the route) and carries the app's top as its
+`top` section (`app-top`, `slots.json`) and the palette as its `palette`
+section (`jump-palette-sv`: the top's jump button and `ctrl+k` open it), so the studio's "edit this page"
+edits every page in the browser while the components stay svelte/1 and the
+repository's: `page-ticket` (`#/ticket/:id`; the head, body, edit,
+relations, actions, commits, history and revisions — the ticket page's
+skeleton, "no such ticket", the deleted notice and its keys `e`, `escape`,
+`g b` are the page's, `escape` and `g b` to `#/` under either prefix, and
+its key strip), `page-new`, `page-search`, `page-ready` and `page-waves`
+(full-height columns: the list scrolls in its own box under its bar), `page-filters`, `page-epics`,
+`page-orgs`, `page-me`, `page-releases`, `page-sheet`; `page-bulk`, `page-blockers`,
+`page-edit`, `page-actions`, `page-facets` and `page-counts` draw one
+component alone for its browser cases. A placed component keeps its
+behaviour and its look and loses the page's chrome to the page — the board
+link and the jump button (app-top's), the page's title, the palette's mark. No route draws a
+svelte/1 component; `tests/apart.rs` holds it to that.
 `../plexus-ui`'s `plexus-ui` tool (FRAME-8; `scripts/plexus-ui` builds it
 from the sibling into this checkout's target and runs it) builds it into
 `dist/ui.tar`: `build --prebuild` the engine (cargo: `wasm32-unknown-unknown`

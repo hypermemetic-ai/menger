@@ -1,0 +1,25 @@
+<script>
+  // STUDIO-12: the ready page — an rhx page the studio edits, placing its
+  // svelte/1 component by its mark, the app's top in its `top` section and the palette in its
+  // `palette` section (app-top's jump button and ctrl+k open it)
+  // (app-top by ui/slots.json); a full-height column, so the list scrolls
+  // in its own box under its bar and the title sits in the panel above it. #/ready and #/ready/:filter: work-ready, under the route's filter.
+  prop("filter");
+</script>
+
+<section class="page page-ready">
+  <slot name="top" here="ready"/>
+  <header class="page-title"><h1>ready</h1></header>
+  <work-ready filter={filter}/>
+  <slot name="palette"/>
+</section>
+
+<style>
+  :scope { display: block; }
+  .page-ready { display: flex; flex-direction: column; height: 100vh; height: 100dvh; color: var(--ink); background: var(--bg); font-family: var(--font-text); font-size: var(--text-size); }
+  .page-ready > [data-slot=top] { flex: none; }
+  .page-title { flex: none; padding: 8px 14px 0; background: var(--panel); }
+  .page-title h1 { margin: 0; font-family: var(--font-display); font-size: 16px; font-weight: var(--weight-strong); color: var(--ink); }
+  .page-ready > [data-slot=work-ready] { flex: 1; min-height: 0; min-width: 0; display: flex; }
+  .page-ready > [data-slot=work-ready] > * { flex: 1; min-width: 0; min-height: 0; display: flex; }
+</style>

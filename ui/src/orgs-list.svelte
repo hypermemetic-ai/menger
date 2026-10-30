@@ -1,7 +1,8 @@
 <!-- SURFACE-9: the organizations the reader holds a role in (#/orgs),
      svelte/1 — `orgs.list`, one `org { name, aliases, roots, shortcodes,
      tickets }` each, in the order they were made. A one-shot read: the
-     organizations have no watch. -->
+     organizations have no watch.
+     STUDIO-12: the page's title is page-orgs's (rhx). -->
 <script module>
   export const uses = ["orgs.list"];
 </script>
@@ -17,7 +18,6 @@
 
 <section class="orgs-list" data-surface="orgs-list">
   <div class="page-head">
-    <h1>organizations</h1>
     <span class="sub">the ones you hold a role in</span>
     {#if $orgs.status !== "live"}<span class="state" data-loading={$orgs.status}>{$orgs.status}</span>{/if}
   </div>
@@ -41,7 +41,6 @@
 <style>
   .orgs-list { max-width: 1180px; margin: 0 auto; padding: 18px 24px 40px; color: var(--ink); font-family: var(--font-text); font-size: var(--text-size); }
   .page-head { display: flex; align-items: baseline; gap: 10px; margin: 0 0 14px; }
-  .page-head h1 { margin: 0; font-family: var(--font-display); font-size: 20px; font-weight: var(--weight-strong); }
   .sub { color: var(--muted); font-size: 12px; }
   .state { margin-left: auto; font-size: 11px; color: var(--muted); }
   .panel { overflow: hidden; background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius-lg); }
