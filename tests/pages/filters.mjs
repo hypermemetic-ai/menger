@@ -125,6 +125,36 @@ export default async (ctx) => {
     }
   });
 
+  // FRAME-53: a nav section remounted after the board drew hears the sticky
+  // `board.drawn` (`on(after, fn, { last: true })`) and asks — no look at the
+  // page. The board's `[data-drawn]` is taken off first, so a section that
+  // looked for it would wait for ever; `ui slots set` puts nav-counts in the
+  // facets' section (the frame hands it `after="board.drawn"` too), then
+  // the clear puts nav-facets back: each draws. None of the three nav
+  // components' sources looks at the page.
+  await test("a_nav_section_remounted_after_the_board_drew_hears_it", async () => {
+    for (const f of ["nav-facets.svelte", "filters-saved.svelte", "nav-counts.svelte"]) {
+      const src = ctx.fs.readFileSync(new URL(`../../ui/src/${f}`, import.meta.url), "utf8");
+      assert(!src.includes('querySelector("[data-board]') && !src.includes("[data-drawn]"), `${f} looks at the page for the board`);
+    }
+    const { page, context } = await openPage("");
+    try {
+      await eventually("the board drawn and the facets' chips", async () =>
+        (await page.locator("[data-board][data-surface=board-rows][data-drawn]").count()) === 1 && (await facets(page).locator("[data-facet]").count()) > 0, 10000);
+      await page.evaluate(() => document.querySelector("[data-board][data-surface=board-rows]").removeAttribute("data-drawn"));
+      sy("ui", "slots", "set", "--layout", boardLayout, "--slot", "facets", "--component", "nav-counts");
+      await eventually("nav-counts in the facets' section, asked and drawn", async () =>
+        (await facets(page).count()) === 0 && (await page.locator("[data-surface=nav-counts] [data-field=count]").count()) > 0, 5000);
+      sy("ui", "slots", "clear", "--layout", boardLayout, "--slot", "facets");
+      await eventually("nav-facets back, asked and drawn", async () =>
+        (await page.locator("[data-surface=nav-counts]").count()) === 0 && (await facets(page).locator("[data-facet]").count()) > 0, 5000);
+      assert((await page.locator("[data-board][data-surface=board-rows][data-drawn]").count()) === 0, "the board was not remounted: its mark stays off");
+    } finally {
+      await context.close();
+      sy("ui", "slots", "clear", "--layout", boardLayout, "--slot", "facets");
+    }
+  });
+
   await test("a_filter_is_saved_and_listed", async () => {
     const { page, context } = await openPage("#/filters/status%20Ready");
     try {
