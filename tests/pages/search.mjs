@@ -11,7 +11,7 @@
 // `[data-empty]`, `[data-refused]`, the pager `[data-pager]` with
 // `[data-field=matched]`, `[data-action=prev|next]`, the filter
 // `[data-field=filter]` and `[data-action=everything]`, the jump button
-// `[data-action="palette.open"]`; `[data-surface=jump-palette]`, its
+// `[data-action="palette.open"]`; `[data-surface=jump-palette-sv]`, its
 // `input[data-palette-input]`, `[data-palette-hit=<id>]`,
 // `[data-search-hit=<id>]`, `[data-command=<name>]`, the row
 // `[data-selected]`, `[data-palette-need]`.
@@ -63,7 +63,7 @@ export default async ({ test, assert, eventually, sleep, openPage, sy, groupsNow
     await opened.page.reload();
     return opened;
   }
-  const pal = (page) => page.locator("[data-surface=jump-palette]").first();
+  const pal = (page) => page.locator("[data-surface=jump-palette-sv]").first();
   const palInput = (page) => pal(page).locator("input[data-palette-input]");
 
   // The tickets the cases read: one titled `qorvex`, one with it in its body.
@@ -200,6 +200,9 @@ export default async ({ test, assert, eventually, sleep, openPage, sy, groupsNow
     await run(">new", "#/new", "new");
     await run(">waves to GLAZE-12", "#/waves/to/GLAZE-12", "waves to");
     await run(">search qorvex", "#/search/qorvex", "search");
+    // An argument is one segment, encoded whole: an address holds `/`, and `?` `#` would be cut.
+    await run(">waves to MENGER/ORG-3", "#/waves/to/MENGER%2FORG-3", "waves to");
+    await run(">search a/b?c#d", "#/search/a%2Fb%3Fc%23d", "search");
     // `>wa` lists the three waves commands; arrows move among them.
     await page.evaluate((r) => (location.hash = r), SV.route);
     await eventually("the board's palette", async () => (await pal(page).count()) === 1);
@@ -214,7 +217,98 @@ export default async ({ test, assert, eventually, sleep, openPage, sy, groupsNow
     await page.keyboard.press("Enter");
     await eventually("it asks for its id", async () => trimmed(await pal(page).locator("[data-palette-need]").textContent({ timeout: 500 })).includes("waves under"), 2_000);
     assert((await hash(page)) === SV.route, "no route without its id");
+    // A click on it does the same: says so and stays (never #/waves/to).
+    await palInput(page).fill(">waves t");
+    await eventually("waves to listed", async () => (await pal(page).locator('[data-command="waves to"]').count()) === 1, 2_000);
+    await pal(page).locator('[data-command="waves to"]').click();
+    await eventually("a click asks for its id", async () => trimmed(await pal(page).locator("[data-palette-need]").textContent({ timeout: 500 })).includes("waves to"), 2_000);
+    assert((await hash(page)) === SV.route && (await palInput(page).count()) === 1, `a click without its id stays: ${await hash(page)}`);
     const calls = (await sentCalls(page)).filter((c) => c.method === "tickets.find" && String(c.params.query).startsWith(">"));
     assert(calls.length === 0, `a command never asks find: ${JSON.stringify(calls)}`);
+  });
+
+  await test("the_slash_opens_and_is_typed_in_a_field", async () => {
+    const { page } = await probed(SV.route);
+    await eventually("the board's palette is mounted", async () => (await pal(page).count()) === 1);
+    await page.locator("body").click({ position: { x: 5, y: 5 } }).catch(() => {});
+    taken(await pressed(page, "/"), "/ on the page");
+    await eventually("/ opens the palette, its field focused", async () => palInput(page).evaluate((e) => e === document.activeElement), 2_000);
+    // In a field `/` is a character: not the host's, typed.
+    free(await pressed(page, "/"), "/ in the field");
+    await eventually("the slash is typed", async () => (await palInput(page).inputValue()) === "/", 2_000);
+  });
+
+  await test("the_open_keys_come_and_go_with_the_palette", async () => {
+    const { page } = await probed(SV.route);
+    await eventually("the board's palette is mounted", async () => (await pal(page).count()) === 1);
+    const blank = () => page.locator("body").click({ position: { x: 5, y: 5 } }).catch(() => {});
+    // The host's `?` overlay: the palette's rows, by chord.
+    const chords = async () => {
+      await page.keyboard.press("?");
+      const sec = page.locator("[data-engine-keys] [data-component=jump-palette-sv]");
+      await eventually("the ? overlay", async () => (await page.locator("[data-engine-keys]").count()) === 1, 2_000);
+      const got = (await attrs(sec.locator("[data-chord]"), "data-chord")).sort();
+      await page.keyboard.press("Escape");
+      await eventually("the overlay closes", async () => (await page.locator("[data-engine-keys]").count()) === 0, 2_000);
+      return got;
+    };
+    await blank();
+    const closed = await chords();
+    assert(JSON.stringify(closed) === JSON.stringify(["/", "ctrl+k"]), `closed, the palette holds ctrl+k and / alone: ${JSON.stringify(closed)}`);
+    // Ten opens and closes: nothing left behind.
+    for (let i = 0; i < 10; i++) {
+      taken(await pressed(page, "Control+k"), `ctrl+k (${i + 1})`);
+      await eventually("open", async () => (await palInput(page).count()) === 1, 2_000);
+      taken(await pressed(page, "Escape"), `escape (${i + 1})`);
+      await eventually("closed", async () => (await palInput(page).count()) === 0, 2_000);
+    }
+    await blank();
+    const after = await chords();
+    assert(JSON.stringify(after) === JSON.stringify(closed), `after ten opens the closed palette holds the same keys: ${JSON.stringify(after)}`);
+    free(await pressed(page, "Enter"), "enter after ten opens");
+    // Open, out of the field: the open-only keys are listed, once each.
+    await page.keyboard.press("Control+k");
+    await eventually("open", async () => (await palInput(page).count()) === 1, 2_000);
+    await pal(page).locator(".palette-foot").click();
+    const open = await chords();
+    assert(JSON.stringify(open) === JSON.stringify(["/", "arrowdown", "arrowup", "ctrl+k", "enter", "escape"]), `open, its six keys once each: ${JSON.stringify(open)}`);
+  });
+
+  await test("a_corrected_query_says_so", async () => {
+    const typo = "qorvax";
+    const { searched, ids } = searchOf(typo);
+    const also = (searched?.words ?? []).filter((w) => w.also?.length);
+    assert(ids.includes(bodied) && also.length > 0, `search reads ${typo} as a typo: ${JSON.stringify(searched?.words)} (${ids})`);
+    const { page } = await openPage(`#/search/${typo}`);
+    const note = sp(page).locator("p[data-corrected]");
+    await eventually("the correction is said", async () => trimmed(await note.textContent({ timeout: 1000 })).includes(also[0].also[0]), 5_000);
+    assert(trimmed(await note.textContent()).includes(typo), "it names the word typed");
+    await eventually("the corrected rows are marked", async () => (await sp(page).locator(`[data-result=search][data-id="${bodied}"][data-corrected]`).count()) === 1, 5_000);
+    // A query the index knows is not corrected.
+    await page.evaluate(() => (location.hash = "#/search/qorvex"));
+    const known = searchOf("qorvex");
+    assert(!(known.searched?.words ?? []).some((w) => w.also?.length), `qorvex is no typo: ${JSON.stringify(known.searched?.words)}`);
+    await eventually("qorvex's rows, uncorrected", async () => JSON.stringify(await resultIds(page, "search")) === JSON.stringify(known.ids) && (await sp(page).locator("[data-result][data-corrected]").count()) === 0, 5_000);
+    await eventually("no correction for a known word", async () => (await note.count()) === 0, 5_000);
+  });
+
+  await test("a_title_is_text_never_markup", async () => {
+    const id = make('<img src=x onerror="window.__xss=1">qorvex', "<b>bold</b> qorvex body");
+    const { page } = await openPage("#/search/qorvex");
+    await eventually("the row is drawn", async () => (await sp(page).locator(`[data-result=find][data-id="${id}"]`).count()) === 1, 5_000);
+    await eventually("and in search", async () => (await sp(page).locator(`[data-result=search][data-id="${id}"]`).count()) === 1, 5_000);
+    assert((await sp(page).locator("img, [data-result] [data-field=title] b, [data-field=snippet] b").count()) === 0, "no element from a title or a body");
+    const title = trimmed(await sp(page).locator(`[data-result=find][data-id="${id}"] [data-field=title]`).textContent());
+    assert(title.startsWith("<img"), `the title is its text: ${title}`);
+    await sleep(300);
+    assert(!(await page.evaluate(() => window.__xss)), "nothing ran");
+    // The palette draws it as text too.
+    await page.evaluate((r) => (location.hash = r), SV.route);
+    await eventually("the board's palette", async () => (await pal(page).count()) === 1);
+    await page.keyboard.press("Control+k");
+    await eventually("open", async () => (await palInput(page).count()) === 1, 2_000);
+    await palInput(page).fill("qorvex");
+    await eventually("the hit is drawn", async () => (await pal(page).locator(`[data-palette-hit="${id}"]`).count()) === 1, 3_000);
+    assert((await pal(page).locator("img").count()) === 0 && !(await page.evaluate(() => window.__xss)), "the palette draws no element from a title");
   });
 };

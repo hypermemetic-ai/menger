@@ -36,10 +36,20 @@
   const offset = $derived(paged.asked === asked ? paged.offset : 0);
 
   const found = live({ snapshot: "tickets.find", params: () => ({ query: q ?? "", filter, limit: 12, fields: FIELDS }), key: "id", when: () => !!q });
+  // `key` is the spec's, unused here: a snapshot with no changes stream
+  // folds nothing by key. Each row is a whole event (`upsert:.`): a `hit`
+  // (its id at `summary.id`, its title and passage marked) or the one
+  // `searched` (matched, next, words), which has no id — the pager's.
   const hits = live({ snapshot: "tickets.search", params: () => ({ query: q ?? "", filter, limit: LIMIT, offset }), key: "id",
                       on: { hit: "upsert:.", searched: "upsert:." }, when: () => !!q });
   const rows = $derived(hits.rows.filter((h) => h.summary));
   const page = $derived(hits.rows.find((h) => h.matched !== undefined));
+  // SEARCH-2: a word the index does not know also matched the words a typo
+  // away — said, so a mark on a word never typed is explained.
+  const corrected = $derived((page?.words ?? []).filter((w) => w.also?.length));
+  // One refusal: find and search are asked under the same filter.
+  const refused = $derived(found.status === "error" || found.status === "refused" ? found.message ?? "this search is not taken"
+    : hits.status === "error" || hits.status === "refused" ? hits.message ?? "this search is not taken" : null);
 
   function next() { paged = { asked, offset: offset + LIMIT }; }
   function prev() { paged = { asked, offset: Math.max(0, offset - LIMIT) }; }
@@ -63,7 +73,10 @@
         <span class="sp-filter">every ticket</span>
       {/if}
     </div>
-    {#if found.status === "error" || found.status === "refused"}<p class="sp-refused" data-refused role="alert">{found.message ?? "this search is not taken"}</p>{/if}
+    {#if refused}<p class="sp-refused" data-refused role="alert">{refused}</p>{/if}
+    {#if corrected.length}
+      <p class="sp-corrected" data-corrected>also read as {#each corrected as w, i (i)}{i ? "; " : ""}“{w.word}” → {w.also.join(", ")}{/each}</p>
+    {/if}
     <div class="sp-grid">
       <section class="panel sp-sec find" data-method="tickets.find">
         <h2>ids and titles <b data-count="find">{found.rows.length}</b></h2>
@@ -80,13 +93,12 @@
       <section class="panel sp-sec" data-method="tickets.search">
         <h2>in bodies {#if page}<b data-count="search">{page.matched}</b>{/if}<span class="m">best first</span></h2>
         {#if hits.status === "pending"}<div class="sp-loading" data-loading><i></i><i></i><i></i></div>{/if}
-        {#if hits.status === "error" || hits.status === "refused"}<p class="sp-refused" data-refused role="alert">{hits.message ?? "this search is not taken"}</p>{/if}
         {#each rows as h (h.summary.id)}
-          <a class="res" data-result="search" data-id={h.summary.id} data-status={h.summary.status} href={"#/ticket/" + h.summary.id}>
+          <a class="res" data-result="search" data-id={h.summary.id} data-status={h.summary.status} data-corrected={h.corrected ? "" : undefined} href={"#/ticket/" + h.summary.id}>
             <i class="kmark" data-kind={h.summary.kind}></i>
             <span class="row-id" data-field="id">{h.summary.id}</span>
             <span class="row-title" data-field="title">{#each h.title as m, i (i)}{#if m.hit}<mark>{m.text}</mark>{:else}{m.text}{/if}{/each}</span>
-            <span class="row-status" data-field="status">{h.summary.status}</span>
+            <span class="row-status" data-field="status">{h.summary.status}{#if h.corrected}<span class="typo" title="matched a word a typo away"> ~</span>{/if}</span>
             <span class="snip" data-field="snippet">{#each h.snippet as m, i (i)}{#if m.hit}<mark>{m.text}</mark>{:else}{m.text}{/if}{/each}</span>
           </a>
         {/each}
@@ -127,7 +139,7 @@
   .search-page .sp-filter button:hover { color: var(--ink); }
   .search-page .sp-filter button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
   .search-page .sp-refused { margin: 8px 0 0; font-size: 12px; color: var(--warn); }
-  .search-page .sp-sec .sp-refused { padding: 8px 12px; margin: 0; }
+  .search-page .sp-corrected { margin: 6px 0 0; font-size: 11px; color: var(--muted); }
   .search-page .sp-grid { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 20px; align-items: start; margin-top: 12px; }
   @media (max-width: 860px) { .search-page .sp-grid { grid-template-columns: minmax(0, 1fr); } }
   .search-page .sp-sec { overflow: hidden; }

@@ -36,7 +36,9 @@
       const arg = !pre && needs && lw.startsWith(name + " ") ? w.slice(name.length + 1).trim() : "";
       if (!pre && !arg) continue;
       const ready = !needs || arg !== "";
-      const route = to + (arg ? (needs === "words" ? encodeURIComponent(arg) : arg) : "");
+      // The argument is one segment, encoded whole: an address holds `/`
+      // (MENGER/ORG-3), and the router cuts at `?` and `#`; it decodes it.
+      const route = to + (arg ? encodeURIComponent(arg) : "");
       out.push({ name, typed: pre ? name.slice(0, lw.length) : name, rest: pre ? name.slice(lw.length) : "", arg, needs, route, shown: ready ? to + arg : `${to}‹${needs}›`, ready });
     }
     return out;
@@ -86,16 +88,24 @@
     sel = order[Math.min(order.length - 1, Math.max(0, at + by))];
     need = "";
   }
+  /** A command: its route, or — still wanting its argument — say so and stay. */
+  function run(c) {
+    if (!c.ready) {
+      sel = "c:" + c.name;
+      need = `>${c.name} needs ${c.needs}: type it after the command`;
+      return;
+    }
+    b.navigate(c.route);
+    close();
+  }
+  function clicked(ev, c) {
+    ev.preventDefault();
+    run(c);
+  }
   function choose() {
     if (command) {
       const c = cmds.find((c) => "c:" + c.name === current);
-      if (!c) return;
-      if (!c.ready) {
-        need = `>${c.name} needs ${c.needs}: type it after the command`;
-        return;
-      }
-      b.navigate(c.route);
-      close();
+      if (c) run(c);
       return;
     }
     if (!current) return;
@@ -124,7 +134,7 @@
   }
 </script>
 
-<div class="jump-palette" data-palette data-surface="jump-palette">
+<div class="jump-palette" data-palette data-surface="jump-palette-sv">
   {#if open}
     <div class="scrim" data-scrim onclick={close} aria-hidden="true"></div>
     <div class="palette-sheet" role="dialog" aria-label="jump to a ticket">
@@ -134,7 +144,7 @@
         <p class="palette-label">commands</p>
         <ul class="palette-hits" data-palette-commands>
           {#each cmds as c (c.name)}
-            <li><a class="palette-cmd" data-command={c.name} data-selected={current === "c:" + c.name ? "" : undefined} href={c.ready ? c.route : c.route.replace(/\/$/, "")} onclick={close}><span class="gt">{">"}</span><span class="cmd"><b>{c.typed}</b>{c.rest}</span><span class="arg">{c.arg}</span><span class="to">{c.shown}</span></a></li>
+            <li><a class="palette-cmd" data-command={c.name} data-selected={current === "c:" + c.name ? "" : undefined} href={c.ready ? c.route : undefined} onclick={(ev) => clicked(ev, c)}><span class="gt">{">"}</span><span class="cmd"><b>{c.typed}</b>{c.rest}</span><span class="arg">{c.arg}</span><span class="to">{c.shown}</span></a></li>
           {/each}
         </ul>
         {#if cmds.length === 0}<p class="palette-empty" data-empty>No command starts “{q.slice(1).trim()}”.</p>{/if}
@@ -166,7 +176,7 @@
   .jump-palette .palette-input { padding: 12px 14px; font-size: 14px; color: var(--ink); background: none; border: 0; border-bottom: var(--border) solid var(--line); outline: none; }
   .jump-palette .palette-input:focus-visible { box-shadow: inset 0 -2px 0 var(--focus); }
   .jump-palette .palette-hits { list-style: none; margin: 0; padding: 4px; overflow: auto; }
-  .jump-palette .palette-hit, .jump-palette .palette-cmd { display: flex; gap: 10px; align-items: center; height: var(--pitch); padding: 0 10px; overflow: hidden; white-space: nowrap; color: var(--ink); text-decoration: none; border-radius: var(--radius); transition: background-color var(--motion-fast) var(--ease); }
+  .jump-palette .palette-hit, .jump-palette .palette-cmd { cursor: pointer; display: flex; gap: 10px; align-items: center; height: var(--pitch); padding: 0 10px; overflow: hidden; white-space: nowrap; color: var(--ink); text-decoration: none; border-radius: var(--radius); transition: background-color var(--motion-fast) var(--ease); }
   .jump-palette .palette-hit:hover, .jump-palette .palette-cmd:hover { background: var(--hover); }
   .jump-palette .palette-hit[data-selected], .jump-palette .palette-cmd[data-selected] { background: var(--row-sel); box-shadow: inset 3px 0 0 var(--accent); }
   .jump-palette .palette-hit:focus-visible, .jump-palette .palette-cmd:focus-visible { outline: none; background: var(--row-sel); box-shadow: inset 0 0 0 2px var(--focus); }
