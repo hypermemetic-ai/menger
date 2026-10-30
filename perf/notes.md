@@ -548,3 +548,32 @@ the engine's on both boards (one cache, in the wasm): every change crosses to JS
 collection, JSON (FRAME-20 would make it the change). Locally the five Svelte modules are free; on the
 wire they are five more files (54–75 KB each, each with its own Svelte runtime; 20–28 KB gzipped,
 116 KB for the five) — the live probe on app-test is where that shows.
+
+## The first row after the boot — `live-probe.mjs`'s table (FRAME-17, 2026-10-30)
+
+`node perf/live-probe.mjs --token-file FILE --runs 5`, app-test (976 tickets), cold loads, the
+page's clock. **Before** — release 20261030T001645Z-ea9ce72 (FRAME-16's after), 2026-10-30 ~00:45Z:
+
+| step | median | runs |
+|---|---|---|
+| the boot done (socket open, wasm instantiated) | +203 ms | 188, 269, 453, 203, 178 |
+| the first call, `tickets.list` sent | +242 ms | 235, 313, 495, 242, 217 |
+| `tickets.list` first data | +343 ms | 343, 409, 573, 333, 312 |
+| `tickets.list` done | +370 ms | 370, 440, 612, 362, 358 |
+| the nav drawn | +324 ms | |
+| the first titled row (a MutationObserver's stamp; Playwright's poll read 443) | +408 ms | 408, 476, 651, 398, 395 |
+
+Where the 200 ms "mount" of FRAME-16's breakdown went (a marked engine, a local throwaway at 10⁴,
+five loads): the boot to the mount 4 ms; the mount 36 ms (the first tree's parse 14 ms — every
+template expression compiled three times, the first time with Rhai's engine made —, the rest 2–7 ms
+a component, handlers compiled only for the mounted five of eleven); every call left together at
+the mount's end (`WsWire::open` sent from a spawned future); the list's answer 39 ms, its 200
+frames 30 ms, the fold and the draw 42 ms (a profile: converting each row to Rhai's value once per
+expression 19 of 63 ms profiled, the DOM about 9). The breakdown's ~200 ms was its own
+instrumentation.
+
+The server's share, on the network's clock (CDP `Network.webSocketFrameReceived`, three loads): the
+nine calls leave within 2 ms; their acks come back in bursts — at ~20, ~60–80 and ~160 ms, several
+in the same millisecond — not in the order sent, and the list waited 58, 165 and 160 ms for its
+ack, then 54–244 ms more to its `done`. Not one call after another, but held and released together
+(PLEXUS-10); the 200 frames' share is PERF-15's.

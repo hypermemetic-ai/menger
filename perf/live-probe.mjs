@@ -3,6 +3,10 @@
 //
 //   node perf/live-probe.mjs --token-file FILE [--origin https://app-test.menger.sh] [--runs 5] [--path /]
 //
+// Prints the first row's median, the boot's marks, FRAME-17's table of the steps after the boot
+// (below) and the waterfall by kind, then one JSON line. A table is its output, not a pass or a
+// fail: nothing here is a test (the hand gate reads it, three runs of five, before and after).
+//
 // Prints: the first titled board row's median over the runs (navigation start → the first
 // `.board-row[data-id] [data-field=title]`), TTFB, when the socket opened, and the waterfall by
 // kind (requests, bytes on the wire and decoded, from → to) of the last run — the shape FRAME-16
@@ -13,6 +17,14 @@
 // not Playwright's "websocket" event), and when WebAssembly.instantiate(Streaming) resolved —
 // the median of each, and in how many runs the socket opened before the wasm was instantiated;
 // the JSON carries every run's marks and the last run's requests counted by kind.
+//
+// FRAME-17: the first row after the boot, as a table (FRAME-17's), the median and each run on the
+// page's clock — the boot done (the socket open and the wasm instantiated), the first call and
+// `tickets.list` sent (every frame the page sends, stamped), `tickets.list` answered (its first
+// data and its `done`, matched to the call by its subscription), the nav drawn, the first titled
+// row — then every mark the host sets itself (`performance.mark`, `plexus-ui:*`: components parsed,
+// each section and the layout mounted, each component's handlers compiled, the first call, answer
+// and row; CONTRACT.md's host chapter), or a line saying the engine sets none.
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -33,6 +45,7 @@ const cookieName = origin.startsWith("https://") ? "__Host-menger_session" : "me
 
 const MARKS = `(() => {
   const log = (window.__probe = {});
+  const frames = (window.__frames = { sent: [], recv: [] });
   const now = () => performance.now();
   const W = window.WebSocket;
   window.WebSocket = class extends W {
@@ -40,8 +53,25 @@ const MARKS = `(() => {
       super(...a);
       log.socket_made ??= now();
       this.addEventListener("open", () => { log.socket_open ??= now(); });
+      this.addEventListener("message", (e) => {
+        const t = now();
+        try {
+          const m = JSON.parse(e.data);
+          frames.recv.push([t, m.params?.subscription ?? null, m.params?.result?.type ?? null, m.id ?? null, typeof m.result === "number" ? m.result : null]);
+        } catch {}
+      });
     }
   };
+  const send = W.prototype.send;
+  W.prototype.send = function (d) {
+    try { const m = JSON.parse(d); frames.sent.push([now(), m.params?.method ?? m.method, m.id ?? null]); } catch {}
+    return send.call(this, d);
+  };
+  new MutationObserver(() => {
+    const t = now();
+    if (log.nav_drawn == null && document.querySelector("[data-nav-group]")) log.nav_drawn = t;
+    if (log.first_row == null) for (const el of document.querySelectorAll(".board-row[data-id] [data-field=title]")) if (el.textContent.trim()) { log.first_row = t; break; }
+  }).observe(document, { childList: true, subtree: true, characterData: true });
   for (const k of ["instantiateStreaming", "instantiate"]) {
     const f = WebAssembly[k];
     WebAssembly[k] = function (...a) { return f.apply(this, a).then((r) => { log.wasm_instantiated ??= now(); return r; }); };
@@ -64,6 +94,16 @@ for (let i = 0; i <= runs; i++) {
   const nav = await page.evaluate(() => { const n = performance.getEntriesByType("navigation")[0]; return { ttfb: n.responseStart, proto: n.nextHopProtocol }; });
   const res = await page.evaluate(() => performance.getEntriesByType("resource").map(r => ({ name: r.name.replace(location.origin, ""), start: r.startTime, dur: r.duration, enc: r.encodedBodySize, dec: r.decodedBodySize })));
   const mark = await page.evaluate(() => window.__probe ?? {});
+  // FRAME-17: the board's list, matched by its request id to its subscription; the host's own marks.
+  const frames = await page.evaluate(() => window.__frames ?? { sent: [], recv: [] });
+  const ask = frames.sent.find((f) => f[1] === "tickets.list");
+  const sub = ask && frames.recv.find((r) => r[3] === ask[2] && r[4] != null)?.[4];
+  const of_list = (type) => (sub == null ? null : frames.recv.find((r) => r[1] === sub && r[2] === type)?.[0] ?? null);
+  const ack = ask && frames.recv.find((r) => r[3] === ask[2] && r[4] != null)?.[0];
+  // The first `live` snapshot: not the host's own (ui.*), not a changes stream.
+  const snap = frames.sent.find((f) => f[1] && !f[1].startsWith("ui.") && !f[1].endsWith(".watch") && !f[1].endsWith("call_unsub"));
+  Object.assign(mark, { first_call: snap?.[0] ?? null, list_sent: ask?.[0] ?? null, list_acked: ack ?? null, list_first_data: of_list("data"), list_done: of_list("done") });
+  for (const m of await page.evaluate(() => performance.getEntriesByType("mark").map((m) => [m.name, m.startTime]))) if (m[0].startsWith("plexus-ui:")) mark[m[0]] ??= m[1];
   if (i > 0) { firsts.push(first); ttfbs.push(nav.ttfb); sockets.push(opened.length ? opened[0] - t0 : null); marks.push(mark); last = { res, nav, first }; }
   await ctx.close();
 }
@@ -74,6 +114,35 @@ console.log(`${origin}${route}: first titled row median ${ms(median(firsts))} ms
 const of = (k) => marks.map((m) => m[k] ?? null);
 const before = marks.filter((m) => m.socket_open != null && m.wasm_instantiated != null && m.socket_open < m.wasm_instantiated).length;
 console.log(`  socket made +${ms(median(of("socket_made")))} ms, open +${ms(median(of("socket_open")))} ms; wasm instantiated +${ms(median(of("wasm_instantiated")))} ms; the socket open first in ${before} of ${marks.length} runs`);
+// FRAME-17: the table — each step's median and each run's, on the page's clock.
+const steps = [
+  ["the boot done (socket open, wasm instantiated)", (m) => (m.socket_open == null || m.wasm_instantiated == null ? null : Math.max(m.socket_open, m.wasm_instantiated))],
+  ["the first `live` snapshot sent", (m) => m.first_call],
+  ["`tickets.list` sent", (m) => m.list_sent],
+  ["`tickets.list` acknowledged", (m) => m.list_acked],
+  ["`tickets.list` answered (its first data)", (m) => m.list_first_data],
+  ["`tickets.list` answered (its done)", (m) => m.list_done],
+  ["the nav drawn", (m) => m.nav_drawn],
+  ["the first titled row", (m) => m.first_row],
+];
+// The gaps the acceptance and the owner read: each a difference, its median and every run's.
+const gap = (a, b) => (m) => (m[a] == null || m[b] == null ? null : m[a] - m[b]);
+const gaps = [
+  ["`tickets.list` sent − the socket open (acceptance: ≤ 20 ms)", gap("list_sent", "socket_open")],
+  ["the ack wait: `tickets.list` sent → acknowledged (PLEXUS-10)", gap("list_acked", "list_sent")],
+  ["acknowledged → its first data", gap("list_first_data", "list_acked")],
+  ["the stream: first data → done (PERF-15)", gap("list_done", "list_first_data")],
+  ["the board's draw: `drawn:tickets.list` − `answered:tickets.list` (acceptance: ≤ 20 ms for 200 rows)", gap("plexus-ui:drawn:tickets.list", "plexus-ui:answered:tickets.list")],
+  ["the first draw: `plexus-ui:first-row` − `plexus-ui:first-answer`", gap("plexus-ui:first-row", "plexus-ui:first-answer")],
+  ["done → the first titled row", gap("first_row", "list_done")],
+];
+const hostMarks = [...new Set(marks.flatMap((m) => Object.keys(m).filter((k) => k.startsWith("plexus-ui:"))))].sort((a, b) => median(of(a)) - median(of(b)));
+for (const k of hostMarks) steps.push([`\`${k}\``, (m) => m[k]]);
+console.log("| mark | median | runs |\n| -- | -- | -- |");
+for (const [what, f] of steps) { const xs = marks.map((m) => f(m) ?? null); console.log(`| ${what} | +${ms(median(xs))} ms | ${xs.map(ms).join(", ")} |`); }
+if (!hostMarks.length) console.log("  (the engine sets no plexus-ui:* marks: a release before FRAME-17)");
+console.log("| gap | median | runs |\n| -- | -- | -- |");
+for (const [what, f] of gaps) { const xs = marks.map((m) => f(m)); console.log(`| ${what} | ${ms(median(xs))} ms | ${xs.map(ms).join(", ")} |`); }
 const kind = (n) => n.includes("engine.wasm") ? "engine.wasm" : n.includes("engine.js") ? "engine.js" : n.includes("host.js") ? "host.js" : n.includes("/components") ? "components" : n.includes("manifest") ? "manifest" : "other";
 const by = {}; for (const r of last.res) (by[kind(r.name)] ||= []).push(r);
 const requests = Object.fromEntries(Object.entries(by).map(([k, rs]) => [k, rs.length]));
@@ -82,4 +151,4 @@ for (const [k, rs] of Object.entries(by)) {
   const s = Math.min(...rs.map(r => r.start)), e = Math.max(...rs.map(r => r.start + r.dur));
   console.log(`  ${k.padEnd(12)} ${String(rs.length).padStart(3)} req  ${(enc / 1024).toFixed(0).padStart(5)} KiB wire (${(dec / 1024).toFixed(0)} KiB)  +${ms(s)} → +${ms(e)} ms`);
 }
-console.log(JSON.stringify({ origin, route, runs, first_row_ms: firsts.map(x => x == null ? null : Math.round(x)), median_ms: median(firsts) == null ? null : Math.round(median(firsts)), ttfb_ms: ttfbs.map(Math.round), socket_open_ms: sockets, marks: marks.map((m) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, Math.round(v)]))), socket_open_before_wasm: before, requests }));
+console.log(JSON.stringify({ origin, route, runs, first_row_ms: firsts.map(x => x == null ? null : Math.round(x)), median_ms: median(firsts) == null ? null : Math.round(median(firsts)), ttfb_ms: ttfbs.map(Math.round), socket_open_ms: sockets, marks: marks.map((m) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, v == null ? null : Math.round(v)]))), socket_open_before_wasm: before, requests }));

@@ -269,7 +269,13 @@ async function main() {
         assert(ext.length === 1, `nav.extents asked once (${ext.length})`);
         const lists = boardLists(calls);
         assert(lists.length === 1, `one list for the window (${lists.length}: ${JSON.stringify(lists.map((l) => l.params))})`);
-        assert(lists[0].t >= ext[0].t, "the list after the extents");
+        // FRAME-17: the first page depends on no extents (after: null) — on
+        // the rhx board it is the first snapshot asked (its changes stream
+        // just before it), right after the boot.
+        if (!B.tag) {
+          const firstRead = calls.find((c) => !c.method.endsWith(".watch"));
+          assert(firstRead?.method === "tickets.list", `the board's list is the first call (${calls.slice(0, 4).map((c) => c.method).join(", ")})`);
+        }
         assert(lists[0].params.limit === PAGE && lists[0].params.summary === true, `the page is limit ${PAGE}, summary: ${JSON.stringify(lists[0].params)}`);
         assert(lists[0].params.after == null, "the first page has no after");
         const rows = main(page, B).locator(".board-row[data-id]");
@@ -281,6 +287,24 @@ async function main() {
         assert((await count(page, B)) === total, `the count is the extents' sum, ${total}`);
         const firstRow = await page.evaluate(() => window.__pages.firstRow);
         assert(firstRow != null, "the first row was stamped once its title showed");
+        // FRAME-17: the host marks its steps on the page's clock, in order (CONTRACT.md's host
+        // chapter); a mark set twice keeps its first. On the rhx board the route's snapshots
+        // are asked before any section mounts; on the Svelte board a `live` is module code,
+        // asked when its module mounts — first-call is the frame's first section's (`top`,
+        // board-layout-sv's nav.counts), before the main section.
+        const marks = await page.evaluate(() => {
+          const m = {};
+          for (const e of performance.getEntriesByType("mark")) if (e.name.startsWith("plexus-ui:")) m[e.name] ??= e.startTime;
+          return m;
+        });
+        const shownMarks = Object.entries(marks).map(([n, t]) => `${n} ${t.toFixed(0)}`).join(", ") || "none";
+        const slots = B.sections.map(([slot]) => `section-mounted:${slot}`);
+        const lacking = ["first-call", "components-parsed", ...slots, "layout-mounted", "first-answer", "first-row"].filter((n) => marks[`plexus-ui:${n}`] == null);
+        assert(!lacking.length, `the board's page carries the host's marks; it lacks ${lacking.join(", ")} (it has: ${shownMarks})`);
+        const m = (n) => marks[`plexus-ui:${n}`];
+        assert(m("components-parsed") <= m("first-call") && m("first-call") < m("section-mounted:main") && m("section-mounted:main") <= m("layout-mounted"), `components parsed, the first call, the main section mounted, then the layout: ${shownMarks}`);
+        if (!B.tag) assert(slots.every((n) => m("first-call") < m(n)), `the rhx board's first call before any section mounts: ${shownMarks}`);
+        assert(m("first-call") < m("first-answer") && m("first-answer") <= m("first-row") && m("first-row") <= firstRow, `the first call, its answer, its rows, no later than the board's first titled row (${firstRow.toFixed(0)}): ${shownMarks}`);
         console.log(`     first row (titled): ${firstRow.toFixed(0)} ms from timeOrigin · ${shown.length} rows drawn · ${total} tickets`);
       });
 
