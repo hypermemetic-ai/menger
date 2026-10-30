@@ -298,16 +298,13 @@ export default async (ctx) => {
         if ((await row.locator("[data-answer=rolled_back]").count()) === 1) return "rolled";
         return null;
       });
-      if (said === "rolled") {
-        // The service took it: ui.rollback is admitted to an admin of one shortcode (reported;
-        // the gate's, not the page's). The case puts v2 back and says so.
-        sy("ui", "rollback", "--to", v2.version);
-        console.log(`     skip a refused rollback said on its row: the service admits ui.rollback to an admin on ${code} (a gap of the gate, reported)`);
-      } else {
-        console.log(`     refused on the row: ${await text(row.locator("[data-refused]"))}`);
-        assert(live() === v2.version, "the pointer stayed on v2");
-        assert((await r.locator(`[data-id="${v2.version}"][data-live=true]`).count()) === 1, "and the page's mark with it");
-      }
+      // FRAME-43: the UI has no scope — a grant on one shortcode moves no pointer, and the row says so.
+      if (said === "rolled") sy("ui", "rollback", "--to", v2.version);
+      assert(said === "refused", `the service refuses ui.rollback to an admin on ${code} alone (FRAME-43); it answered: ${said}`);
+      const words = await text(row.locator("[data-refused]"));
+      assert(words.includes("*"), `the refusal names \`*\`: ${words}`);
+      assert(live() === v2.version, "the pointer stayed on v2");
+      assert((await r.locator(`[data-id="${v2.version}"][data-live=true]`).count()) === 1, "and the page's mark with it");
     } finally {
       await sa.context.close();
       revoke(shelf.principal, code);

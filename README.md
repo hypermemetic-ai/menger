@@ -760,7 +760,10 @@ against a tenant that is not menger (`../plexus-ui/service/tests`); menger's
 - **Who may**: viewers and editors `versions`, `watch`, `slots list`,
   `routes list`; editors `routes set`, `routes clear`, `author`; a
   `deployer` `push` (V2-7: a deploy pushes as the pipeline key); `rollback`,
-  `preview`, `slots set`, `slots clear` are the admin's.
+  `preview`, `slots set`, `slots clear` are the admin's. Every write
+  (`push`, `author`, `rollback`, `preview`, `slots set|clear`, `routes
+  set|clear`) wants its grant held on `*`: the UI has no scope, and a grant
+  held on a scope alone is refused `forbidden` naming the scope (FRAME-43).
 - **Signing and pushing** a bundle: `plexus-ui sign KEYFILE TAR` prints the
   signature; `plexus-ui push --url ws://… --key NAME TAR` signs in as the key
   and pushes it (FRAME-8: `../plexus-ui`'s tool, `scripts/plexus-ui` here;
