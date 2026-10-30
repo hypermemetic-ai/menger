@@ -1,5 +1,6 @@
 import type { RpcClient } from '../rpc';
-import type { MembersEvent, PairingCode, ScopeRef, TeamName } from './types';
+import { MethodStream } from '../rpc';
+import type { MembersEvent, PairingCode, SchemaResult, ScopeRef, TeamName } from './types';
 import type { Principal, Role } from '../orgs/types';
 import type { MembersProfilesClient } from '../members/profiles/client';
 import type { MembersTeamsClient } from '../members/teams/client';
@@ -25,7 +26,7 @@ export interface MembersClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `members.grant` on the scope of `scope`
      */
-    grant(role: Role, scope: ScopeRef, everyone?: boolean | null, principal?: Principal | null, team?: TeamName | null): AsyncGenerator<MembersEvent>;
+    grant(role: Role, scope: ScopeRef, everyone?: boolean | null, principal?: Principal | null, team?: TeamName | null): MethodStream<'members.grant', MembersEvent>;
     /**
      * The grants on the scopes you administer, by principal then scope.
   
@@ -36,7 +37,7 @@ export interface MembersClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `members.list` anywhere it is held
      */
-    list(scope?: ScopeRef | null): AsyncGenerator<MembersEvent>;
+    list(scope?: ScopeRef | null): MethodStream<'members.list', MembersEvent>;
     /**
      * Who you are, then your teams, then each grant you hold (a team's as team:<name>, everyone's as everyone).
   
@@ -46,7 +47,7 @@ export interface MembersClient {
   (ACCESS-57) everyone's (`principal: everyone`).
      * @requires `members.mine` anywhere it is held
      */
-    mine(): AsyncGenerator<MembersEvent>;
+    mine(): MethodStream<'members.mine', MembersEvent>;
     /**
      * The machines waiting whose pairing code is this one (TETHER-12: a code typed on #/pair).
   
@@ -58,7 +59,7 @@ export interface MembersClient {
      * @server-derived auth
      * @requires `members.pairing` anywhere it is held
      */
-    pairing(code: PairingCode): AsyncGenerator<MembersEvent>;
+    pairing(code: PairingCode): MethodStream<'members.pairing', MembersEvent>;
     /**
      * Who signed in without a grant, waiting for an admin.
   
@@ -70,7 +71,7 @@ export interface MembersClient {
   come back.
      * @requires `members.requests` anywhere it is held
      */
-    requests(): AsyncGenerator<MembersEvent>;
+    requests(): MethodStream<'members.requests', MembersEvent>;
     /**
      * Take a principal's or a team's role on a scope (an organization, a shortcode, a ticket, a subtree, or *) away.
   
@@ -82,12 +83,12 @@ export interface MembersClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `members.revoke` on the scope of `scope`
      */
-    revoke(scope: ScopeRef, everyone?: boolean | null, principal?: Principal | null, team?: TeamName | null): AsyncGenerator<MembersEvent>;
+    revoke(scope: ScopeRef, everyone?: boolean | null, principal?: Principal | null, team?: TeamName | null): MethodStream<'members.revoke', MembersEvent>;
     /**
      * Get plugin or method schema. Pass {"method": "name"} for a specific method.
      * @requires `members.schema` anywhere it is held
      */
-    schema(): Promise<unknown>;
+    schema(method?: string | null): Promise<SchemaResult>;
 }
 /** Create a typed members client from an RPC client */
 export declare function createMembersClient(rpc: RpcClient): MembersClient;

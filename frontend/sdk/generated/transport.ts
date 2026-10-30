@@ -32,6 +32,7 @@ import type {
   StandardResponse,
 } from './types';
 import type { RpcClient } from './rpc';
+import { currentCallScope } from './watch';
 
 // ─── CA-2: credential provider ─────────────────────────────────────────────
 
@@ -99,6 +100,19 @@ const CONNECTION_SITE_HINT: string | undefined = undefined;
 
 /** Fallback attach convention when neither override nor schema names a site. */
 const CONVENTION_SITE = 'cookie:access_token';
+
+/**
+ * RETURNS-17: a call failed on this side of the wire — the socket would not
+ * open, timed out, or closed while the call was waiting or streaming. Never
+ * a server's answer: that is a `RemoteCallError` (./rpc).
+ */
+export class TransportError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TransportError';
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
 
 /** Runtime environment probe — upgrade headers are settable in Node only. */
 const IS_NODE: boolean =
@@ -276,7 +290,8 @@ function rpcErrorFor(code: number, message: string, data?: unknown): PlexusRpcEr
 
 interface JsonRpcNotification {
   jsonrpc: '2.0';
-  method: 'subscription';
+  /** Not significant (plexus-wire spec/01): any string; never read (POLYGLOT-12). */
+  method: string;
   params: { subscription: number; result: PlexusStreamItem };
 }
 
@@ -289,6 +304,8 @@ interface ActiveSubscription {
   queue: PlexusStreamItem[];
   waiting: ((item: PlexusStreamItem | null) => void) | null;
   done: boolean;
+  /** RETURNS-17: the socket closed under it — a TransportError, never a quiet end. */
+  lost: boolean;
 }
 
 export class PlexusRpcClient implements RpcClient {
@@ -404,14 +421,14 @@ export class PlexusRpcClient implements RpcClient {
 
     return new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
-        reject(new Error(`Connection timeout after ${this.config.connectionTimeout}ms`));
+        reject(new TransportError(`Connection timeout after ${this.config.connectionTimeout}ms`));
       }, this.config.connectionTimeout);
 
       // In browsers, wsOpts is always undefined here (guarded above) — the
       // native WebSocket constructor only accepts (url, protocols).
       this.ws = wsOpts ? new WebSocket(this.config.url, wsOpts as any) : new WebSocket(this.config.url);
       this.ws.onopen  = () => { clearTimeout(timeout); this.log('Connected to', this.config.url); resolve(); };
-      this.ws.onerror = (event) => { clearTimeout(timeout); this.log('WebSocket error:', event); reject(new Error('WebSocket connection failed')); };
+      this.ws.onerror = (event) => { clearTimeout(timeout); this.log('WebSocket error:', event); reject(new TransportError('WebSocket connection failed')); };
       this.ws.onclose = (event) => { this.log('WebSocket closed:', event.code, event.reason); this.handleDisconnect(); };
       this.ws.onmessage = (event) => { this.handleMessage(event.data.toString()); };
     });
@@ -423,8 +440,8 @@ export class PlexusRpcClient implements RpcClient {
   }
 
   private handleDisconnect(): void {
-    for (const [id, pending] of this.pendingRequests) { pending.reject(new Error('Connection closed')); this.pendingRequests.delete(id); }
-    for (const [id, sub] of this.subscriptions) { sub.done = true; if (sub.waiting) { sub.waiting(null); sub.waiting = null; } this.subscriptions.delete(id); }
+    for (const [id, pending] of this.pendingRequests) { pending.reject(new TransportError('Connection closed')); this.pendingRequests.delete(id); }
+    for (const [id, sub] of this.subscriptions) { sub.done = true; sub.lost = true; if (sub.waiting) { sub.waiting(null); sub.waiting = null; } this.subscriptions.delete(id); }
   }
 
   private handleMessage(data: string): void {
@@ -485,7 +502,39 @@ export class PlexusRpcClient implements RpcClient {
     this.ws.send(JSON.stringify({ jsonrpc: '2.0', id, method: `${this.config.backend}.respond`, params: { request_id: requestId, response_data: response } }));
   }
 
+  /**
+   * RETURNS-38: `<service>.call_unsub` for a subscription its caller let go of
+   * before it ended — a `break`, or a merge closed (watch.ts). Its reply is
+   * taken here, awaited by no one.
+   */
+  private sendUnsubscribe(subscriptionId: number): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const id = this.nextId++;
+    this.pendingRequests.set(id, { resolve: () => {}, reject: () => {} });
+    this.log('Unsubscribing:', subscriptionId);
+    this.ws.send(JSON.stringify({ jsonrpc: '2.0', id, method: `${this.config.backend}.call_unsub`, params: [subscriptionId] }));
+  }
+
   async *call(method: string, params?: unknown): AsyncGenerator<PlexusStreamItem> {
+    // RETURNS-38: read first and synchronously — a merge (watch.ts) starts
+    // this call inside a scope, and closing the merge cancels through it,
+    // even while this generator is parked on an await.
+    const scope = currentCallScope();
+    let cancelled = false;
+    let acknowledged: number | undefined;
+    let unsubscribed = false;
+    let live: ActiveSubscription | undefined;
+    const unsubscribe = (): void => {
+      if (unsubscribed || acknowledged === undefined || !live || live.done) return;
+      unsubscribed = true;
+      this.sendUnsubscribe(acknowledged);
+    };
+    scope?.onCancel(() => {
+      cancelled = true;
+      unsubscribe();
+      if (live?.waiting) { const w = live.waiting; live.waiting = null; w(null); }
+    });
+
     // CA-2 preflight: a gated, non-public method with no credentials
     // configured fails fast CLIENT-SIDE, naming the requirement — no server
     // round-trip. Escape hatch: `preflight: false`.
@@ -516,9 +565,11 @@ export class PlexusRpcClient implements RpcClient {
     }
 
     await this.connect();
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) throw new Error('Not connected');
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) throw new TransportError('Not connected');
+    if (cancelled) return;
 
-    const sub: ActiveSubscription = { queue: [], waiting: null, done: false };
+    const sub: ActiveSubscription = { queue: [], waiting: null, done: false, lost: false };
+    live = sub;
     const id = this.nextId++;
     const request: JsonRpcRequest = {
       jsonrpc: '2.0', id,
@@ -533,6 +584,7 @@ export class PlexusRpcClient implements RpcClient {
     this.ws.send(JSON.stringify(request));
 
     const subscriptionId = await subscriptionIdPromise;
+    acknowledged = subscriptionId;
     this.log('Got subscription ID:', subscriptionId);
     this.subscriptions.set(subscriptionId, sub);
 
@@ -540,6 +592,8 @@ export class PlexusRpcClient implements RpcClient {
     if (pendingMessages) {
       this.pendingSubscriptionMessages.delete(subscriptionId);
       for (const msg of pendingMessages) {
+        // POLYGLOT-12: a request that came before the id is answered, as one after it is
+        if (msg.type === 'request') { this.handleBidirectionalRequest(msg as PlexusStreamItemRequest); continue; }
         if (msg.type === 'done' || msg.type === 'error') sub.done = true;
         sub.queue.push(msg);
       }
@@ -547,19 +601,28 @@ export class PlexusRpcClient implements RpcClient {
 
     try {
       while (true) {
+        if (cancelled) return;
         if (sub.queue.length > 0) {
           const item = sub.queue.shift()!;
           yield item;
           if (item.type === 'done' || item.type === 'error') return;
           continue;
         }
-        if (sub.done) return;
+        if (sub.done) {
+          if (sub.lost) throw new TransportError(`Connection closed while ${method} was streaming`);
+          return;
+        }
         const item = await new Promise<PlexusStreamItem | null>(resolve => { sub.waiting = resolve; });
-        if (item === null) return;
+        if (item === null) {
+          if (cancelled) return;
+          throw new TransportError(`Connection closed while ${method} was streaming`);
+        }
         yield item;
         if (item.type === 'done' || item.type === 'error') return;
       }
     } finally {
+      // Ended before its done / error: the server is still streaming.
+      unsubscribe();
       this.subscriptions.delete(subscriptionId);
     }
   }

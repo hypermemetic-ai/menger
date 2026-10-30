@@ -1,5 +1,6 @@
 import type { RpcClient } from '../../rpc';
-import type { WebhookSecret, WebhookUrl } from './types';
+import { MethodStream } from '../../rpc';
+import type { SchemaResult, WebhookSecret, WebhookUrl } from './types';
 import type { DeploymentsEvent, EnvironmentName, Project } from '../../deployments/types';
 /** Typed client interface for deployments.webhook plugin */
 export interface DeploymentsWebhookClient {
@@ -12,12 +13,12 @@ export interface DeploymentsWebhookClient {
      * (`url: null`) or an in-band `error`. Admin on the project.
      * @requires `webhook.clear` on the scope of `project`
      */
-    clear(environment: EnvironmentName, project: Project): AsyncGenerator<DeploymentsEvent>;
+    clear(environment: EnvironmentName, project: Project): MethodStream<'deployments.webhook.clear', DeploymentsEvent>;
     /**
      * Get plugin or method schema. Pass {"method": "name"} for a specific method.
      * @requires `webhook.schema` anywhere it is held
      */
-    schema(): Promise<unknown>;
+    schema(method?: string | null): Promise<SchemaResult>;
     /**
      * Set an environment's webhook (admin): url (https, or http to loopback) and the secret that signs each delivery; yields webhook { url, secret_set }
      *
@@ -30,7 +31,7 @@ export interface DeploymentsWebhookClient {
      * `error`, nothing written. Admin on the project.
      * @requires `webhook.set` on the scope of `project`
      */
-    set(environment: EnvironmentName, project: Project, secret: WebhookSecret, url: WebhookUrl): AsyncGenerator<DeploymentsEvent>;
+    set(environment: EnvironmentName, project: Project, secret: WebhookSecret, url: WebhookUrl): MethodStream<'deployments.webhook.set', DeploymentsEvent>;
     /**
      * Show an environment's webhook (admin): url, secret_set, set_at, set_by — never the secret
      *
@@ -40,7 +41,7 @@ export interface DeploymentsWebhookClient {
      * Admin on the project.
      * @requires `webhook.show` on the scope of `project`
      */
-    show(environment: EnvironmentName, project: Project): AsyncGenerator<DeploymentsEvent>;
+    show(environment: EnvironmentName, project: Project): MethodStream<'deployments.webhook.show', DeploymentsEvent>;
 }
 /** Create a typed deployments.webhook client from an RPC client */
 export declare function createDeploymentsWebhookClient(rpc: RpcClient): DeploymentsWebhookClient;

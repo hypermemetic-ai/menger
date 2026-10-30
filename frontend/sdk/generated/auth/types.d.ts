@@ -111,8 +111,15 @@ export interface MembershipEntry {
     role: string;
     scope: string;
 }
-/** A method, as `<activation>.<method>` — `tickets.set_status`. Two
-or more dot-separated segments, none empty, no whitespace. */
+/** A dotted method path like `auth.login` or `cone.send_message`.
+
+Wire form: bare string. Validation: must match
+`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`. At least two segments are required
+(the activation namespace plus the method name).
+
+Wildcards are NOT allowed — wildcards belong to `Scope` (AUTHZ-CORE-4).
+
+Per AUTHZ-S01-output §1. */
 export type MethodPath = string;
 /** How a provider signs someone in. */
 export type ProviderKind = "browser" | "password" | "key";
@@ -125,3 +132,5 @@ export type RoleName = string;
 /** Where a role is held: a scope name (`MENGER`) or `*`, everywhere.
 What a name means is the service's; it is not blank. */
 export type ScopeName = string;
+/** Stub type - definition missing from IR */
+export type SchemaResult = unknown;

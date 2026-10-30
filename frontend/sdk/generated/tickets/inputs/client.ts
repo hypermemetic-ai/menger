@@ -2,8 +2,8 @@
 // Wraps RPC layer and unwraps PlexusStreamItem to domain types
 
 import type { RpcClient } from '../../rpc';
-import { extractData, collectOne } from '../../rpc';
-import type { Question } from './types';
+import { MethodStream, collectOne } from '../../rpc';
+import type { Question, SchemaResult } from './types';
 import type { InputId, InputState, InputValue } from '../../chats/types';
 import type { ShortcodeRef, TicketRef } from '../../notes/types';
 import type { FilterText, Message, TicketsEvent, Zone } from '../../tickets/types';
@@ -32,7 +32,7 @@ body. `tickets.watch` carries the `InputChanged`.
    * @requiresAuth — resolver: self.access.verify
    * @requires `inputs.answer` on the scope of `ticket`
    */
-  answer(input: InputId, ticket: TicketRef, value: InputValue, rationale?: Message | null): AsyncGenerator<TicketsEvent>;
+  answer(input: InputId, ticket: TicketRef, value: InputValue, rationale?: Message | null): MethodStream<'tickets.inputs.answer', TicketsEvent>;
   /**
    * File a question for the owner on a ticket: a new text input appended to its body (one write, one revision); yields input_changed with the input.
 
@@ -49,7 +49,7 @@ elsewhere is malformed — and nothing is written.
    * @requiresAuth — resolver: self.access.verify
    * @requires `inputs.ask` on the scope of `ticket`
    */
-  ask(question: Question, ticket: TicketRef): AsyncGenerator<TicketsEvent>;
+  ask(question: Question, ticket: TicketRef): MethodStream<'tickets.inputs.ask', TicketsEvent>;
   /**
    * Clear an input's answer (open again; kept in its history, with where it came from, said by the server); yields input_changed.
 
@@ -62,7 +62,7 @@ such input, closed, removed.
    * @requiresAuth — resolver: self.access.verify
    * @requires `inputs.clear` on the scope of `ticket`
    */
-  clear(input: InputId, ticket: TicketRef): AsyncGenerator<TicketsEvent>;
+  clear(input: InputId, ticket: TicketRef): MethodStream<'tickets.inputs.clear', TicketsEvent>;
   /**
    * Close an input: freeze its answer (or its lack of one); yields input_changed.
 
@@ -75,7 +75,7 @@ input, removed.
    * @requiresAuth — resolver: self.access.verify
    * @requires `inputs.close` on the scope of `ticket`
    */
-  close(input: InputId, ticket: TicketRef): AsyncGenerator<TicketsEvent>;
+  close(input: InputId, ticket: TicketRef): MethodStream<'tickets.inputs.close', TicketsEvent>;
   /**
    * Every input (a body's <m-decision id> / <m-input id kind>) with its kind, question, options, recommendation, state, answer and history; filtered by ticket, shortcode, state and a filter on its ticket.
 
@@ -102,7 +102,7 @@ filter.
    * @requiresAuth — resolver: self.access.verify
    * @requires `inputs.list` anywhere it is held
    */
-  list(epic?: ShortcodeRef | null, filter?: FilterText | null, state?: InputState | null, ticket?: TicketRef | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
+  list(epic?: ShortcodeRef | null, filter?: FilterText | null, state?: InputState | null, ticket?: TicketRef | null, tz?: Zone | null): MethodStream<'tickets.inputs.list', TicketsEvent>;
   /**
    * Reopen a closed input; yields input_changed.
 
@@ -114,12 +114,12 @@ no such input, removed.
    * @requiresAuth — resolver: self.access.verify
    * @requires `inputs.reopen` on the scope of `ticket`
    */
-  reopen(input: InputId, ticket: TicketRef): AsyncGenerator<TicketsEvent>;
+  reopen(input: InputId, ticket: TicketRef): MethodStream<'tickets.inputs.reopen', TicketsEvent>;
   /**
    * Get plugin or method schema. Pass {"method": "name"} for a specific method.
    * @requires `inputs.schema` anywhere it is held
    */
-  schema(): Promise<unknown>;
+  schema(method?: string | null): Promise<SchemaResult>;
 }
 
 /** Typed client implementation for tickets.inputs plugin */
@@ -127,39 +127,39 @@ class TicketsInputsClientImpl implements TicketsInputsClient {
   private rpc: RpcClient;
   constructor(rpc: RpcClient) { this.rpc = rpc; }
 
-  async *answer(input: InputId, ticket: TicketRef, value: InputValue, rationale?: Message | null): AsyncGenerator<TicketsEvent> {
+  answer(input: InputId, ticket: TicketRef, value: InputValue, rationale?: Message | null): MethodStream<'tickets.inputs.answer', TicketsEvent> {
     const stream = this.rpc.call('tickets.inputs.answer', { input, rationale, ticket, value });
-    yield* extractData<TicketsEvent>(stream);
+    return new MethodStream<'tickets.inputs.answer', TicketsEvent>('tickets.inputs.answer', stream);
   }
 
-  async *ask(question: Question, ticket: TicketRef): AsyncGenerator<TicketsEvent> {
+  ask(question: Question, ticket: TicketRef): MethodStream<'tickets.inputs.ask', TicketsEvent> {
     const stream = this.rpc.call('tickets.inputs.ask', { question, ticket });
-    yield* extractData<TicketsEvent>(stream);
+    return new MethodStream<'tickets.inputs.ask', TicketsEvent>('tickets.inputs.ask', stream);
   }
 
-  async *clear(input: InputId, ticket: TicketRef): AsyncGenerator<TicketsEvent> {
+  clear(input: InputId, ticket: TicketRef): MethodStream<'tickets.inputs.clear', TicketsEvent> {
     const stream = this.rpc.call('tickets.inputs.clear', { input, ticket });
-    yield* extractData<TicketsEvent>(stream);
+    return new MethodStream<'tickets.inputs.clear', TicketsEvent>('tickets.inputs.clear', stream);
   }
 
-  async *close(input: InputId, ticket: TicketRef): AsyncGenerator<TicketsEvent> {
+  close(input: InputId, ticket: TicketRef): MethodStream<'tickets.inputs.close', TicketsEvent> {
     const stream = this.rpc.call('tickets.inputs.close', { input, ticket });
-    yield* extractData<TicketsEvent>(stream);
+    return new MethodStream<'tickets.inputs.close', TicketsEvent>('tickets.inputs.close', stream);
   }
 
-  async *list(epic?: ShortcodeRef | null, filter?: FilterText | null, state?: InputState | null, ticket?: TicketRef | null, tz?: Zone | null): AsyncGenerator<TicketsEvent> {
+  list(epic?: ShortcodeRef | null, filter?: FilterText | null, state?: InputState | null, ticket?: TicketRef | null, tz?: Zone | null): MethodStream<'tickets.inputs.list', TicketsEvent> {
     const stream = this.rpc.call('tickets.inputs.list', { epic, filter, state, ticket, tz });
-    yield* extractData<TicketsEvent>(stream);
+    return new MethodStream<'tickets.inputs.list', TicketsEvent>('tickets.inputs.list', stream);
   }
 
-  async *reopen(input: InputId, ticket: TicketRef): AsyncGenerator<TicketsEvent> {
+  reopen(input: InputId, ticket: TicketRef): MethodStream<'tickets.inputs.reopen', TicketsEvent> {
     const stream = this.rpc.call('tickets.inputs.reopen', { input, ticket });
-    yield* extractData<TicketsEvent>(stream);
+    return new MethodStream<'tickets.inputs.reopen', TicketsEvent>('tickets.inputs.reopen', stream);
   }
 
-  async schema(): Promise<unknown> {
-    const stream = this.rpc.call('tickets.inputs.schema', {});
-    return collectOne<unknown>(stream);
+  async schema(method?: string | null): Promise<SchemaResult> {
+    const stream = this.rpc.call('tickets.inputs.schema', { method });
+    return collectOne<SchemaResult>(stream);
   }
 }
 

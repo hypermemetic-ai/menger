@@ -2,7 +2,8 @@
 // Wraps RPC layer and unwraps PlexusStreamItem to domain types
 
 import type { RpcClient } from '../../rpc';
-import { extractData, collectOne } from '../../rpc';
+import { MethodStream, collectOne } from '../../rpc';
+import type { SchemaResult } from './types';
 import type { TicketsEvent } from '../../tickets/types';
 
 /** Typed client interface for tickets.components plugin */
@@ -27,12 +28,12 @@ shortcode gets the components whose owner it can view — no orphan —
 each with only the references it can view.
    * @requires `components.list` anywhere it is held
    */
-  list(): AsyncGenerator<TicketsEvent>;
+  list(): MethodStream<'tickets.components.list', TicketsEvent>;
   /**
    * Get plugin or method schema. Pass {"method": "name"} for a specific method.
    * @requires `components.schema` anywhere it is held
    */
-  schema(): Promise<unknown>;
+  schema(method?: string | null): Promise<SchemaResult>;
 }
 
 /** Typed client implementation for tickets.components plugin */
@@ -40,14 +41,14 @@ class TicketsComponentsClientImpl implements TicketsComponentsClient {
   private rpc: RpcClient;
   constructor(rpc: RpcClient) { this.rpc = rpc; }
 
-  async *list(): AsyncGenerator<TicketsEvent> {
+  list(): MethodStream<'tickets.components.list', TicketsEvent> {
     const stream = this.rpc.call('tickets.components.list', {});
-    yield* extractData<TicketsEvent>(stream);
+    return new MethodStream<'tickets.components.list', TicketsEvent>('tickets.components.list', stream);
   }
 
-  async schema(): Promise<unknown> {
-    const stream = this.rpc.call('tickets.components.schema', {});
-    return collectOne<unknown>(stream);
+  async schema(method?: string | null): Promise<SchemaResult> {
+    const stream = this.rpc.call('tickets.components.schema', { method });
+    return collectOne<SchemaResult>(stream);
   }
 }
 

@@ -1,5 +1,6 @@
 import type { RpcClient } from '../rpc';
-import type { ChatId, MediaData, MediaEvent, MediaHash, MediaType } from './types';
+import { MethodStream } from '../rpc';
+import type { ChatId, MediaData, MediaEvent, MediaHash, MediaType, SchemaResult } from './types';
 import type { TicketRef } from '../notes/types';
 /** Typed client interface for media plugin */
 export interface MediaClient {
@@ -18,7 +19,7 @@ export interface MediaClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `media.get` anywhere it is held
      */
-    get(hash: MediaHash, ticket?: TicketRef | null): AsyncGenerator<MediaEvent>;
+    get(hash: MediaHash, ticket?: TicketRef | null): MethodStream<'media.get', MediaEvent>;
     /**
      * Keep an image for a ticket (PNG, JPEG, GIF or WebP, at most 7 MiB, base64); yields stored { hash, mime, bytes, width, height, duplicate }.
   
@@ -46,12 +47,12 @@ export interface MediaClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `media.put` on the scope of `ticket`
      */
-    put(data: MediaData, mime: MediaType, chat?: ChatId | null, ticket?: TicketRef | null): AsyncGenerator<MediaEvent>;
+    put(data: MediaData, mime: MediaType, chat?: ChatId | null, ticket?: TicketRef | null): MethodStream<'media.put', MediaEvent>;
     /**
      * Get plugin or method schema. Pass {"method": "name"} for a specific method.
      * @requires `media.schema` anywhere it is held
      */
-    schema(): Promise<unknown>;
+    schema(method?: string | null): Promise<SchemaResult>;
 }
 /** Create a typed media client from an RPC client */
 export declare function createMediaClient(rpc: RpcClient): MediaClient;

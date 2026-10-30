@@ -1,6 +1,7 @@
-import type { Answer, Archived, Code, CommitRef, InputHistoryEntry, InputId, InputKind, InputOption, InputState, Label, Placement, Severity, ShortcodeId, Status, TicketId, TicketName, TicketSummary } from '../chats/types';
-import type { EpicArchived, WatchEnd } from '../epics/types';
+import type { Answer, Archived, Code, CommitRef, InputHistoryEntry, InputId, InputKind, InputOption, InputState, Label, Placement, Severity, ShortcodeId, Status, TicketId, TicketName, TicketSummary, Uid } from '../chats/types';
+import type { EpicArchived, EpicName, WatchEnd } from '../epics/types';
 import type { Kind, TicketRef } from '../notes/types';
+import type { OrgId } from '../orgs/types';
 /** MNG-16: what an `amend` moved — its title, its body. */
 export type AmendedField = "title" | "body";
 /** Where a comment was left: the app page, the place on it, what was there
@@ -101,6 +102,33 @@ export declare function isAttrKindTicket(e: AttrKind): e is AttrKindTicket;
 export declare function isAttrKindEnum(e: AttrKind): e is AttrKindEnum;
 /** Where a write comes from: app, api (default) or pipeline (synapse is api, merge pipeline) */
 export type CallerSource = "app" | "api" | "pipeline";
+/** TICKETS-35: one of the tickets a name fits — what `ambiguous` says of
+each candidate, so a reader can choose: its uid, key, full address,
+organization, epic, kind, status, title and parent. A candidate the
+caller may not read (or that is a shortcode, not a ticket) carries its
+address alone, as `candidates` does. */
+export interface Choice {
+    /** Its full address — always: the candidate it is. */
+    address: string;
+    /** ORG-13: the epic it is in (`genesis`), not its shortcode's letters. */
+    epic?: EpicName | null;
+    id?: TicketId | null;
+    kind?: Kind | null;
+    org?: OrgId | null;
+    /** Its parent, when it has one the caller reads. */
+    parent?: ChoiceParent | null;
+    status?: Status | null;
+    title?: string | null;
+    uid?: Uid | null;
+}
+/** TICKETS-35: a [`Choice`]'s parent — enough to tell two namesakes apart
+and to link to it by uid. */
+export interface ChoiceParent {
+    address: string;
+    id: TicketId;
+    title: string;
+    uid?: Uid;
+}
 /** One comment, as kept. */
 export interface Comment {
     anchor: Anchor;
@@ -665,6 +693,17 @@ export interface Ticket {
     shortcode?: ShortcodeId;
     status: Status;
     title: string;
+    /** TICKETS-35: the ticket's uid — the one name nothing changes: minted
+  at its birth (and once for every ticket a file held before uids),
+  kept through every move, never another's. Every name of the ticket
+  takes it, bare or in a link (`/t/<uid>/…`). `default`, and omitted
+  when there is none: a server from before TICKETS-35 sends none. */
+    uid?: Uid;
+    /** TICKETS-35: the uid of each ticket this one names — its `parent`,
+  each of `blocked_by` and each of `unlocks` — keyed as it names them;
+  a forward reference (a ticket not born yet) has none. Filled as the
+  ticket goes out, of the tickets its reader sees; omitted when empty. */
+    uidOf?: Record<string, unknown>;
     /** Ticket ids that can start once this one completes. */
     unlocks: TicketName[];
     updatedUnix: number;
@@ -1220,10 +1259,15 @@ export interface TicketsEventNotFound {
 /** ORG-3: `id` (an address as it was asked — a ticket or a shortcode)
 names more than one thing in the reader's reach: `candidates` are
 each one's full address, in the store's order. Nothing was read or
-written; name one of them in full, or by a short form only it has. */
+written; name one of them in full, or by a short form only it has.
+TICKETS-35: `choices`, one per candidate in the same order — a
+ticket the caller reads with its uid, id, address, organization,
+epic, kind, status, title and parent; any other (a shortcode, a
+ticket out of the caller's reach) its address alone. */
 export interface TicketsEventAmbiguous {
     type: 'ambiguous';
     candidates: string[];
+    choices: Choice[];
     id: Asked;
 }
 /** TICKETS-6: refused because `scope` is frozen — a new child of it, a
@@ -1567,6 +1611,10 @@ export interface Tombstone {
     reparented?: TicketId[];
     restorableUntilUnix?: number | null;
     title: string;
+    /** TICKETS-35: the deleted ticket's uid — it names the tombstone, and
+  the ticket again once it is undeleted. Omitted when none (a ticket
+  deleted by a server before TICKETS-35, until the next open mints it). */
+    uid?: Uid;
     unblocked?: TicketId[];
 }
 /** MENGER-13: one **transition** — a change of one ticket's status or kind,
@@ -1617,3 +1665,5 @@ IANA name (`Europe/Berlin`), `UTC`, or an offset (`+02:00`). Checked
 for its spelling here (wasm-safe); a name the server's tzdb does not
 hold is the server's in-band refusal. */
 export type Zone = string;
+/** Stub type - definition missing from IR */
+export type SchemaResult = unknown;

@@ -1,4 +1,6 @@
 import type { RpcClient } from '../../rpc';
+import { MethodStream } from '../../rpc';
+import type { SchemaResult } from './types';
 import type { MembersEvent, TeamName } from '../../members/types';
 import type { OrgId, Principal } from '../../orgs/types';
 /** Typed client interface for members.teams plugin */
@@ -12,7 +14,7 @@ export interface MembersTeamsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `teams.add` anywhere it is held
      */
-    add(principal: Principal, team: TeamName): AsyncGenerator<MembersEvent>;
+    add(principal: Principal, team: TeamName): MethodStream<'members.teams.add', MembersEvent>;
     /**
      * Make a team, empty, in an organization; yields the team. Needs admin somewhere.
   
@@ -23,7 +25,7 @@ export interface MembersTeamsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `teams.create` anywhere it is held
      */
-    create(name: TeamName, org?: OrgId | null): AsyncGenerator<MembersEvent>;
+    create(name: TeamName, org?: OrgId | null): MethodStream<'members.teams.create', MembersEvent>;
     /**
      * Delete a team — every grant it holds goes with it; needs admin on every scope it holds.
   
@@ -33,7 +35,7 @@ export interface MembersTeamsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `teams.delete` anywhere it is held
      */
-    delete(team: TeamName): AsyncGenerator<MembersEvent>;
+    delete(team: TeamName): MethodStream<'members.teams.delete', MembersEvent>;
     /**
      * The teams in your organizations, by name; one team { name, org, created_by, at, members } each.
   
@@ -43,7 +45,7 @@ export interface MembersTeamsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `teams.list` anywhere it is held
      */
-    list(org?: OrgId | null): AsyncGenerator<MembersEvent>;
+    list(org?: OrgId | null): MethodStream<'members.teams.list', MembersEvent>;
     /**
      * Take a principal out of a team; needs admin on every scope it holds.
   
@@ -53,19 +55,19 @@ export interface MembersTeamsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `teams.remove` anywhere it is held
      */
-    remove(principal: Principal, team: TeamName): AsyncGenerator<MembersEvent>;
+    remove(principal: Principal, team: TeamName): MethodStream<'members.teams.remove', MembersEvent>;
     /**
      * Rename a team — its members and grants go with it; needs admin on every scope it holds.
      * @server-derived auth
      * @requiresAuth — resolver: self.access.verify
      * @requires `teams.rename` anywhere it is held
      */
-    rename(team: TeamName, to: TeamName): AsyncGenerator<MembersEvent>;
+    rename(team: TeamName, to: TeamName): MethodStream<'members.teams.rename', MembersEvent>;
     /**
      * Get plugin or method schema. Pass {"method": "name"} for a specific method.
      * @requires `teams.schema` anywhere it is held
      */
-    schema(): Promise<unknown>;
+    schema(method?: string | null): Promise<SchemaResult>;
     /**
      * A team: then each member (team_member), then each grant it holds on a scope you administer.
   
@@ -77,7 +79,7 @@ export interface MembersTeamsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `teams.show` anywhere it is held
      */
-    show(team: TeamName): AsyncGenerator<MembersEvent>;
+    show(team: TeamName): MethodStream<'members.teams.show', MembersEvent>;
 }
 /** Create a typed members.teams client from an RPC client */
 export declare function createMembersTeamsClient(rpc: RpcClient): MembersTeamsClient;

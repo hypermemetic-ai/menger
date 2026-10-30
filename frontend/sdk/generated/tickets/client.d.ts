@@ -1,5 +1,6 @@
 import type { RpcClient } from '../rpc';
-import type { CallerSource, Cursor, DeleteChildren, FilterText, MengerPath, Message, MockupRef, Reason, SeverityChange, TicketsEvent, Urgency, Zone } from './types';
+import { MethodStream } from '../rpc';
+import type { CallerSource, Cursor, DeleteChildren, FilterText, MengerPath, Message, MockupRef, Reason, SchemaResult, SeverityChange, TicketsEvent, Urgency, Zone } from './types';
 import type { InputId, Label, MessageId, Severity, Status } from '../chats/types';
 import type { ChatId } from '../media/types';
 import type { Body, Kind, Query, ShortcodeRef, TicketRef, Title } from '../notes/types';
@@ -50,7 +51,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.amend` on the scope of `id`
      */
-    amend(id: TicketRef, body?: Body | null, title?: Title | null): AsyncGenerator<TicketsEvent>;
+    amend(id: TicketRef, body?: Body | null, title?: Title | null): MethodStream<'tickets.amend', TicketsEvent>;
     /**
      * Archive tickets — each named (or a filter's) with its whole subtree, live work included and named (live); out of every view unless a filter says archived; status unchanged; yields archived { ids, live, unqueued, mark, dry_run }.
   
@@ -59,7 +60,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.archive` on the scope of `ids`
      */
-    archive(dryRun?: boolean | null, filter?: FilterText | null, ids?: TicketRef[] | null, max?: number | null, message?: Message | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
+    archive(dryRun?: boolean | null, filter?: FilterText | null, ids?: TicketRef[] | null, max?: number | null, message?: Message | null, tz?: Zone | null): MethodStream<'tickets.archive', TicketsEvent>;
     /**
      * Assign or unassign a ticket's people and agents — principals that read it — or many tickets' (ids; one write, all or none); yields assignees_changed { ticket, added, removed } per ticket.
   
@@ -76,7 +77,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.assign` on the scope of `id`
      */
-    assign(add?: Principal[] | null, id?: TicketRef | null, ids?: TicketRef[] | null, message?: Message | null, remove?: Principal[] | null, source?: CallerSource | null): AsyncGenerator<TicketsEvent>;
+    assign(add?: Principal[] | null, id?: TicketRef | null, ids?: TicketRef[] | null, message?: Message | null, remove?: Principal[] | null, source?: CallerSource | null): MethodStream<'tickets.assign', TicketsEvent>;
     /**
      * Wait for the owner's response on a ticket: waiting { ticket, queued } at once, then one replied { ticket, reply } — an input answered, changes requested, a comment or an unqueue by another, the ticket canceled or deleted — and the end; timed_out after timeout_minutes.
   
@@ -85,7 +86,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.await_reply` anywhere it is held
      */
-    awaitReply(id: TicketRef, input?: InputId | null, since?: number | null, timeoutMinutes?: number | null): AsyncGenerator<TicketsEvent>;
+    awaitReply(id: TicketRef, input?: InputId | null, since?: number | null, timeoutMinutes?: number | null): MethodStream<'tickets.await_reply', TicketsEvent>;
     /**
      * Create a ticket; allocates the next EPIC-N id, status starts Pending (a doc's: Doc, for good); the first ticket of a prefix must be a scope or a doc.
   
@@ -121,7 +122,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.create` anywhere it is held
      */
-    create(epic: ShortcodeRef, title: Title, blockedBy?: TicketRef[] | null, body?: Body | null, chat?: ChatId | null, kind?: Kind | null, org?: OrgId | null, parent?: TicketRef | null, path?: MengerPath | null, severity?: Severity | null): AsyncGenerator<TicketsEvent>;
+    create(epic: ShortcodeRef, title: Title, blockedBy?: TicketRef[] | null, body?: Body | null, chat?: ChatId | null, kind?: Kind | null, org?: OrgId | null, parent?: TicketRef | null, path?: MengerPath | null, severity?: Severity | null): MethodStream<'tickets.create', TicketsEvent>;
     /**
      * Delete tickets for good (admin): refused while children, blockers, a shortcode, a component, a theme or a live input point at one, unless children reparent|delete and unblock say what moves; a tombstone kept (get answers deleted), the body 30 days for undelete; yields deleted { ids, tombstones }.
   
@@ -134,7 +135,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.delete` on the scope of `ids`
      */
-    delete(children?: DeleteChildren | null, filter?: FilterText | null, ids?: TicketRef[] | null, max?: number | null, message?: Message | null, tz?: Zone | null, unblock?: boolean | null): AsyncGenerator<TicketsEvent>;
+    delete(children?: DeleteChildren | null, filter?: FilterText | null, ids?: TicketRef[] | null, max?: number | null, message?: Message | null, tz?: Zone | null, unblock?: boolean | null): MethodStream<'tickets.delete', TicketsEvent>;
     /**
      * Find tickets whose id or title contains the query (case-insensitive), optionally under a filter; summary rows, paged with after + limit.
   
@@ -161,7 +162,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.find` anywhere it is held
      */
-    find(query: Query, after?: Cursor | null, filter?: FilterText | null, limit?: number | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
+    find(query: Query, after?: Cursor | null, filter?: FilterText | null, limit?: number | null, tz?: Zone | null): MethodStream<'tickets.find', TicketsEvent>;
     /**
      * Freeze a scope (admin): no new children of it, no new numbers in the shortcode it roots, until it is unfrozen; yields frozen_changed { ticket }.
   
@@ -172,7 +173,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.freeze` on the scope of `id`
      */
-    freeze(id: TicketRef): AsyncGenerator<TicketsEvent>;
+    freeze(id: TicketRef): MethodStream<'tickets.freeze', TicketsEvent>;
     /**
      * Get one ticket by id, or by path address SHORTCODE/path (e.g. PLEXUS/_MENGER/board).
   
@@ -184,7 +185,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.get` anywhere it is held
      */
-    get(id: TicketRef): AsyncGenerator<TicketsEvent>;
+    get(id: TicketRef): MethodStream<'tickets.get', TicketsEvent>;
     /**
      * Heartbeat — version, unix time, ticket count.
   
@@ -192,7 +193,7 @@ export interface TicketsClient {
   how many tickets the store holds.
      * @requires `tickets.health` anywhere it is held
      */
-    health(): AsyncGenerator<TicketsEvent>;
+    health(): MethodStream<'tickets.health', TicketsEvent>;
     /**
      * A ticket's history: each status and kind transition (from, to, when, who, source, message, cause), oldest first, then those it caused in other tickets, then its queue records (MENGER-39), then history_end (when the log began; what a restore would put back; since when it has held its status).
   
@@ -213,7 +214,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.history` anywhere it is held
      */
-    history(id: TicketRef): AsyncGenerator<TicketsEvent>;
+    history(id: TicketRef): MethodStream<'tickets.history', TicketsEvent>;
     /**
      * Add or remove a ticket's labels (e.g. needs-you), or many tickets' (ids; one write, all or none); yields labels_changed { ticket, added, removed } per ticket.
   
@@ -235,7 +236,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.label` on the scope of `id`
      */
-    label(add?: Label[] | null, id?: TicketRef | null, ids?: TicketRef[] | null, remove?: Label[] | null): AsyncGenerator<TicketsEvent>;
+    label(add?: Label[] | null, id?: TicketRef | null, ids?: TicketRef[] | null, remove?: Label[] | null): MethodStream<'tickets.label', TicketsEvent>;
     /**
      * List tickets, optionally filtered by epic, status, parent and/or a filter; paged with after + limit, or at a position with at.
   
@@ -277,7 +278,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.list` anywhere it is held
      */
-    list(after?: Cursor | null, at?: number | null, epic?: ShortcodeRef | null, filter?: FilterText | null, keep?: TicketRef | null, limit?: number | null, parent?: TicketRef | null, status?: Status | null, summary?: boolean | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
+    list(after?: Cursor | null, at?: number | null, epic?: ShortcodeRef | null, filter?: FilterText | null, keep?: TicketRef | null, limit?: number | null, parent?: TicketRef | null, status?: Status | null, summary?: boolean | null, tz?: Zone | null): MethodStream<'tickets.list', TicketsEvent>;
     /**
      * Queue a ticket for the owner — urgency whenever | today | now | blocking (blocking names the input that answers it), and why, with the inputs it asks (repeat --input; --blocking the one you are idle on) and views of mockups to look at (repeat --mockup); queued again it is raised, never lowered, and its inputs and views added; yields queued { entry, ticket, action }.
   
@@ -289,7 +290,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.queue` on the scope of `id`
      */
-    queue(id: TicketRef, reason: Reason, urgency: Urgency, blocking?: InputId | null, input?: InputId[] | null, message?: MessageId | null, mockup?: MockupRef[] | null, source?: CallerSource | null): AsyncGenerator<TicketsEvent>;
+    queue(id: TicketRef, reason: Reason, urgency: Urgency, blocking?: InputId | null, input?: InputId[] | null, message?: MessageId | null, mockup?: MockupRef[] | null, source?: CallerSource | null): MethodStream<'tickets.queue', TicketsEvent>;
     /**
      * The owner's queue, most urgent first, then oldest: a queue_row { entry, ticket } each, then queue_end { count, snoozed, now_unix }.
   
@@ -298,7 +299,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.queued` anywhere it is held
      */
-    queued(snoozed?: boolean | null): AsyncGenerator<TicketsEvent>;
+    queued(snoozed?: boolean | null): MethodStream<'tickets.queued', TicketsEvent>;
     /**
      * Rename a ticket into a subtask id, `<parent>.N` (TICKETS-10.1), only under its own parent; its old id keeps resolving (get says moved_from); refused in band, naming the rule, anywhere else; yields reshortcoded { moves, tickets }.
   
@@ -308,7 +309,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.rename` on the scope of `id`
      */
-    rename(id: TicketRef, to: TicketRef, dryRun?: boolean | null, message?: Message | null): AsyncGenerator<TicketsEvent>;
+    rename(id: TicketRef, to: TicketRef, dryRun?: boolean | null, message?: Message | null): MethodStream<'tickets.rename', TicketsEvent>;
     /**
      * Request changes on a queued ticket: the body kept as a comment on its conversation (intent changes) and the ticket unqueued (action changes_requested), in one write; its input stays open; yields changes_requested { id, comment, entry, by, at_unix }.
   
@@ -317,7 +318,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.request_changes` on the scope of `id`
      */
-    requestChanges(body: Body, id: TicketRef, source?: CallerSource | null): AsyncGenerator<TicketsEvent>;
+    requestChanges(body: Body, id: TicketRef, source?: CallerSource | null): MethodStream<'tickets.request_changes', TicketsEvent>;
     /**
      * Move tickets into another shortcode, renumbered there in the order given (a scope moved into a new code becomes its root; --new-scope makes the shortcode first; a root moves with --with-children as a rename); old ids keep resolving (get says moved_from); all or none; yields reshortcoded { moves, tickets }.
   
@@ -326,7 +327,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.reshortcode` on the scope of `ids`
      */
-    reshortcode(ids: TicketRef[], to: ShortcodeRef, dryRun?: boolean | null, message?: Message | null, newScope?: Title | null, parent?: TicketRef | null, withChildren?: boolean | null): AsyncGenerator<TicketsEvent>;
+    reshortcode(ids: TicketRef[], to: ShortcodeRef, dryRun?: boolean | null, message?: Message | null, newScope?: Title | null, parent?: TicketRef | null, withChildren?: boolean | null): MethodStream<'tickets.reshortcode', TicketsEvent>;
     /**
      * Restore archived tickets — each named (or a filter's archived ones) back in every view with its archived ancestors; with_children, the subtree archived with it; yields restored { ids, ancestors, still_archived, by, dry_run }.
   
@@ -335,12 +336,12 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.restore` on the scope of `ids`
      */
-    restore(dryRun?: boolean | null, filter?: FilterText | null, ids?: TicketRef[] | null, max?: number | null, message?: Message | null, tz?: Zone | null, withChildren?: boolean | null): AsyncGenerator<TicketsEvent>;
+    restore(dryRun?: boolean | null, filter?: FilterText | null, ids?: TicketRef[] | null, max?: number | null, message?: Message | null, tz?: Zone | null, withChildren?: boolean | null): MethodStream<'tickets.restore', TicketsEvent>;
     /**
      * Get plugin or method schema. Pass {"method": "name"} for a specific method.
      * @requires `tickets.schema` anywhere it is held
      */
-    schema(): Promise<unknown>;
+    schema(method?: string | null): Promise<SchemaResult>;
     /**
      * Search inside tickets: the tickets whose title or body holds every word of the query (prefixes and typos too), best first, each with the passage that matched; optionally under a filter, paged with offset + limit.
   
@@ -363,7 +364,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.search` anywhere it is held
      */
-    search(query: Query, filter?: FilterText | null, limit?: number | null, offset?: number | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
+    search(query: Query, filter?: FilterText | null, limit?: number | null, offset?: number | null, tz?: Zone | null): MethodStream<'tickets.search', TicketsEvent>;
     /**
      * Set a ticket's kind; everything kept by kind moves with it (to a doc: status Doc; from a doc: the status given, else Epic for a scope and Pending otherwise).
   
@@ -389,7 +390,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.set_kind` on the scope of `id`
      */
-    setKind(id: TicketRef, kind: Kind, message?: Message | null, source?: CallerSource | null, status?: Status | null): AsyncGenerator<TicketsEvent>;
+    setKind(id: TicketRef, kind: Kind, message?: Message | null, source?: CallerSource | null, status?: Status | null): MethodStream<'tickets.set_kind', TicketsEvent>;
     /**
      * Set a ticket's parent — the ticket it is an output of; adopts a parentless ticket or moves one.
   
@@ -405,7 +406,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.set_parent` on the scope of `id`
      */
-    setParent(id: TicketRef, parent: TicketRef): AsyncGenerator<TicketsEvent>;
+    setParent(id: TicketRef, parent: TicketRef): MethodStream<'tickets.set_parent', TicketsEvent>;
     /**
      * Set a ticket's status (not a doc's: a doc has no lifecycle); Canceled cancels its open descendants in the same write, and leaving Canceled may restore them (restore_children).
   
@@ -430,7 +431,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.set_status` on the scope of `id`
      */
-    setStatus(id: TicketRef, status: Status, message?: Message | null, restoreChildren?: boolean | null, source?: CallerSource | null): AsyncGenerator<TicketsEvent>;
+    setStatus(id: TicketRef, status: Status, message?: Message | null, restoreChildren?: boolean | null, source?: CallerSource | null): MethodStream<'tickets.set_status', TicketsEvent>;
     /**
      * Snooze a queued ticket for some minutes (1 to a week): off the alerting surfaces, still queued; yields snoozed { entry, ticket }.
   
@@ -440,7 +441,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.snooze` on the scope of `id`
      */
-    snooze(id: TicketRef, minutes: number, source?: CallerSource | null): AsyncGenerator<TicketsEvent>;
+    snooze(id: TicketRef, minutes: number, source?: CallerSource | null): MethodStream<'tickets.snooze', TicketsEvent>;
     /**
      * Bring deleted tickets back (admin) within 30 days of the delete, whole, children and blocks put back; yields undeleted { ids, tickets }.
   
@@ -452,7 +453,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.undelete` on the scope of `ids`
      */
-    undelete(ids: TicketRef[]): AsyncGenerator<TicketsEvent>;
+    undelete(ids: TicketRef[]): MethodStream<'tickets.undelete', TicketsEvent>;
     /**
      * Unfreeze a scope (admin): it and its shortcode grow again; yields frozen_changed { ticket }.
   
@@ -461,7 +462,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.unfreeze` on the scope of `id`
      */
-    unfreeze(id: TicketRef): AsyncGenerator<TicketsEvent>;
+    unfreeze(id: TicketRef): MethodStream<'tickets.unfreeze', TicketsEvent>;
     /**
      * Take a ticket out of the owner's queue (done with it, or withdrawn); yields unqueued { id, entry, action, by, at_unix }, or not_queued.
   
@@ -471,7 +472,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.unqueue` on the scope of `id`
      */
-    unqueue(id: TicketRef, source?: CallerSource | null): AsyncGenerator<TicketsEvent>;
+    unqueue(id: TicketRef, source?: CallerSource | null): MethodStream<'tickets.unqueue', TicketsEvent>;
     /**
      * Change any part of a ticket in one write — title, body, kind, status, parent, severity, blockers (block / unblock); all lands or none does; yields updated { ticket, changed }.
   
@@ -484,7 +485,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.update` on the scope of `id`
      */
-    update(id: TicketRef, block?: TicketRef[] | null, body?: Body | null, hidden?: boolean | null, kind?: Kind | null, message?: Message | null, parent?: TicketRef | null, severity?: SeverityChange | null, source?: CallerSource | null, status?: Status | null, title?: Title | null, unblock?: TicketRef[] | null): AsyncGenerator<TicketsEvent>;
+    update(id: TicketRef, block?: TicketRef[] | null, body?: Body | null, hidden?: boolean | null, kind?: Kind | null, message?: Message | null, parent?: TicketRef | null, severity?: SeverityChange | null, source?: CallerSource | null, status?: Status | null, title?: Title | null, unblock?: TicketRef[] | null): MethodStream<'tickets.update', TicketsEvent>;
     /**
      * The same update to many tickets in one write — kind, status, parent, severity, blockers, labels; by ids or a filter; all lands or none does; yields updated_many { ids, changed, tickets, unchanged }.
   
@@ -497,7 +498,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.update_many` on the scope of `ids`
      */
-    updateMany(assign?: Principal[] | null, block?: TicketRef[] | null, filter?: FilterText | null, ids?: TicketRef[] | null, kind?: Kind | null, label?: Label[] | null, max?: number | null, message?: Message | null, parent?: TicketRef | null, severity?: SeverityChange | null, source?: CallerSource | null, status?: Status | null, tz?: Zone | null, unassign?: Principal[] | null, unblock?: TicketRef[] | null, unlabel?: Label[] | null): AsyncGenerator<TicketsEvent>;
+    updateMany(assign?: Principal[] | null, block?: TicketRef[] | null, filter?: FilterText | null, ids?: TicketRef[] | null, kind?: Kind | null, label?: Label[] | null, max?: number | null, message?: Message | null, parent?: TicketRef | null, severity?: SeverityChange | null, source?: CallerSource | null, status?: Status | null, tz?: Zone | null, unassign?: Principal[] | null, unblock?: TicketRef[] | null, unlabel?: Label[] | null): MethodStream<'tickets.update_many', TicketsEvent>;
     /**
      * Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / AssigneesChanged / UnlocksChanged / UnlocksRemoved / BlockersChanged / SeverityChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / ComponentChanged / ComponentRemoved / InputChanged / UpdatedMany / Deleted / Undeleted / Reshortcoded), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events; Entered / Left / Recount when the caller's grants move what it sees; WatchClosed { reason } when they end it.
   
@@ -581,7 +582,7 @@ export interface TicketsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `tickets.watch` anywhere it is held
      */
-    watch(epic?: ShortcodeRef | null, filter?: FilterText | null, membership?: boolean | null, revisions?: boolean | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
+    watch(epic?: ShortcodeRef | null, filter?: FilterText | null, membership?: boolean | null, revisions?: boolean | null, tz?: Zone | null): MethodStream<'tickets.watch', TicketsEvent>;
 }
 /** Create a typed tickets client from an RPC client */
 export declare function createTicketsClient(rpc: RpcClient): TicketsClient;

@@ -2,8 +2,8 @@
 // Wraps RPC layer and unwraps PlexusStreamItem to domain types
 
 import type { RpcClient } from '../rpc';
-import { extractData, collectOne } from '../rpc';
-import type { Branch, DeploySource, DeployState, DeploymentId, DeploymentsEvent, EnvironmentName, Project, Release, StepName, StepState, StepUrl, Timestamp } from './types';
+import { MethodStream, collectOne } from '../rpc';
+import type { Branch, DeploySource, DeployState, DeploymentId, DeploymentsEvent, EnvironmentName, Project, Release, SchemaResult, StepName, StepState, StepUrl, Timestamp } from './types';
 import type { CommitRef } from '../chats/types';
 import type { TicketRef } from '../notes/types';
 import type { Message } from '../tickets/types';
@@ -28,7 +28,7 @@ signed: `deployments.webhook.set|clear|show`. Admin's alone. */
    * admin's) on the request's project.
    * @requires `deployments.cancel_request` anywhere it is held
    */
-  cancelRequest(id: DeploymentId): AsyncGenerator<DeploymentsEvent>;
+  cancelRequest(id: DeploymentId): MethodStream<'deployments.cancel_request', DeploymentsEvent>;
   /**
    * Each environment: what it runs, since when, its last deployment, how many tickets run there
    *
@@ -38,7 +38,7 @@ signed: `deployments.webhook.set|clear|show`. Admin's alone. */
    * tickets run there, and (DEPLOY-21) `from`, where it promotes from.
    * @requires `deployments.environments` anywhere it is held
    */
-  environments(project?: Project | null): AsyncGenerator<DeploymentsEvent>;
+  environments(project?: Project | null): MethodStream<'deployments.environments', DeploymentsEvent>;
   /**
    * Where a ticket's work runs: running { environment, since, deployment, behind, version } per environment, not_running for the rest
    *
@@ -52,7 +52,7 @@ signed: `deployments.webhook.set|clear|show`. Admin's alone. */
    * names no ticket.
    * @requires `deployments.for_ticket` on the scope of `id`
    */
-  forTicket(id: TicketRef): AsyncGenerator<DeploymentsEvent>;
+  forTicket(id: TicketRef): MethodStream<'deployments.for_ticket', DeploymentsEvent>;
   /**
    * List deployments newest first, by project, environment, state and ticket; each with the tickets it carried
    *
@@ -63,7 +63,7 @@ signed: `deployments.webhook.set|clear|show`. Admin's alone. */
    * (older than) that deployment; `limit` caps the page. From the cache.
    * @requires `deployments.list` anywhere it is held
    */
-  list(after?: DeploymentId | null, environment?: EnvironmentName | null, limit?: number | null, project?: Project | null, state?: DeployState | null, ticket?: TicketRef | null): AsyncGenerator<DeploymentsEvent>;
+  list(after?: DeploymentId | null, environment?: EnvironmentName | null, limit?: number | null, project?: Project | null, state?: DeployState | null, ticket?: TicketRef | null): MethodStream<'deployments.list', DeploymentsEvent>;
   /**
    * Set where an environment promotes from (admin): prod from test; without from, from none; yields promotes { project, environment, from }
    *
@@ -77,7 +77,7 @@ signed: `deployments.webhook.set|clear|show`. Admin's alone. */
    * moved — or an in-band `error` (itself, a cycle), nothing written.
    * @requires `deployments.promotes` on the scope of `project`
    */
-  promotes(environment: EnvironmentName, project: Project, from?: EnvironmentName | null): AsyncGenerator<DeploymentsEvent>;
+  promotes(environment: EnvironmentName, project: Project, from?: EnvironmentName | null): MethodStream<'deployments.promotes', DeploymentsEvent>;
   /**
    * Record a deployment (DEPLOY-10's record): the tickets its commits carry run in the environment; yields deployed { deployment, carried, unlinked, entered, left, duplicate }
    *
@@ -107,7 +107,7 @@ signed: `deployments.webhook.set|clear|show`. Admin's alone. */
    * `watch`.
    * @requires `deployments.record` on the scope of `project`
    */
-  record(environment: EnvironmentName, project: Project, revision: CommitRef, state: DeployState, at?: Timestamp | null, commits?: CommitRef[] | null, from?: EnvironmentName | null, previous?: CommitRef | null, release?: Release | null, request?: DeploymentId | null, source?: DeploySource | null, tickets?: TicketRef[] | null): AsyncGenerator<DeploymentsEvent>;
+  record(environment: EnvironmentName, project: Project, revision: CommitRef, state: DeployState, at?: Timestamp | null, commits?: CommitRef[] | null, from?: EnvironmentName | null, previous?: CommitRef | null, release?: Release | null, request?: DeploymentId | null, source?: DeploySource | null, tickets?: TicketRef[] | null): MethodStream<'deployments.record', DeploymentsEvent>;
   /**
    * Queue a deploy: kept as a requested deployment, POSTed to the environment's webhook (signed); yields request { deployment, carried }
    *
@@ -127,7 +127,7 @@ signed: `deployments.webhook.set|clear|show`. Admin's alone. */
    * (or admin's) on the project.
    * @requires `deployments.request` on the scope of `project`
    */
-  request(environment: EnvironmentName, project: Project, branch?: Branch | null, note?: Message | null, release?: Release | null, revision?: CommitRef | null): AsyncGenerator<DeploymentsEvent>;
+  request(environment: EnvironmentName, project: Project, branch?: Branch | null, note?: Message | null, release?: Release | null, revision?: CommitRef | null): MethodStream<'deployments.request', DeploymentsEvent>;
   /**
    * The kept cells: cells { project, environment, running: [{ ticket, since, deployment, behind, version }], staged: [{ ticket, stage }] } per environment
    *
@@ -142,12 +142,12 @@ signed: `deployments.webhook.set|clear|show`. Admin's alone. */
    * What the app's board marks are drawn from, one read for every row.
    * @requires `deployments.running` anywhere it is held
    */
-  running(environment?: EnvironmentName | null, ids?: TicketRef[] | null, project?: Project | null): AsyncGenerator<DeploymentsEvent>;
+  running(environment?: EnvironmentName | null, ids?: TicketRef[] | null, project?: Project | null): MethodStream<'deployments.running', DeploymentsEvent>;
   /**
    * Get plugin or method schema. Pass {"method": "name"} for a specific method.
    * @requires `deployments.schema` anywhere it is held
    */
-  schema(): Promise<unknown>;
+  schema(method?: string | null): Promise<SchemaResult>;
   /**
    * Report a step of a request's run (its executor's): name, state, detail, url; yields request { deployment, carried }
    *
@@ -166,7 +166,7 @@ signed: `deployments.webhook.set|clear|show`. Admin's alone. */
    * on the request's project.
    * @requires `deployments.step` anywhere it is held
    */
-  step(name: StepName, request: DeploymentId, state: StepState, detail?: Message | null, url?: StepUrl | null): AsyncGenerator<DeploymentsEvent>;
+  step(name: StepName, request: DeploymentId, state: StepState, detail?: Message | null, url?: StepUrl | null): MethodStream<'deployments.step', DeploymentsEvent>;
   /**
    * Watch deployments: deployed, then environment_changed, as each is recorded
    *
@@ -177,7 +177,7 @@ signed: `deployments.webhook.set|clear|show`. Admin's alone. */
    * `tickets.watch { filter }`.
    * @requires `deployments.watch` anywhere it is held
    */
-  watch(): AsyncGenerator<DeploymentsEvent>;
+  watch(): MethodStream<'deployments.watch', DeploymentsEvent>;
 }
 
 /** Typed client implementation for deployments plugin */
@@ -189,59 +189,59 @@ class DeploymentsClientImpl implements DeploymentsClient {
     this.webhook = createDeploymentsWebhookClient(rpc);
   }
 
-  async *cancelRequest(id: DeploymentId): AsyncGenerator<DeploymentsEvent> {
+  cancelRequest(id: DeploymentId): MethodStream<'deployments.cancel_request', DeploymentsEvent> {
     const stream = this.rpc.call('deployments.cancel_request', { id });
-    yield* extractData<DeploymentsEvent>(stream);
+    return new MethodStream<'deployments.cancel_request', DeploymentsEvent>('deployments.cancel_request', stream);
   }
 
-  async *environments(project?: Project | null): AsyncGenerator<DeploymentsEvent> {
+  environments(project?: Project | null): MethodStream<'deployments.environments', DeploymentsEvent> {
     const stream = this.rpc.call('deployments.environments', { project });
-    yield* extractData<DeploymentsEvent>(stream);
+    return new MethodStream<'deployments.environments', DeploymentsEvent>('deployments.environments', stream);
   }
 
-  async *forTicket(id: TicketRef): AsyncGenerator<DeploymentsEvent> {
+  forTicket(id: TicketRef): MethodStream<'deployments.for_ticket', DeploymentsEvent> {
     const stream = this.rpc.call('deployments.for_ticket', { id });
-    yield* extractData<DeploymentsEvent>(stream);
+    return new MethodStream<'deployments.for_ticket', DeploymentsEvent>('deployments.for_ticket', stream);
   }
 
-  async *list(after?: DeploymentId | null, environment?: EnvironmentName | null, limit?: number | null, project?: Project | null, state?: DeployState | null, ticket?: TicketRef | null): AsyncGenerator<DeploymentsEvent> {
+  list(after?: DeploymentId | null, environment?: EnvironmentName | null, limit?: number | null, project?: Project | null, state?: DeployState | null, ticket?: TicketRef | null): MethodStream<'deployments.list', DeploymentsEvent> {
     const stream = this.rpc.call('deployments.list', { after, environment, limit, project, state, ticket });
-    yield* extractData<DeploymentsEvent>(stream);
+    return new MethodStream<'deployments.list', DeploymentsEvent>('deployments.list', stream);
   }
 
-  async *promotes(environment: EnvironmentName, project: Project, from?: EnvironmentName | null): AsyncGenerator<DeploymentsEvent> {
+  promotes(environment: EnvironmentName, project: Project, from?: EnvironmentName | null): MethodStream<'deployments.promotes', DeploymentsEvent> {
     const stream = this.rpc.call('deployments.promotes', { environment, from, project });
-    yield* extractData<DeploymentsEvent>(stream);
+    return new MethodStream<'deployments.promotes', DeploymentsEvent>('deployments.promotes', stream);
   }
 
-  async *record(environment: EnvironmentName, project: Project, revision: CommitRef, state: DeployState, at?: Timestamp | null, commits?: CommitRef[] | null, from?: EnvironmentName | null, previous?: CommitRef | null, release?: Release | null, request?: DeploymentId | null, source?: DeploySource | null, tickets?: TicketRef[] | null): AsyncGenerator<DeploymentsEvent> {
+  record(environment: EnvironmentName, project: Project, revision: CommitRef, state: DeployState, at?: Timestamp | null, commits?: CommitRef[] | null, from?: EnvironmentName | null, previous?: CommitRef | null, release?: Release | null, request?: DeploymentId | null, source?: DeploySource | null, tickets?: TicketRef[] | null): MethodStream<'deployments.record', DeploymentsEvent> {
     const stream = this.rpc.call('deployments.record', { at, commits, environment, from, previous, project, release, request, revision, source, state, tickets });
-    yield* extractData<DeploymentsEvent>(stream);
+    return new MethodStream<'deployments.record', DeploymentsEvent>('deployments.record', stream);
   }
 
-  async *request(environment: EnvironmentName, project: Project, branch?: Branch | null, note?: Message | null, release?: Release | null, revision?: CommitRef | null): AsyncGenerator<DeploymentsEvent> {
+  request(environment: EnvironmentName, project: Project, branch?: Branch | null, note?: Message | null, release?: Release | null, revision?: CommitRef | null): MethodStream<'deployments.request', DeploymentsEvent> {
     const stream = this.rpc.call('deployments.request', { branch, environment, note, project, release, revision });
-    yield* extractData<DeploymentsEvent>(stream);
+    return new MethodStream<'deployments.request', DeploymentsEvent>('deployments.request', stream);
   }
 
-  async *running(environment?: EnvironmentName | null, ids?: TicketRef[] | null, project?: Project | null): AsyncGenerator<DeploymentsEvent> {
+  running(environment?: EnvironmentName | null, ids?: TicketRef[] | null, project?: Project | null): MethodStream<'deployments.running', DeploymentsEvent> {
     const stream = this.rpc.call('deployments.running', { environment, ids, project });
-    yield* extractData<DeploymentsEvent>(stream);
+    return new MethodStream<'deployments.running', DeploymentsEvent>('deployments.running', stream);
   }
 
-  async schema(): Promise<unknown> {
-    const stream = this.rpc.call('deployments.schema', {});
-    return collectOne<unknown>(stream);
+  async schema(method?: string | null): Promise<SchemaResult> {
+    const stream = this.rpc.call('deployments.schema', { method });
+    return collectOne<SchemaResult>(stream);
   }
 
-  async *step(name: StepName, request: DeploymentId, state: StepState, detail?: Message | null, url?: StepUrl | null): AsyncGenerator<DeploymentsEvent> {
+  step(name: StepName, request: DeploymentId, state: StepState, detail?: Message | null, url?: StepUrl | null): MethodStream<'deployments.step', DeploymentsEvent> {
     const stream = this.rpc.call('deployments.step', { detail, name, request, state, url });
-    yield* extractData<DeploymentsEvent>(stream);
+    return new MethodStream<'deployments.step', DeploymentsEvent>('deployments.step', stream);
   }
 
-  async *watch(): AsyncGenerator<DeploymentsEvent> {
+  watch(): MethodStream<'deployments.watch', DeploymentsEvent> {
     const stream = this.rpc.call('deployments.watch', {});
-    yield* extractData<DeploymentsEvent>(stream);
+    return new MethodStream<'deployments.watch', DeploymentsEvent>('deployments.watch', stream);
   }
 }
 

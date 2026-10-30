@@ -2,8 +2,8 @@
 // Wraps RPC layer and unwraps PlexusStreamItem to domain types
 
 import type { RpcClient } from '../rpc';
-import { extractData, collectOne } from '../rpc';
-import type { ChatId, MediaData, MediaEvent, MediaHash, MediaType } from './types';
+import { MethodStream, collectOne } from '../rpc';
+import type { ChatId, MediaData, MediaEvent, MediaHash, MediaType, SchemaResult } from './types';
 import type { TicketRef } from '../notes/types';
 
 /** Typed client interface for media plugin */
@@ -23,7 +23,7 @@ cache.
    * @requiresAuth — resolver: self.access.verify
    * @requires `media.get` anywhere it is held
    */
-  get(hash: MediaHash, ticket?: TicketRef | null): AsyncGenerator<MediaEvent>;
+  get(hash: MediaHash, ticket?: TicketRef | null): MethodStream<'media.get', MediaEvent>;
   /**
    * Keep an image for a ticket (PNG, JPEG, GIF or WebP, at most 7 MiB, base64); yields stored { hash, mime, bytes, width, height, duplicate }.
 
@@ -51,12 +51,12 @@ putter's, and the admins' of `*`. Through synapse the data is a file
    * @requiresAuth — resolver: self.access.verify
    * @requires `media.put` on the scope of `ticket`
    */
-  put(data: MediaData, mime: MediaType, chat?: ChatId | null, ticket?: TicketRef | null): AsyncGenerator<MediaEvent>;
+  put(data: MediaData, mime: MediaType, chat?: ChatId | null, ticket?: TicketRef | null): MethodStream<'media.put', MediaEvent>;
   /**
    * Get plugin or method schema. Pass {"method": "name"} for a specific method.
    * @requires `media.schema` anywhere it is held
    */
-  schema(): Promise<unknown>;
+  schema(method?: string | null): Promise<SchemaResult>;
 }
 
 /** Typed client implementation for media plugin */
@@ -64,19 +64,19 @@ class MediaClientImpl implements MediaClient {
   private rpc: RpcClient;
   constructor(rpc: RpcClient) { this.rpc = rpc; }
 
-  async *get(hash: MediaHash, ticket?: TicketRef | null): AsyncGenerator<MediaEvent> {
+  get(hash: MediaHash, ticket?: TicketRef | null): MethodStream<'media.get', MediaEvent> {
     const stream = this.rpc.call('media.get', { hash, ticket });
-    yield* extractData<MediaEvent>(stream);
+    return new MethodStream<'media.get', MediaEvent>('media.get', stream);
   }
 
-  async *put(data: MediaData, mime: MediaType, chat?: ChatId | null, ticket?: TicketRef | null): AsyncGenerator<MediaEvent> {
+  put(data: MediaData, mime: MediaType, chat?: ChatId | null, ticket?: TicketRef | null): MethodStream<'media.put', MediaEvent> {
     const stream = this.rpc.call('media.put', { chat, data, mime, ticket });
-    yield* extractData<MediaEvent>(stream);
+    return new MethodStream<'media.put', MediaEvent>('media.put', stream);
   }
 
-  async schema(): Promise<unknown> {
-    const stream = this.rpc.call('media.schema', {});
-    return collectOne<unknown>(stream);
+  async schema(method?: string | null): Promise<SchemaResult> {
+    const stream = this.rpc.call('media.schema', { method });
+    return collectOne<SchemaResult>(stream);
   }
 }
 

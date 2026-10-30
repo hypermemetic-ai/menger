@@ -43,6 +43,14 @@ export interface MethodRequirements {
     readonly siteHint?: string;
 }
 /**
+ * RETURNS-17: a call failed on this side of the wire — the socket would not
+ * open, timed out, or closed while the call was waiting or streaming. Never
+ * a server's answer: that is a `RemoteCallError` (./rpc).
+ */
+export declare class TransportError extends Error {
+    constructor(message: string);
+}
+/**
  * Thrown CLIENT-SIDE (preflight, no server round-trip) when a gated method
  * is called with no credentials configured (CA-2). Disable via
  * `preflight: false` in the config to send the call anyway.
@@ -151,6 +159,12 @@ export declare class PlexusRpcClient implements RpcClient {
     private handleNotification;
     private handleBidirectionalRequest;
     private sendBidirectionalResponse;
+    /**
+     * RETURNS-38: `<service>.call_unsub` for a subscription its caller let go of
+     * before it ended — a `break`, or a merge closed (watch.ts). Its reply is
+     * taken here, awaited by no one.
+     */
+    private sendUnsubscribe;
     call(method: string, params?: unknown): AsyncGenerator<PlexusStreamItem>;
 }
 export declare function createClient(config: PlexusRpcConfig): PlexusRpcClient;

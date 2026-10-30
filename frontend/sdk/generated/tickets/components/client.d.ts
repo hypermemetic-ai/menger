@@ -1,4 +1,6 @@
 import type { RpcClient } from '../../rpc';
+import { MethodStream } from '../../rpc';
+import type { SchemaResult } from './types';
 import type { TicketsEvent } from '../../tickets/types';
 /** Typed client interface for tickets.components plugin */
 export interface TicketsComponentsClient {
@@ -22,12 +24,12 @@ export interface TicketsComponentsClient {
   each with only the references it can view.
      * @requires `components.list` anywhere it is held
      */
-    list(): AsyncGenerator<TicketsEvent>;
+    list(): MethodStream<'tickets.components.list', TicketsEvent>;
     /**
      * Get plugin or method schema. Pass {"method": "name"} for a specific method.
      * @requires `components.schema` anywhere it is held
      */
-    schema(): Promise<unknown>;
+    schema(method?: string | null): Promise<SchemaResult>;
 }
 /** Create a typed tickets.components client from an RPC client */
 export declare function createTicketsComponentsClient(rpc: RpcClient): TicketsComponentsClient;

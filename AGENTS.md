@@ -812,8 +812,11 @@ COMPILE-4, README "Diagrams"; menger runs without it.) Pick by consumer:
   container** (`../dockerfiles/plexus-codegen`, STARTER-2) rather than
   from a host install; `../plexus-starter`'s `scripts/codegen.sh` is the
   worked example of wiring that into `npm run build`, `cargo xtask` and
-  CI. `synapse-cc` 0.3.5 and `service-codegen` 0.5.0 are also installed in
-  `~/.local/bin` (2026-10-16). menger's own use (COMP-10):
+  CI. `synapse-cc` 0.3.6 and `service-codegen` 0.5.2 are also installed in
+  `~/.local/bin` (`~/AGENTS.md` "This machine"). Since SYNAPSE-CC-9 the
+  frames' SDK needs service-codegen 0.5.2 (TICKETS-37: a type the protocol
+  root declares and an activation uses is generated and imported); the
+  image holds 0.5.1 until STARTER-6 rebuilds it. menger's own use (COMP-10):
   `scripts/sdk-codegen.sh` generates the frames' typed SDK
   (`menger.tickets.*`) into `frontend/sdk/generated/` — rerun it whenever
   the activation's surface changes; `tickets-api/tests/sdk_manifest.rs`

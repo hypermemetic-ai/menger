@@ -1,5 +1,6 @@
 import type { RpcClient } from '../rpc';
-import type { Ceiling, SessionEvent } from './types';
+import { MethodStream } from '../rpc';
+import type { Ceiling, SchemaResult, SessionEvent } from './types';
 /** Typed client interface for session plugin */
 export interface SessionClient {
     /**
@@ -18,7 +19,7 @@ export interface SessionClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `session.login` anywhere it is held
      */
-    login(scope?: Ceiling[] | null, ttlSecs?: number | null): AsyncGenerator<SessionEvent>;
+    login(scope?: Ceiling[] | null, ttlSecs?: number | null): MethodStream<'session.login', SessionEvent>;
     /**
      * End this connection's session: logged_out.
   
@@ -28,7 +29,7 @@ export interface SessionClient {
   no session.
      * @requires `session.logout` anywhere it is held
      */
-    logout(): AsyncGenerator<SessionEvent>;
+    logout(): MethodStream<'session.logout', SessionEvent>;
     /**
      * The providers this menger admits callers through: provider { name, kind, issuer, audience }.
   
@@ -39,12 +40,12 @@ export interface SessionClient {
   `public` (ACCESS-19), answered before anyone has signed in.
      * @requires `session.providers` anywhere it is held
      */
-    providers(): AsyncGenerator<SessionEvent>;
+    providers(): MethodStream<'session.providers', SessionEvent>;
     /**
      * Get plugin or method schema. Pass {"method": "name"} for a specific method.
      * @requires `session.schema` anywhere it is held
      */
-    schema(): Promise<unknown>;
+    schema(method?: string | null): Promise<SchemaResult>;
     /**
      * Who this connection is: identity { principal, name, roles, tenant, provider }, or anonymous.
   
@@ -58,7 +59,7 @@ export interface SessionClient {
   never reported as signed in.
      * @requires `session.whoami` anywhere it is held
      */
-    whoami(): AsyncGenerator<SessionEvent>;
+    whoami(): MethodStream<'session.whoami', SessionEvent>;
 }
 /** Create a typed session client from an RPC client */
 export declare function createSessionClient(rpc: RpcClient): SessionClient;

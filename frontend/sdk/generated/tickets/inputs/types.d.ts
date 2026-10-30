@@ -3,3 +3,5 @@ its whitespace one space each (one line), at most [`QUESTION_MAX`]
 bytes, without control characters. Kept as text: the store escapes
 it into the body's markup. */
 export type Question = string;
+/** Stub type - definition missing from IR */
+export type SchemaResult = unknown;

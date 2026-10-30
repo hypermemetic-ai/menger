@@ -2,8 +2,8 @@
 // Wraps RPC layer and unwraps PlexusStreamItem to domain types
 
 import type { RpcClient } from '../rpc';
-import { extractData, collectOne } from '../rpc';
-import type { Author, Body, Kind, NoteId, NoteState, NotesEvent, Query, ShortcodeRef, TicketRef, Title } from './types';
+import { MethodStream, collectOne } from '../rpc';
+import type { Author, Body, Kind, NoteId, NoteState, NotesEvent, Query, SchemaResult, ShortcodeRef, TicketRef, Title } from './types';
 
 /** Typed client interface for notes plugin */
 export interface NotesClient {
@@ -19,7 +19,7 @@ export interface NotesClient {
    * `error` naming the problem, with nothing kept.
    * @requires `notes.add` anywhere it is held
    */
-  add(body: Body, author?: Author | null): AsyncGenerator<NotesEvent>;
+  add(body: Body, author?: Author | null): MethodStream<'notes.add', NotesEvent>;
   /**
    * Get one note by id
    *
@@ -27,7 +27,7 @@ export interface NotesClient {
    * in-band `error` for an id that names no note.
    * @requires `notes.get` anywhere it is held
    */
-  get(id: NoteId): AsyncGenerator<NotesEvent>;
+  get(id: NoteId): MethodStream<'notes.get', NotesEvent>;
   /**
    * List notes newest first, by state, author and text; paged with after and limit
    *
@@ -41,12 +41,12 @@ export interface NotesClient {
    * names no note, is one in-band `error` and nothing else. From the cache.
    * @requires `notes.list` anywhere it is held
    */
-  list(after?: NoteId | null, author?: Author | null, limit?: number | null, state?: NoteState | null, text?: Query | null): AsyncGenerator<NotesEvent>;
+  list(after?: NoteId | null, author?: Author | null, limit?: number | null, state?: NoteState | null, text?: Query | null): MethodStream<'notes.list', NotesEvent>;
   /**
    * Get plugin or method schema. Pass {"method": "name"} for a specific method.
    * @requires `notes.schema` anywhere it is held
    */
-  schema(): Promise<unknown>;
+  schema(method?: string | null): Promise<SchemaResult>;
   /**
    * Make a note a ticket, titled by its first line unless given; yields the note
    *
@@ -65,7 +65,7 @@ export interface NotesClient {
    * `tickets.create` where the ticket lands, as `tickets.create` does.
    * @requires `notes.upgrade` anywhere it is held
    */
-  upgrade(epic: ShortcodeRef, id: NoteId, kind?: Kind | null, parent?: TicketRef | null, title?: Title | null): AsyncGenerator<NotesEvent>;
+  upgrade(epic: ShortcodeRef, id: NoteId, kind?: Kind | null, parent?: TicketRef | null, title?: Title | null): MethodStream<'notes.upgrade', NotesEvent>;
 }
 
 /** Typed client implementation for notes plugin */
@@ -73,29 +73,29 @@ class NotesClientImpl implements NotesClient {
   private rpc: RpcClient;
   constructor(rpc: RpcClient) { this.rpc = rpc; }
 
-  async *add(body: Body, author?: Author | null): AsyncGenerator<NotesEvent> {
+  add(body: Body, author?: Author | null): MethodStream<'notes.add', NotesEvent> {
     const stream = this.rpc.call('notes.add', { author, body });
-    yield* extractData<NotesEvent>(stream);
+    return new MethodStream<'notes.add', NotesEvent>('notes.add', stream);
   }
 
-  async *get(id: NoteId): AsyncGenerator<NotesEvent> {
+  get(id: NoteId): MethodStream<'notes.get', NotesEvent> {
     const stream = this.rpc.call('notes.get', { id });
-    yield* extractData<NotesEvent>(stream);
+    return new MethodStream<'notes.get', NotesEvent>('notes.get', stream);
   }
 
-  async *list(after?: NoteId | null, author?: Author | null, limit?: number | null, state?: NoteState | null, text?: Query | null): AsyncGenerator<NotesEvent> {
+  list(after?: NoteId | null, author?: Author | null, limit?: number | null, state?: NoteState | null, text?: Query | null): MethodStream<'notes.list', NotesEvent> {
     const stream = this.rpc.call('notes.list', { after, author, limit, state, text });
-    yield* extractData<NotesEvent>(stream);
+    return new MethodStream<'notes.list', NotesEvent>('notes.list', stream);
   }
 
-  async schema(): Promise<unknown> {
-    const stream = this.rpc.call('notes.schema', {});
-    return collectOne<unknown>(stream);
+  async schema(method?: string | null): Promise<SchemaResult> {
+    const stream = this.rpc.call('notes.schema', { method });
+    return collectOne<SchemaResult>(stream);
   }
 
-  async *upgrade(epic: ShortcodeRef, id: NoteId, kind?: Kind | null, parent?: TicketRef | null, title?: Title | null): AsyncGenerator<NotesEvent> {
+  upgrade(epic: ShortcodeRef, id: NoteId, kind?: Kind | null, parent?: TicketRef | null, title?: Title | null): MethodStream<'notes.upgrade', NotesEvent> {
     const stream = this.rpc.call('notes.upgrade', { epic, id, kind, parent, title });
-    yield* extractData<NotesEvent>(stream);
+    return new MethodStream<'notes.upgrade', NotesEvent>('notes.upgrade', stream);
   }
 }
 

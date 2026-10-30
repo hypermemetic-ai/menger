@@ -1,4 +1,6 @@
 import type { RpcClient } from '../../rpc';
+import { MethodStream } from '../../rpc';
+import type { SchemaResult } from './types';
 import type { CommitRef } from '../../chats/types';
 import type { TicketRef } from '../../notes/types';
 import type { TicketsEvent } from '../../tickets/types';
@@ -27,12 +29,12 @@ export interface TicketsCommitsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `commits.link` on the scope of `id`
      */
-    link(commits: CommitRef[], id?: TicketRef | null, ids?: TicketRef[] | null): AsyncGenerator<TicketsEvent>;
+    link(commits: CommitRef[], id?: TicketRef | null, ids?: TicketRef[] | null): MethodStream<'tickets.commits.link', TicketsEvent>;
     /**
      * Get plugin or method schema. Pass {"method": "name"} for a specific method.
      * @requires `commits.schema` anywhere it is held
      */
-    schema(): Promise<unknown>;
+    schema(method?: string | null): Promise<SchemaResult>;
     /**
      * Unlink commits from a ticket; yields commits_unlinked { ticket, removed }.
   
@@ -47,7 +49,7 @@ export interface TicketsCommitsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `commits.unlink` on the scope of `id`
      */
-    unlink(commits: CommitRef[], id: TicketRef): AsyncGenerator<TicketsEvent>;
+    unlink(commits: CommitRef[], id: TicketRef): MethodStream<'tickets.commits.unlink', TicketsEvent>;
 }
 /** Create a typed tickets.commits client from an RPC client */
 export declare function createTicketsCommitsClient(rpc: RpcClient): TicketsCommitsClient;

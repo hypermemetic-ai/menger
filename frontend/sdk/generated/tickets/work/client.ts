@@ -2,7 +2,8 @@
 // Wraps RPC layer and unwraps PlexusStreamItem to domain types
 
 import type { RpcClient } from '../../rpc';
-import { extractData, collectOne } from '../../rpc';
+import { MethodStream, collectOne } from '../../rpc';
+import type { SchemaResult } from './types';
 import type { Kind, ShortcodeRef, TicketRef } from '../../notes/types';
 import type { Cursor, FilterText, TicketsEvent, Zone } from '../../tickets/types';
 
@@ -25,7 +26,7 @@ yielded only when there are any.
    * @requiresAuth — resolver: self.access.verify
    * @requires `work.blockers` anywhere it is held
    */
-  blockers(id: TicketRef): AsyncGenerator<TicketsEvent>;
+  blockers(id: TicketRef): MethodStream<'tickets.work.blockers', TicketsEvent>;
   /**
    * Tickets that can start now: Ready, with every blocker Complete, Superseded or Canceled; optionally under a filter.
 
@@ -49,12 +50,12 @@ ACCESS-17: was `tickets ready_set`.
    * @requiresAuth — resolver: self.access.verify
    * @requires `work.ready` anywhere it is held
    */
-  ready(after?: Cursor | null, epic?: ShortcodeRef | null, filter?: FilterText | null, limit?: number | null, summary?: boolean | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
+  ready(after?: Cursor | null, epic?: ShortcodeRef | null, filter?: FilterText | null, limit?: number | null, summary?: boolean | null, tz?: Zone | null): MethodStream<'tickets.work.ready', TicketsEvent>;
   /**
    * Get plugin or method schema. Pass {"method": "name"} for a specific method.
    * @requires `work.schema` anywhere it is held
    */
-  schema(): Promise<unknown>;
+  schema(method?: string | null): Promise<SchemaResult>;
   /**
    * The order of work: each ticket of the shortcodes placed in its wave over the whole blocked_by graph (or missing_blocker, or done) with what it waits on, then the wave counts.
 
@@ -81,7 +82,7 @@ only.
    * @requiresAuth — resolver: self.access.verify
    * @requires `work.waves` anywhere it is held
    */
-  waves(epics: ShortcodeRef[], kinds?: Kind[] | null): AsyncGenerator<TicketsEvent>;
+  waves(epics: ShortcodeRef[], kinds?: Kind[] | null): MethodStream<'tickets.work.waves', TicketsEvent>;
   /**
    * The wave board whose final state is one ticket: its blockers transitively (and a scope's open descendants) placed in waves, done blockers done, the ticket alone in the last wave; cycles named; then the wave counts.
 
@@ -90,7 +91,7 @@ MENGER-31: the wave board whose final state is `id` (activation/waves.rs).
    * @requiresAuth — resolver: self.access.verify
    * @requires `work.waves_to` anywhere it is held
    */
-  wavesTo(id: TicketRef, kinds?: Kind[] | null): AsyncGenerator<TicketsEvent>;
+  wavesTo(id: TicketRef, kinds?: Kind[] | null): MethodStream<'tickets.work.waves_to', TicketsEvent>;
   /**
    * The order of work under one ticket: each ticket of its subtree placed in its wave (or missing_blocker, or done) with what it waits on, then the wave counts.
 
@@ -99,7 +100,7 @@ MENGER-31: the wave board of `id`'s subtree (activation/waves.rs).
    * @requiresAuth — resolver: self.access.verify
    * @requires `work.waves_under` anywhere it is held
    */
-  wavesUnder(id: TicketRef, kinds?: Kind[] | null): AsyncGenerator<TicketsEvent>;
+  wavesUnder(id: TicketRef, kinds?: Kind[] | null): MethodStream<'tickets.work.waves_under', TicketsEvent>;
 }
 
 /** Typed client implementation for tickets.work plugin */
@@ -107,34 +108,34 @@ class TicketsWorkClientImpl implements TicketsWorkClient {
   private rpc: RpcClient;
   constructor(rpc: RpcClient) { this.rpc = rpc; }
 
-  async *blockers(id: TicketRef): AsyncGenerator<TicketsEvent> {
+  blockers(id: TicketRef): MethodStream<'tickets.work.blockers', TicketsEvent> {
     const stream = this.rpc.call('tickets.work.blockers', { id });
-    yield* extractData<TicketsEvent>(stream);
+    return new MethodStream<'tickets.work.blockers', TicketsEvent>('tickets.work.blockers', stream);
   }
 
-  async *ready(after?: Cursor | null, epic?: ShortcodeRef | null, filter?: FilterText | null, limit?: number | null, summary?: boolean | null, tz?: Zone | null): AsyncGenerator<TicketsEvent> {
+  ready(after?: Cursor | null, epic?: ShortcodeRef | null, filter?: FilterText | null, limit?: number | null, summary?: boolean | null, tz?: Zone | null): MethodStream<'tickets.work.ready', TicketsEvent> {
     const stream = this.rpc.call('tickets.work.ready', { after, epic, filter, limit, summary, tz });
-    yield* extractData<TicketsEvent>(stream);
+    return new MethodStream<'tickets.work.ready', TicketsEvent>('tickets.work.ready', stream);
   }
 
-  async schema(): Promise<unknown> {
-    const stream = this.rpc.call('tickets.work.schema', {});
-    return collectOne<unknown>(stream);
+  async schema(method?: string | null): Promise<SchemaResult> {
+    const stream = this.rpc.call('tickets.work.schema', { method });
+    return collectOne<SchemaResult>(stream);
   }
 
-  async *waves(epics: ShortcodeRef[], kinds?: Kind[] | null): AsyncGenerator<TicketsEvent> {
+  waves(epics: ShortcodeRef[], kinds?: Kind[] | null): MethodStream<'tickets.work.waves', TicketsEvent> {
     const stream = this.rpc.call('tickets.work.waves', { epics, kinds });
-    yield* extractData<TicketsEvent>(stream);
+    return new MethodStream<'tickets.work.waves', TicketsEvent>('tickets.work.waves', stream);
   }
 
-  async *wavesTo(id: TicketRef, kinds?: Kind[] | null): AsyncGenerator<TicketsEvent> {
+  wavesTo(id: TicketRef, kinds?: Kind[] | null): MethodStream<'tickets.work.waves_to', TicketsEvent> {
     const stream = this.rpc.call('tickets.work.waves_to', { id, kinds });
-    yield* extractData<TicketsEvent>(stream);
+    return new MethodStream<'tickets.work.waves_to', TicketsEvent>('tickets.work.waves_to', stream);
   }
 
-  async *wavesUnder(id: TicketRef, kinds?: Kind[] | null): AsyncGenerator<TicketsEvent> {
+  wavesUnder(id: TicketRef, kinds?: Kind[] | null): MethodStream<'tickets.work.waves_under', TicketsEvent> {
     const stream = this.rpc.call('tickets.work.waves_under', { id, kinds });
-    yield* extractData<TicketsEvent>(stream);
+    return new MethodStream<'tickets.work.waves_under', TicketsEvent>('tickets.work.waves_under', stream);
   }
 }
 

@@ -71,3 +71,5 @@ export declare function isSessionEventProvider(e: SessionEvent): e is SessionEve
 export declare function isSessionEventLogin(e: SessionEvent): e is SessionEventLogin;
 export declare function isSessionEventLoggedOut(e: SessionEvent): e is SessionEventLoggedOut;
 export declare function isSessionEventError(e: SessionEvent): e is SessionEventError;
+/** Stub type - definition missing from IR */
+export type SchemaResult = unknown;

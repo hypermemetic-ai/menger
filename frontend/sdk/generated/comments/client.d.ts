@@ -1,5 +1,6 @@
 import type { RpcClient } from '../rpc';
-import type { AnchorPath, CommentsEvent, Route, Under } from './types';
+import { MethodStream } from '../rpc';
+import type { AnchorPath, CommentsEvent, Route, SchemaResult, Under } from './types';
 import type { Author, Body, Query, TicketRef } from '../notes/types';
 import type { Anchor, CommentId, CommentIntent, CommentState, Message, Reason } from '../tickets/types';
 /** Typed client interface for comments plugin */
@@ -36,7 +37,7 @@ export interface CommentsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `comments.add` anywhere it is held
      */
-    add(body: Body, anchor?: Anchor | null, replyTo?: CommentId | null): AsyncGenerator<CommentsEvent>;
+    add(body: Body, anchor?: Anchor | null, replyTo?: CommentId | null): MethodStream<'comments.add', CommentsEvent>;
     /**
      * COMMENT-9: the comments the app could not keep, newest first — `failure { failure }` each.
   
@@ -46,7 +47,7 @@ export interface CommentsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `comments.failures` anywhere it is held
      */
-    failures(limit?: number | null): AsyncGenerator<CommentsEvent>;
+    failures(limit?: number | null): MethodStream<'comments.failures', CommentsEvent>;
     /**
      * List comments, newest first, filtered by ticket, under (a ticket or shortcode's lineage), route, path (a prefix), state, author and text; paged with after + limit.
   
@@ -70,7 +71,7 @@ export interface CommentsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `comments.list` anywhere it is held
      */
-    list(after?: CommentId | null, author?: Author | null, intent?: CommentIntent | null, limit?: number | null, path?: AnchorPath | null, route?: Route | null, state?: CommentState | null, text?: Query | null, thread?: CommentId | null, ticket?: TicketRef | null, under?: Under | null): AsyncGenerator<CommentsEvent>;
+    list(after?: CommentId | null, author?: Author | null, intent?: CommentIntent | null, limit?: number | null, path?: AnchorPath | null, route?: Route | null, state?: CommentState | null, text?: Query | null, thread?: CommentId | null, ticket?: TicketRef | null, under?: Under | null): MethodStream<'comments.list', CommentsEvent>;
     /**
      * Reopen a resolved comment; yields the comment, open.
   
@@ -82,7 +83,7 @@ export interface CommentsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `comments.reopen` anywhere it is held
      */
-    reopen(id: CommentId): AsyncGenerator<CommentsEvent>;
+    reopen(id: CommentId): MethodStream<'comments.reopen', CommentsEvent>;
     /**
      * COMMENT-9: report a comment the app could not keep; yields `reported { failure }`.
   
@@ -94,7 +95,7 @@ export interface CommentsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `comments.report` anywhere it is held
      */
-    report(anchor: Anchor, body: Body, reason: Reason, agent?: Message | null, failedAt?: number | null): AsyncGenerator<CommentsEvent>;
+    report(anchor: Anchor, body: Body, reason: Reason, agent?: Message | null, failedAt?: number | null): MethodStream<'comments.report', CommentsEvent>;
     /**
      * Resolve a comment; yields the comment, resolved.
   
@@ -107,12 +108,12 @@ export interface CommentsClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `comments.resolve` anywhere it is held
      */
-    resolve(id: CommentId): AsyncGenerator<CommentsEvent>;
+    resolve(id: CommentId): MethodStream<'comments.resolve', CommentsEvent>;
     /**
      * Get plugin or method schema. Pass {"method": "name"} for a specific method.
      * @requires `comments.schema` anywhere it is held
      */
-    schema(): Promise<unknown>;
+    schema(method?: string | null): Promise<SchemaResult>;
     /**
      * Subscribe to comments: added / resolved / reopened, each with the comment, until disconnect; lagged { missed } where a slow subscriber lost changes.
   
@@ -127,7 +128,7 @@ export interface CommentsClient {
   a revoke or sign-out ends it.
      * @requires `comments.watch` anywhere it is held
      */
-    watch(): AsyncGenerator<CommentsEvent>;
+    watch(): MethodStream<'comments.watch', CommentsEvent>;
 }
 /** Create a typed comments client from an RPC client */
 export declare function createCommentsClient(rpc: RpcClient): CommentsClient;

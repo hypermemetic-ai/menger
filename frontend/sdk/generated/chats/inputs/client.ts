@@ -2,7 +2,8 @@
 // Wraps RPC layer and unwraps PlexusStreamItem to domain types
 
 import type { RpcClient } from '../../rpc';
-import { extractData, collectOne } from '../../rpc';
+import { MethodStream, collectOne } from '../../rpc';
+import type { SchemaResult } from './types';
 import type { ChatsEvent, InputId, InputKind, InputState, InputValue, MessageId } from '../../chats/types';
 import type { ChatId } from '../../media/types';
 import type { TicketRef } from '../../notes/types';
@@ -25,7 +26,7 @@ carries the `input_changed` to every participant; it answers an
    * @requiresAuth — resolver: self.access.verify
    * @requires `message_inputs.answer` anywhere it is held
    */
-  answer(chat: ChatId, input: InputId, message: MessageId, value: InputValue, rationale?: Message | null): AsyncGenerator<ChatsEvent>;
+  answer(chat: ChatId, input: InputId, message: MessageId, value: InputValue, rationale?: Message | null): MethodStream<'chats.inputs.answer', ChatsEvent>;
   /**
    * Clear a message's input's answer (open again; kept in its history); yields input_changed { input }, or input { input } when it held none.
 
@@ -36,7 +37,7 @@ before who answered was), while the chat is open. A closed input is
    * @requiresAuth — resolver: self.access.verify
    * @requires `message_inputs.clear` anywhere it is held
    */
-  clear(chat: ChatId, input: InputId, message: MessageId): AsyncGenerator<ChatsEvent>;
+  clear(chat: ChatId, input: InputId, message: MessageId): MethodStream<'chats.inputs.clear', ChatsEvent>;
   /**
    * Close a message's input: freeze its answer (DECIDED, for a decision); yields input_changed { input }, or input { input } when it was closed.
 
@@ -46,7 +47,7 @@ ticket. An answer or a clear is refused until it is reopened.
    * @requiresAuth — resolver: self.access.verify
    * @requires `message_inputs.close` anywhere it is held
    */
-  close(chat: ChatId, input: InputId, message: MessageId): AsyncGenerator<ChatsEvent>;
+  close(chat: ChatId, input: InputId, message: MessageId): MethodStream<'chats.inputs.close', ChatsEvent>;
   /**
    * The inputs of the messages in the caller's chats (an <m-decision id> / <m-input id kind> in a message's body), oldest message first; an input { input } each, then page { next }.
 
@@ -61,7 +62,7 @@ are never split. A deleted message's are not listed.
    * @requiresAuth — resolver: self.access.verify
    * @requires `message_inputs.list` anywhere it is held
    */
-  list(after?: MessageId | null, chat?: ChatId | null, kind?: InputKind | null, limit?: number | null, state?: InputState | null, ticket?: TicketRef | null): AsyncGenerator<ChatsEvent>;
+  list(after?: MessageId | null, chat?: ChatId | null, kind?: InputKind | null, limit?: number | null, state?: InputState | null, ticket?: TicketRef | null): MethodStream<'chats.inputs.list', ChatsEvent>;
   /**
    * Reopen a closed message's input; yields input_changed { input }, or input { input } when it was not closed.
 
@@ -71,12 +72,12 @@ again when it holds an answer, else `open`.
    * @requiresAuth — resolver: self.access.verify
    * @requires `message_inputs.reopen` anywhere it is held
    */
-  reopen(chat: ChatId, input: InputId, message: MessageId): AsyncGenerator<ChatsEvent>;
+  reopen(chat: ChatId, input: InputId, message: MessageId): MethodStream<'chats.inputs.reopen', ChatsEvent>;
   /**
    * Get plugin or method schema. Pass {"method": "name"} for a specific method.
    * @requires `message_inputs.schema` anywhere it is held
    */
-  schema(): Promise<unknown>;
+  schema(method?: string | null): Promise<SchemaResult>;
 }
 
 /** Typed client implementation for chats.inputs plugin */
@@ -84,34 +85,34 @@ class ChatsInputsClientImpl implements ChatsInputsClient {
   private rpc: RpcClient;
   constructor(rpc: RpcClient) { this.rpc = rpc; }
 
-  async *answer(chat: ChatId, input: InputId, message: MessageId, value: InputValue, rationale?: Message | null): AsyncGenerator<ChatsEvent> {
+  answer(chat: ChatId, input: InputId, message: MessageId, value: InputValue, rationale?: Message | null): MethodStream<'chats.inputs.answer', ChatsEvent> {
     const stream = this.rpc.call('chats.inputs.answer', { chat, input, message, rationale, value });
-    yield* extractData<ChatsEvent>(stream);
+    return new MethodStream<'chats.inputs.answer', ChatsEvent>('chats.inputs.answer', stream);
   }
 
-  async *clear(chat: ChatId, input: InputId, message: MessageId): AsyncGenerator<ChatsEvent> {
+  clear(chat: ChatId, input: InputId, message: MessageId): MethodStream<'chats.inputs.clear', ChatsEvent> {
     const stream = this.rpc.call('chats.inputs.clear', { chat, input, message });
-    yield* extractData<ChatsEvent>(stream);
+    return new MethodStream<'chats.inputs.clear', ChatsEvent>('chats.inputs.clear', stream);
   }
 
-  async *close(chat: ChatId, input: InputId, message: MessageId): AsyncGenerator<ChatsEvent> {
+  close(chat: ChatId, input: InputId, message: MessageId): MethodStream<'chats.inputs.close', ChatsEvent> {
     const stream = this.rpc.call('chats.inputs.close', { chat, input, message });
-    yield* extractData<ChatsEvent>(stream);
+    return new MethodStream<'chats.inputs.close', ChatsEvent>('chats.inputs.close', stream);
   }
 
-  async *list(after?: MessageId | null, chat?: ChatId | null, kind?: InputKind | null, limit?: number | null, state?: InputState | null, ticket?: TicketRef | null): AsyncGenerator<ChatsEvent> {
+  list(after?: MessageId | null, chat?: ChatId | null, kind?: InputKind | null, limit?: number | null, state?: InputState | null, ticket?: TicketRef | null): MethodStream<'chats.inputs.list', ChatsEvent> {
     const stream = this.rpc.call('chats.inputs.list', { after, chat, kind, limit, state, ticket });
-    yield* extractData<ChatsEvent>(stream);
+    return new MethodStream<'chats.inputs.list', ChatsEvent>('chats.inputs.list', stream);
   }
 
-  async *reopen(chat: ChatId, input: InputId, message: MessageId): AsyncGenerator<ChatsEvent> {
+  reopen(chat: ChatId, input: InputId, message: MessageId): MethodStream<'chats.inputs.reopen', ChatsEvent> {
     const stream = this.rpc.call('chats.inputs.reopen', { chat, input, message });
-    yield* extractData<ChatsEvent>(stream);
+    return new MethodStream<'chats.inputs.reopen', ChatsEvent>('chats.inputs.reopen', stream);
   }
 
-  async schema(): Promise<unknown> {
-    const stream = this.rpc.call('chats.inputs.schema', {});
-    return collectOne<unknown>(stream);
+  async schema(method?: string | null): Promise<SchemaResult> {
+    const stream = this.rpc.call('chats.inputs.schema', { method });
+    return collectOne<SchemaResult>(stream);
   }
 }
 

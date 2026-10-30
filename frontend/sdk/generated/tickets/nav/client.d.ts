@@ -1,4 +1,6 @@
 import type { RpcClient } from '../../rpc';
+import { MethodStream } from '../../rpc';
+import type { SchemaResult } from './types';
 import type { ShortcodeRef, TicketRef } from '../../notes/types';
 import type { Cursor, FilterText, TicketsEvent, Zone } from '../../tickets/types';
 /** Typed client interface for tickets.nav plugin */
@@ -22,7 +24,7 @@ export interface TicketsNavClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `nav.counts` anywhere it is held
      */
-    counts(filter?: FilterText | null, keep?: TicketRef | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
+    counts(filter?: FilterText | null, keep?: TicketRef | null, tz?: Zone | null): MethodStream<'tickets.nav.counts', TicketsEvent>;
     /**
      * Each shortcode's last sequence (a deleted ticket's too: numbers are never reused) and the holes below it, in shortcode order — where each shortcode ends in the store's order.
   
@@ -41,7 +43,7 @@ export interface TicketsNavClient {
   `created` already carries the newborn's `epic` and `seq`.
      * @requires `nav.extents` anywhere it is held
      */
-    extents(): AsyncGenerator<TicketsEvent>;
+    extents(): MethodStream<'tickets.nav.extents', TicketsEvent>;
     /**
      * Menu counts: per field (status, category, kind, severity, blocked, ready, has commits, menger doc, in), the matches of base and filter without filter's own groups for that field, by value.
   
@@ -62,7 +64,7 @@ export interface TicketsNavClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `nav.facets` anywhere it is held
      */
-    facets(base?: FilterText | null, filter?: FilterText | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
+    facets(base?: FilterText | null, filter?: FilterText | null, tz?: Zone | null): MethodStream<'tickets.nav.facets', TicketsEvent>;
     /**
      * One roll-up per shortcode: done/total over its subtree's work, its docs, its root (with the root's title, status and kind), and the host it nests under.
   
@@ -82,7 +84,7 @@ export interface TicketsNavClient {
   at the top for this caller).
      * @requires `nav.groups` anywhere it is held
      */
-    groups(): AsyncGenerator<TicketsEvent>;
+    groups(): MethodStream<'tickets.nav.groups', TicketsEvent>;
     /**
      * Which of these tickets a filter admits: one member { id, matched } per id, in the order given (an unknown id: false); at most 1000 ids.
   
@@ -100,12 +102,12 @@ export interface TicketsNavClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `nav.member` anywhere it is held
      */
-    member(filter: FilterText, ids: TicketRef[], tz?: Zone | null): AsyncGenerator<TicketsEvent>;
+    member(filter: FilterText, ids: TicketRef[], tz?: Zone | null): MethodStream<'tickets.nav.member', TicketsEvent>;
     /**
      * Get plugin or method schema. Pass {"method": "name"} for a specific method.
      * @requires `nav.schema` anywhere it is held
      */
-    schema(): Promise<unknown>;
+    schema(method?: string | null): Promise<SchemaResult>;
     /**
      * The nav under a filter: a parent's children (or a shortcode's top level) that match or hold a match, each with matched and below (matches strictly under it), then a page; matches_only: the matches nearest below instead, then the hosted shortcodes drawn there.
   
@@ -146,7 +148,7 @@ export interface TicketsNavClient {
      * @requiresAuth — resolver: self.access.verify
      * @requires `nav.tree` anywhere it is held
      */
-    tree(filter: FilterText, after?: Cursor | null, epic?: ShortcodeRef | null, keep?: TicketRef | null, limit?: number | null, matchesOnly?: boolean | null, parent?: TicketRef | null, tz?: Zone | null): AsyncGenerator<TicketsEvent>;
+    tree(filter: FilterText, after?: Cursor | null, epic?: ShortcodeRef | null, keep?: TicketRef | null, limit?: number | null, matchesOnly?: boolean | null, parent?: TicketRef | null, tz?: Zone | null): MethodStream<'tickets.nav.tree', TicketsEvent>;
 }
 /** Create a typed tickets.nav client from an RPC client */
 export declare function createTicketsNavClient(rpc: RpcClient): TicketsNavClient;
