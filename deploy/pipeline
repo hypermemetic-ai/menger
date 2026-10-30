@@ -776,14 +776,15 @@ ui_push() { # WS REL → 0 and UI_PUSHED (the version) and UI_MATCHES (contract_
 studio_push() { # WS REL — STUDIO-2: REL's studio bundle (dist/studio.tar) pushed --no-live as the pipeline key, kept as
   # bundle:studio and served at /studio/; never the app. A release without one pushes nothing; a refusal is said and
   # recorded, never fatal: the app's push already went live, and the studio stays on the version it had.
-  local ws=$1 r=$RELEASES/$2 tool out v
+  local ws=$1 r=$RELEASES/$2 tool out v; STUDIO_WHY=
   [[ -f $r/dist/studio.tar ]] || return 0
   tool=$(ui_tool "$2"); [[ -n $tool && -n $DEPLOY_KEY_FILE ]] || { say "FAIL the studio: no plexus-ui or no pipeline key to push it"; return 1; }
   out=$(env -u MENGER_DEPLOY_KEY timeout 70 "$tool" push --url "$ws" --service menger --key-file "$DEPLOY_KEY_FILE" --as pipeline \
           --timeout 50 --json --no-live "$r/dist/studio.tar" 2>&1) || true
   v=$(jq -rR 'fromjson? | select(.type == "pushed") | .version' <<<"$out" 2>/dev/null | head -n 1)
   if [[ -n $v ]]; then say "ok   the studio kept on $ws: ${v:0:12} (bundle:studio, /studio/)"; return 0; fi
-  say "FAIL the studio's push to $ws: $(head -c 200 <<<"$out" | tr '\t\n' '  ')"
+  STUDIO_WHY=$(head -c 200 <<<"$out" | tr '\t\n' '  ')
+  say "FAIL the studio's push to $ws: $STUDIO_WHY"
   return 1
 }
 page_is() { # BUNDLE-PAGE SERVED — SERVED is the bundle's page, its {{STAMPS}} filled: each piece between them, in order
@@ -920,7 +921,7 @@ cmd_local() {
       die "the push to $LOCAL_CONTAINER answered contract_matches: ${UI_MATCHES:-null} — $rel's bundle was not built against the service it runs (UI-12)"
     fi
     say "ok   pushed $rel's bundle: ${UI_PUSHED:0:12} live, contract_matches: true"
-    studio_push "ws://127.0.0.1:$LOCAL_WS_PORT" "$rel" || record app-local run "$rel" "studio push failed"
+    studio_push "ws://127.0.0.1:$LOCAL_WS_PORT" "$rel" || record app-local studio "$rel" "refused: ${STUDIO_WHY:-no answer}"
     if ! ui_smoke "ws://127.0.0.1:$LOCAL_WS_PORT" "http://127.0.0.1:$LOCAL_SHELL_PORT" "$rel"; then
       record app-local run "$rel" "smoke failed"; die "$LOCAL_CONTAINER runs $rel and its /app/ smoke FAILED"
     fi
@@ -987,7 +988,7 @@ cmd_remote() {
         die "the push to $host answered contract_matches: ${UI_MATCHES:-null} — $rel's bundle was not built against the service it runs (UI-12)"
       fi
       say "ok   pushed $rel's bundle to $host: ${UI_PUSHED:0:12} live, contract_matches: true"
-      studio_push "wss://$host/ws" "$rel" || record test run "$rel" "studio push failed"
+      studio_push "wss://$host/ws" "$rel" || record test studio "$rel" "refused: ${STUDIO_WHY:-no answer}"
     fi
     if ! smoke_remote test "$rel"; then
       record test run "$rel" "smoke failed"; tell test failed "$rel" "$good"
