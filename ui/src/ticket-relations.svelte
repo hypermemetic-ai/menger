@@ -1,6 +1,7 @@
 <!-- SURFACE-3: a ticket's relations — its children (`list { parent }`, live
-     by `watch`: a child made, moved in or out, its status, a delete) with
-     their roll-up; what blocks it and what it blocks (SURFACE-7's
+     by `watch`: a child made, moved in or out, its status, a delete or an
+     archive; `restored` and `undeleted` carry no ticket row to fold, so a
+     child back from either shows on the next draw) with their roll-up; what blocks it and what it blocks (SURFACE-7's
      `work-blockers` by its mark, the ticket's own `blocked_by` / `unlocks`
      as chips beside it); its subtasks (`ticket-subtasks`, by its mark). The
      parent is the head's chip. -->
@@ -20,10 +21,10 @@
                         on: { amended: "upsert:ticket", status_changed: "upsert:ticket", kind_changed: "upsert:ticket", updated: "upsert:ticket",
                               labels_changed: "upsert:ticket", severity_changed: "upsert:ticket", frozen_changed: "upsert:ticket", hidden_changed: "upsert:ticket",
                               blockers_changed: "upsert:ticket", unlocks_changed: "upsert:ticket", unlocks_removed: "upsert:ticket", parent_changed: "upsert:ticket",
-                              commits_linked: "upsert:ticket", commits_unlinked: "upsert:ticket", revision_restored: "upsert:ticket" } });
+                              commits_linked: "upsert:ticket", commits_unlinked: "upsert:ticket", revision_restored: "upsert:ticket", deleted: "upsert:." } });
   const children = live({ snapshot: "tickets.list", params: () => ({ parent: id, summary: true, limit: 200, fields: FIELDS }), changes: "tickets.watch", key: "id",
                           on: { created: "upsert:ticket", amended: "upsert:ticket", status_changed: "upsert:ticket", kind_changed: "upsert:ticket",
-                                parent_changed: "upsert:ticket", deleted: "remove:ids" } });
+                                parent_changed: "upsert:ticket", deleted: "remove:ids", archived: "remove:ids" } });
   const t = $derived(ticket.rows.find((r) => r.title != null));
   const kids = $derived(children.rows.filter((c) => !c.id.startsWith(id + ".")));
   const done = $derived(kids.filter((c) => c.status === "Complete").length);

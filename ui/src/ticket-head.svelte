@@ -2,13 +2,14 @@
      the frozen / archived / hidden badges, the title, the status chip (the
      board's look), labels and the parent chip; live on the page's `get` spec
      (the same spec in every part reading the ticket: one snapshot, one
-     stream) and its `tomb` (archived, restored). ‹ › and `[` / `]` move to
+     stream); the archived badge from the archive's transitions (the spec
+     ticket-history reads). ‹ › and `[` / `]` move to
      the previous / next sibling — the parent's children (`list { parent,
      fields: [id] }`), asked once the parent is known. The status menu stays
      until SURFACE-4's ticket-actions carries set_status (the board's ticket
      case selects it). -->
 <script module>
-  export const uses = ["tickets.get", "tickets.watch", "tickets.list", "tickets.set_status"];
+  export const uses = ["tickets.get", "tickets.watch", "tickets.list", "tickets.set_status", "tickets.history"];
 </script>
 
 <script>
@@ -24,9 +25,9 @@
                         on: { amended: "upsert:ticket", status_changed: "upsert:ticket", kind_changed: "upsert:ticket", updated: "upsert:ticket",
                               labels_changed: "upsert:ticket", severity_changed: "upsert:ticket", frozen_changed: "upsert:ticket", hidden_changed: "upsert:ticket",
                               blockers_changed: "upsert:ticket", unlocks_changed: "upsert:ticket", unlocks_removed: "upsert:ticket", parent_changed: "upsert:ticket",
-                              commits_linked: "upsert:ticket", commits_unlinked: "upsert:ticket", revision_restored: "upsert:ticket" } });
-  const tomb = live({ snapshot: "tickets.get", params: () => ({ id }), changes: "tickets.watch", key: "ids",
-                      on: { deleted: "upsert:.", undeleted: "upsert:.", archived: "upsert:.", restored: "upsert:." } });
+                              commits_linked: "upsert:ticket", commits_unlinked: "upsert:ticket", revision_restored: "upsert:ticket", deleted: "upsert:." } });
+  // The archive's moves are transitions: the spec ticket-history reads, one collection.
+  const history = live({ snapshot: "tickets.history", params: () => ({ id }), changes: "tickets.watch", key: "transition", on: { transition: "upsert:." } });
   const t = $derived(ticket.rows.find((r) => r.title != null));
   const parent = $derived(t?.parent ?? null);
   const siblings = live({ snapshot: "tickets.list", params: () => ({ parent, summary: true, limit: 1000, fields: ["id"] }), key: "id", when: () => parent != null });
@@ -34,9 +35,9 @@
   const at = $derived(sibs.indexOf(id));
   const prev = $derived(at > 0 ? sibs[at - 1] : null);
   const next = $derived(at >= 0 && at + 1 < sibs.length ? sibs[at + 1] : null);
-  // The last word of the watch on this ticket's archive mark, else get's.
-  const marks = $derived(tomb.rows.filter((r) => Array.isArray(r.ids) && r.ids.includes(id) && r.dry_run !== true && (r.mark || r.ancestors)));
-  const archived = $derived(marks.length ? marks.at(-1).mark != null : t?.archived != null);
+  // The last archive transition of this ticket, else get's mark.
+  const moves = $derived(history.rows.map((r) => r.transition).filter((x) => x && x.ticket === id && x.field === "archive").sort((a, z) => a.id - z.id));
+  const archived = $derived(moves.length ? moves.at(-1).to === "archived" : t?.archived != null);
 
   b.keys({
     "[": { to: () => prev && b.navigate(base + "ticket/" + prev), label: "previous sibling" },

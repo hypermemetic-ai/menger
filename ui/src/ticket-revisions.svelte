@@ -3,9 +3,10 @@
      width): that revision against the one before it, any two by their a / b
      pickers, `revisions diff --text` side by side or as text, or the b
      revision as it stood (`revisions get`). Live: `watch { revisions: true }`
-     says `revised`; the newest revision is kept by ticket (`revisions list
-     { limit: 1 }`, folded whole) and drawn above the list when it is past
-     its top. Restoring is SURFACE-4's: "pick" says `ticket.revision_picked
+     says `revised`, folded whole into a collection keyed by ticket
+     (`revisions list { limit: 1 }`: this ticket's newest rev); each newer rev
+     moves the list's `before` past it, so the list is asked again and holds
+     every revision, however many came at once. Restoring is SURFACE-4's: "pick" says `ticket.revision_picked
      { id, rev }` on the bus for `ticket-actions`. `escape` closes the diff. -->
 <script module>
   export const uses = ["tickets.revisions.list", "tickets.watch", "tickets.revisions.diff", "tickets.revisions.get"];
@@ -22,14 +23,14 @@
   let view = $state("side");
   let picked = $state(0);
 
-  const revs = live({ snapshot: "tickets.revisions.list", params: () => ({ id, limit: 50 }), key: "rev" });
   const latest = live({ snapshot: "tickets.revisions.list", params: () => ({ id, limit: 1 }), changes: "tickets.watch", changes_params: { revisions: true },
                         key: "ticket", on: { revised: "upsert:." } });
+  const newest = $derived(latest.rows.filter((r) => r.ticket === id).reduce((m, r) => Math.max(m, r.rev ?? 0), 0));
+  const revs = live({ snapshot: "tickets.revisions.list", params: () => (newest ? { id, limit: 50, before: newest + 1 } : { id, limit: 50 }), key: "rev" });
   const diff = live({ snapshot: "tickets.revisions.diff", params: () => ({ id, from: a, to: z, text: true }), key: "to", when: () => open && a !== z });
   const opened = live({ snapshot: "tickets.revisions.get", params: () => ({ id, rev: z }), key: "ticket", when: () => open && view === "was", on: { revision_at: "upsert:." } });
 
-  const top = $derived(revs.rows.reduce((m, r) => Math.max(m, r.rev), 0));
-  const rows = $derived([...latest.rows.filter((r) => r.ticket === id && r.rev > top), ...revs.rows]);
+  const rows = $derived(revs.rows);
   const d = $derived(diff.rows.find((x) => x.from === a && x.to === z));
   const was = $derived(opened.rows.find((o) => o.ticket && o.revision?.rev === z));
   const changed = $derived(d ? [...d.fields, ...d.frontmatter] : []);
@@ -103,7 +104,7 @@
           {#if was}
             <div class="was" data-revision-open={was.revision.rev}>
               <p class="was-head"><span class="st" data-status={was.ticket.status}>{was.ticket.status}</span> <strong data-field="title">{was.ticket.title}</strong></p>
-              <div class="md" data-field="body">{@html markdown(was.ticket.body)}</div>
+              <div class="md" data-field="body">{@html markdown(was.ticket.body ?? "")}</div>
             </div>
           {/if}
         {:else if a === z}

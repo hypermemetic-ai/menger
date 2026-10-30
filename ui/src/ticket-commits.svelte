@@ -2,8 +2,7 @@
      `commits`, live on the page's `get` spec (`commits_linked`,
      `commits_unlinked`); `commits link` from a field and `commits unlink`
      beside each, a refusal said under the form in the service's words
-     (FRAME-37's `{ ok, events, message }`; until it lands, the call's events
-     or its rejection). -->
+     (FRAME-37's `{ ok, events, message }`). -->
 <script module>
   export const uses = ["tickets.get", "tickets.watch", "tickets.commits.link", "tickets.commits.unlink"];
 </script>
@@ -17,36 +16,25 @@
                         on: { amended: "upsert:ticket", status_changed: "upsert:ticket", kind_changed: "upsert:ticket", updated: "upsert:ticket",
                               labels_changed: "upsert:ticket", severity_changed: "upsert:ticket", frozen_changed: "upsert:ticket", hidden_changed: "upsert:ticket",
                               blockers_changed: "upsert:ticket", unlocks_changed: "upsert:ticket", unlocks_removed: "upsert:ticket", parent_changed: "upsert:ticket",
-                              commits_linked: "upsert:ticket", commits_unlinked: "upsert:ticket", revision_restored: "upsert:ticket" } });
+                              commits_linked: "upsert:ticket", commits_unlinked: "upsert:ticket", revision_restored: "upsert:ticket", deleted: "upsert:." } });
   const t = $derived(ticket.rows.find((r) => r.title != null));
   const commits = $derived(t?.commits ?? []);
   let commit = $state("");
   let refused = $state("");
 
-  // FRAME-37's answer, or today's (before it lands, `ok` is undefined): the
-  // events with an in-band error among them, or a rejection with its words.
-  async function answer(call) {
-    try {
-      const a = await call;
-      // FRAME-37: always resolves, `ok` false on a refusal or a drop, `message` its words (the answer is also the events' array).
-      if (a && typeof a.ok === "boolean") return { ok: a.ok, events: a.events ?? [...a], message: String(a.message ?? "").replace(/^Invalid params: /, "") };
-      const events = Array.isArray(a) ? a : [];
-      const bad = events.find((e) => ["error", "refused", "not_found", "ambiguous", "frozen"].includes(e?.type));
-      return bad ? { ok: false, events, message: bad.message ?? bad.reason ?? bad.type } : { ok: true, events };
-    } catch (e) {
-      return { ok: false, events: [], message: String(e?.message ?? e).replace(/^Invalid params: /, "") };
-    }
-  }
+  // FRAME-37: the answer always resolves — `ok`, `events`, `message` (the
+  // service's words; an invalid parameter's without the JSON-RPC prefix).
+  const words = (m) => String(m ?? "refused").replace(/^Invalid params: /, "");
 
   async function link(ev) {
     ev.preventDefault();
     const c = commit.trim();
-    const a = await answer(b.call("tickets.commits.link", { id, commits: [c] }));
-    if (a.ok) { commit = ""; refused = ""; } else refused = a.message;
+    const a = await b.call("tickets.commits.link", { id, commits: [c] });
+    if (a.ok) { commit = ""; refused = ""; } else refused = words(a.message);
   }
   async function unlink(c) {
-    const a = await answer(b.call("tickets.commits.unlink", { id, commits: [c] }));
-    refused = a.ok ? "" : a.message;
+    const a = await b.call("tickets.commits.unlink", { id, commits: [c] });
+    refused = a.ok ? "" : words(a.message);
   }
 </script>
 

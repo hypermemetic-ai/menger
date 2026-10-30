@@ -5,14 +5,20 @@
      revisions; SURFACE-4's `ticket-edit` and `ticket-actions` placed the same
      way as marks (`[data-slot][data-component]`), holes until their
      components are in the bundle. The page reads `get` on `watch` (the spec
-     every part reads: one snapshot, one stream) for its skeleton and its
-     "no such ticket", and `tomb` for what is not a ticket row — `deleted`,
-     `undeleted`, `archived`, `restored` — so it says "deleted" and offers the
-     actions mark (undelete). Keys (FRAME-36): `e` says `ticket.edit` on the
+     every part reads: one snapshot, one stream) for its skeleton, its "no
+     such ticket" and a ticket deleted before it opened (`get` answers
+     `deleted`, folded whole); a delete or an undelete while it is open is a
+     revision, read from ticket-revisions' own spec — so it says "deleted"
+     and offers the actions mark (undelete). What a page sends: `get` once
+     for the ticket and once per chip; `list` for the children and the
+     siblings; `subtasks list`; `history`; `revisions list` twice (the
+     newest, the list); five `watch` streams — the ticket, the children, the
+     subtasks, the history and the revisions — since the host shares a
+     stream only between identical specs. Keys (FRAME-36): `e` says `ticket.edit` on the
      bus (SURFACE-4's edit hears it), `escape` and `g b` go to the board.
      ticket-page.rhx is the rhx board's page, kept as it was. -->
 <script module>
-  export const uses = ["tickets.get", "tickets.watch"];
+  export const uses = ["tickets.get", "tickets.watch", "tickets.revisions.list"];
 </script>
 
 <script>
@@ -32,23 +38,34 @@
                         on: { amended: "upsert:ticket", status_changed: "upsert:ticket", kind_changed: "upsert:ticket", updated: "upsert:ticket",
                               labels_changed: "upsert:ticket", severity_changed: "upsert:ticket", frozen_changed: "upsert:ticket", hidden_changed: "upsert:ticket",
                               blockers_changed: "upsert:ticket", unlocks_changed: "upsert:ticket", unlocks_removed: "upsert:ticket", parent_changed: "upsert:ticket",
-                              commits_linked: "upsert:ticket", commits_unlinked: "upsert:ticket", revision_restored: "upsert:ticket" } });
-  const tomb = live({ snapshot: "tickets.get", params: () => ({ id }), changes: "tickets.watch", key: "ids",
-                      on: { deleted: "upsert:.", undeleted: "upsert:.", archived: "upsert:.", restored: "upsert:." } });
+                              commits_linked: "upsert:ticket", commits_unlinked: "upsert:ticket", revision_restored: "upsert:ticket", deleted: "upsert:." } });
+  // This ticket's newest revision, on `watch { revisions: true }` — the spec
+  // ticket-revisions reads, so one collection: a delete and an undelete are
+  // revisions (`revised { fields: ["deleted"] }`, `["undeleted"]`).
+  const latest = live({ snapshot: "tickets.revisions.list", params: () => ({ id, limit: 1 }), changes: "tickets.watch", changes_params: { revisions: true },
+                        key: "ticket", on: { revised: "upsert:." } });
   const t = $derived(ticket.rows.find((r) => r.title != null));
-  // The last word on this ticket's life: a deleted row with its tombstones, or undeleted.
-  const life = $derived(tomb.rows.filter((r) => Array.isArray(r.ids) && r.ids.includes(id) && (r.tombstones || r.tickets)).at(-1));
-  const gone = $derived(life?.tombstones ? life.tombstones.find((x) => x.id === id) ?? life.tombstones[0] ?? {} : null);
+  // Deleted: `get` answered `deleted { ids, tombstones }` (folded whole), or
+  // the newest revision since says so (and no undelete after it).
+  const tombed = $derived(ticket.rows.find((r) => Array.isArray(r.tombstones)));
+  const word = $derived(latest.rows.find((r) => r.ticket === id && Array.isArray(r.fields) && (r.fields.includes("deleted") || r.fields.includes("undeleted"))));
+  const gone = $derived(word ? (word.fields.includes("deleted") ? (tombed?.tombstones?.find((x) => x.id === id) ?? { title: t?.title }) : null)
+                             : tombed ? tombed.tombstones.find((x) => x.id === id) ?? tombed.tombstones[0] ?? {} : null);
+  // `e` says ticket.edit on the bus (SURFACE-4's to hear); the edit mark
+  // flashes (two classes in turn restart it) and the page counts it in
+  // `data-edit-asked` — on the article, never a `data-*` of the mark, which
+  // would cross to its component as a prop.
+  let knocked = $state(0);
   const loading = $derived(ticket.status === "pending" || (ticket.status === "resyncing" && ticket.rows.length === 0));
 
   b.keys({
-    e: { to: () => b.emit("ticket.edit", { id }), label: "edit the ticket" },
+    e: { to: () => { b.emit("ticket.edit", { id }); knocked += 1; }, label: "edit the ticket" },
     escape: { to: () => b.navigate(base), label: "back to the board" },
     "g b": { to: () => b.navigate(base), label: "go to the board" },
   });
 </script>
 
-<article class="ticket-page" data-surface="ticket-page" data-ticket={id}>
+<article class="ticket-page" data-surface="ticket-page" data-ticket={id} data-edit-asked={knocked}>
   <nav class="crumbs">
     <a href={base} data-back>← board</a>
     <span class="keys" aria-hidden="true"><kbd>e</kbd> edit<i class="sep"></i><kbd>esc</kbd> board<i class="sep"></i><kbd>[</kbd><kbd>]</kbd> siblings<i class="sep"></i><kbd>?</kbd> keys</span>
@@ -73,7 +90,7 @@
       <div class="cell head"><Head id={id}/></div>
       <div class="cell main">
         <Body id={id}/>
-        <div class="hole" data-mark="ticket-edit" data-slot="ticket-edit" data-component="ticket-edit" data-id={id}></div>
+        <div class="hole" class:heard={knocked % 2 === 1} class:heard-again={knocked > 0 && knocked % 2 === 0} data-mark="ticket-edit" data-slot="ticket-edit" data-component="ticket-edit" data-id={id}></div>
         <Relations id={id}/>
       </div>
       <aside class="cell side">
@@ -105,6 +122,10 @@
   .ticket-page .side > .hole { margin-top: 0; }
   .ticket-page .hole:empty { display: flex; align-items: center; min-height: 34px; padding: 6px 10px; border: var(--border) dashed var(--tree-line); border-radius: var(--radius); }
   .ticket-page .hole:empty::before { content: "<" attr(data-component) " id/>"; font-size: 11px; color: var(--muted); }
+  .ticket-page .hole.heard { animation: heard var(--motion-flash) var(--ease); }
+  .ticket-page .hole.heard-again { animation: heard-again var(--motion-flash) var(--ease); }
+  @keyframes heard-again { from { background: var(--sel); border-color: var(--accent); } to { background: transparent; } }
+  @keyframes heard { from { background: var(--sel); border-color: var(--accent); } to { background: transparent; } }
   .ticket-page .skeleton .wide { grid-column: 1 / -1; padding-bottom: 14px; }
   .ticket-page .skeleton .main, .ticket-page .skeleton .side { grid-row: 2; }
   .ticket-page .bone { display: block; width: 100%; height: 10px; margin: 6px 0; background: var(--skeleton); border-radius: var(--radius-sm); animation: breathe var(--motion-pulse) var(--ease) infinite alternate; }
@@ -123,7 +144,7 @@
     .ticket-page .keys { display: none; }
   }
   @media (prefers-reduced-motion: reduce) {
-    .ticket-page .bone { animation: none; }
+    .ticket-page .bone, .ticket-page .hole.heard, .ticket-page .hole.heard-again { animation: none; }
     .ticket-page .crumbs a { transition: none; }
   }
 </style>

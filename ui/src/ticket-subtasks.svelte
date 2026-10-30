@@ -3,7 +3,7 @@
      subtask made here or anywhere appears, its status moves, a delete goes),
      and `subtasks create` with a title: its answer said under the form, the
      new id or the service's refusal in its words (FRAME-37's `{ ok, events,
-     message }`; until it lands, the call's events or its rejection). -->
+     message }`). -->
 <script module>
   export const uses = ["tickets.subtasks.list", "tickets.watch", "tickets.subtasks.create"];
 </script>
@@ -22,25 +22,15 @@
   let landed = $state("");
   let busy = $state(false);
 
-  // FRAME-37's answer, or today's: the events (an in-band error among them) or a rejection.
-  async function answer(call) {
-    try {
-      const a = await call;
-      // FRAME-37: always resolves, `ok` false on a refusal or a drop, `message` its words (the answer is also the events' array).
-      if (a && typeof a.ok === "boolean") return { ok: a.ok, events: a.events ?? [...a], message: String(a.message ?? "").replace(/^Invalid params: /, "") };
-      const events = Array.isArray(a) ? a : [];
-      const bad = events.find((e) => ["error", "refused", "not_found", "ambiguous", "frozen"].includes(e?.type));
-      return bad ? { ok: false, events, message: bad.message ?? bad.reason ?? bad.type } : { ok: true, events };
-    } catch (e) {
-      return { ok: false, events: [], message: String(e?.message ?? e).replace(/^Invalid params: /, "") };
-    }
-  }
+  // FRAME-37: the answer always resolves — `ok`, `events`, `message` (the
+  // service's words; an invalid parameter's without the JSON-RPC prefix).
+  const words = (m) => String(m ?? "refused").replace(/^Invalid params: /, "");
 
   async function create(ev) {
     ev?.preventDefault?.();
     if (busy) return;
     busy = true;
-    const a = await answer(b.call("tickets.subtasks.create", { parent: id, title }));
+    const a = await b.call("tickets.subtasks.create", { parent: id, title });
     busy = false;
     if (a.ok) {
       const made = a.events.find((e) => e.type === "created")?.ticket?.id;
@@ -48,7 +38,7 @@
       refused = "";
       title = "";
     } else {
-      refused = a.message;
+      refused = words(a.message);
       landed = "";
     }
   }

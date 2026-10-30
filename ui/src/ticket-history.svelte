@@ -3,7 +3,10 @@
      why; a status move as two chips. `history { id }`, then live: `watch`
      says each new `transition`, folded whole (`upsert:.`, keyed by the
      transition itself — its `id` is a number the snapshot's `id` param would
-     refuse); rows of other tickets are passed over. -->
+     refuse); rows of other tickets are passed over here, since neither the
+     fold nor the stream can drop them: `admits` reads only a row's top-level
+     fields, and `watch --filter 'ticket X'` passes every ticket's
+     `transition` (a service gap), so they are kept for the page's life. -->
 <script module>
   export const uses = ["tickets.history", "tickets.watch"];
 </script>

@@ -220,8 +220,19 @@ export default async (ctx) => {
       await eventually("picked", async () => (await r.locator("[data-pick]").getAttribute("aria-pressed")) === "true");
       await r.locator("[data-close]").click({ timeout: 2000 });
       await eventually("closed, back in its column", async () => (await r.getAttribute("data-open")) === "false");
+      // Two revisions made while the page is open: both listed, the count the service's.
       sy("tickets", "update", "--id", t.id, "--severity", "Low");
-      await eventually("a new revision appears live", async () => (await r.locator(`li[data-id="${top + 1}"]`).count()) === 1, 5_000);
+      sy("tickets", "update", "--id", t.id, "--severity", "High");
+      await eventually("both new revisions appear live", async () => (await r.locator(`li[data-id="${top + 1}"]`).count()) === 1 && (await r.locator(`li[data-id="${top + 2}"]`).count()) === 1, 5_000);
+      const held = sy("tickets", "revisions", "list", "--id", t.id).filter((e) => e.type === "revision").map((e) => e.revision.rev);
+      await eventually(`the list is the service's (${held})`, async () => JSON.stringify(await r.locator("li[data-id]").evaluateAll((els) => els.map((e) => Number(e.dataset.id)))) === JSON.stringify(held), 5_000);
+      // Opened, the newest is compared with the one before it, which is listed.
+      await r.locator(`li[data-id="${top + 2}"]`).click({ timeout: 2000 });
+      await eventually("rev top+2 against top+1", async () => (await r.locator(`[data-diff="${top + 1}..${top + 2}"] [data-field=severity]`).count()) === 1, 5_000);
+      // Escape closes the open diff first, and the page stays.
+      await page.keyboard.press("Escape");
+      await eventually("escape closed the diff", async () => (await r.getAttribute("data-open")) === "false");
+      assert((await page.evaluate(() => location.hash)) === `${ROUTE}${t.id}`, "the first escape stayed on the page");
     } finally {
       await context.close();
     }
@@ -248,12 +259,31 @@ export default async (ctx) => {
     } finally {
       await c2.close();
     }
+    // A ticket deleted before its page opened says so too.
+    const d = made("the kiln deleted before");
+    sy("tickets", "delete", "--ids", d.id);
+    const { page: p3, context: c3 } = await openPage(`${ROUTE}${d.id}`);
+    try {
+      const tp3 = p3.locator("[data-surface=ticket-page]");
+      await eventually("the page says deleted, with its title", async () => (await text(tp3.locator("[data-deleted]"))).includes(`${d.id} was deleted — ${d.title}`), 10_000);
+      assert((await tp3.locator("[data-empty]").count()) === 0 && (await tp3.locator("[data-surface=ticket-head]").count()) === 0, "not 'no such ticket', no head");
+    } finally {
+      await c3.close();
+    }
   });
 
   await test("the_marks_for_edit_and_actions_are_there", async () => {
     const t = made("the kiln's marks");
-    const { tp, context } = await open(t.id);
+    const { page, tp, context } = await open(t.id);
     try {
+      // What the page sends: one `get` of the ticket for every part reading it, five watch streams.
+      await eventually("every part drawn", async () => (await tp.locator("[data-surface=ticket-revisions] li[data-id]").count()) > 0 && (await tp.locator("[data-surface=ticket-history] [data-transition]").count()) > 0, 5_000);
+      await sleep(300);
+      const calls = await sentCalls(page);
+      const by = calls.reduce((m, c) => ((m[c.method] = (m[c.method] ?? 0) + 1), m), {});
+      console.log(`     sent: ${JSON.stringify(by)}`);
+      assert(calls.filter((c) => c.method === "tickets.get" && c.params.id === t.id).length === 1, `one get of ${t.id}: ${JSON.stringify(by)}`);
+      assert((by["tickets.watch"] ?? 0) <= 5, `at most five watches: ${JSON.stringify(by)}`);
       for (const [mark, where] of [["ticket-edit", tp], ["ticket-actions", tp], ["work-blockers", tp.locator("[data-surface=ticket-relations]")]]) {
         const m = where.locator(`[data-mark=${mark}][data-slot=${mark}][data-component=${mark}]`);
         assert((await m.count()) === 1, `${mark}'s mark is placed`);
@@ -284,9 +314,11 @@ export default async (ctx) => {
       await eventually("its siblings", async () => (await page.locator("[data-surface=ticket-head] [data-sib=prev]").count()) === 1, 5_000);
       await page.keyboard.press("[");
       await eventually(`[ goes back to ${kids[1]}`, async () => (await page.evaluate(() => location.hash)) === `${ROUTE}${kids[1]}`, 5_000);
-      // e says ticket.edit on the bus: no navigation.
+      // e says ticket.edit on the bus (SURFACE-4 hears it): the page counts it on its root and the edit mark flashes; no navigation.
+      const asked = Number(await tp.getAttribute("data-edit-asked"));
       await page.keyboard.press("e");
-      await sleep(200);
+      await eventually("e asked for the edit", async () => Number(await tp.getAttribute("data-edit-asked")) === asked + 1);
+      assert(await tp.locator("[data-mark=ticket-edit]").evaluate((e) => e.classList.contains("heard")), "the edit mark heard it");
       assert((await page.evaluate(() => location.hash)) === `${ROUTE}${kids[1]}`, "e moved nothing");
       await page.keyboard.press("x");
       await page.keyboard.press("Escape");
@@ -294,6 +326,12 @@ export default async (ctx) => {
       const seen = await page.evaluate(() => window.__keys);
       assert(seen.includes("x"), `an unbound key reaches the page: ${JSON.stringify(seen)}`);
       for (const k of ["]", "[", "e", "Escape"]) assert(!seen.includes(k), `${k} never reached the page: ${JSON.stringify(seen)}`);
+      // g b, a sequence, goes to the board too.
+      await page.evaluate((r) => (location.hash = r), `${ROUTE}${kids[0]}`);
+      await eventually(`${kids[0]} is drawn`, async () => (await text(page.locator("[data-surface=ticket-head] [data-field=id]"))) === kids[0], 5_000);
+      await page.keyboard.press("g");
+      await page.keyboard.press("b");
+      await eventually("g b goes to the board", async () => !(await page.evaluate(() => location.hash)).includes("/ticket/"), 5_000);
     } finally {
       await context.close();
     }

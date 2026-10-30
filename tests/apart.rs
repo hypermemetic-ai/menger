@@ -1509,7 +1509,7 @@ fn bus_breaks(sources: &[(String, String)]) -> Vec<String> {
         let have = svelte_imports(&code);
         for i in imports {
             if !have.iter().any(|h| h == i) {
-                out.push(format!("ui/src/{f}: imports no ./{i}.svelte"));
+                out.push(format!("ui/src/{f}: imports no ./{i}.svelte and no plexus-ui:{i}"));
             }
         }
     }
@@ -1568,8 +1568,8 @@ fn the_svelte_board_rides_the_bus() {
         "ui/src/ticket-page-sv.svelte: an {@html …} not of markdown(…): HTML reaches the page only through the bus's sanitized render",
         "ui/src/ticket-page-sv.svelte: markdown( not imported from plexus-ui/host",
         "ui/src/ticket-page-sv.svelte: a store subscribed or stood in by hand (`.subscribe(`): the face's live is the store",
-        "ui/src/ticket-page-sv.svelte: imports no ./ticket-head.svelte",
-        "ui/src/ticket-page-sv.svelte: imports no ./ticket-body.svelte",
+        "ui/src/ticket-page-sv.svelte: imports no ./ticket-head.svelte and no plexus-ui:ticket-head",
+        "ui/src/ticket-page-sv.svelte: imports no ./ticket-body.svelte and no plexus-ui:ticket-body",
         "ui/src/ticket-body.svelte is missing",
         "ui/src/ticket-head.svelte is missing",
         "ui/src/ticket-page-sv.svelte: says `data-chip-id`, which the bus or a sibling now does",
