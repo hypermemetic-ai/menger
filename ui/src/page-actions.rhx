@@ -1,0 +1,15 @@
+<script>
+  // STUDIO-12: a component alone, for its browser cases — an rhx page like
+  // every route's, placing one svelte/1 component by its mark and nothing
+  // else (no top: the app's pages carry it). #/actions/:id: ticket-actions.
+  prop("id");
+</script>
+
+<section class="page page-actions">
+  <ticket-actions id={id}/>
+</section>
+
+<style>
+  :scope { display: block; }
+  .page-actions { color: var(--ink); background: var(--bg); font-family: var(--font-text); font-size: var(--text-size); }
+</style>

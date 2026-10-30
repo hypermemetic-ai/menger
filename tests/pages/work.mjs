@@ -46,7 +46,8 @@ export default async (ctx) => {
       const title = await W.locator(`.board-row[data-id="${a}"] [data-field=title]`).textContent();
       assert(title.includes("a ready build"), `the row's title: ${title}`);
       assert((await W.locator(`.board-row[data-id="${a}"] [data-field=status]`).textContent()).trim() === "Ready", "the row's status chip");
-      assert((await W.locator(`.board-row[data-id="${a}"] [data-component=ticket-chip] [data-chip-id="${root}"]`).count()) === 1, "the parent as a ticket-chip");
+      // STUDIO-12: the chip is a bound mark inside the page's own bound mark — waited for, as every mark is.
+      await eventually("the parent as a ticket-chip", async () => (await W.locator(`.board-row[data-id="${a}"] [data-component=ticket-chip] [data-chip-id="${root}"]`).count()) === 1, 5_000);
       assert((await W.locator(`.board-row[data-id="${a}"] .sev[data-sev=High]`).count()) === 1, "the severity bars");
       // A blocker completing lets what it held arrive; a ticket taken leaves.
       status(held, "Complete");

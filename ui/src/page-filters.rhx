@@ -1,0 +1,16 @@
+<script>
+  // STUDIO-12: the filters page — an rhx page the studio edits, placing its
+  // svelte/1 component by its mark, the app's top in its `top` section
+  // (app-top by ui/slots.json). #/filters and #/filters/:filter: filters-saved, whole (the board's nav holds it compact); its own heading is its.
+  prop("filter");
+</script>
+
+<section class="page page-filters">
+  <slot name="top" here="filters"/>
+  <filters-saved filter={filter}/>
+</section>
+
+<style>
+  :scope { display: block; }
+  .page-filters { min-height: 100vh; min-height: 100dvh; color: var(--ink); background: var(--bg); font-family: var(--font-text); font-size: var(--text-size); }
+</style>

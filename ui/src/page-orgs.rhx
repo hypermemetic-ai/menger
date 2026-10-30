@@ -1,0 +1,18 @@
+<script>
+  // STUDIO-12: the orgs page — an rhx page the studio edits, placing its
+  // svelte/1 component by its mark, the app's top in its `top` section
+  // (app-top by ui/slots.json). #/orgs: orgs-list.
+</script>
+
+<section class="page page-orgs">
+  <slot name="top" here="orgs"/>
+  <header class="page-title"><h1>organizations</h1></header>
+  <orgs-list/>
+</section>
+
+<style>
+  :scope { display: block; }
+  .page-orgs { min-height: 100vh; min-height: 100dvh; color: var(--ink); background: var(--bg); font-family: var(--font-text); font-size: var(--text-size); }
+  .page-title { max-width: 1180px; margin: 0 auto; padding: 16px 24px 0; }
+  .page-title h1 { margin: 0; font-family: var(--font-display); font-size: 20px; font-weight: var(--weight-strong); color: var(--ink); }
+</style>

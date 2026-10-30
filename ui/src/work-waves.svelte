@@ -9,7 +9,8 @@
      come from the lanes' fixed pitch (a lane 226 px wide and 56 px apart, a
      chip 26 px tall and 8 px apart; the sheet holds both). A hovered chip
      lights its lines and the chips they join; a click opens the ticket. A
-     route or a kind moved asks again. -->
+     route or a kind moved asks again.
+     STUDIO-12: the page's title is page-waves's (rhx). -->
 <script module>
   const KINDS = ["scope", "execution", "build", "gap", "spike"];
   // The pitch the sheet draws at (.lanes, .lane, .lane-head, .chip).
@@ -90,7 +91,6 @@
 
 <section class="work-waves" data-surface="work-waves">
   <header class="ww-head" data-mode={mode}>
-    <h1>waves</h1>
     <span class="sum" data-field="summary">{mode === "pick" ? "choose shortcodes" : `${placed.length - G.done} tickets in ${G.lanes.length} waves${G.done ? ` · ${G.done} done` : ""}`}</span>
     {#if mode === "in" || mode === "pick"}
       <span class="ctl" data-param="epics"><span>epics</span>
@@ -159,7 +159,6 @@
 <style>
   .work-waves { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; height: 100%; background: var(--bg); color: var(--ink); font-family: var(--font-text); font-size: var(--text-size); }
   .ww-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; padding: 10px 24px; background: var(--panel); border-bottom: var(--border) solid var(--line); }
-  .ww-head h1 { margin: 0; font-family: var(--font-display); font-size: 18px; font-weight: var(--weight-strong); }
   .sum { color: var(--muted); font-size: 12px; }
   .ctl { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: 11px; color: var(--muted); }
   .ctl > span { margin-right: 2px; }

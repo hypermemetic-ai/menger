@@ -1,0 +1,21 @@
+<script>
+  // STUDIO-12: the waves page — an rhx page the studio edits, placing its
+  // svelte/1 component by its mark, the app's top in its `top` section
+  // (app-top by ui/slots.json). #/waves, #/waves/in/:epics, #/waves/:id and #/waves/to/:to: work-waves, the mode from the route.
+  prop("epics");
+  prop("id");
+  prop("to");
+</script>
+
+<section class="page page-waves">
+  <slot name="top" here="waves"/>
+  <header class="page-title"><h1>waves</h1></header>
+  <work-waves epics={epics} id={id} to={to}/>
+</section>
+
+<style>
+  :scope { display: block; }
+  .page-waves { min-height: 100vh; min-height: 100dvh; color: var(--ink); background: var(--bg); font-family: var(--font-text); font-size: var(--text-size); }
+  .page-title { padding: 16px 24px 10px; }
+  .page-title h1 { margin: 0; font-family: var(--font-display); font-size: 20px; font-weight: var(--weight-strong); color: var(--ink); }
+</style>

@@ -1,0 +1,18 @@
+<script>
+  // STUDIO-12: the sheet's page — an rhx page the studio edits, placing
+  // sheet-page (svelte/1: every component in every state, both schemes) by
+  // its mark, the app's top in its `top` section (app-top by
+  // ui/slots.json). #/sheet and #/sheet/:id: the ticket from the route. The
+  // sheet places every component but this one, which places it.
+  prop("id");
+</script>
+
+<section class="page page-sheet">
+  <slot name="top" here="sheet"/>
+  <sheet-page id={id}/>
+</section>
+
+<style>
+  :scope { display: block; }
+  .page-sheet { min-height: 100vh; min-height: 100dvh; color: var(--ink); background: var(--bg); font-family: var(--font-text); font-size: var(--text-size); }
+</style>

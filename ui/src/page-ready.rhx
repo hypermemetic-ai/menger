@@ -1,0 +1,19 @@
+<script>
+  // STUDIO-12: the ready page — an rhx page the studio edits, placing its
+  // svelte/1 component by its mark, the app's top in its `top` section
+  // (app-top by ui/slots.json). #/ready and #/ready/:filter: work-ready, under the route's filter.
+  prop("filter");
+</script>
+
+<section class="page page-ready">
+  <slot name="top" here="ready"/>
+  <header class="page-title"><h1>ready</h1></header>
+  <work-ready filter={filter}/>
+</section>
+
+<style>
+  :scope { display: block; }
+  .page-ready { min-height: 100vh; min-height: 100dvh; color: var(--ink); background: var(--bg); font-family: var(--font-text); font-size: var(--text-size); }
+  .page-title { padding: 16px 24px 10px; }
+  .page-title h1 { margin: 0; font-family: var(--font-display); font-size: 20px; font-weight: var(--weight-strong); color: var(--ink); }
+</style>

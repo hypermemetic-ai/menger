@@ -50,7 +50,23 @@
   import NavTree from "plexus-ui:nav-tree";
   import NavTreeSv from "plexus-ui:nav-tree-sv";
   import OrgsList from "plexus-ui:orgs-list";
+  import PageActions from "plexus-ui:page-actions";
+  import PageBlockers from "plexus-ui:page-blockers";
+  import PageBulk from "plexus-ui:page-bulk";
+  import PageCounts from "plexus-ui:page-counts";
+  import PageEdit from "plexus-ui:page-edit";
+  import PageEpics from "plexus-ui:page-epics";
+  import PageFacets from "plexus-ui:page-facets";
+  import PageFilters from "plexus-ui:page-filters";
+  import PageMe from "plexus-ui:page-me";
+  import PageNew from "plexus-ui:page-new";
+  import PageOrgs from "plexus-ui:page-orgs";
+  import PageReady from "plexus-ui:page-ready";
+  import PageReleases from "plexus-ui:page-releases";
+  import PageSearch from "plexus-ui:page-search";
   import PageShell from "plexus-ui:page-shell";
+  import PageTicket from "plexus-ui:page-ticket";
+  import PageWaves from "plexus-ui:page-waves";
   import SearchPage from "plexus-ui:search-page";
   import TicketActions from "plexus-ui:ticket-actions";
   import TicketBody from "plexus-ui:ticket-body";
@@ -62,7 +78,6 @@
   import TicketHead from "plexus-ui:ticket-head";
   import TicketHistory from "plexus-ui:ticket-history";
   import TicketPage from "plexus-ui:ticket-page";
-  import TicketPageSv from "plexus-ui:ticket-page-sv";
   import TicketPicker from "plexus-ui:ticket-picker";
   import TicketRelations from "plexus-ui:ticket-relations";
   import TicketRevisions from "plexus-ui:ticket-revisions";
@@ -134,7 +149,6 @@
       ["search-page", SearchPage, (t) => ({ q: t }), ["hover", "focus", "disabled", "selected"], { loading: { q: t0(), sheet: "loading" }, empty: { q: "zzqqxxjj" }, refused: { q: "ready", filter: REFUSED } }, true],
     ]],
     ["the ticket", [
-      ["ticket-page-sv", TicketPageSv, ID, ["hover", "focus"], { loading: { sheet: "loading" }, ...gone }, true],
       ["ticket-page", TicketPage, ID, ["hover", "focus"], gone, true],
       ["ticket-head", TicketHead, ID, ["hover", "focus"], gone],
       ["ticket-body", TicketBody, ID, [], gone],
@@ -162,6 +176,25 @@
       ["orgs-list", OrgsList, F, ["hover"], { loading: { sheet: "loading" } }],
       ["me-page", MePage, F, ["hover", "focus", "disabled"], { loading: { sheet: "loading" } }, true],
       ["ui-versions", UiVersions, F, ["hover", "focus", "disabled"], { loading: { sheet: "loading" } }, true],
+    ]],
+    // STUDIO-12: the pages — each route's rhx page, placing its components by their marks (#/sheet's own, page-sheet, aside: it places this).
+    ["the pages", [
+      ["page-ticket", PageTicket, ID, [], { loading: { sheet: "loading" }, ...gone }, true],
+      ["page-new", PageNew, (t) => ({ parent: t }), [], {}, true],
+      ["page-search", PageSearch, (t) => ({ q: t }), [], { empty: { q: "zzqqxxjj" } }, true],
+      ["page-ready", PageReady, F, [], fil, true],
+      ["page-waves", PageWaves, ID, [], {}, true],
+      ["page-filters", PageFilters, F, [], {}, true],
+      ["page-epics", PageEpics, F, [], {}, true],
+      ["page-orgs", PageOrgs, F, [], {}, true],
+      ["page-me", PageMe, F, [], {}, true],
+      ["page-releases", PageReleases, F, [], {}, true],
+      ["page-bulk", PageBulk, (t) => ({ ids: t }), [], {}, true],
+      ["page-blockers", PageBlockers, ID, [], {}, true],
+      ["page-edit", PageEdit, ID, [], {}, true],
+      ["page-actions", PageActions, ID, [], {}, true],
+      ["page-facets", PageFacets, (t) => ({ filter: "status Ready" }), [], fil, true],
+      ["page-counts", PageCounts, (t) => ({ filter: "status Ready" }), [], fil, true],
     ]],
     ["the layouts", [
       ["board-frame", BoardFrame, F, [], {}, true],
