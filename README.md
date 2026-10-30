@@ -121,8 +121,8 @@ and, with no version live, a placeholder page naming the socket.
 `/app/<hash>/<file>` is that version's file, `immutable` for a year. `/` is
 the placeholder too (or the entrypoint of an `--app-dist` build). `/studio/` (STUDIO-2) is the framework's studio — the version a push of
 plexus-ui's `studio/` built `--name studio` and pushed `--no-live` keeps as
-`bundle:studio` (a deploy pushes it after the app's) — to a session holding
-`admin` or `editor` on `*` (403 otherwise), with `--ui-compiler`'s module at
+`bundle:studio` (a deploy pushes it after the app's) — to a session the gate
+says holds `ui.author` on `*` — admin, an `editor` on `*` (403 otherwise), with `--ui-compiler`'s module at
 `/studio/ui-compiler.wasm`, which it compiles a new page in. The
 login routes (`/login`, `/login/start`, `/login/callback`, `/logout`,
 `/auth/cli`, …) are plexus-login's. Every page goes out under a

@@ -282,7 +282,8 @@ async fn the_entrypoint_preloads_the_boot() {
 
 /// STUDIO-2: the studio — the framework's own bundle, kept as `bundle:studio`
 /// (pushed `live: false` under that name) — is served at `/studio/` beside
-/// `/app/`, inside the session check, to admin and `editor` on `*` alone.
+/// `/app/`, inside the session check, to a session holding `ui.author` on `*`
+/// (admin, `editor` on `*`) alone — the gate's answer.
 #[tokio::test]
 async fn the_studio_is_mounted_for_the_admin_and_editors() {
     let m = start().await;
@@ -312,4 +313,11 @@ async fn the_studio_is_mounted_for_the_admin_and_editors() {
     assert_eq!(m.get("/studio/", Some(&editor)).await.status(), 200, "an editor");
     let anonymous = m.get("/studio/", None).await;
     assert_eq!(anonymous.status(), 303, "no session: the login page");
+    // An editor under one ticket holds ui.author nowhere the studio writes.
+    const NARROW: [u8; 32] = [0x52; 32];
+    call(&admin, "tickets.create", json!({ "epic": "KILN", "kind": "scope", "title": "the kiln" })).await;
+    let g = call(&admin, "auth.grant", json!({ "principal": support::principal_of(&NARROW), "role": "editor", "scope": "KILN" })).await;
+    assert!(g.first().is_some_and(|e| e.get("error_kind").is_none()), "editor on KILN: {g:?}");
+    let narrow = support::mint_session_for(&NARROW, m.ws).await;
+    assert_eq!(m.get("/studio/", Some(&narrow)).await.status(), 403, "an editor on KILN alone");
 }

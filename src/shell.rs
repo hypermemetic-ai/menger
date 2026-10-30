@@ -73,7 +73,7 @@ pub struct ShellConfig {
 /// STUDIO-2: who opens `/studio/`, and the module the studio compiles in.
 #[derive(Clone)]
 pub struct Studio {
-    /// Whether a session's identity may open it (menger: admin or `editor` on `*`).
+    /// Whether a session's identity may open it (menger: [`studio_may`]).
     pub may: Arc<dyn Fn(&plexus_core::plexus::AuthContext) -> bool + Send + Sync>,
     /// `--ui-compiler`'s bytes, served at `/studio/ui-compiler.wasm`.
     pub compiler: Option<Vec<u8>>,
@@ -546,11 +546,9 @@ mod tests {
 
 }
 
-/// STUDIO-2: who opens the studio — a principal holding `admin` or
-/// `editor` on `*` among `held`'s memberships (menger's book, teams and
-/// `everyone` included).
-pub fn studio_may<M: plexus_auth_core::Memberships + ?Sized>(held: &M, ctx: &plexus_core::plexus::AuthContext) -> bool {
-    let principal = ctx.principal().map(|p| p.to_string()).unwrap_or_else(|| ctx.user_id.clone());
-    let Ok(p) = principal.parse() else { return false };
-    held.held(&p).iter().any(|m| matches!(m.role.as_str(), "admin" | "editor") && m.scope == plexus_auth_core::ScopeRef::Everywhere)
+/// STUDIO-2: who opens the studio — the gate's own answer to "does this
+/// session hold `ui.author` (an editor's grant) on `*`": memberships, teams,
+/// `everyone` and a session's ceiling all counted, as for a call.
+pub fn studio_may(gate: &plexus_auth_core::grants::Gate, ctx: &plexus_core::plexus::AuthContext) -> bool {
+    gate.held_on(ctx, &plexus_auth_core::grants::Grant::new("ui.author")).iter().any(|s| s.is_everywhere())
 }
