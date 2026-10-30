@@ -31,7 +31,7 @@ cg() { local name=$1 want=$2; shift 2
 
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t \
   GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
-unset CLEANUP_GATE_LOG CLEANUP_GATE_IDLE_HOURS
+unset CLEANUP_GATE_LOG CLEANUP_GATE_IDLE_HOURS MENGER_SCRATCH_DIRS
 # CI-2: the disk's use is said, never measured, and cargo is a stand-in that
 # answers `metadata` from a map (manifest<TAB>build_directory) — no real cargo runs
 export CLEANUP_GATE_USED_PCT=30 CLEANUP_GATE_CARGO=$T/bin/cargo STUB_CARGO_MAP=$T/cargo-map
@@ -276,6 +276,198 @@ there "logs: recent kept" "$PL/20261019T010101Z-ccccccc-gate-workspace.log"; the
 refused "a red run's log by path" "a red run's log" --path "$PL/20260102T010101Z-bbbbbbb-gate-workspace.log"
 cg "--log-days 1 takes the recent green one" 0 --yes --sweep --log-days 1
 gone "logs: --log-days 1" "$PL/20261019T010101Z-ccccccc-gate-workspace.log"; there "logs: still the red" "$PL/20260102T010101Z-bbbbbbb-build-release.log"
+
+# ── RUN-34: the throwaway's ui8-* work directories under a scratch root ────
+# scripts/ui-throwaway.mjs's workDir() makes ui8-pages-* / ui8-probe-* (and
+# any ui8-<prefix>-*) under $TMPDIR; builders set it to ~/.cache/menger-perf-
+# scratch. Such a directory, holding the throwaway's marks (tickets.db, ui.db,
+# admin.key — the server's database, the ui service's, the admin's key), is
+# shape ui8-work under a scratch root — a directory named menger-perf-scratch
+# in ~/.cache, or one MENGER_SCRATCH_DIRS names — when nothing holds it and
+# nothing in it changed for an hour. Nothing else in a scratch root is a shape.
+PS=$H/.cache/menger-perf-scratch OS=$T/other-scratch UK=$T/unknown-scratch
+mkdir -p "$PS" "$OS" "$UK"
+ui8() { local d=$1; shift   # DIR [MARK…]: a fake work directory with these marks (default: all of them)
+  mkdir -p "$d/engine"; echo e >"$d/engine/engine.wasm"
+  local m; for m in "${@:-tickets.db tickets.db-wal ui.db admin.key signer.key session}"; do for m in $m; do echo x >"$d/$m"; done; done; }
+echo x >"$PS/menger-perf.db"; echo x >"$PS/f17-build.log"; mkdir -p "$PS/f17"; echo x >"$PS/f17/a"
+aged '3 hours ago' "$PS/menger-perf.db" "$PS/f17-build.log" "$PS/f17"
+
+# a_ui8_dir_under_a_scratch_root_is_a_leftover
+ui8 "$PS/ui8-pages-x"; aged '2 hours ago' "$PS/ui8-pages-x"
+cg "ui8: a dry run by path" 0 --path "$PS/ui8-pages-x"
+has "ui8: the shape" "$out" "would remove  ui8-work"; has "ui8: its path" "$out" "$PS/ui8-pages-x"
+there "ui8: a dry run keeps it" "$PS/ui8-pages-x"
+cg "ui8: removed by path" 0 --yes --path "$PS/ui8-pages-x"
+has "ui8: removed" "$out" "removed  ui8-work"; gone "ui8: removed by path" "$PS/ui8-pages-x"
+has "ui8: logged" "$(<"$LOG")" "removed ui8-work $PS/ui8-pages-x"
+there "ui8: the scratch root stays" "$PS"; there "ui8: its other files stay" "$PS/menger-perf.db"
+ui8 "$PS/ui8-probe-x"; aged '2 hours ago' "$PS/ui8-probe-x"
+cg "ui8: a probe's by path" 0 --yes --path "$PS/ui8-probe-x"; gone "ui8: a probe's" "$PS/ui8-probe-x"
+ui8 "$PS/ui8-f20p0-x"; aged '2 hours ago' "$PS/ui8-f20p0-x"   # a builder's own prefix: still ui8-*
+cg "ui8: any ui8- prefix by path" 0 --yes --path "$PS/ui8-f20p0-x"; gone "ui8: any ui8- prefix" "$PS/ui8-f20p0-x"
+ui8 "$PS/ui8-pages-early" admin.key signer.key; aged '2 hours ago' "$PS/ui8-pages-early"  # the run died before the server started?
+refused "ui8: keys alone are not the marks" "without the throwaway's marks" --path "$PS/ui8-pages-early"
+refused "ui8: the scratch root itself" "a root" --path "$PS"
+refused "ui8: a scratch root's other files" "not a leftover shape" --path "$PS/menger-perf.db"
+refused "ui8: a scratch root's other dirs" "not a leftover shape" --path "$PS/f17"
+there "ui8: refusals touch nothing" "$PS/f17/a"; there "ui8: refusals touch nothing" "$PS/ui8-pages-early/admin.key"
+
+# a_ui8_dir_in_use_is_refused
+ui8 "$PS/ui8-pages-held"; ui8 "$PS/ui8-pages-cwd"; aged '2 hours ago' "$PS/ui8-pages-held" "$PS/ui8-pages-cwd"
+# shellcheck disable=SC2217  # the point: sleep holds the database open, as the server does
+sleep 60 <"$PS/ui8-pages-held/tickets.db" & held=$!
+(cd "$PS/ui8-pages-cwd" && exec sleep 60) & inside=$!
+sleep 0.3
+refused "ui8: its database held open" "in use by pid $held" --path "$PS/ui8-pages-held"
+refused "ui8: something works in it" "in use by pid $inside" --path "$PS/ui8-pages-cwd"
+cg "ui8: the sweep keeps what is held" 0 --yes --sweep
+has "ui8: the sweep keeps it, held" "$out" "kept     ui8-work"; has "ui8: … and says by whom" "$out" "$PS/ui8-pages-held — in use by pid $held"
+there "ui8: held, there" "$PS/ui8-pages-held/tickets.db"; there "ui8: worked in, there" "$PS/ui8-pages-cwd"
+kill "$held" "$inside" 2>/dev/null; wait "$held" "$inside" 2>/dev/null
+cg "ui8: let go, it goes" 0 --yes --path "$PS/ui8-pages-held" "$PS/ui8-pages-cwd"
+gone "ui8: let go" "$PS/ui8-pages-held"; gone "ui8: let go (cwd)" "$PS/ui8-pages-cwd"
+
+# a_ui8_dir_under_an_unknown_root_is_refused
+ui8 "$UK/ui8-pages-x"; ui8 "$H/.cache/ui8-pages-x"; ui8 "$PS/sub/ui8-pages-x"
+aged '2 hours ago' "$UK/ui8-pages-x" "$H/.cache/ui8-pages-x" "$PS/sub"
+refused "ui8: under an unknown root" "not a leftover shape" --path "$UK/ui8-pages-x"
+refused "ui8: under ~/.cache itself" "not a leftover shape" --path "$H/.cache/ui8-pages-x"
+refused "ui8: two levels below a scratch root" "not a leftover shape" --path "$PS/sub/ui8-pages-x"
+MENGER_SCRATCH_DIRS=$OS refused "ui8: a root the env names, but not this one" "not a leftover shape" --path "$UK/ui8-pages-x"
+there "ui8: unknown, there" "$UK/ui8-pages-x/tickets.db"; there "ui8: ~/.cache, there" "$H/.cache/ui8-pages-x"
+there "ui8: deeper, there" "$PS/sub/ui8-pages-x"
+
+# a_ui8_dir_younger_than_an_hour_is_left
+ui8 "$PS/ui8-pages-young"; aged '20 minutes ago' "$PS/ui8-pages-young"
+refused "ui8: younger than an hour, by path" "modified within 1h" --path "$PS/ui8-pages-young"
+cg "ui8: younger than an hour, the sweep" 0 --yes --sweep
+has "ui8: the sweep keeps the young one" "$out" "kept     ui8-work"; has "ui8: … and says why" "$out" "$PS/ui8-pages-young — modified within 1h"
+there "ui8: young, there" "$PS/ui8-pages-young/tickets.db"
+ui8 "$PS/ui8-pages-touched"; aged '2 hours ago' "$PS/ui8-pages-touched"; echo w >>"$PS/ui8-pages-touched/tickets.db-wal"
+refused "ui8: one file written within the hour" "modified within 1h" --path "$PS/ui8-pages-touched"
+there "ui8: touched, there" "$PS/ui8-pages-touched"
+
+# the_sweep_lists_and_takes_scratch_roots
+ui8 "$PS/ui8-probe-a"; ui8 "$PS/ui8-pages-b"; ui8 "$OS/ui8-probe-c"
+aged '2 hours ago' "$PS/ui8-probe-a" "$PS/ui8-pages-b" "$OS/ui8-probe-c" "$PS/ui8-pages-touched"
+MENGER_SCRATCH_DIRS="$OS:$UK/absent" cg "ui8: --list" 2 --list
+for p in "$PS/ui8-probe-a" "$PS/ui8-pages-b" "$OS/ui8-probe-c" "$PS/ui8-pages-touched"; do has "ui8: --list names $p" "$out" "ui8-work   $p"; done
+has "ui8: --list judges the young one" "$out" "$PS/ui8-pages-young"
+hasnt "ui8: --list, never the unknown root" "$out" "$UK/ui8-pages-x"
+hasnt "ui8: --list, never a scratch root's other files" "$out" "$PS/menger-perf.db"
+there "ui8: --list removes nothing" "$PS/ui8-probe-a"
+MENGER_SCRATCH_DIRS="$OS:$UK/absent" cg "ui8: the sweep, dry run" 0 --sweep
+has "ui8: the dry sweep" "$out" "would remove  ui8-work"; has "ui8: … names the scratch root's" "$out" "$PS/ui8-probe-a"
+has "ui8: … and the env's" "$out" "$OS/ui8-probe-c"
+there "ui8: the dry sweep keeps" "$PS/ui8-probe-a"
+MENGER_SCRATCH_DIRS="$OS:$UK/absent" cg "ui8: the sweep" 0 --yes --sweep
+for p in "$PS/ui8-probe-a" "$PS/ui8-pages-b" "$OS/ui8-probe-c" "$PS/ui8-pages-touched"; do gone "ui8: swept" "$p"; done
+has "ui8: the sweep logged" "$(<"$LOG")" "removed ui8-work $PS/ui8-probe-a"
+has "ui8: … the env's root's too" "$(<"$LOG")" "removed ui8-work $OS/ui8-probe-c"
+there "ui8: the sweep keeps the young" "$PS/ui8-pages-young"; there "ui8: … the keys-only" "$PS/ui8-pages-early"
+there "ui8: … the unknown root's" "$UK/ui8-pages-x"; there "ui8: … ~/.cache's" "$H/.cache/ui8-pages-x"
+there "ui8: … the root's own files" "$PS/menger-perf.db"; there "ui8: … and dirs" "$PS/f17/a"; there "ui8: … the root" "$PS"
+MENGER_SCRATCH_DIRS="$OS:$H" cg "ui8: \$HOME named a scratch root refuses the run" 1 --yes --path "$PS/ui8-pages-young"
+has "ui8: … and says which" "$out" "MENGER_SCRATCH_DIRS names $H — a root"; there "ui8: … touching nothing" "$PS/ui8-pages-young"
+MENGER_SCRATCH_DIRS=relative/dir cg "ui8: a relative scratch root refuses the run" 1 --list; has "ui8: relative said" "$out" "not an absolute path"
+has "ui8: install.sh says the timer runs its installed copy, and which" "$(<"$(dirname "$HERE")/sweep/install.sh")" "the timer runs this installed copy"
+has "ui8: the timer reads its own env file" "$(<"$(dirname "$HERE")/sweep/menger-sweep.service")" "EnvironmentFile=-%h/.config/menger/sweep.env"
+
+# a_dir_named_ui8_without_the_marks_is_refused
+mkdir -p "$PS/ui8-pages-bare" "$PS/ui8-notes"; echo x >"$PS/ui8-pages-bare/notes.md"; echo x >"$PS/ui8-notes/tickets.db"
+aged '2 hours ago' "$PS/ui8-pages-bare" "$PS/ui8-notes"
+refused "ui8: no marks" "without the throwaway's marks" --path "$PS/ui8-pages-bare"
+refused "ui8: a database alone is not the marks" "without the throwaway's marks" --path "$PS/ui8-notes"
+echo x >"$PS/ui8-file"; aged '2 hours ago' "$PS/ui8-file"
+refused "ui8: a file named ui8 is no work directory" "not a leftover shape" --path "$PS/ui8-file"
+ln -s "$T/elsewhere" "$PS/ui8-pages-link"
+refused "ui8: a symlink named ui8 out of the root" "not a leftover shape" --path "$PS/ui8-pages-link"
+cg "ui8: the sweep leaves the unmarked" 0 --yes --sweep
+there "ui8: unmarked, there" "$PS/ui8-pages-bare/notes.md"; there "ui8: a db alone, there" "$PS/ui8-notes/tickets.db"
+there "ui8: the file, there" "$PS/ui8-file"; there "ui8: the link's target, there" "$T/elsewhere/wt"
+
+# the review's cases (RUN-34): a scratch root's own rules, and what the sweep may never take
+bad_env() { local name=$1 why=$2 val=$3
+  MENGER_SCRATCH_DIRS=$val cg "ui8: $name refuses --list" 1 --list; has "ui8: $name said" "$out" "$why"
+  MENGER_SCRATCH_DIRS=$val cg "ui8: $name refuses --path" 1 --path "$PS/ui8-pages-young"; there "ui8: $name, nothing touched" "$PS/ui8-pages-young"
+}
+bad_env "\$HOME" "a root, never a scratch root" "$H"
+bad_env "/" "a root, never a scratch root" "/"
+bad_env "a .. entry" "named with . or .." "$OS/../other-scratch"
+bad_env "a newline" "a newline in it" "$OS"$'\n'"$UK"
+bad_env "~/.cache" "a root, never a scratch root" "$H/.cache"
+bad_env "an ancestor of \$HOME" "a root, never a scratch root" "$T"
+bad_env "a dir in the workspace" "in the workspace" "$WS/.scratchy"
+bad_env "a dir outside the test root" "outside the test root" "/var/tmp"
+# under --sweep a bad entry is said and skipped: the rest is swept
+bd fa/8888888888888888; aged '8 hours ago' "$CB/fa"
+ui8 "$OS/ui8-probe-d"; aged '2 hours ago' "$OS/ui8-probe-d"
+MENGER_SCRATCH_DIRS="$H:$OS:/bad"$'\n'"/x" cg "ui8: a bad env under --sweep still sweeps" 0 --yes --sweep
+has "ui8: … says the bad one" "$out" "MENGER_SCRATCH_DIRS names $H — a root"
+gone "ui8: … still takes cargo-build" "$CB/fa/8888888888888888"
+has "ui8: … the newline entry said, not split" "$out" "a newline in it"; gone "ui8: … and a good root's" "$OS/ui8-probe-d"
+
+# a scratch root with a space in its path
+SP="$T/with space"; ui8 "$SP/ui8-probe-s"; ui8 "$SP/ui8-probe-t"; aged '2 hours ago' "$SP/ui8-probe-s" "$SP/ui8-probe-t"
+MENGER_SCRATCH_DIRS=$SP cg "ui8: a space, by path" 0 --yes --path "$SP/ui8-probe-s"; gone "ui8: a space, by path" "$SP/ui8-probe-s"
+MENGER_SCRATCH_DIRS=$SP cg "ui8: a space, the sweep" 0 --yes --sweep; gone "ui8: a space, the sweep" "$SP/ui8-probe-t"
+
+# a future mtime is young
+ui8 "$PS/ui8-pages-future"; aged '2 hours' "$PS/ui8-pages-future"
+refused "ui8: a future mtime, by path" "modified within 1h" --path "$PS/ui8-pages-future"
+cg "ui8: a future mtime, the sweep" 0 --yes --sweep; has "ui8: … kept" "$out" "$PS/ui8-pages-future — modified within 1h"
+there "ui8: future, there" "$PS/ui8-pages-future/tickets.db"
+
+# a newline in a name: never two paths (one of them $PWD/.victim, a worktree)
+git -C "$M" worktree add -q -b victim "$WS/.victim"
+NL=$PS/$'ui8-a\n.victim'; ui8 "$NL"; aged '2 hours ago' "$NL" "$WS/.victim"
+out=$(cd "$WS" && CLEANUP_GATE_ROOT=$T "$CG" --sweep 2>&1); [[ $? == 0 ]] && ok || bad "ui8: a newline, dry sweep from the workspace: $out"
+hasnt "ui8: a newline: no worktree in a sweep" "$out" "worktree"; hasnt "ui8: … no victim" "$out" ".victim"
+out=$(cd "$WS" && CLEANUP_GATE_ROOT=$T "$CG" --yes --sweep 2>&1); [[ $? == 0 ]] && ok || bad "ui8: a newline, sweep from the workspace: $out"
+there "ui8: the victim worktree stays" "$WS/.victim/f"; there "ui8: the newline dir stays" "$NL/tickets.db"
+out=$(cd "$WS" && CLEANUP_GATE_ROOT=$T "$CG" --list 2>&1)
+hasnt "ui8: --list does not name the newline dir as ui8-work" "$out" "ui8-work   $PS/ui8-a"
+refused "ui8: a newline name by path" "named with a newline" --path "$NL"; there "ui8: … there" "$NL/tickets.db"
+out=$(cd "$WS" && CLEANUP_GATE_ROOT=$T "$CG" --yes --path "$NL" 2>&1); [[ $? == 2 ]] && ok || bad "ui8: a newline path from the workspace: $out"
+hasnt "ui8: … never the worktree it would split into" "$out" "worktree"; there "ui8: … the victim stays" "$WS/.victim/f"
+
+# ui8-* links: to $HOME, to a checkout, to a marked dir elsewhere
+mkdir -p "$T/linked-marked"; ui8 "$T/linked-marked"; aged '2 hours ago' "$T/linked-marked"
+ln -s "$H" "$PS/ui8-pages-tohome"; ln -s "$M" "$PS/ui8-pages-tomain"; ln -s "$T/linked-marked" "$PS/ui8-pages-tomarked"
+refused "ui8: a link to \$HOME" "a root" --path "$PS/ui8-pages-tohome"
+refused "ui8: a link to a checkout" "main checkout" --path "$PS/ui8-pages-tomain"
+refused "ui8: a link to a marked dir elsewhere" "not a leftover shape" --path "$PS/ui8-pages-tomarked"
+cg "ui8: the sweep and the links" 0 --yes --sweep
+hasnt "ui8: the sweep never follows a ui8 link" "$out" "ui8-pages-to"
+there "ui8: \$HOME there" "$H/.local/share/menger/tickets.db"; there "ui8: the checkout there" "$M/f"; there "ui8: the marked dir there" "$T/linked-marked/tickets.db"
+
+# the sweep refuses any shape but build output, pipeline logs and ui8-work
+git -C "$M" worktree add -q -b gate-y "$WS/.gate-y"; ln -s "$WS/.gate-y" "$CT/link-to-wt"
+cg "ui8: the sweep meets a worktree" 2 --yes --sweep
+has "ui8: … refuses it" "$out" "refused  $CT/link-to-wt → $WS/.gate-y — a worktree, and the sweep takes only"
+there "ui8: … the worktree stays" "$WS/.gate-y/f"
+rm -f -- "$CT/link-to-wt"   # the fixture link alone, never what it points at
+
+# the default scratch root as a symlink to $HOME: dropped, and said
+T2=$(mktemp -d "$PARENT/t2.XXXXXX"); mkdir -p "$T2/home/.cache" "$T2/tmp"; ln -s "$T2/home" "$T2/home/.cache/menger-perf-scratch"
+ui8 "$T2/home/ui8-x"; aged '2 hours ago' "$T2/home/ui8-x"
+out=$(CLEANUP_GATE_ROOT=$T2 "$CG" --yes --sweep 2>&1); [[ $? == 0 ]] && ok || bad "ui8: the default root a link: $out"
+has "ui8: the default root a link to \$HOME: said" "$out" "menger-perf-scratch → $T2/home — a root, never a scratch root; not a scratch root"
+there "ui8: … \$HOME/ui8-x stays" "$T2/home/ui8-x/tickets.db"
+out=$(CLEANUP_GATE_ROOT=$T2 "$CG" --yes --path "$T2/home/ui8-x" 2>&1); [[ $? == 2 ]] && ok || bad "ui8: … by path: $out"
+has "ui8: … by path, no shape" "$out" "not a leftover shape"
+CLEANUP_GATE_LOG=/dev/null "$CG" --yes --path "$T2" >/dev/null || bad "ui8: the second test root $T2 was not removed"
+
+# a ui8 dir that is a mount point is never emptied (an unprivileged mount namespace, where there is one)
+mkdir -p "$PS/ui8-pages-mnt"
+if unshare -rm true 2>/dev/null; then
+  # shellcheck disable=SC2016  # expanded inside the namespace
+  out=$(unshare -rm bash -c 'mount -t tmpfs t "$1" && for m in tickets.db ui.db admin.key; do echo x >"$1/$m"; done && touch -d "2 hours ago" "$1"/* "$1" &&
+    CLEANUP_GATE_ROOT="$2" "$3" --yes --path "$1"; echo "rc=$?"; [ -e "$1/tickets.db" ] && echo still-there' _ "$PS/ui8-pages-mnt" "$T" "$CG" 2>&1)
+  has "ui8: a mount point refused" "$out" "a mount point, never removed"; has "ui8: … exit 2" "$out" "rc=2"
+  has "ui8: … its files kept" "$out" "still-there"
+else echo "cleanup-gate: no unprivileged mount namespace here; the mount-point case is not run" >&2; fi
 
 # ── done: the root goes through the script itself (a session's scratch) ───
 printf 'cleanup-gate: %d passed, %d failed\n' "$pass" "$fail"

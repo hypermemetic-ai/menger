@@ -42,8 +42,19 @@
 #               run's log; the sweep takes those older than 60 days
 #               (--log-days N, CLEANUP_GATE_LOG_DAYS) and never a red run's —
 #               `<stamp>.red` beside them marks it, and a path names none of those
+#   ui8-work    RUN-34: scripts/ui-throwaway.mjs's work directory, ui8-<prefix>-…
+#               (tests/pages_browser.mjs's ui8-pages-, perf/pages-probe.mjs's
+#               ui8-probe-) directly in a scratch root — ~/.cache/menger-perf-scratch,
+#               or a directory MENGER_SCRATCH_DIRS names (colon-separated; the
+#               timer reads it from ~/.config/menger/sweep.env) — holding the
+#               throwaway's marks (tickets.db, ui.db, admin.key), nothing in it
+#               modified for an hour (whatever --idle-hours says); the sweep takes
+#               them too. A scratch root's other files are no shape. (Below
+#               /tmp/claude-UID/ such a directory is a session's scratch.)
 #
-# — and it is refused if it is /, $HOME, any of those roots itself, under
+# — and it is refused if it is /, $HOME, any of those roots itself (a scratch
+# root too: one MENGER_SCRATCH_DIRS names that is such a root refuses the run,
+# or is skipped by --sweep), under
 # ~/.local/share/menger, a repository's main checkout, publish.sh's stage
 # (.menger-publish), in use by a process (its cwd or an open file) or by a
 # cargo holding its lock, the directory you are in, or named with a `..`. A
@@ -53,9 +64,13 @@
 # CI-2 — the sweep (`--sweep`; the hourly timer runs `--sweep --yes`, see
 # scripts/sweep/install.sh) takes only build output: every cargo-build dir,
 # every non-shared target and every target-part, each only when nothing in it
-# was modified for the idle threshold and nothing holds it. The threshold
+# was modified for the idle threshold and nothing holds it — and RUN-34's
+# ui8-work directories in the scratch roots, idle an hour. The threshold
 # drops as the disk fills: 6 h (--idle-hours), 1 h at 75% used, 15 min at
-# 90%. What it keeps is said (`kept`), never refused: a sweep exits 0.
+# 90%. What it keeps is said (`kept`), not refused; a candidate of any other
+# shape (never expected: a symlink into a worktree, say) is refused and the
+# sweep exits 2, else 0. A bad scratch root is said on stderr and skipped, so
+# the sweep still runs (--path, --list and NAME exit 1 on one instead).
 #
 # CLEANUP_GATE_ROOT=DIR (tests only; DIR must lie below /tmp/) moves every
 # root into DIR — DIR/home is $HOME, DIR/tmp is /tmp — so the tests run on a
@@ -103,7 +118,7 @@ if [[ -n ${CLEANUP_GATE_ROOT:-} ]]; then
   [[ $R0 == "$TMP0"/?*/?* ]] || { echo "cleanup-gate: CLEANUP_GATE_ROOT must lie at least two levels below /tmp (got $R0)" >&2; exit 1; }
   H=$R0/home TMPR=$R0/tmp
 else
-  H=$(readlink -f -- "$HOME") TMPR=$(readlink -f /tmp)
+  R0="" H=$(readlink -f -- "$HOME") TMPR=$(readlink -f /tmp)
 fi
 WS=$H/dev/controlflow/hypermemetic
 CT=$H/.cache/cargo-target
@@ -117,6 +132,49 @@ HERE_PWD=$(readlink -f -- "$PWD" 2>/dev/null || echo "$PWD")
 real() { readlink -f -- "$1" 2>/dev/null || echo "$1"; }
 PLOGS=$(real "$PLOGS")
 WS=$(real "$WS") CT=$(real "$CT") CB=$(real "$CB") SCR=$(real "$SCR") DATA=$(real "$DATA")
+# a root is never removed, nor a scratch root
+is_root() { case $1 in /|"$H"|"$WS"|"$CT"|"$CB"|"$SCR"|"$TMPR"|"$H/.cache"|"$H/dev"|"$H/dev/controlflow"|"$DATA") return 0 ;; esac; return 1; }
+
+# RUN-34: the scratch roots a ui8-work directory lives in — menger-perf-scratch
+# in ~/.cache by name, and each of MENGER_SCRATCH_DIRS (absolute, colon-separated).
+# Each, its symlinks resolved, must be no root, no ancestor of $HOME, not in
+# the workspace or menger's data (and under a test root, under it). A bad
+# default root is dropped with a line on stderr; a bad MENGER_SCRATCH_DIRS
+# entry refuses the run (exit 1), except under --sweep, which says it and
+# goes on without it — the hourly timer must not stop sweeping over one line.
+scratch_root_bad() { # PATH → why it may not be a scratch root (empty: it may)
+  local d=$1 r
+  [[ $d == *$'\n'* ]] && { echo 'a newline in it'; return; }
+  [[ $d == /* ]] || { echo 'not an absolute path'; return; }
+  case "/$d/" in */../*|*/./*) echo 'named with . or ..'; return ;; esac
+  r=$(real "$d")
+  if is_root "$r" || [[ $H == "$r"/* || $r == "$DATA"/* ]]; then echo 'a root, never a scratch root'; return; fi
+  if [[ $r == "$WS"/* ]]; then echo 'in the workspace, never a scratch root'; return; fi
+  if [[ -n ${R0:-} && $r != "$R0"/* ]]; then echo "outside the test root $R0"; return; fi
+}
+SCRATCH_ROOTS=()
+_d=$H/.cache/menger-perf-scratch
+if _why=$(scratch_root_bad "$_d") && [[ -n $_why ]]; then
+  printf 'cleanup-gate: %s → %s — %s; not a scratch root\n' "$_d" "$(real "$_d")" "$_why" >&2
+else SCRATCH_ROOTS+=("$(real "$_d")"); fi
+_sd=()
+[[ -n ${MENGER_SCRATCH_DIRS:-} ]] && mapfile -d: -t _sd < <(printf '%s' "$MENGER_SCRATCH_DIRS")
+for _d in "${_sd[@]}"; do
+  [[ -n $_d ]] || continue
+  _why=$(scratch_root_bad "$_d")
+  if [[ -n $_why ]]; then
+    printf 'cleanup-gate: MENGER_SCRATCH_DIRS names %s — %s\n' "${_d//$'\n'/\\n}" "$_why" >&2
+    [[ $sweep == 1 ]] && continue
+    exit 1
+  fi
+  SCRATCH_ROOTS+=("$(real "$_d")")
+done
+unset _sd _d _why
+# a work directory's own name: mkdtemp's ui8-<prefix>-XXXXXX, nothing else (no newline, no space)
+ui8_name() { [[ $1 =~ ^ui8-[A-Za-z0-9._-]+$ ]]; }
+is_scratch_root() { local s; for s in "${SCRATCH_ROOTS[@]}"; do [[ $1 == "$s" ]] && return 0; done; return 1; }
+UI8_MARKS=(tickets.db ui.db admin.key)
+has_ui8_marks() { local m; for m in "${UI8_MARKS[@]}"; do [[ -f $1/$m ]] || return 1; done; }
 
 refused=0 total=0
 human() { numfmt --to=iec --suffix=B "$1" 2>/dev/null || echo "${1}B"; }
@@ -185,6 +243,7 @@ remove_path() {
   case $r in
     /|"$H"|"$WS"|"$CT"|"$CB"|"$SCR"|"$TMPR"|"$H/.cache"|"$H/dev"|"$H/dev/controlflow") refuse "$shown" 'a root, never removed'; return ;;
   esac
+  if is_scratch_root "$r"; then refuse "$shown" 'a scratch root — a root, never removed'; return; fi
   if [[ $r == "$DATA" ]] || under "$r" "$DATA"; then refuse "$shown" "menger's data (~/.local/share/menger)"; return; fi
   if [[ $r == "$WS/.menger-publish" ]]; then refuse "$shown" "scripts/publish.sh's stage"; return; fi
   if [[ $HERE_PWD == "$r" ]] || under "$HERE_PWD" "$r"; then refuse "$shown" 'you are inside it'; return; fi
@@ -213,13 +272,32 @@ remove_path() {
   elif [[ -f $r && $(dirname "$r") == "$PLOGS" && $(basename "$r") =~ ^([0-9]{8}T[0-9]{6}Z)-.+\.log$ ]]; then
     if [[ -e $PLOGS/${BASH_REMATCH[1]}.red ]]; then refuse "$shown" "a red run's log (kept: $PLOGS/${BASH_REMATCH[1]}.red)"; return; fi
     shape=pipeline-log
+  elif [[ -d $r ]] && ui8_name "$(basename "$r")" && is_scratch_root "$(dirname "$r")"; then
+    if ! has_ui8_marks "$r"; then refuse "$shown" "a ui8 directory without the throwaway's marks (${UI8_MARKS[*]})"; return; fi
+    shape=ui8-work
   else
-    refuse "$shown" 'not a leftover shape (worktree, ws-scratch, target, target-part, cargo-build, scratch-db, session, sweep, pipeline-log)'; return
+    refuse "$shown" 'not a leftover shape (worktree, ws-scratch, target, target-part, cargo-build, scratch-db, session, sweep, pipeline-log, ui8-work)'; return
   fi
-  local busy=""
-  if [[ $sweep == 1 ]] && busy=$(busy_since "$r" "$idle_min") && [[ -n $busy ]]; then
+  # the sweep takes build output and work directories, nothing else, whatever named it
+  if [[ $sweep == 1 ]]; then
+    case $shape in cargo-build|target|target-part|pipeline-log|ui8-work) ;;
+      *) refuse "$shown" "a $shape, and the sweep takes only build output, pipeline logs and ui8-work"; return ;;
+    esac
+  fi
+  # what rm -r takes must not be, or cross, a mount
+  case $shape in target|target-part|cargo-build|session|ws-scratch|sweep|ui8-work)
+    if [[ -d $r ]] && { mountpoint -q -- "$r" 2>/dev/null || [[ $(stat -c %d -- "$r" 2>/dev/null) != "$(stat -c %d -- "$(dirname "$r")" 2>/dev/null)" ]]; }; then
+      refuse "$shown" 'a mount point, never removed'; return
+    fi ;;
+  esac
+  local busy="" idle=$idle_min
+  # RUN-34: a work directory waits an hour, by path or by the sweep, whatever --idle-hours says
+  [[ $shape == ui8-work ]] && idle=60
+  if [[ $sweep == 1 || $shape == ui8-work ]] && busy=$(busy_since "$r" "$idle") && [[ -n $busy ]]; then
     [[ $busy == "$r" ]] && busy=itself || busy=${busy#"$r"/}
-    say "kept     $(printf '%-11s' "$shape") $shown — modified within $(mins "$idle_min") ($busy)"; return
+    if [[ $sweep == 1 ]]; then say "kept     $(printf '%-11s' "$shape") $shown — modified within $(mins "$idle") ($busy)"
+    else refuse "$shown" "modified within $(mins "$idle") ($busy)"; fi
+    return
   fi
   if pid=$(in_use "$r") && [[ -n $pid ]]; then
     busy="in use by pid $pid ($({ tr '\0\n' '  ' </proc/"$pid"/cmdline; } 2>/dev/null | cut -c1-60))"
@@ -256,7 +334,7 @@ remove_path() {
         if out=$(git -C "$main" branch -d -- "$br" 2>&1); then extra=", branch $br deleted"
         else extra=", branch $br kept (${out//$'\n'/ })"; fi
       fi ;;
-    target|target-part|cargo-build|session|ws-scratch|sweep)
+    target|target-part|cargo-build|session|ws-scratch|sweep|ui8-work)
       if [[ -d $r ]]; then out=$(rm -r --one-file-system -- "$r" 2>&1); rc=$?
       else out=$(rm -f -- "$r" 2>&1); rc=$?; fi
       [[ $rc == 0 ]] || { refuse "$shown" "rm: ${out//$'\n'/ }"; return; } ;;
@@ -307,6 +385,19 @@ candidates() {
            "$TMPR"/menger-*.log "$SCR"/* "$TMPR/theme-sweep"; do
     [[ -e $f || -L $f ]] && printf '%s\n' "$f"
   done
+  ui8_dirs all
+}
+# RUN-34: the ui8-* entries directly in each scratch root — `all` of them (--list
+# judges each), or only the work directories holding the marks (the sweep's)
+ui8_dirs() { local s f
+  for s in "${SCRATCH_ROOTS[@]}"; do
+    for f in "$s"/ui8-?*; do
+      [[ -e $f || -L $f ]] || continue
+      ui8_name "$(basename "$f")" || continue   # one path per line: a name with a newline never passes
+      [[ $1 == all ]] || { [[ -d $f && ! -L $f ]] && has_ui8_marks "$f"; } || continue
+      printf '%s\n' "$f"
+    done
+  done
 }
 
 # ── --sweep: build output, each part judged by its idleness ───────────────
@@ -326,6 +417,7 @@ sweep_candidates() {
         -prune -print 2>/dev/null
     else printf '%s\n' "$d"; fi
   done
+  ui8_dirs marked
 }
 # the disk's use, in percent, where the build output lives
 used_pct() {
@@ -353,7 +445,11 @@ if [[ $sweep == 1 ]]; then
 elif [[ $list == 1 ]]; then
   run_all < <(candidates | sort -u)
 elif [[ $mode == path ]]; then
-  run_all < <(printf '%s\n' "${args[@]}")
+  # each path whole: one with a newline in it is refused, never read as two
+  for p in "${args[@]}"; do
+    if [[ $p == *$'\n'* ]]; then refuse "${p//$'\n'/\\n}" 'named with a newline'; continue; fi
+    run_all <<<"$p"
+  done
 else
   for n in "${args[@]}"; do
     found=$(paths_for_name "$n")
