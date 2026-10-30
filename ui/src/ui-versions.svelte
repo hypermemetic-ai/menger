@@ -104,7 +104,11 @@
       if (fresh.length) moved(fresh[fresh.length - 1].version);
     });
   });
+  // One move heard twice in one flush (a version going live for the first
+  // time is both a first and a row gone) makes one generation: the second
+  // finds the pointer there and the generation not yet answered.
   function moved(version) {
+    if (version === pointer && watcher && watcher.base == null) return;
     pointer = version;
     generation((watcher?.n ?? 0) + 1);
   }

@@ -8,11 +8,11 @@
      asked for the method entered (`bind:value`), answered with its grant,
      the roles that hold it and where I hold one of them, a method there is
      none of refused in place, the methods asked before kept as "recent" —
-     and the way out: a browser's session (the shell's /login/me says so,
-     with when it ends) signs out by the form alone, posted to the shell's
-     door, /logout; a session with no cookie (an agent's) by `session.logout`. -->
+     and the way out: the form, posted to the shell's door, /logout — the
+     page runs on the shell's cookie, and the door ends it (`session.logout`
+     is the door's, not reached from here). -->
 <script module>
-  export const uses = ["session.whoami", "session.providers", "session.logout", "auth.whoami", "auth.providers", "auth.requires", "members.mine"];
+  export const uses = ["session.whoami", "session.providers", "auth.whoami", "auth.providers", "auth.requires", "members.mine"];
 </script>
 
 <script>
@@ -50,30 +50,11 @@
     draft = m;
     method = m;
   }
-  // The browser's own session (a cookie the shell set): the shell's door,
-  // /login/me, says so, with when it ends. Sign out is then the form alone —
-  // POST /logout ends the session, revokes it at its backend and walks the
-  // provider's own sign-out; a `session.logout` over the socket first would
-  // leave the door no session to end. A session with no cookie (an agent's
-  // key, a bearer) signs out over the socket.
-  let browser = $state(null);
-  fetch("/login/me", { credentials: "same-origin", cache: "no-store" })
-    .then((r) => (r.ok ? r.json() : null))
-    .then((j) => { browser = j ?? false; })
-    .catch(() => { browser = false; });
-  const ends = $derived(browser?.expires_at ? new Date((typeof browser.expires_at === "number" ? browser.expires_at : Date.parse(browser.expires_at) / 1000) * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : null);
-  let out = $state("");
-  async function logout(e) {
-    if (browser) return; // the form posts to the door
-    e.preventDefault();
-    try {
-      const a = await b.call("session.logout", {});
-      if (a && a.ok === false) { out = a.message ?? "refused"; return; }
-      location.assign("/login");
-    } catch (err) {
-      out = err?.message ?? String(err);
-    }
-  }
+  // Sign out is the shell's door alone: a page at /app/ runs on the shell's
+  // cookie, and POST /logout ends that session, revokes it at its backend and
+  // walks the provider's own sign-out. `session.logout` is the door's, not
+  // reached from here (as `auth.logout`): sent first over the socket, it would
+  // leave /logout no session to end.
   // A team's own grants (a grant whose principal names the team).
   const teamGrants = (t) => grants.filter((g) => typeof g.principal === "string" && g.principal.endsWith(":" + t.name));
 </script>
@@ -97,15 +78,13 @@
             <dt>roles</dt><dd data-field="roles">{#each memberships as m (m.role + "@" + m.scope)}<span class="role" data-role={m.role} title={"on " + m.scope}>{m.role}</span> {/each}</dd>
             <dt>agent</dt><dd data-field="agent">{$door.rows[0]?.agent ?? "none"}</dd>
             <dt>ceiling</dt><dd class="muted" data-field="ceiling">{($door.rows[0]?.ceiling ?? []).map(ceiling).join(", ") || "none"}</dd>
-            <dt>session</dt><dd data-field="session">{browser ? (ends ? `the browser's · ends ${ends}` : "the browser's") : browser === false ? "a key's, over the socket" : ""}</dd>
           </dl>
         {:else if $who.status === "pending"}
           <dl><dt>principal</dt><dd data-loading="">key:0000000000</dd></dl>
         {/if}
         {#if $who.status === "error" || $who.status === "refused"}<p class="pad" data-refused="">refused: {$who.message}</p>{/if}
         <form class="who-acts" method="post" action="/logout">
-          <button class="btn warn" type="submit" data-action="session.logout" onclick={logout}>sign out</button>
-          {#if out}<span data-refused="">refused: {out}</span>{/if}
+          <button class="btn warn" type="submit" data-action="session.logout">sign out</button>
         </form>
       </section>
       <section class="panel" data-method="session.providers" data-field="providers">

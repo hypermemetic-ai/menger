@@ -203,8 +203,8 @@ export default async (ctx) => {
     const s = await writeSession(`ws://127.0.0.1:${server.ws}`, keyFile, file, "owner");
     const out = await openAs(s.token, "#/me");
     try {
+      // At once, before anything the page reads has answered.
       const r = out.page.locator("[data-surface=me-page]");
-      await eventually("the second session's page", async () => (await text(r.locator("[data-field=principal]"))) === who.principal);
       await r.locator("[data-action='session.logout']").click();
       await eventually("the door: /login", async () => new URL(out.page.url()).pathname === "/login");
       // A browser's session signs out by the door alone: no session.logout over the socket,

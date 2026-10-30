@@ -55,9 +55,12 @@
   let notice = $state(null);
   let refused = $state({});
 
+  // The list asked again; the newest asking's answer stands, whichever lands last.
+  let asked = 0;
   async function reask() {
+    const n = ++asked;
     const a = await answer(b.call("epics.list", { archived }));
-    if (a.ok) fresh = a.events.filter((e) => e?.type === "epic").map((e) => e.epic);
+    if (a.ok && n === asked) fresh = a.events.filter((e) => e?.type === "epic").map((e) => e.epic);
   }
   // What the watch brought, each row heard once (a row a change left alone is
   // the same object: FRAME-20).
@@ -65,12 +68,19 @@
   $effect(() => {
     const rows = epics.rows;
     untrack(() => {
-      const mine = rows.filter((r) => r.what != null && !heard.has(r) && (org == null || r.org === org));
+      // Any change asks the list again — another organization's epic of the
+      // same name lands on this one's row in the collection, so the list
+      // (this organization's) is the truth; only this organization's are
+      // kept as what changed.
+      const news = rows.filter((r) => r.what != null && !heard.has(r));
       for (const r of rows) heard.add(r);
-      if (!mine.length) return;
-      const next = { ...changed };
-      for (const r of mine) next[r.name] = r.what;
-      changed = next;
+      if (!news.length) return;
+      const mine = news.filter((r) => org == null || r.org === org);
+      if (mine.length) {
+        const next = { ...changed };
+        for (const r of mine) next[r.name] = r.what;
+        changed = next;
+      }
       reask();
     });
   });
@@ -91,11 +101,11 @@
       }
     });
   });
-  let toggled = false;
+  // Asked once at mount and on each toggle: the list drawn is the one asked
+  // for this organization, never a row another organization's change landed on.
   $effect(() => {
     archived;
-    if (toggled) reask();
-    toggled = true;
+    untrack(reask);
   });
 
   const rows = $derived.by(() => {
