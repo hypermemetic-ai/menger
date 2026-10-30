@@ -41,7 +41,7 @@
 //!   `--node-modules` to the tool.
 //! - FRAME-14: the board in both profiles — each of its five components as
 //!   `<name>.rhx` and as real Svelte, `<name>-sv.svelte` (one name is one
-//!   source); the Svelte board drawn at `#/sv/…` in an rhx frame whose
+//!   source); the Svelte board drawn at `#/` (SURFACE-2; `#/sv/…` its alias, the rhx one at `#/rhx/`) in an rhx frame whose
 //!   sections hold the Svelte ones, the rhx ones `slots.json`'s defaults.
 //! - FRAME-25: the Svelte board rides FRAME-19's bus — no timer of its own
 //!   beside a `live`, no sanitizer or markdown of its own (`markdown` from
@@ -1239,8 +1239,10 @@ const BOARD_SIBLINGS: [&str; 3] = ["nav-flat", "nav-children", "ticket-chip"];
 /// FRAME-14: the frame the Svelte board is drawn in — an rhx layout, since a
 /// section is the host's and only an rhx template marks one (`<slot name>`;
 /// a svelte/1 module mounts no section, plexus-ui@40aa390). Its sections
-/// hold the Svelte components: `top` the Svelte half of `board-layout` (the
-/// top bar and its filter line), then the nav, the board and the palette.
+/// hold the Svelte components: `top` the app's top (app-top, SURFACE-2), `bar`
+/// the Svelte half of `board-layout` (the top bar and its filter line), then
+/// the nav, the board's keymap (keys-help), the board, the bulk bar under it
+/// (bulk-bar, SURFACE-5) and the palette.
 const SV_FRAME: &str = "board-frame";
 
 /// What FRAME-14 finds missing from the board's two profiles, given the
@@ -1248,7 +1250,7 @@ const SV_FRAME: &str = "board-frame";
 /// a component without its `.rhx` or its real `-sv.svelte`; a route of
 /// either board that is not there; a section default that is not the rhx
 /// one on the rhx board, or not the Svelte one in the frame; a frame that
-/// marks not all four of its sections.
+/// marks not all seven of its sections.
 fn board_breaks(sources: &[(String, String)], routes: &str, slots: &str) -> Vec<String> {
     let mut out = Vec::new();
     let text = |f: &str| sources.iter().find(|(n, _)| n == f).map(|(_, t)| t.as_str());
@@ -1263,10 +1265,15 @@ fn board_breaks(sources: &[(String, String)], routes: &str, slots: &str) -> Vec<
         }
     }
     let routes: Value = serde_json::from_str(routes).unwrap_or_else(|e| panic!("routes.json: {e}"));
+    // SURFACE-2: the Svelte board is the default (owner, 2026-10-30), the rhx
+    // one the comparison at #/rhx/, and #/sv/ the Svelte board's alias.
     for (route, want) in [
-        ("#/", "board-layout"),
-        ("#/f/:filter", "board-layout"),
-        ("#/ticket/:id", "ticket-page"),
+        ("#/", SV_FRAME),
+        ("#/f/:filter", SV_FRAME),
+        ("#/ticket/:id", "ticket-page-sv"),
+        ("#/rhx/", "board-layout"),
+        ("#/rhx/f/:filter", "board-layout"),
+        ("#/rhx/ticket/:id", "ticket-page"),
         ("#/sv/", SV_FRAME),
         ("#/sv/f/:filter", SV_FRAME),
         ("#/sv/ticket/:id", "ticket-page-sv"),
@@ -1278,7 +1285,7 @@ fn board_breaks(sources: &[(String, String)], routes: &str, slots: &str) -> Vec<
     }
     let slots: Value = serde_json::from_str(slots).unwrap_or_else(|e| panic!("slots.json: {e}"));
     let rhx = [("nav", "nav-tree"), ("main", "board-rows"), ("palette", "jump-palette")];
-    let sv = [("top", "board-layout-sv"), ("nav", "nav-tree-sv"), ("main", "board-rows-sv"), ("palette", "jump-palette-sv")];
+    let sv = [("top", "app-top"), ("bar", "board-layout-sv"), ("nav", "nav-tree-sv"), ("keys", "keys-help"), ("main", "board-rows-sv"), ("bulk", "bulk-bar"), ("palette", "jump-palette-sv")];
     for (layout, want) in [("board-layout", &rhx[..]), (SV_FRAME, &sv[..])] {
         for (slot, component) in want {
             let have = slots.get(layout).and_then(|l| l.get(slot)).and_then(Value::as_str);
@@ -1311,8 +1318,8 @@ fn board_breaks(sources: &[(String, String)], routes: &str, slots: &str) -> Vec<
 }
 
 /// FRAME-14: menger's board in real Svelte beside the rhx one — each of the
-/// five as `<name>.rhx` and `<name>-sv.svelte`, the Svelte board at `#/sv/`,
-/// `#/sv/f/:filter` and `#/sv/ticket/:id`, the rhx ones the defaults
+/// five as `<name>.rhx` and `<name>-sv.svelte`, the Svelte board at `#/`
+/// (SURFACE-2; `#/sv/…` its alias), the rhx one at `#/rhx/`, the rhx ones the defaults
 /// (`slots.json`); a right-click puts a Svelte one in a section of the rhx
 /// board (tests/pages_browser.mjs). FRAME-13's `svelte_is_not_in_menger_yet`
 /// went with it: its time has come.
@@ -1321,18 +1328,18 @@ fn each_board_component_has_both_profiles() {
     // The check, on what it is given first.
     let sv = "<script module>\n  export const uses = [];\n</script>\n<p/>\n";
     let mut good: Vec<(String, String)> = BOARD.iter().chain(BOARD_SIBLINGS.iter()).flat_map(|n| [(format!("{n}.rhx"), "<p/>".to_string()), (format!("{n}-sv.svelte"), sv.to_string())]).collect();
-    good.push((format!("{SV_FRAME}.rhx"), r#"<slot name="top" filter={filter}/><slot name="nav"/><slot name="main"/><slot name="palette"/>"#.into()));
-    let routes = r##"{ "#/": "board-layout", "#/f/:filter": "board-layout", "#/ticket/:id": "ticket-page", "#/sv/": "board-frame", "#/sv/f/:filter": "board-frame", "#/sv/ticket/:id": "ticket-page-sv" }"##;
-    let slots = r#"{ "board-layout": { "nav": "nav-tree", "main": "board-rows", "palette": "jump-palette" }, "board-frame": { "top": "board-layout-sv", "nav": "nav-tree-sv", "main": "board-rows-sv", "palette": "jump-palette-sv" } }"#;
+    good.push((format!("{SV_FRAME}.rhx"), r#"<slot name="top" filter={filter}/><slot name="bar"/><slot name="nav"/><slot name="keys"/><slot name="main"/><slot name="bulk"/><slot name="palette"/>"#.into()));
+    let routes = r##"{ "#/": "board-frame", "#/f/:filter": "board-frame", "#/ticket/:id": "ticket-page-sv", "#/rhx/": "board-layout", "#/rhx/f/:filter": "board-layout", "#/rhx/ticket/:id": "ticket-page", "#/sv/": "board-frame", "#/sv/f/:filter": "board-frame", "#/sv/ticket/:id": "ticket-page-sv" }"##;
+    let slots = r#"{ "board-layout": { "nav": "nav-tree", "main": "board-rows", "palette": "jump-palette" }, "board-frame": { "top": "app-top", "bar": "board-layout-sv", "nav": "nav-tree-sv", "keys": "keys-help", "main": "board-rows-sv", "bulk": "bulk-bar", "palette": "jump-palette-sv" } }"#;
     assert_eq!(board_breaks(&good, routes, slots), Vec::<String>::new());
     let chipless: Vec<(String, String)> = good.iter().filter(|(f, _)| f != "ticket-chip-sv.svelte").cloned().collect();
     assert_eq!(board_breaks(&chipless, routes, slots), ["ui/src/ticket-chip-sv.svelte is missing (the Svelte ticket-chip)"]);
     let mut bad = good.clone();
     bad.retain(|(f, _)| f != "nav-tree-sv.svelte" && f != "board-rows.rhx");
     bad.iter_mut().filter(|(f, _)| f == "jump-palette-sv.svelte").for_each(|(_, t)| *t = "<script>\n</script>\n<p/>\n".into());
-    let swapped = r#"{ "board-layout": { "nav": "nav-tree", "main": "board-rows-sv", "palette": "jump-palette" }, "board-frame": { "top": "board-layout-sv", "nav": "nav-tree-sv", "main": "board-rows-sv", "palette": "jump-palette-sv" } }"#;
+    let swapped = r#"{ "board-layout": { "nav": "nav-tree", "main": "board-rows-sv", "palette": "jump-palette" }, "board-frame": { "top": "app-top", "bar": "board-layout-sv", "nav": "nav-tree-sv", "keys": "keys-help", "main": "board-rows-sv", "bulk": "bulk-bar", "palette": "jump-palette-sv" } }"#;
     assert_eq!(
-        board_breaks(&bad, r##"{ "#/": "board-layout", "#/f/:filter": "board-layout", "#/ticket/:id": "ticket-page", "#/sv/": "board-frame", "#/sv/ticket/:id": "ticket-page" }"##, swapped),
+        board_breaks(&bad, r##"{ "#/": "board-frame", "#/f/:filter": "board-frame", "#/ticket/:id": "ticket-page-sv", "#/rhx/": "board-layout", "#/rhx/f/:filter": "board-layout", "#/rhx/ticket/:id": "ticket-page", "#/sv/": "board-frame", "#/sv/ticket/:id": "ticket-page" }"##, swapped),
         [
             "ui/src/board-rows.rhx is missing (the rhx board-rows)",
             "ui/src/nav-tree-sv.svelte is missing (the Svelte nav-tree)",
@@ -1343,12 +1350,12 @@ fn each_board_component_has_both_profiles() {
         ]
     );
     let frameless: Vec<(String, String)> = good.iter().filter(|(f, _)| f != "board-frame.rhx").cloned().chain([("board-frame.rhx".to_string(), r#"<slot name="nav"/>"#.to_string())]).collect();
-    assert_eq!(board_breaks(&frameless, routes, slots).len(), 3, "a frame that marks one section of four");
+    assert_eq!(board_breaks(&frameless, routes, slots).len(), 6, "a frame that marks one section of seven");
     let busy: Vec<(String, String)> = good
         .iter()
         .filter(|(f, _)| f != "board-frame.rhx")
         .cloned()
-        .chain([("board-frame.rhx".to_string(), "<script>\n  prop(\"filter\");\n  let n = live(#{ snapshot: \"tickets.nav.counts\", key: \"shortcode\" });\n</script>\n<div class=\"board-layout\"><filter-line filter={filter}/><slot name=\"top\"/><slot name=\"nav\"/><slot name=\"main\"/><slot name=\"palette\"/></div>".to_string())])
+        .chain([("board-frame.rhx".to_string(), "<script>\n  prop(\"filter\");\n  let n = live(#{ snapshot: \"tickets.nav.counts\", key: \"shortcode\" });\n</script>\n<div class=\"board-layout\"><filter-line filter={filter}/><slot name=\"top\"/><slot name=\"bar\"/><slot name=\"nav\"/><slot name=\"keys\"/><slot name=\"main\"/><slot name=\"bulk\"/><slot name=\"palette\"/></div>".to_string())])
         .collect();
     assert_eq!(
         board_breaks(&busy, routes, slots),

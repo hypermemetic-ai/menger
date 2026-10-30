@@ -147,9 +147,11 @@ export default async ({ test, assert, eventually, sleep, openPage, sy, groupsNow
     const { page } = await probed(SV.route);
     await eventually("the board's palette is mounted", async () => (await pal(page).count()) === 1);
     await page.locator("body").click({ position: { x: 5, y: 5 } }).catch(() => {});
-    // Closed, the palette's keys are not bound: Enter and Escape stay the page's.
-    free(await pressed(page, "Enter"), "enter (closed)");
-    free(await pressed(page, "Escape"), "escape (closed)");
+    // Closed, the palette binds neither Enter nor Escape (its overlay rows: the_open_keys_come_and_go_with_the_palette);
+    // on the board they are the rows' (SURFACE-2: open the selected, clear the selection), so they leave it shut.
+    await pressed(page, "Enter");
+    await pressed(page, "Escape");
+    assert((await palInput(page).count()) === 0, "closed, enter and escape leave the palette shut");
     taken(await pressed(page, "Control+k"), "ctrl+k");
     await eventually("ctrl+k focuses the palette's field", async () => palInput(page).evaluate((e) => e === document.activeElement), 2_000);
     // ctrl+k in the field is still the host's (a ctrl chord).
@@ -227,15 +229,20 @@ export default async ({ test, assert, eventually, sleep, openPage, sy, groupsNow
     assert(calls.length === 0, `a command never asks find: ${JSON.stringify(calls)}`);
   });
 
-  await test("the_slash_opens_and_is_typed_in_a_field", async () => {
+  await test("the_slash_is_typed_in_the_palettes_field_and_does_not_reopen_it", async () => {
     const { page } = await probed(SV.route);
     await eventually("the board's palette is mounted", async () => (await pal(page).count()) === 1);
     await page.locator("body").click({ position: { x: 5, y: 5 } }).catch(() => {});
+    // On the page `/` is the board's (the filter line's, SURFACE-2): the palette stays shut.
     taken(await pressed(page, "/"), "/ on the page");
-    await eventually("/ opens the palette, its field focused", async () => palInput(page).evaluate((e) => e === document.activeElement), 2_000);
-    // In a field `/` is a character: not the host's, typed.
+    await sleep(200);
+    assert((await palInput(page).count()) === 0, "/ does not open the palette");
+    taken(await pressed(page, "Control+k"), "ctrl+k");
+    await eventually("ctrl+k opens the palette, its field focused", async () => palInput(page).evaluate((e) => e === document.activeElement), 2_000);
+    // In a field `/` is a character: not the host's, typed, and the palette stays as it is.
     free(await pressed(page, "/"), "/ in the field");
     await eventually("the slash is typed", async () => (await palInput(page).inputValue()) === "/", 2_000);
+    assert((await palInput(page).count()) === 1, "one palette, open");
   });
 
   await test("the_open_keys_come_and_go_with_the_palette", async () => {
@@ -254,7 +261,7 @@ export default async ({ test, assert, eventually, sleep, openPage, sy, groupsNow
     };
     await blank();
     const closed = await chords();
-    assert(JSON.stringify(closed) === JSON.stringify(["/", "ctrl+k"]), `closed, the palette holds ctrl+k and / alone: ${JSON.stringify(closed)}`);
+    assert(JSON.stringify(closed) === JSON.stringify(["ctrl+k"]), `closed, the palette holds ctrl+k alone: ${JSON.stringify(closed)}`);
     // Ten opens and closes: nothing left behind.
     for (let i = 0; i < 10; i++) {
       taken(await pressed(page, "Control+k"), `ctrl+k (${i + 1})`);
@@ -265,13 +272,14 @@ export default async ({ test, assert, eventually, sleep, openPage, sy, groupsNow
     await blank();
     const after = await chords();
     assert(JSON.stringify(after) === JSON.stringify(closed), `after ten opens the closed palette holds the same keys: ${JSON.stringify(after)}`);
-    free(await pressed(page, "Enter"), "enter after ten opens");
+    await pressed(page, "Enter"); // the rows' on the board (SURFACE-2), never the palette's once it is closed
+    assert((await palInput(page).count()) === 0, "enter after ten opens leaves the palette shut");
     // Open, out of the field: the open-only keys are listed, once each.
     await page.keyboard.press("Control+k");
     await eventually("open", async () => (await palInput(page).count()) === 1, 2_000);
     await pal(page).locator(".palette-foot").click();
     const open = await chords();
-    assert(JSON.stringify(open) === JSON.stringify(["/", "arrowdown", "arrowup", "ctrl+k", "enter", "escape"]), `open, its six keys once each: ${JSON.stringify(open)}`);
+    assert(JSON.stringify(open) === JSON.stringify(["arrowdown", "arrowup", "ctrl+k", "enter", "escape"]), `open, its five keys once each: ${JSON.stringify(open)}`);
   });
 
   await test("a_corrected_query_says_so", async () => {

@@ -4,8 +4,9 @@
 //   node perf/pages-probe.mjs [--seed N] [--runs 5] [--path /app/] [--timeout-ms 30000] [--debug] [--no-build] [--headed] [--keep]
 //
 // `--path` (FRAME-14) is what each load opens, the board by its route:
-// `/app/` (the default) the rhx board, `/app/#/sv/` the Svelte one
-// (svelte/1). Both draw the same marks, so one probe reads either.
+// `/app/` (the default) the Svelte board (svelte/1; SURFACE-2: the default
+// since 2026-10-30, `/app/#/sv/` its alias), `/app/#/rhx/` the rhx one.
+// Both draw the same marks, so one probe reads either.
 //
 // A throwaway menger seeded N (default 10⁶; release build), the bundle
 // from plexus-ui build pushed to it (scripts/ui-throwaway.mjs, as

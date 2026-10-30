@@ -1,18 +1,30 @@
 <script>
   // FRAME-14: the frame the Svelte board is drawn in — an rhx layout because
   // a section is the host's and only an rhx template marks one. It places
-  // four sections and nothing else (tests/apart.rs holds it to that): `top`
-  // the Svelte top bar (board-layout-sv), then the Svelte nav, board and
-  // palette (ui/slots.json). The route gives the filter (`#/sv/` none,
-  // `#/sv/f/:filter` the text); every section gets it.
+  // its sections and nothing else (tests/apart.rs holds it to that). SURFACE-2:
+  // the Svelte board is the default (`#/`, `#/f/:filter`; `#/sv/…` kept as
+  // aliases); `top` the app's top (app-top), `bar` the Svelte top bar and
+  // its filter line (board-layout-sv), then the nav column — the nav and
+  // the board's keymap (keys-help) — the board with the bulk bar under it
+  // (bulk-bar, SURFACE-5: it hears `board.selected`), and the palette
+  // (ui/slots.json the defaults). A section is placed only with its default:
+  // one with none costs the first row ~0.3 s (SURFACE-2's probe). The route
+  // gives the filter (`#/` none, `#/f/:filter` the text); every section gets it.
   prop("filter");
 </script>
 
 <div class="board-layout" data-board-layout data-filter={filter}>
-  <slot name="top" filter={filter}/>
+  <slot name="top" filter={filter} here="board"/>
+  <slot name="bar" filter={filter}/>
   <div class="board-body">
-    <slot name="nav" filter={filter}/>
-    <slot name="main" filter={filter}/>
+    <div class="board-side">
+      <slot name="nav" filter={filter}/>
+      <slot name="keys"/>
+    </div>
+    <div class="board-main">
+      <slot name="main" filter={filter}/>
+      <slot name="bulk"/>
+    </div>
   </div>
   <slot name="palette"/>
 </div>
@@ -21,11 +33,13 @@
   :scope { display: block; }
   .board-layout { display: flex; flex-direction: column; height: 100vh; height: 100dvh; background: var(--bg); color: var(--ink); font-family: var(--font-text); font-size: var(--text-size); }
   .board-body { flex: 1; min-height: 0; display: flex; }
-  .board-body > [data-slot=nav] { width: 260px; flex: none; border-right: var(--border) solid var(--line); overflow: auto; background: var(--panel); }
-  .board-body > [data-slot=main] { flex: 1; min-width: 0; display: flex; }
-  .board-body > [data-slot=main] > * { flex: 1; min-width: 0; display: flex; }
-  [data-slot=top] > * { display: block; }
+  .board-side { width: 260px; flex: none; display: flex; flex-direction: column; border-right: var(--border) solid var(--line); overflow: auto; background: var(--panel); }
+  .board-side > [data-slot=nav] { flex: 1 0 auto; }
+  .board-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .board-main > [data-slot=main] { flex: 1; min-height: 0; min-width: 0; display: flex; }
+  .board-main > [data-slot=main] > * { flex: 1; min-width: 0; display: flex; }
+  [data-slot=top] > *, [data-slot=bar] > * { display: block; }
   @media (max-width: 720px) {
-    .board-body > [data-slot=nav] { display: none; }
+    .board-side { display: none; }
   }
 </style>
