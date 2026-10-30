@@ -17,13 +17,16 @@
 //                              the first rows are on screen (INIT keeps the module's exports
 //                              as wasm-bindgen instantiates it); the median
 //   rows held                  `.board-row`s in the DOM at that moment
+//   marks                      FRAME-17: `tickets.list` sent (INIT's frames) and every mark the host
+//                              sets on the page's clock (`plexus-ui:*`, CONTRACT.md's host chapter),
+//                              each one's median, on a line of their own and in the JSON
 //
 // Budgets (UI-8's `first_rows_at_a_million`): first rows ≤ 0.3 s, wasm
 // memory ≤ 10 MB. Prints one row the way perf/notes.md records them, and
 // a JSON line after it; exits 1 when a budget is missed, 2 when setup failed.
 import path from "node:path";
 import { makeKey, readToken, sessionCookies, writeSession } from "../scripts/throwaway-login.mjs";
-import { INIT, Throwaway, build, bundle, playwright, push, sleep, workDir } from "../scripts/ui-throwaway.mjs";
+import { INIT, Throwaway, build, bundle, playwright, push, sentCalls, sleep, workDir } from "../scripts/ui-throwaway.mjs";
 
 const args = process.argv.slice(2);
 const flag = (name) => args.includes(name);
@@ -85,13 +88,17 @@ async function main() {
         if (got) break;
         await sleep(20);
       }
+      // FRAME-17: the board's list sent, and the host's own marks.
+      const marks = got ? await page.evaluate(() => Object.fromEntries(performance.getEntriesByType("mark").filter((m) => m.name.startsWith("plexus-ui:")).map((m) => [m.name, m.startTime]))) : {};
+      const list = got ? (await sentCalls(page)).find((c) => c.method === "tickets.list") : null;
+      if (list) marks["tickets.list sent"] = list.t;
       // The memory a second after the first rows: what the page holds once settled.
       if (got) {
         await sleep(1_000);
         got.memory = await page.evaluate(() => window.__pages.memory?.buffer?.byteLength ?? null);
       }
       got ??= { firstRow: null, held: 0, memory: await page.evaluate(() => window.__pages.memory?.buffer?.byteLength ?? null) };
-      if (i > 0) runs.push(got);
+      if (i > 0) runs.push({ ...got, marks });
       await context.close();
     }
   } finally {
@@ -109,7 +116,10 @@ async function main() {
   console.log(
     `| ${magnitude(SEED)} | v2 · board first rows painted | ${painted.length ? `${(first / 1000).toFixed(3)} s` : "never"} (median of ${RUNS}: ${each} ms) | wasm ${Number.isFinite(memory) ? mib(memory) : "unknown"} · ${Number.isFinite(held) ? held : 0} rows held | ${ok ? "within" : "over"} 0.3 s / 10 MB |`,
   );
-  console.log(JSON.stringify({ seed: SEED, runs, first_rows_ms: first, wasm_bytes: memory, rows_held: held, ok }));
+  const names = [...new Set(runs.flatMap((r) => Object.keys(r.marks ?? {})))];
+  const marks = Object.fromEntries(names.map((n) => [n, median(runs.map((r) => r.marks?.[n]).filter((x) => x != null))]).sort((a, b) => a[1] - b[1]));
+  console.log(`  marks (median, ms): ${Object.entries(marks).map(([n, t]) => `${n} +${t.toFixed(0)}`).join(" · ") || "none"}${names.some((n) => n.startsWith("plexus-ui:")) ? "" : " (the engine sets no plexus-ui:* marks)"}`);
+  console.log(JSON.stringify({ seed: SEED, runs, first_rows_ms: first, wasm_bytes: memory, rows_held: held, marks, ok }));
   process.exit(ok ? 0 : 1);
 }
 

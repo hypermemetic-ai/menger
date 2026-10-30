@@ -220,6 +220,15 @@ async function main() {
       assert((await count(page)) === total, `the count is the extents' sum, ${total}`);
       const firstRow = await page.evaluate(() => window.__pages.firstRow);
       assert(firstRow != null, "the first row was stamped once its title showed");
+      // FRAME-17: the host marks its steps on the page's clock, in order (CONTRACT.md's host chapter).
+      const marks = await page.evaluate(() => Object.fromEntries(performance.getEntriesByType("mark").filter((m) => m.name.startsWith("plexus-ui:")).map((m) => [m.name, m.startTime])));
+      const shown_marks = Object.entries(marks).map(([n, t]) => `${n} ${t.toFixed(0)}`).join(", ") || "none";
+      const named = ["first-call", "components-parsed", "section-mounted:nav", "section-mounted:main", "section-mounted:palette", "layout-mounted", "first-answer", "first-row"].map((n) => `plexus-ui:${n}`);
+      const lacking = named.filter((n) => marks[n] == null);
+      assert(!lacking.length, `the board's page carries the host's marks; it lacks ${lacking.join(", ")} (it has: ${shown_marks})`);
+      const m = (n) => marks[`plexus-ui:${n}`];
+      assert(m("components-parsed") < m("section-mounted:main") && m("section-mounted:main") <= m("layout-mounted"), `components parsed, the main section mounted, then the layout: ${shown_marks}`);
+      assert(m("first-call") < m("first-answer") && m("first-answer") <= m("first-row") && m("first-row") <= firstRow, `the first call, its answer, its rows, no later than the board's first titled row (${firstRow.toFixed(0)}): ${shown_marks}`);
       console.log(`     first row (titled): ${firstRow.toFixed(0)} ms from timeOrigin · ${shown.length} rows drawn · ${total} tickets`);
     });
 

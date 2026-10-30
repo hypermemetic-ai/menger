@@ -25,7 +25,7 @@ npm run smoke                     # the concurrency ladder's smoke — must pass
 | `reads-probe.mjs` | FILTER-15: `find`, `member`, `ready_set` under a filter | yours |
 | `tree-probe.mjs` | FILTER-13: the kept tree's reads | yours |
 | `ready-probe.mjs` | SCALE-32: ready-set and status pages; the fan-out of one blocker (`fan-out.py`'s store) | yours |
-| `live-probe.mjs` | FRAME-16: the first row on the wire — cold loads of a deployed menger, the waterfall by kind | a deployment (app-test), a session token file |
+| `live-probe.mjs` | FRAME-16: the first row on the wire — cold loads of a deployed menger, the waterfall by kind; FRAME-17: the steps after the boot and the host's marks, as a table | a deployment (app-test), a session token file |
 | `filter-identical.mjs` | FILTER-4: unfiltered pages byte for byte what another server answers | yours (two) |
 
 `fan-out.py` writes the store `ready-probe.mjs fan-out` reads; `menger_ws.py`
@@ -41,6 +41,27 @@ A throwaway menger seeded N, the bundle from `plexus-ui build` pushed to
 it, then cold loads of `/app/`, each in a fresh browser context signed in by
 cookie. Budgets: first rows ≤ 0.3 s and wasm memory ≤ 10 MB at a million;
 exit 1 past one, 2 when setup failed.
+
+The page's own marks, each one's median, on a line after the row
+(FRAME-17): `tickets.list` sent, and every `plexus-ui:*` mark the host sets
+(`performance.mark`, CONTRACT.md's host chapter in `../plexus-ui`).
+
+## The first row on the wire — `live-probe.mjs` (FRAME-16, FRAME-17)
+
+```sh
+node perf/live-probe.mjs --token-file FILE --runs 5   # app-test; FILE holds a session token (0600), never argv
+```
+
+Cold loads of a deployed menger signed in by cookie. Its output is a
+table, not a verdict — no test runs it: the first titled row's median
+(Playwright's, which reads ~30 ms late) and the boot's marks, then
+FRAME-17's steps after the boot on the page's clock, each with its median
+and every run — the boot done, the first call and `tickets.list` sent,
+`tickets.list` answered (first data, `done`), the nav drawn, the first
+titled row (a MutationObserver's stamp) — then each `plexus-ui:*` mark the
+host sets (or a line saying the release sets none), the waterfall by kind,
+and one JSON line. The hand gate is three runs of five, the release before
+and after, in the same hour.
 
 ## The concurrency ladder — `concurrency.mjs` (PERF-12)
 
