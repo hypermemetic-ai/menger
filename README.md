@@ -645,7 +645,7 @@ scope; every read answers under the caller's filter **and** its scopes.
 |---|---|
 | `viewer` | read under the scope: `tickets`' reads and its children's, `orgs.list`, `epics`' own settings, `ui.versions`, `ui.watch`, `ui.slots.list` |
 | `editor` | also create and change tickets: `tickets`' writes, `commits`, saved filters, `revisions restore`, `subtasks create` |
-| `admin` | every grant: `tickets.delete`, `undelete`, `freeze`, `unfreeze`, `members.*`, `orgs.create`, `auth.role_set`, `auth.grant`, `ui.rollback`, `ui.preview`, `ui.slots.set`, `ui.slots.clear`, … |
+| `admin` | every grant: `tickets.delete`, `undelete`, `freeze`, `unfreeze`, `members.*`, `orgs.create`, `auth.role_set`, `auth.grant`, `ui.rollback`, `ui.preview`, `ui.slots.set`, `ui.slots.clear`, and the undo of a push or a rollback (FRAME-52), … |
 | `deployer` | `ui.push` alone — a CI's key (V2-7: the pipeline key) |
 | `member` | `auth.whoami`, `auth.logout`, `auth.requires` |
 
@@ -706,7 +706,8 @@ against a tenant that is not menger (`../plexus-ui/service/tests`); menger's
 
 - **Its file** is `ui.db` (`--ui-db-path`, `MENGER_UI_DB_PATH`; default
   beside the tickets file, never the same file): `ui_versions`,
-  `ui_pointer`, `ui_preview`, `ui_slots`, `ui_routes`.
+  `ui_pointer`, `ui_preview`, `ui_slots`, `ui_routes`, and (FRAME-52)
+  `ui_labels`, `ui_tags`, `ui_moves` — made on a file of any form before.
 - **`push`** takes the bundle (a tar, base64, at most 16 MiB), its manifest
   and a signature: Ed25519 over the bundle's sha256 by a key named with
   `--ui-signer` (`MENGER_UI_SIGNERS`, `;`-separated 64-hex public keys; none:
@@ -752,18 +753,36 @@ against a tenant that is not menger (`../plexus-ui/service/tests`); menger's
   it); `author` and `routes set|clear` are refused `forbidden` to a caller
   held only on a scope; `stale_base` when the live version moved while it
   was built; `live: false` moves no pointer; at most 16 sources a call. rhx only: a `svelte/1` component comes through the tool's build (Node), which the service does not have.
-- **`rollback --to <hash>`** moves the pointer to a kept version;
+- **Named and tagged versions** (FRAME-52): every version flag — `rollback
+  --to`, `preview --version`, `slots set --version`, `tag --version` —
+  takes a hash, 6 or more of its first hex digits, or a label. **`tag
+  --version V [--label L] [--tags a,b] [--untag a]`** names a version (a
+  label is one per version and unique: given to another, it moves; never hex
+  digits alone) and tags it; `versions` rows carry `label` and `tags`,
+  `versions --tag demo` filters, `versions --live true` answers the live
+  row alone; `tagged` is said on `watch`.
+- **Undo is a method** (FRAME-52): **`history [--limit N]`** is the
+  pointer's moves, newest first, kept in `ui.db` — `move { seq, version,
+  label, how, by, at, from }`, `how` push, author, rollback, undo or redo;
+  **`undo`** moves the pointer back to where the last move found it,
+  **`redo`** forward again (a new move ends the redo), each answering `live
+  { version, label, undone }`. An editor undoes an `author`, anyone's;
+  undoing a `push` or a `rollback` is a rollback, the admin's. The studio's
+  Undo and Redo and the releases page call these, so an undo survives a
+  reload and an agent's reaches every page.
+- **`rollback --to <version>`** moves the pointer to a kept version;
   **`preview`** serves one to the caller's own sessions; **`versions`**
   lists them; **`watch`** says `live` on each move, `slot_changed` on each
   section change and `route_changed` on each route's, held to its caller by the gate: `watch_closed { reason }`
   (`signed_out`, `expired`, `revoked`, `refused`) when it no longer stands.
 - **Who may**: viewers and editors `versions`, `watch`, `slots list`,
-  `routes list`, `here`, `follow`; editors `routes set`, `routes clear`, `author`,
-  `show`, `sessions`; a
+  `routes list`, `here`, `follow`, `history`; editors `routes set`, `routes clear`, `author`,
+  `show`, `sessions`, `tag`, `undo`, `redo` (an `author`'s; a push's or a
+  rollback's undo is the admin's); a
   `deployer` `push` (V2-7: a deploy pushes as the pipeline key); `rollback`,
   `preview`, `slots set`, `slots clear` are the admin's. Every write
   (`push`, `author`, `rollback`, `preview`, `slots set|clear`, `routes
-  set|clear`, `show`) and `sessions` want their grant held on `*`: the UI
+  set|clear`, `show`, `tag`, `undo`, `redo`) and `sessions` want their grant held on `*`: the UI
   has no scope, and a grant held on a scope alone is refused `forbidden`
   naming the scope (FRAME-43, FRAME-48).
 - **An agent drives the studio** (FRAME-48): a studio page opens its
