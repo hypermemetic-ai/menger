@@ -41,7 +41,7 @@
       <p class="ticket-code"><span data-ticket-id>{t.id}</span></p>
       <h1 class="ticket-title" data-ticket-title>{t.title}</h1>
       <div class="ticket-meta">
-        <span class="tag status" data-ticket-status>{t.status}</span>
+        <span class="tag status" data-status={t.status} data-ticket-status>{t.status}</span>
         <span class="tag kind" data-ticket-kind>{t.kind}</span>
         <label class="status-menu">set status
           <select data-status-menu onchange={setStatus}>
@@ -69,3 +69,41 @@
     {#if $children.status === "live" && kids.length === 0}<p class="empty">none</p>{/if}
   </section>
 </article>
+
+<style>
+  .ticket-page { max-width: 860px; margin: 0 auto; padding: 16px 20px 40px; color: var(--ink); font-family: var(--font-text); font-size: var(--text-size); }
+  .crumbs { margin-bottom: 12px; font-size: 12px; }
+  .crumbs a { color: var(--muted); text-decoration: none; border-radius: var(--radius-sm); }
+  .crumbs a:hover { color: var(--accent); }
+  .crumbs a:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .ticket-code { margin: 0; font-size: 12px; color: var(--accent); }
+  .ticket-title { margin: 4px 0 10px; font-family: var(--font-display); font-size: 22px; line-height: 1.25; font-weight: var(--weight-strong); }
+  .ticket-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12px; color: var(--muted); }
+  .tag { display: inline-block; padding: 0 7px; font-size: 11px; line-height: 18px; color: var(--muted); border: var(--border) solid var(--line); border-radius: var(--radius-md); }
+  .tag.status { border-color: transparent; background: var(--st-draft-bg); color: var(--st-draft-fg); }
+  .tag.status[data-status=Draft] { background: var(--st-draft-bg); color: var(--st-draft-fg); }
+  .tag.status[data-status=Pending] { background: var(--st-pending-bg); color: var(--st-pending-fg); }
+  .tag.status[data-status=Ready] { background: var(--st-ready-bg); color: var(--st-ready-fg); }
+  .tag.status[data-status=Coding] { background: var(--st-coding-bg); color: var(--st-coding-fg); }
+  .tag.status[data-status="In Review"] { background: var(--st-in-review-bg); color: var(--st-in-review-fg); }
+  .tag.status[data-status=Complete] { background: var(--st-complete-bg); color: var(--st-complete-fg); }
+  .tag.status[data-status=Blocked] { background: var(--st-blocked-bg); color: var(--st-blocked-fg); }
+  .tag.status[data-status=Superseded] { background: var(--st-superseded-bg); color: var(--st-superseded-fg); }
+  .tag.status[data-status=Canceled] { background: var(--st-canceled-bg); color: var(--st-canceled-fg); }
+  .status-menu { display: flex; gap: 6px; align-items: center; }
+  .status-menu select { padding: 1px 4px; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); }
+  .status-menu select:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
+  .ticket-body { padding-top: 10px; font-family: var(--sans); line-height: 1.55; overflow-wrap: anywhere; border-top: var(--border) solid var(--line); }
+  .ticket-body :global(a) { color: var(--accent); text-decoration: underline; }
+  .ticket-body :global(pre) { overflow: auto; padding: 8px 10px; font-family: var(--font-text); background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius); }
+  .ticket-body :global(code) { font-family: var(--font-text); }
+  .ticket-children h2 { margin: 22px 0 6px; font-size: 11px; font-weight: var(--weight-medium); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .ticket-children ul { list-style: none; margin: 0; padding: 0; }
+  .ticket-children a { display: flex; gap: 10px; align-items: baseline; padding: 4px 6px; color: var(--ink); text-decoration: none; border-radius: var(--radius); transition: background-color var(--motion-fast) var(--ease); }
+  .ticket-children a:hover { background: var(--hover); }
+  .ticket-children a:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
+  .row-id { flex: none; color: var(--accent); }
+  .row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .empty { color: var(--muted); }
+</style>

@@ -198,6 +198,8 @@ fn link_attrs(tag: &str) -> Vec<(String, String)> {
 /// FRAME-26: what a bundle's Svelte runtime stands for here (the server
 /// serves its bytes and never runs them).
 const RUNTIME_JS: &str = "export function mount() {}\n";
+/// FRAME-30: a bundle's theme.css.
+const THEME_CSS: &str = ":root {\n  --bg: #fbfaf7;\n  color-scheme: light;\n}\n";
 /// A svelte/1 module beside it, importing it.
 const MODULE_JS: &str = "import { mount as m } from \"./svelte-runtime.js\";\nexport function mount(t, o) { return m(t, o); }\n";
 
@@ -213,6 +215,8 @@ const MODULE_JS: &str = "import { mount as m } from \"./svelte-runtime.js\";\nex
 /// bundle's one Svelte runtime, `components/svelte-runtime.js` — always:
 /// the route is a hash the server never sees, and menger's bundle always
 /// holds svelte/1 components (the bundle here names it in `runtimes`).
+/// FRAME-30: and `<link rel="stylesheet">` of the bundle's `theme.css`, the
+/// tokens every component's sheet paints with — first, before the script.
 #[tokio::test]
 async fn the_entrypoint_preloads_the_boot() {
     let m = start().await;
@@ -226,6 +230,7 @@ async fn the_entrypoint_preloads_the_boot() {
         ("manifest.json", "{}\n"),
         ("components.json", "{}\n"),
         ("components/svelte-runtime.js", RUNTIME_JS),
+        ("theme.css", THEME_CSS),
         // runtimes stands beside a svelte/1 component (the push refuses one alone).
         ("components/x-list.js", MODULE_JS),
         ("src/x-list.svelte", "<script module>\n  export const uses = [];\n</script>\n<p>x</p>\n"),
@@ -242,6 +247,7 @@ async fn the_entrypoint_preloads_the_boot() {
     let mut manifest: serde_json::Value = serde_json::from_str(&support::json_manifest("c1", "a1")).unwrap();
     manifest["components"] = json!({ "x-list": { "profile": "svelte/1", "module": sha_hex(MODULE_JS.as_bytes()), "uses": [] } });
     manifest["runtimes"] = json!({ "svelte/1": sha_hex(RUNTIME_JS.as_bytes()) });
+    manifest["theme"] = json!(sha_hex(THEME_CSS.as_bytes()));
     let pushed = call(&admin, "ui.push", support::signed_params(&bytes, &manifest.to_string(), 1)).await;
     assert_eq!(pushed[0]["type"], "pushed", "{pushed:?}");
     let hash = sha_hex(&bytes);
@@ -260,6 +266,8 @@ async fn the_entrypoint_preloads_the_boot() {
         ("preload", Some("fetch"), "components.json"),
         // FRAME-26: the bundle's one Svelte runtime, before the first module asks it.
         ("modulepreload", None, "components/svelte-runtime.js"),
+        // FRAME-30: the theme's tokens.
+        ("stylesheet", None, "theme.css"),
     ];
     for (rel, as_, file) in boot {
         let href = format!("/app/{hash}/{file}");

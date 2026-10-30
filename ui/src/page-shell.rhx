@@ -3,3 +3,7 @@
 
 <header class="shell"><span>menger</span></header>
 <slot name="main"/>
+
+<style>
+  .shell { padding: 8px 14px; background: var(--panel); border-bottom: var(--border) solid var(--line); font-weight: var(--weight-bold); }
+</style>

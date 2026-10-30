@@ -49,6 +49,11 @@
 //!   siblings (`nav-flat-sv`, `nav-children-sv`, `ticket-chip-sv`, each in
 //!   both profiles), a sibling reached by its importer; no keyed `{#each`
 //!   straight over a store (`$rows.rows`: Svelte compares by value there).
+//! - FRAME-30: the look is the components' and the theme's — `ui/index.html`
+//!   holds the page's frame alone (rules on `*`, `html`, `body`, `a` and the
+//!   form controls, no token defined, no component's rule) and loads
+//!   `theme.css` before anything else; `ui/theme.toml` holds the tokens;
+//!   every board component, in both profiles, carries its own `<style>`.
 //! - FRAME-9: `tether/` takes `plexus-login` from the sibling, as
 //!   plexus-substrate (which tether takes) does — one `plexus-login` in its
 //!   graph, never menger's tree's.
@@ -1654,4 +1659,71 @@ fn the_build_host_has_node() {
     if let Err(why) = node_check(&body) {
         panic!("FRAME-13: the build host has Node when the UI holds svelte/1 — {why}");
     }
+}
+
+/// FRAME-30: what of `index.html` is not the frame — a rule on anything but
+/// the frame's elements, a token defined, no theme.css loaded first.
+fn frame_breaks(index: &str) -> Vec<String> {
+    const FRAME: [&str; 7] = ["*", "html", "body", "a", "button", "input", "select"];
+    let mut out = Vec::new();
+    let link = index.find("/app/{{UI_VERSION}}/theme.css");
+    let first = index.find("<link").zip(link).is_some_and(|(l, t)| index[l..t].find('>').is_none());
+    if !first {
+        out.push("theme.css is not the first <link> (rel=stylesheet, /app/{{UI_VERSION}}/theme.css)".into());
+    }
+    let mut rest = index;
+    while let Some(i) = rest.find("<style>") {
+        let body = &rest[i + 7..];
+        let end = body.find("</style>").unwrap_or(body.len());
+        let css = &body[..end];
+        let mut clean = String::new();
+        let mut c = css;
+        while let Some(o) = c.find("/*") {
+            clean.push_str(&c[..o]);
+            c = c[o..].find("*/").map_or("", |e| &c[o + e + 2..]);
+        }
+        clean.push_str(c);
+        for rule in clean.split('}') {
+            let Some((sel, decls)) = rule.split_once('{') else { continue };
+            for s in sel.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                if !FRAME.contains(&s) {
+                    out.push(format!("index.html: `{s}` is a component's rule (or no frame's): it belongs in the component's <style>"));
+                }
+            }
+            if decls.split(';').any(|d| d.trim_start().starts_with("--")) {
+                out.push(format!("index.html: `{}` defines a token: the tokens are ui/theme.toml's", sel.trim()));
+            }
+        }
+        rest = &body[end..];
+    }
+    out
+}
+
+#[test]
+fn the_look_is_the_components_and_the_themes() {
+    let root = root();
+    let index = std::fs::read_to_string(root.join("ui/index.html")).unwrap();
+    let breaks = frame_breaks(&index);
+    assert!(breaks.is_empty(), "ui/index.html is the frame alone:\n  {}", breaks.join("\n  "));
+    // The check reads what it is given.
+    let bad = "<link rel=\"stylesheet\" href=\"/app/{{UI_VERSION}}/theme.css\"><style>:root { --bg: #fff; } .board-row { height: 28px; } * { box-sizing: border-box; }</style>";
+    let got = frame_breaks(bad);
+    assert!(got.iter().any(|b| b.contains(".board-row")) && got.iter().any(|b| b.contains(":root")), "{got:?}");
+    assert!(frame_breaks("<link rel=\"modulepreload\" href=\"x\"><link rel=\"stylesheet\" href=\"/app/{{UI_VERSION}}/theme.css\">").iter().any(|b| b.contains("first")));
+    let theme = std::fs::read_to_string(root.join("ui/theme.toml")).expect("ui/theme.toml holds the tokens");
+    for t in ["\"--bg\"", "\"--panel\"", "\"--ink\"", "\"--muted\"", "\"--line\"", "\"--accent\"", "\"--hover\"", "\"--warn\"", "\"--pitch\""] {
+        assert!(theme.contains(t), "ui/theme.toml keeps {t}");
+    }
+    let mut bare = Vec::new();
+    for c in ["board-layout", "board-frame", "board-rows", "nav-tree", "nav-children", "nav-flat", "jump-palette", "ticket-page", "ticket-chip", "filter-line"] {
+        for f in [format!("{c}.rhx"), format!("{c}-sv.svelte")] {
+            let p = root.join("ui/src").join(&f);
+            if let Ok(text) = std::fs::read_to_string(&p) {
+                if !text.contains("<style>") {
+                    bare.push(f);
+                }
+            }
+        }
+    }
+    assert!(bare.is_empty(), "every board component carries its own <style>: {bare:?}");
 }

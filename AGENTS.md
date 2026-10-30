@@ -125,8 +125,9 @@ synapse -P 4460 menger ui preview
 synapse -P 4460 menger ui watch          # open-ended
 ```
 
-**The UI's source** is `ui/` — `index.html`, `routes.json`, `slots.json`,
-`src/*.rhx` — compiled by `../plexus-ui`'s `plexus-ui-compiler`
+**The UI's source** is `ui/` — `index.html` (the page's frame alone),
+`theme.toml` (the tokens, FRAME-30: the bundle's `theme.css`), `routes.json`, `slots.json`,
+`src/*.rhx` — each component carrying its look in a `<style>` on the tokens — compiled by `../plexus-ui`'s `plexus-ui-compiler`
 (UI-5: rhx, profile `rhx/1` → a view tree and Rhai handlers;
 native and as a wasm module with no imports) and drawn by its
 `plexus-ui-engine` (UI-6, UI-10: signals,

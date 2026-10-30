@@ -83,6 +83,7 @@
       <div class="board-window" style={"transform:translateY(" + PITCH * first + "px)"}>
       {#each rows.rows as r (r.id)}
         <a class="board-row" data-id={r.id} data-status={r.status} href={base + "ticket/" + r.id}>
+          <i class="kmark" data-kind={r.kind} aria-hidden="true"></i>
           <span class="row-id" data-field="id">{r.id}</span>
           <span class="row-title" data-field="title">{r.title}</span>
           <span class="row-kind" data-field="kind">{r.kind}</span>
@@ -93,3 +94,43 @@
     </div>
   </div>
 </section>
+
+<style>
+  .board { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; background: var(--bg); }
+  .board-head { display: flex; gap: 6px; align-items: baseline; padding: 7px 14px; color: var(--muted); background: var(--panel); border-bottom: var(--border) solid var(--line); }
+  .board-count { color: var(--ink); font-weight: var(--weight-bold); font-variant-numeric: tabular-nums; }
+  .board-status { margin-left: auto; font-size: 11px; color: var(--warn); }
+  .board-status::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 5px; vertical-align: 1px; border-radius: 50%; background: var(--warn); }
+  .board-scroll { flex: 1; min-height: 0; overflow: auto; position: relative; outline: none; }
+  .board-scroll:focus-visible { box-shadow: inset 0 0 0 2px var(--focus); }
+  .board-space { position: relative; }
+  .board-window { position: absolute; left: 0; right: 0; top: 0; will-change: transform; }
+  .board-row { display: grid; grid-template-columns: 10px 104px minmax(0, 1fr) auto auto; gap: 10px; align-items: center; height: var(--pitch); padding: 0 14px; color: var(--ink); text-decoration: none; white-space: nowrap; border-bottom: var(--border) solid var(--line); transition: background-color var(--motion-fast) var(--ease); }
+  .board-row:hover { background: var(--hover); }
+  .board-row:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
+  .row-id { color: var(--accent); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; }
+  .row-title { overflow: hidden; text-overflow: ellipsis; }
+  .row-kind { color: var(--muted); font-size: 11px; }
+  .row-status { display: inline-block; padding: 0 7px; font-size: 11px; line-height: 18px; border-radius: var(--radius-md); background: var(--st-draft-bg); color: var(--st-draft-fg); }
+  .board-row[data-status=Draft] .row-status { background: var(--st-draft-bg); color: var(--st-draft-fg); }
+  .board-row[data-status=Pending] .row-status { background: var(--st-pending-bg); color: var(--st-pending-fg); }
+  .board-row[data-status=Ready] .row-status { background: var(--st-ready-bg); color: var(--st-ready-fg); }
+  .board-row[data-status=Coding] .row-status { background: var(--st-coding-bg); color: var(--st-coding-fg); }
+  .board-row[data-status="In Review"] .row-status { background: var(--st-in-review-bg); color: var(--st-in-review-fg); }
+  .board-row[data-status=Complete] .row-status { background: var(--st-complete-bg); color: var(--st-complete-fg); }
+  .board-row[data-status=Blocked] .row-status { background: var(--st-blocked-bg); color: var(--st-blocked-fg); }
+  .board-row[data-status=Superseded] .row-status { background: var(--st-superseded-bg); color: var(--st-superseded-fg); }
+  .board-row[data-status=Canceled] .row-status { background: var(--st-canceled-bg); color: var(--st-canceled-fg); }
+  .kmark { display: inline-block; width: 8px; height: 8px; flex: none; background: var(--kind-build); border-radius: 50%; }
+  .kmark[data-kind=scope] { background: var(--kind-scope); border-radius: var(--radius-xs); transform: rotate(45deg) scale(.85); }
+  .kmark[data-kind=gap] { background: var(--kind-gap); border-radius: 0; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+  .kmark[data-kind=spike] { background: none; border: 2px solid var(--kind-spike); }
+  .kmark[data-kind=execution] { background: var(--kind-execution); border-radius: var(--radius-xs); }
+  @media (max-width: 720px) {
+    .board-row { grid-template-columns: 10px 88px minmax(0, 1fr) auto; }
+    .row-kind { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .board-row { transition: none; }
+  }
+</style>

@@ -1,0 +1,99 @@
+# FRAME-30: menger's tokens — compiled by plexus-ui build to the bundle's
+# theme.css, which ui/index.html loads first; every component's <style>
+# paints with these, never a literal. [light, dark, what it paints]. The
+# nine tokens ui/index.html held before are kept as they were; the rest are
+# APP-114's (the designer's sheet), and the three statuses it left out are
+# v1's tokens.toml's.
+
+[colour.paper]
+"--bg"       = ['#fbfaf7', '#141412', 'the page']
+"--panel"    = ['#ffffff', '#1c1b19', 'the nav, the top bar, a panel head']
+"--card"     = ['#ffffff', '#22211e', 'new: a control face, a menu, the palette']
+"--hover"    = ['#f1efe9', '#26251f', 'a row or control under the pointer']
+"--sel"      = ['#eef1fc', '#1d2235', 'new: a flash, a pressed toggle']
+"--row-sel"  = ['#e2e8fb', '#232b45', 'new: the selected row']
+"--skeleton" = ['#ebe8e1', '#2a2925', 'new: a row still loading']
+"--shadow"   = ['#1d1c1a24', '#00000080', 'new: the lift under a menu or the palette']
+
+[colour.ink]
+"--ink"      = ['#1d1c1a', '#ecebe6', 'text']
+"--muted"    = ['#6b6860', '#9b988f', 'labels, counts, hints']
+"--disabled" = ['#a19e96', '#6b6860', 'new: a control that will not act']
+
+[colour.line]
+"--line"      = ['#e4e1d9', '#2e2d29', 'hairlines']
+"--tree-line" = ['#d3cfc4', '#3a3934', "new: the tree's connectors"]
+
+[colour.accent]
+"--accent" = ['#3b5bdb', '#8ea6ff', 'ids, links, the selected bar']
+"--focus"  = ['#3b5bdb', '#8ea6ff', 'new: the keyboard ring (the accent, until a theme splits them)']
+
+[colour.signal]
+"--warn" = ['#b3261e', '#ff8a80', 'offline, a filter that matches nothing, an unknown word']
+"--live" = ['#2f7a2a', '#6cc66a', 'new: done in a roll-up, a write that landed']
+
+[colour.chip]   # new
+"--chip-bg"   = ['#eef0f4', '#23252b', 'a ticket chip, a count']
+"--chip-fg"   = ['#55606e', '#aab4c2', "the chip's text"]
+"--chip-line" = ['#dde1e8', '#30333b', "the chip's edge"]
+
+[colour.status]   # new: one pair per status, each over 4.5:1 in both modes
+"--st-draft-bg"     = ['#efe9e0', '#2b2721', 'Draft']
+"--st-draft-fg"     = ['#72644c', '#c9b99a', 'Draft']
+"--st-pending-bg"   = ['#f3e8c8', '#3a3115', 'Pending']
+"--st-pending-fg"   = ['#7a5d00', '#e8cf7a', 'Pending']
+"--st-ready-bg"     = ['#e3ecf7', '#1b2e46', 'Ready']
+"--st-ready-fg"     = ['#2b5b8c', '#a3c6ee', 'Ready']
+"--st-coding-bg"    = ['#fde0c5', '#3d2614', 'Coding']
+"--st-coding-fg"    = ['#8f3f00', '#f4b37c', 'Coding']
+"--st-in-review-bg" = ['#cdeef4', '#10343b', 'In Review']
+"--st-in-review-fg" = ['#0b5b6b', '#85d2df', 'In Review']
+"--st-complete-bg"  = ['#cfe9c9', '#16341f', 'Complete']
+"--st-complete-fg"  = ['#256b1a', '#8fd39a', 'Complete']
+"--st-blocked-bg"    = ['#fdecec', '#3d1a1c', 'Blocked (v1)']
+"--st-blocked-fg"    = ['#a23', '#f09a9a', 'Blocked (v1)']
+"--st-superseded-bg" = ['#f3d9d9', '#3b2224', 'Superseded (v1)']
+"--st-superseded-fg" = ['#aa2222', '#dea3a3', 'Superseded (v1)']
+"--st-canceled-bg"   = ['#ecebe7', '#2c2b28', 'Canceled (v1)']
+"--st-canceled-fg"   = ['#5f5d57', '#b9b6ae', 'Canceled (v1)']
+
+[colour.kind]   # new: the kind mark's fill; its shape says the kind too
+"--kind-scope"     = ['#7a5d00', '#e3c56a', 'scope: a diamond']
+"--kind-build"     = ['#3b5bdb', '#8ea6ff', 'build: a dot']
+"--kind-execution" = ['#2f7a2a', '#6cc66a', 'execution: a square']
+"--kind-gap"       = ['#b3261e', '#ff8a80', 'gap: a triangle']
+"--kind-spike"     = ['#6b3fa0', '#c7abf2', 'spike: a ring']
+
+[colour.severity]   # new: the three bars
+"--sev-critical" = ['#b3261e', '#ff8a80', 'critical: three bars']
+"--sev-high"     = ['#c4561b', '#ffab70', 'high: three bars']
+"--sev-medium"   = ['#9a6b00', '#e6c065', 'medium: two bars']
+"--sev-low"      = ['#6b6860', '#9b988f', 'low: one bar']
+
+[type]   # new
+"--font-text"     = ['"Geist Mono", ui-monospace, monospace', '"Geist Mono", ui-monospace, monospace', 'the app']
+"--font-display"  = ['"Geist", system-ui, sans-serif', '"Geist", system-ui, sans-serif', "a ticket's title"]
+"--sans"          = ['"Geist", system-ui, sans-serif', '"Geist", system-ui, sans-serif', 'a body']
+"--text-size"     = ['13px', '13px', 'the body size']
+"--weight-medium" = ['500', '500', 'a code, a head']
+"--weight-strong" = ['600', '600', 'a title']
+"--weight-bold"   = ['700', '700', 'a count']
+
+[space]
+"--pitch"  = ['28px', '28px', 'a row']
+"--border" = ['1px', '1px', 'new: every hairline']
+
+[shape]   # new
+"--radius-xs"   = ['2px', '2px', 'a mark']
+"--radius-sm"   = ['3px', '3px', 'a key, a skeleton bar']
+"--radius"      = ['4px', '4px', 'a control']
+"--radius-md"   = ['5px', '5px', 'a status chip']
+"--radius-lg"   = ['6px', '6px', 'a menu']
+"--radius-xl"   = ['8px', '8px', 'the palette']
+"--radius-pill" = ['999px', '999px', 'a ticket chip, a count']
+
+[motion]   # new; reduced motion: none of them run
+"--motion-fast"  = ['.12s', '.12s', 'a hover, a menu opening']
+"--motion-flash" = ['1.8s', '1.8s', 'a new row flashing --sel']
+"--motion-pulse" = ['1.2s', '1.2s', 'a skeleton breathing, the spinner']
+"--ease"         = ['ease-out', 'ease-out', 'all of them']

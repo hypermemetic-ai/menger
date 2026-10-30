@@ -34,3 +34,20 @@
   </div>
   <span class="hint" data-palette-hint>press / to jump</span>
 </header>
+
+<style>
+  .topbar { display: flex; align-items: flex-start; gap: 14px; min-height: 46px; padding: 8px max(14px, env(safe-area-inset-left)); background: var(--panel); border-bottom: var(--border) solid var(--line); }
+  .brand { font-family: var(--font-display); font-weight: var(--weight-bold); color: var(--ink); text-decoration: none; padding: 5px 4px 0; border-radius: var(--radius); transition: color var(--motion-fast) var(--ease); }
+  .brand:hover { color: var(--accent); }
+  .brand:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .hint { margin-left: auto; padding-top: 7px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+  @media (max-width: 720px) {
+    .topbar { gap: 8px; }
+    .hint { display: none; }
+  }
+  .filter-line { flex: 1; min-width: 0; }
+  .filter-input { width: 100%; max-width: 640px; padding: 5px 10px; color: var(--ink); background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius); transition: border-color var(--motion-fast) var(--ease); }
+  .filter-input:hover { border-color: var(--muted); }
+  .filter-input:focus-visible { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px var(--sel); }
+  .filter-refused { margin: 4px 0 0; color: var(--warn); font-size: 11px; }
+</style>
