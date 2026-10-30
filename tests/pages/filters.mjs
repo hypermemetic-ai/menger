@@ -19,11 +19,12 @@
 //       (`[data-refused]`), saved names offered as `[data-complete=<name>]`
 //   PERF-22: the board's `[data-board][data-surface=board-rows]` gains `[data-drawn]` once its first
 //       answer is drawn (and says `board.drawn` on the bus); the nav's facets and saved filters ask then —
-//       FRAME-50: because the frame places them with `after="board.drawn"`, never from a look at the page
+//       FRAME-50: because the frame places them with `after="board.drawn"`, never from a look at the page;
+//       FRAME-53: `board.drawn` is sticky, so a section remounted after the board drew hears it at once
 import { bundle, push, sentCalls } from "../../scripts/ui-throwaway.mjs";
 
 export default async (ctx) => {
-  const { test, assert, eventually, openPage, marked, sameDocument, sy, summaries } = ctx;
+  const { test, assert, eventually, sleep, openPage, marked, sameDocument, sy, summaries } = ctx;
   const trimmed = (t) => String(t ?? "").trim();
   const one = (events, type) => events.find((e) => e.type === type);
   const got = (name) => sy("tickets", "filters", "get", "--name", name);
@@ -84,8 +85,8 @@ export default async (ctx) => {
 
   // FRAME-50 (review): nav-facets swapped alone after the board drew — the
   // board stays, says no second `board.drawn`, and the remounted facets
-  // (given `after="board.drawn"`) find the board's `[data-drawn]` and draw
-  // their chips (a facets that waited for the topic alone would draw none).
+  // (given `after="board.drawn"`) hear the kept, sticky `board.drawn`
+  // (FRAME-53, `{ last: true }`) and draw their chips.
   await test("a_facets_swapped_in_after_the_board_drew_asks", async () => {
     const { v2, server, session, sy, fs, path } = ctx;
     const work = path.dirname(session);
@@ -122,6 +123,100 @@ export default async (ctx) => {
     } finally {
       await context.close();
       sy("ui", "rollback", "--to", v2.version);
+    }
+  });
+
+  // FRAME-53: a nav section remounted after the board drew hears the sticky
+  // `board.drawn` (`on(after, fn, { last: true })`) and asks — no look at the
+  // page. The board's `[data-drawn]` is taken off first, so a section that
+  // looked for it would wait for ever; `ui slots set` puts nav-counts in the
+  // facets' section (the frame hands it `after="board.drawn"` too), then
+  // the clear puts nav-facets back: each draws. Then, the behaviour held:
+  // none of the three nav components' sources looks at the page.
+  await test("a_nav_section_remounted_after_the_board_drew_hears_it", async () => {
+    const { page, context } = await openPage("");
+    try {
+      await eventually("the board drawn and the facets' chips", async () =>
+        (await page.locator("[data-board][data-surface=board-rows][data-drawn]").count()) === 1 && (await facets(page).locator("[data-facet]").count()) > 0, 10000);
+      await page.evaluate(() => document.querySelector("[data-board][data-surface=board-rows]").removeAttribute("data-drawn"));
+      sy("ui", "slots", "set", "--layout", boardLayout, "--slot", "facets", "--component", "nav-counts");
+      await eventually("nav-counts in the facets' section, asked and drawn", async () =>
+        (await facets(page).count()) === 0 && (await page.locator("[data-surface=nav-counts] [data-field=count]").count()) > 0, 5000);
+      sy("ui", "slots", "clear", "--layout", boardLayout, "--slot", "facets");
+      await eventually("nav-facets back, asked and drawn", async () =>
+        (await page.locator("[data-surface=nav-counts]").count()) === 0 && (await facets(page).locator("[data-facet]").count()) > 0, 5000);
+      assert((await page.locator("[data-board][data-surface=board-rows][data-drawn]").count()) === 0, "the board was not remounted: its mark stays off");
+    } finally {
+      await context.close();
+      sy("ui", "slots", "clear", "--layout", boardLayout, "--slot", "facets");
+    }
+    for (const f of ["nav-facets.svelte", "filters-saved.svelte", "nav-counts.svelte"]) {
+      const src = ctx.fs.readFileSync(new URL(`../../ui/src/${f}`, import.meta.url), "utf8");
+      assert(!src.includes('querySelector("[data-board]') && !src.includes("[data-drawn]"), `${f} looks at the page for the board`);
+    }
+  });
+
+  // FRAME-53 (review): a return trip — the board, a ticket, the board on
+  // another filter. The old board's `board.drawn` went with it (a kept
+  // event goes with its member, and the route change unmounts the old board
+  // before the new nav's `on(after, …, { last: true })` runs inside `on`),
+  // so the new facets and saved filters wait for the new board's first
+  // answer, as on the first visit: tickets.nav.facets (and
+  // tickets.filters.list, when its kept collection does not serve it) is
+  // sent after the new tickets.list is answered.
+  await test("a_return_trip_asks_the_nav_after_the_new_rows", async () => {
+    const { page, context } = await openPage("");
+    try {
+      await eventually("the board drawn and the facets' chips", async () =>
+        (await page.locator(".board-row[data-id]").count()) > 0 && (await facets(page).locator("[data-facet]").count()) > 0, 10000);
+      const id = await page.locator(".board-row[data-id]").first().getAttribute("data-id");
+      await page.evaluate((id) => (location.hash = `#/ticket/${id}`), id);
+      await eventually("the ticket's page, no board", async () => (await page.locator(".board-row[data-id]").count()) === 0 && (await facets(page).count()) === 0, 10000);
+      await sleep(300);
+      // Each answer as it arrives: the reply naming a call's subscription,
+      // then the first item of that subscription.
+      const t0 = await page.evaluate(() => {
+        const P = window.__pages;
+        const A = (window.__answers = { subs: {}, first: {} });
+        const ids = {};
+        for (const s of P.sockets) s.addEventListener("message", (e) => {
+          const t = performance.now();
+          let f;
+          try { f = JSON.parse(e.data); } catch { return; }
+          if (f.id != null && ids[f.id] && f.result != null && typeof f.result !== "object") A.subs[f.result] = ids[f.id];
+          const sub = f.params?.subscription;
+          if (sub != null && A.subs[sub] && !(A.subs[sub].n in A.first)) A.first[A.subs[sub].n] = t;
+        });
+        let n = 0;
+        const send = WebSocket.prototype.send;
+        WebSocket.prototype.send = function (d) {
+          try { const f = JSON.parse(d); if (f.params?.method) ids[f.id] = { method: f.params.method, n: n++, t: performance.now() }; } catch {}
+          return send.call(this, d);
+        };
+        window.__ids = ids;
+        const t = performance.now();
+        location.hash = "#/f/kind%20build";
+        return t;
+      });
+      await eventually("the board again and the facets' chips", async () =>
+        (await page.locator(".board-row[data-id]").count()) > 0 && (await facets(page).locator("[data-facet]").count()) > 0 &&
+        (await saved(page).locator('[data-id="Needs you"]').count()) === 1, 10000);
+      const calls = await page.evaluate(() => Object.values(window.__ids).map((c) => ({ ...c, answered: window.__answers.first[c.n] ?? null })));
+      const list = calls.find((c) => c.method === "tickets.list");
+      assert(list && list.answered != null, `the new tickets.list sent and answered: ${JSON.stringify(calls.map((c) => c.method))}`);
+      const at = (m) => calls.find((c) => c.method === m);
+      const show = calls.filter((c) => /tickets\.(list|nav\.facets|filters\.list)$/.test(c.method)).map((c) => `${c.method}@+${(c.t - t0).toFixed(1)}`).join(", ");
+      // The facets' params are the new filter's: asked again. The saved
+      // filters' are `{}`, the collection the first board's section left
+      // still kept (the cache's keep) — served without a call, or asked
+      // after the answer too.
+      assert(at("tickets.nav.facets") != null, `tickets.nav.facets is asked on the board again (${show})`);
+      for (const m of ["tickets.nav.facets", "tickets.filters.list"]) {
+        if (at(m)) assert(at(m).t >= list.answered, `${m} sent after the new tickets.list's answer (+${(list.answered - t0).toFixed(1)}): ${show}`);
+      }
+      console.log(`     after the return: ${show}; the list answered +${(list.answered - t0).toFixed(1)}`);
+    } finally {
+      await context.close();
     }
   });
 
