@@ -174,7 +174,12 @@ class Socket:
             if item.get("type") == "error":
                 raise RuntimeError(f"{method}: {item}")
             if item.get("type") == "data":
-                out.append(item.get("content"))
+                content = item.get("content") or {}
+                # PERF-15: a page's `rows` as the per-row events it carries.
+                if content.get("type") == "rows":
+                    out.extend(content.get("items") or [])
+                else:
+                    out.append(content)
         self.last_bytes = size
         return (time.perf_counter() - t) * 1000, out
 

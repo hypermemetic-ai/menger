@@ -17,10 +17,10 @@ async fn ready_set_gates_on_blockers() {
     one(hub.set_status(operator(), "DAG-2".into(), "Ready".into(), None, None, None).await).await;
     one(hub.set_status(operator(), "DAG-3".into(), "Ready".into(), None, None, None).await).await;
 
-    assert_eq!(ticket_ids(hub.work().ready(operator(), None, None, None, None, None, None).await).await, vec!["DAG-2"]);
+    assert_eq!(ticket_ids(flat(hub.work().ready(operator(), None, None, None, None, None, None, None).await)).await, vec!["DAG-2"]);
 
     one(hub.set_status(operator(), "DAG-2".into(), "Complete".into(), None, None, None).await).await;
-    assert_eq!(ticket_ids(hub.work().ready(operator(), None, None, None, None, None, None).await).await, vec!["DAG-3"]);
+    assert_eq!(ticket_ids(flat(hub.work().ready(operator(), None, None, None, None, None, None, None).await)).await, vec!["DAG-3"]);
 }
 
 #[tokio::test]
@@ -37,11 +37,11 @@ async fn ready_set_accepts_superseded_blockers_and_filters_by_epic() {
     one(hub.set_status(operator(), "TWO-1".into(), "Ready".into(), None, None, None).await).await;
 
     assert_eq!(
-        ticket_ids(hub.work().ready(operator(), None, None, None, None, None, None).await).await,
+        ticket_ids(flat(hub.work().ready(operator(), None, None, None, None, None, None, None).await)).await,
         vec!["ONE-2", "TWO-1"]
     );
     assert_eq!(
-        ticket_ids(hub.work().ready(operator(), Some("one".into()), None, None, None, None, None).await).await,
+        ticket_ids(flat(hub.work().ready(operator(), Some("one".into()), None, None, None, None, None, None).await)).await,
         vec!["ONE-2"]
     );
 }
@@ -55,7 +55,7 @@ async fn dangling_blocker_excludes_from_ready_set_and_is_marked() {
     .await;
     one(hub.set_status(operator(), "DAG-1".into(), "Ready".into(), None, None, None).await).await;
 
-    assert!(ticket_ids(hub.work().ready(operator(), None, None, None, None, None, None).await).await.is_empty());
+    assert!(ticket_ids(flat(hub.work().ready(operator(), None, None, None, None, None, None, None).await)).await.is_empty());
 
     let evs: Vec<_> = Box::pin(hub.work().blockers(operator(), "DAG-1".into()).await).collect().await;
     assert_eq!(evs.len(), 1);
@@ -127,7 +127,7 @@ async fn ready_set_takes_the_same_page_params() {
         one(hub.set_status(operator(), id.into(), "Ready".into(), None, None, None).await).await;
     }
 
-    let (ids, page) = ids_and_page(hub.work().ready(operator(), None, None, Some(2), Some(true), None, None).await).await;
+    let (ids, page) = ids_and_page(flat(hub.work().ready(operator(), None, None, Some(2), Some(true), None, None, None).await)).await;
     assert_eq!(ids, vec!["RS-1", "RS-2"]);
     assert_eq!(
         page,
@@ -136,7 +136,7 @@ async fn ready_set_takes_the_same_page_params() {
     );
 
     let (ids, page) =
-        ids_and_page(hub.work().ready(operator(), None, Some("RS-2".into()), Some(2), Some(true), None, None).await).await;
+        ids_and_page(flat(hub.work().ready(operator(), None, Some("RS-2".into()), Some(2), Some(true), None, None, None).await)).await;
     assert_eq!(ids, vec!["RS-3"]);
     assert_eq!(page, Some((None, 0)));
 }

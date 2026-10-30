@@ -34,7 +34,9 @@ function caller(ws) {
     const item = JSON.parse(String(m.data)).params?.result;
     if (!item || !pending) return;
     if (item.type === "data") {
-      pending.events.push(item.content);
+      // PERF-15: a page's `rows` as the per-row events it carries.
+      if (item.content.type === "rows") pending.events.push(...item.content.items);
+      else pending.events.push(item.content);
       if (item.content.type === "page") pending.page = performance.now();
     } else if (item.type === "done") {
       const p = pending; pending = null; p.done = performance.now(); p.resolve(p);

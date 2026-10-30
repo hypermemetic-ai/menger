@@ -353,6 +353,7 @@ synapse -P 4460 menger tickets get --id MENGER/ORG-3
 synapse -P 4460 menger tickets list --epic MNG --summary true
 synapse -P 4460 menger tickets list --filter 'blocked' --at 1000 --summary true --limit 20
 synapse -P 4460 menger tickets list --epic MENGER --summary true --limit 1000 --after MENGER-1000
+synapse -P 4460 menger tickets list --summary true --limit 200 --fields id,title,kind,status
 synapse -P 4460 menger tickets find --query watch --filter 'not category done'
 synapse -P 4460 menger tickets search --query 'plcement wave'
 synapse -P 4460 menger tickets search --query 'set_status' --filter 'not category done' --limit 5 --offset 0

@@ -5,13 +5,41 @@
 use super::*;
 use crate::store::FilterChange;
 
-/// MNG-9: one page of the store, as the events that carry it — a row per
-/// ticket and then exactly one `page` event, which is what tells a client
+/// PERF-15: the most a `rows` event carries of its items' JSON — 1 MiB, so a
+/// page of whole tickets (a body may be 8 MiB, `list {}` a thousand rows)
+/// stays far under the transport's 10 MB message cap: past it the page goes
+/// on in the next `rows` event (an item larger than the budget alone in its
+/// own), and the page event follows the last.
+pub const ROWS_BUDGET: usize = 1 << 20;
+
+/// PERF-15: a page's rows as its `rows` events — one, empty or not, unless
+/// they are past [`ROWS_BUDGET`].
+pub(super) fn rows_events(items: Vec<Row>) -> Vec<TicketsEvent> {
+    let mut out = Vec::new();
+    let (mut chunk, mut bytes) = (Vec::new(), 0usize);
+    for item in items {
+        let n = serde_json::to_vec(&item).map(|v| v.len()).unwrap_or(0);
+        if !chunk.is_empty() && bytes + n > ROWS_BUDGET {
+            out.push(TicketsEvent::Rows { items: std::mem::take(&mut chunk) });
+            bytes = 0;
+        }
+        bytes += n;
+        chunk.push(item);
+    }
+    if !chunk.is_empty() || out.is_empty() {
+        out.push(TicketsEvent::Rows { items: chunk });
+    }
+    out
+}
+
+/// MNG-9: one page of the store, as the events that carry it — PERF-15: its
+/// rows as one `rows` event (each a `summary`, thinned to `fields` when the
+/// call asked them), and then exactly one `page` event, which is what tells a client
 /// whether to ask for more. A failed cursor is the one in-band `error`
 /// instead, with no page event: nothing was walked, so there is nowhere to
 /// resume from. SCALE-14: the `summary` shape — a page of the cache's rows,
 /// as they are; whole tickets come from [`walk_events`].
-pub(super) fn page_events(page: Result<Page, StoreError>) -> Box<dyn Iterator<Item = TicketsEvent> + Send> {
+pub(super) fn page_events(page: Result<Page, StoreError>, fields: Option<&[SummaryField]>) -> Box<dyn Iterator<Item = TicketsEvent> + Send> {
     let page = match page {
         Ok(page) => page,
         Err(e) => {
@@ -20,20 +48,16 @@ pub(super) fn page_events(page: Result<Page, StoreError>) -> Box<dyn Iterator<It
             }))
         }
     };
-    Box::new(
-        page.tickets
-            .into_iter()
-            .map(|summary| TicketsEvent::Summary { summary })
-            .chain(std::iter::once(TicketsEvent::Page {
-                next: page.next,
-                remaining: page.remaining,
-                first: page.first,
-            })),
-    )
+    let items = page.tickets.into_iter().map(|row| Row::Summary { summary: SummaryRow::of(row, fields) }).collect();
+    let mut events = rows_events(items);
+    events.push(TicketsEvent::Page { next: page.next, remaining: page.remaining, first: page.first });
+    Box::new(events.into_iter())
 }
 
-/// SCALE-14: the same events with whole tickets — a `ticket` row each,
-/// then the one `page` event — for `list` and `ready_set` without
+/// SCALE-14: the same events with whole tickets — PERF-15: each step's
+/// tickets one `rows` event of `ticket` items (a page is one step unless it
+/// is past the walk's page of bodies; an empty page one empty `rows`), then
+/// the one `page` event — for `list` and `ready_set` without
 /// `summary`. Streamed from a [`Walk`], a page of bodies at a time, so a
 /// `list {}` of the whole store holds one page of bodies, not every one. A
 /// failed cursor is still the one in-band `error` and nothing else (the
@@ -41,14 +65,21 @@ pub(super) fn page_events(page: Result<Page, StoreError>) -> Box<dyn Iterator<It
 /// `error` in place of the page event.
 pub(super) fn walk_events(store: Arc<Store>, mut walk: Walk) -> impl Stream<Item = TicketsEvent> + Send {
     stream! {
+        let mut said = false;
         loop {
             match walk.next(&store).await {
                 Ok(Step::Tickets(tickets)) => {
-                    for ticket in tickets {
-                        yield TicketsEvent::Ticket { ticket };
+                    if !tickets.is_empty() {
+                        said = true;
+                        for ev in rows_events(tickets.into_iter().map(|ticket| Row::Ticket { ticket }).collect()) {
+                            yield ev;
+                        }
                     }
                 }
                 Ok(Step::End { next, remaining, first }) => {
+                    if !said {
+                        yield TicketsEvent::Rows { items: Vec::new() };
+                    }
                     yield TicketsEvent::Page { next, remaining, first };
                     break;
                 }
@@ -159,26 +190,17 @@ pub(super) fn wire_event(change: Change) -> Option<TicketsEvent> {
     })
 }
 
-/// FILTER-13: one page of `tree` as its events — a `node` per row, then one
-/// `page` (no `first`); a refusal is the one in-band `error`, and nothing
+/// FILTER-13: one page of `tree` as its events — PERF-15: its rows one
+/// `rows` event of `node` items, then one `page` (no `first`); a refusal is the one in-band `error`, and nothing
 /// else.
 pub(super) fn tree_page_events(page: Result<TreePage, StoreError>) -> Vec<TicketsEvent> {
     match page {
         Err(e) => vec![refusal(e)],
-        Ok(page) => page
-            .nodes
-            .into_iter()
-            .map(|n| TicketsEvent::Node {
-                summary: n.summary,
-                matched: n.matched,
-                below: n.below,
-            })
-            .chain(std::iter::once(TicketsEvent::Page {
-                next: page.next,
-                remaining: page.remaining,
-                first: None,
-            }))
-            .collect(),
+        Ok(page) => {
+            let mut events = rows_events(page.nodes.into_iter().map(|n| Row::Node { summary: n.summary, matched: n.matched, below: n.below }).collect());
+            events.push(TicketsEvent::Page { next: page.next, remaining: page.remaining, first: None });
+            events
+        }
     }
 }
 

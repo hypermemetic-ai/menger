@@ -28,10 +28,11 @@ pub(super) fn counts_stream(store: Arc<Store>, caller: VerifiedUser, filter: Opt
                 // letters beside it; an `under` naming several is refused.
                 // ACCESS-10: within the caller's reach, `keep` only in it.
                 match store.counts_read(&caller, &lens, keep.as_deref()) {
+                    // PERF-15: every shortcode's count one `rows` event.
                     Ok(counts) => {
-                        for (shortcode, held) in counts {
-                            let epic = store.shortcode_named_by(&shortcode).0;
-                            yield TicketsEvent::Count { epic, shortcode, held };
+                        let items: Vec<Row> = counts.into_iter().map(|(shortcode, held)| Row::Count { epic: store.shortcode_named_by(&shortcode).0, shortcode, held }).collect();
+                        for ev in rows_events(items) {
+                            yield ev;
                         }
                     }
                     Err(e) => yield veiled(&caller, e),

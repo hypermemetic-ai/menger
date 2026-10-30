@@ -16,7 +16,7 @@ async fn groups_yields_the_rows_and_watch_filters_group_changes_by_their_shortco
     one(hub.create(operator(), "SUB".into(), "hosted".into(), Some("scope".into()), None, None, None, Some("PLX-1".into()), None, None).await).await;
     one(hub.create(operator(), "SUB".into(), "work".into(), None, None, None, None, None, None, None).await).await;
 
-    let evs: Vec<TicketsEvent> = Box::pin(hub.nav().groups(operator()).await).collect().await;
+    let evs: Vec<TicketsEvent> = Box::pin(flat(hub.nav().groups(operator()).await)).collect().await;
     let groups: Vec<crate::types::Group> = evs
         .into_iter()
         .map(|ev| match ev {
@@ -54,7 +54,7 @@ async fn extents_yields_each_shortcodes_last_seq_in_shortcode_order() {
     let refused = one(hub.create(operator(), "AB".into(), "t".into(), None, None, Some(vec!["AB-2".into()]), None, None, None, None).await).await;
     assert!(matches!(refused, TicketsEvent::Error { .. }), "{refused:?}");
 
-    let evs: Vec<TicketsEvent> = Box::pin(hub.nav().extents(operator()).await).collect().await;
+    let evs: Vec<TicketsEvent> = Box::pin(flat(hub.nav().extents(operator()).await)).collect().await;
     let extents: Vec<(String, u32)> = evs
         .into_iter()
         .map(|ev| match ev {

@@ -71,7 +71,11 @@ async fn call(c: &WsClient, method: &str, params: Value) -> Vec<Value> {
     let mut out = Vec::new();
     while let Ok(Some(Ok(item))) = tokio::time::timeout(Duration::from_secs(5), s.next()).await {
         match item["type"].as_str() {
-            Some("data") => out.push(item["content"].clone()),
+            // PERF-15: a page's `rows` read as the per-row events it carries.
+            Some("data") => match item["content"].clone() {
+                c if c["type"] == "rows" => out.extend(c["items"].as_array().cloned().unwrap_or_default()),
+                c => out.push(c),
+            },
             Some("error") => {
                 out.push(item);
                 break;
@@ -206,4 +210,81 @@ async fn a_saved_filter_holding_a_dropped_cell_is_refused_when_used() {
     let c = support::connect(port).await;
     let why = refusal(&c, "tickets.list", json!({"filter": "saved Held"})).await;
     assert!(why.contains("queued"), "{why}");
+}
+
+/// One method's `returns`: its event's variants, by their `type`.
+fn variants<'a>(schema: &'a Value, method: &str) -> Vec<&'a Value> {
+    let m = schema["methods"].as_array().unwrap().iter().find(|m| m["name"] == method).unwrap_or_else(|| panic!("{method} in the schema"));
+    m["returns"]["oneOf"].as_array().unwrap_or_else(|| panic!("{method} returns a oneOf: {}", m["returns"])).iter().collect()
+}
+
+/// A variant's `type`.
+fn tag(v: &Value) -> &str {
+    v["properties"]["type"]["const"].as_str().or_else(|| v["properties"]["type"]["enum"][0].as_str()).unwrap_or_default()
+}
+
+/// PERF-15: the schema says a page is one event — every paged read
+/// (`list`, `work.ready`, `nav.tree`, `find`, `search`) and the board's
+/// listings (`nav.groups`, `nav.extents`, `nav.counts`) return a `rows`
+/// variant whose `items` are the per-row events as they were (`summary`,
+/// `ticket`, `node`, `hit`, `group`, `extent`, `count`), each by its `type`.
+/// The schema's hash moves with it, and the bundle's contract with that.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_page_is_one_rows_event_in_the_schema() {
+    let port = start_server().await;
+    let c = support::connect(port).await;
+    let tickets = one(&c, "tickets.schema", json!({})).await;
+    let nav = one(&c, "tickets.nav.schema", json!({})).await;
+    let work = one(&c, "tickets.work.schema", json!({})).await;
+    for (schema, method) in [(&tickets, "list"), (&tickets, "find"), (&tickets, "search"), (&work, "ready"), (&nav, "tree"), (&nav, "groups"), (&nav, "extents"), (&nav, "counts")] {
+        let vs = variants(schema, method);
+        let rows = vs.iter().find(|v| tag(v) == "rows").unwrap_or_else(|| panic!("{method}: no `rows` variant among {:?}", vs.iter().map(|v| tag(v)).collect::<Vec<_>>()));
+        let required: BTreeSet<String> = rows["required"].as_array().unwrap().iter().map(|r| r.as_str().unwrap().to_string()).collect();
+        assert_eq!(required, set(&["type", "items"]), "{method}: rows {{ items }}: {rows}");
+        assert_eq!(rows["properties"]["items"]["type"], "array", "{method}: items is a list: {rows}");
+        // The item: a `$ref` to the one row type, or the variants inline.
+        let item = &rows["properties"]["items"]["items"];
+        let defs = &schema["methods"].as_array().unwrap().iter().find(|m| m["name"] == method).unwrap()["returns"]["$defs"];
+        let item = match item["$ref"].as_str() {
+            Some(r) => &defs[r.trim_start_matches("#/$defs/")],
+            None => item,
+        };
+        let kinds: BTreeSet<String> = item["oneOf"].as_array().unwrap_or_else(|| panic!("{method}: an item is one of the row events: {item}")).iter().map(|v| tag(v).to_string()).collect();
+        assert_eq!(kinds, set(&["summary", "ticket", "node", "hit", "group", "extent", "count"]), "{method}: the items are the per-row events");
+        // The trailer each page ends with is still its own event.
+        let trailer = match method { "search" => Some("searched"), "list" | "find" | "ready" | "tree" => Some("page"), _ => None };
+        if let Some(t) = trailer {
+            assert!(vs.iter().any(|v| tag(v) == t), "{method}: {t} still among its variants");
+        }
+    }
+    // A watch's changes are each their own event.
+    let watch = variants(&tickets, "watch");
+    for t in ["created", "status_changed", "deleted"] {
+        assert!(watch.iter().any(|v| tag(v) == t), "watch: {t} among its variants");
+    }
+    // `fields`: a list of the summary row's field names.
+    let list = tickets["methods"].as_array().unwrap().iter().find(|m| m["name"] == "list").unwrap();
+    let fields = &list["params"]["properties"]["fields"];
+    assert!(fields.to_string().contains("SummaryField") || fields.to_string().contains("\"title\""), "list takes fields of the summary row: {fields}");
+}
+
+/// PERF-15: the summary row is its fields — the schema's `TicketSummary`
+/// properties, written out, so thinning the row is a deliberate edit here
+/// (a page thins by `fields`, never by trimming the row); and `fields`
+/// names exactly these.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_summary_row_is_its_fields() {
+    let port = start_server().await;
+    let c = support::connect(port).await;
+    let tickets = one(&c, "tickets.schema", json!({})).await;
+    let list = tickets["methods"].as_array().unwrap().iter().find(|m| m["name"] == "list").unwrap();
+    let defs = &list["returns"]["$defs"];
+    let row: BTreeSet<String> = defs["TicketSummary"]["properties"].as_object().unwrap_or_else(|| panic!("TicketSummary in {}", list["returns"])).keys().cloned().collect();
+    let written = set(&[
+        "id", "epic", "shortcode", "address", "seq", "title", "status", "kind", "severity", "parent", "parent_hidden", "child_count", "blocked_by", "unlocks",
+        "hidden_blocked_by", "hidden_unlocks", "commits", "path", "placement", "labels", "archived", "frozen", "hidden", "created_unix", "updated_unix",
+    ]);
+    assert_eq!(row, written, "the summary row's fields");
+    let named: BTreeSet<String> = menger_tickets_api::vocab::SummaryField::ALL.iter().map(|f| f.as_str().to_string()).collect();
+    assert_eq!(named, written, "fields names exactly the summary row's keys");
 }

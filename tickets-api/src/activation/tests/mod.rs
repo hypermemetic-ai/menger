@@ -26,6 +26,18 @@ fn untransitioned(s: impl Stream<Item = TicketsEvent> + Send + 'static) -> impl 
     s.filter(|e| futures::future::ready(!matches!(e, TicketsEvent::Transition { .. })))
 }
 
+/// PERF-15: a page's `rows` read as the per-row events it carries — what
+/// these tests read before a page was one event.
+fn flat(s: impl Stream<Item = TicketsEvent> + Send + 'static) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    s.flat_map(|e| {
+        let evs: Vec<TicketsEvent> = match e {
+            TicketsEvent::Rows { items } => items.into_iter().map(|r| r.into_event().expect("a whole row")).collect(),
+            e => vec![e],
+        };
+        futures::stream::iter(evs)
+    })
+}
+
 async fn one(s: impl Stream<Item = TicketsEvent> + Send + 'static) -> TicketsEvent {
     Box::pin(s).next().await.expect("event")
 }
@@ -134,7 +146,7 @@ async fn a_doc_over_the_activation_refuses_every_lifecycle_write_in_band() {
         TicketsEvent::Error { message } => assert!(message.contains("'DOCS-1' is a doc"), "{message}"),
         other => panic!("expected Error, got {other:?}"),
     }
-    match one(hub.list(operator(), None, Some("Doc".into()), None, None, None, Some(true), None, None, None, None).await).await {
+    match one(flat(hub.list(operator(), None, Some("Doc".into()), None, None, None, Some(true), None, None, None, None, None).await)).await {
         TicketsEvent::Summary { summary } => assert_eq!((summary.id.as_str(), summary.status), ("DOCS-1", Status::Doc)),
         other => panic!("expected Summary, got {other:?}"),
     }
@@ -166,7 +178,7 @@ async fn list_filters_by_status() {
     one(hub.set_status(operator(), "MNG-1".into(), "Ready".into(), None, None, None).await).await;
 
     let (ids, page) =
-        ids_and_page(hub.list(operator(), None, Some("Ready".into()), None, None, None, None, None, None, None, None).await).await;
+        ids_and_page(flat(hub.list(operator(), None, Some("Ready".into()), None, None, None, None, None, None, None, None, None).await)).await;
     assert_eq!(ids, vec!["MNG-1"]);
     assert_eq!(page, Some((None, 0)), "one match, nothing beyond it");
 }
@@ -252,9 +264,9 @@ async fn set_status_takes_the_worker_states_and_list_filters_on_them() {
     let wire = serde_json::to_value(one(hub.get(operator(), "WK-3".into()).await).await).unwrap();
     assert_eq!(wire["ticket"]["status"], "In Review");
 
-    let (ids, _) = ids_and_page(hub.list(operator(), None, Some("coding".into()), None, None, None, None, None, None, None, None).await).await;
+    let (ids, _) = ids_and_page(flat(hub.list(operator(), None, Some("coding".into()), None, None, None, None, None, None, None, None, None).await)).await;
     assert_eq!(ids, ["WK-2"]);
-    let (ids, _) = ids_and_page(hub.list(operator(), None, Some("In Review".into()), None, None, None, None, None, None, None, None).await).await;
+    let (ids, _) = ids_and_page(flat(hub.list(operator(), None, Some("In Review".into()), None, None, None, None, None, None, None, None, None).await)).await;
     assert_eq!(ids, ["WK-3"]);
 }
 
@@ -372,7 +384,7 @@ async fn ticket_ids(s: impl Stream<Item = TicketsEvent> + Send + 'static) -> Vec
 async fn ids_and_page(
     s: impl Stream<Item = TicketsEvent> + Send + 'static,
 ) -> (Vec<String>, Option<(Option<String>, u64)>) {
-    let evs: Vec<TicketsEvent> = Box::pin(s).collect().await;
+    let evs: Vec<TicketsEvent> = Box::pin(flat(s)).collect().await;
     let mut ids = Vec::new();
     let mut page = None;
     for ev in evs {
@@ -494,7 +506,7 @@ async fn create_with_parent_updates_children_and_watch_carries_the_parent() {
         other => panic!("expected Ticket, got {other:?}"),
     }
     assert_eq!(
-        ticket_ids(hub.list(operator(), None, None, Some("FAM-1".into()), None, None, None, None, None, None, None).await).await,
+        ticket_ids(flat(hub.list(operator(), None, None, Some("FAM-1".into()), None, None, None, None, None, None, None, None).await)).await,
         vec!["FAM-2"]
     );
     match one(hub.get(operator(), "FAM-2".into()).await).await {
@@ -561,14 +573,14 @@ async fn list_filters_by_parent() {
 
     // MNG-14: "unrelated" (LP-2) named no parent and hangs under the root.
     assert_eq!(
-        ticket_ids(hub.list(operator(), None, None, Some("LP-1".into()), None, None, None, None, None, None, None).await).await,
+        ticket_ids(flat(hub.list(operator(), None, None, Some("LP-1".into()), None, None, None, None, None, None, None, None).await)).await,
         vec!["LP-2", "LP-3", "ZZ-1"]
     );
-    assert!(ticket_ids(hub.list(operator(), None, None, Some("LP-2".into()), None, None, None, None, None, None, None).await)
+    assert!(ticket_ids(flat(hub.list(operator(), None, None, Some("LP-2".into()), None, None, None, None, None, None, None, None).await))
         .await
         .is_empty());
     assert_eq!(
-        ticket_ids(hub.list(operator(), None, None, None, None, None, None, None, None, None, None).await).await.len(),
+        ticket_ids(flat(hub.list(operator(), None, None, None, None, None, None, None, None, None, None, None).await)).await.len(),
         4,
         "unfiltered list is unchanged"
     );
@@ -594,7 +606,7 @@ async fn summary_rows_carry_every_field_but_the_body() {
         .await)
     .await;
 
-    let evs: Vec<_> = Box::pin(hub.list(operator(), None, None, None, None, None, Some(true), None, None, None, None).await)
+    let evs: Vec<_> = Box::pin(flat(hub.list(operator(), None, None, None, None, None, Some(true), None, None, None, None, None).await))
         .collect()
         .await;
     assert_eq!(evs.len(), 2, "one row, one page: {evs:?}");
@@ -610,7 +622,7 @@ async fn summary_rows_carry_every_field_but_the_body() {
     assert!(summary.get("children").is_none(), "SCALE-4: no list of children: {summary}");
 
     // The full ticket still carries it, unchanged.
-    let evs: Vec<_> = Box::pin(hub.list(operator(), None, None, None, None, None, None, None, None, None, None).await)
+    let evs: Vec<_> = Box::pin(flat(hub.list(operator(), None, None, None, None, None, None, None, None, None, None, None).await))
         .collect()
         .await;
     let row = serde_json::to_value(&evs[0]).unwrap();
@@ -626,10 +638,10 @@ async fn an_after_that_names_no_ticket_is_one_in_band_error() {
     one(hub.create(operator(), "CUR".into(), "a".into(), None, None, None, None, None, None, None).await).await;
 
     for evs in [
-        Box::pin(hub.list(operator(), None, None, None, Some("ZZZ-9".into()), None, None, None, None, None, None).await)
+        Box::pin(flat(hub.list(operator(), None, None, None, Some("ZZZ-9".into()), None, None, None, None, None, None, None).await))
             .collect::<Vec<_>>()
             .await,
-        Box::pin(hub.work().ready(operator(), None, Some("ZZZ-9".into()), None, None, None, None).await)
+        Box::pin(flat(hub.work().ready(operator(), None, Some("ZZZ-9".into()), None, None, None, None, None).await))
             .collect::<Vec<_>>()
             .await,
     ] {
@@ -658,26 +670,26 @@ async fn find_yields_summary_rows_then_one_page_fifty_by_default() {
     }
     one(hub.create(operator(), "OTH".into(), "The Ticket Page".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
 
-    let evs: Vec<TicketsEvent> = Box::pin(hub.find(operator(), "".into(), None, None, None, None).await).collect().await;
+    let evs: Vec<TicketsEvent> = Box::pin(flat(hub.find(operator(), "".into(), None, None, None, None, None).await)).collect().await;
     assert_eq!(evs.len(), 51, "50 rows and the page");
     let row = serde_json::to_value(&evs[0]).unwrap();
     assert_eq!((row["type"].as_str(), row["summary"]["id"].as_str()), (Some("summary"), Some("FND-1")));
     assert!(row["summary"].get("body").is_none(), "a summary carries no body: {row}");
-    let (ids, page) = ids_and_page(hub.find(operator(), "".into(), None, None, None, None).await).await;
+    let (ids, page) = ids_and_page(flat(hub.find(operator(), "".into(), None, None, None, None, None).await)).await;
     assert_eq!(ids.len(), 50, "the palette's 50 when no limit is asked");
     assert_eq!(page, Some((Some("FND-50".into()), 11)));
 
-    let (ids, page) = ids_and_page(hub.find(operator(), "  fnd-5 ".into(), None, None, None, None).await).await;
+    let (ids, page) = ids_and_page(flat(hub.find(operator(), "  fnd-5 ".into(), None, None, None, None, None).await)).await;
     let expected: Vec<String> =
         std::iter::once(5).chain(50..=59).map(|n| format!("FND-{n}")).collect();
     assert_eq!(ids, expected, "trimmed, case-folded, in (epic, seq) order");
     assert_eq!(page, Some((None, 0)));
 
     let (ids, page) =
-        ids_and_page(hub.find(operator(), "ticket page".into(), Some("fnd-3".into()), Some(1), None, None).await).await;
+        ids_and_page(flat(hub.find(operator(), "ticket page".into(), Some("fnd-3".into()), Some(1), None, None, None).await)).await;
     assert_eq!((ids, page), (vec!["OTH-1".to_string()], Some((None, 0))));
 
-    let evs: Vec<TicketsEvent> = Box::pin(hub.find(operator(), "row".into(), Some("ZZZ-9".into()), None, None, None).await)
+    let evs: Vec<TicketsEvent> = Box::pin(flat(hub.find(operator(), "row".into(), Some("ZZZ-9".into()), None, None, None, None).await))
         .collect()
         .await;
     match evs.as_slice() {
@@ -948,7 +960,7 @@ async fn list_pages_by_default_and_never_past_the_most() {
     store.seed_synthetic(SYS, crate::store::SeedSpec { count: 1_200, seed: 7, into_existing: false }).unwrap();
     let hub = TicketsActivation::new(store);
     let list = |after: Option<crate::vocab::Cursor>, limit: Option<u32>| {
-        hub.list(operator(), None, None, None, after, limit, Some(true), None, None, None, None)
+        hub.list(operator(), None, None, None, after, limit, Some(true), None, None, None, None, None)
     };
     let (ids, page) = ids_and_page(list(None, None).await).await;
     assert_eq!(ids.len(), LIST_PAGE_DEFAULT as usize);
@@ -960,7 +972,7 @@ async fn list_pages_by_default_and_never_past_the_most() {
     assert_eq!(ids.len(), 1_200, "under the most, what is asked");
     assert!(LIST_PAGE_MAX >= 10_000);
     // Full rows page the same way.
-    let (ids, _) = ids_and_page(hub.list(operator(), None, None, None, None, None, None, None, None, None, None).await).await;
+    let (ids, _) = ids_and_page(flat(hub.list(operator(), None, None, None, None, None, None, None, None, None, None, None).await)).await;
     assert_eq!(ids.len(), LIST_PAGE_DEFAULT as usize);
 }
 

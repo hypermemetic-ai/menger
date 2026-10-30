@@ -283,14 +283,34 @@ method runs. Flags below are synapse's spelling (`--kebab-case`); `[--x]` is
 optional. The schema's description of each method is the reference for
 what it yields.
 
+**A page is one event** (PERF-15). Every paged read — `list`, `find`,
+`search`, `nav tree`, `work ready`, `subtasks list` — and the board's whole
+listings — `nav groups`, `nav extents`, `nav counts` — answer their rows as
+one `rows { items }` event, then their one trailing event (`page`;
+`searched` for `search`; none for a listing), then `done`: three frames for a
+page of 200, not 202. Each item is the per-row event it stands for,
+serialized exactly as that event was (`summary`, `ticket`, `node`, `hit`,
+`group`, `extent`, `count`), so a reader expands `items` in place. An empty
+page is one `rows` with no items; a refusal is its `error` alone, no `rows`.
+A page past **1 MiB** of items (`ROWS_BUDGET`: whole tickets, a body up to
+8 MiB) goes on in the next `rows` event — an item over the budget alone in
+its own — so no frame nears the transport's 10 MB message cap; the trailing
+event follows the last. A `watch` is not a page: each change is still its
+own event, and so is each item of `history`, `revisions list`,
+`work blockers`, `nav facets` and `nav member`. `--fields` (`list`, `find`,
+`work ready`; a list of the summary row's field names, `id,title,kind,status`
+the board's four; another name refused by its type) thins each summary row
+to those keys and its `id`, and asks for summary rows; without it a row is
+whole. synapse `-j` prints the `rows` event as one line (SYNAPSE-36).
+
 ### `tickets`
 
 | method | flags | what it does |
 |---|---|---|
 | `health` | | version, unix time, ticket count |
 | `get` | `--id` | one ticket by id or path address |
-| `list` | `[--epic] [--status] [--parent] [--filter] [--keep] [--after] [--at] [--limit] [--summary] [--tz]` | tickets in store order, paged; a `page` event last |
-| `find` | `--query [--filter] [--after] [--limit] [--tz]` | id or title contains the query (the jump) |
+| `list` | `[--epic] [--status] [--parent] [--filter] [--keep] [--after] [--at] [--limit] [--summary] [--fields] [--tz]` | tickets in store order, paged: `rows`, then `page` |
+| `find` | `--query [--filter] [--after] [--limit] [--fields] [--tz]` | id or title contains the query (the jump) |
 | `search` | `--query [--filter] [--offset] [--limit] [--tz]` | inside titles and bodies, best first, each hit with its passage |
 | `create` | `--epic --title [--kind] [--parent] [--blocked-by] [--severity] [--body] [--org] [--path]` | the next `EPIC-N`; born `Draft` |
 | `amend` | `--id [--title] [--body]` | replace a title and/or body, whole |
@@ -320,7 +340,7 @@ what it yields.
 | `revisions list` · `get` · `diff` · `restore` | `--id [--before] [--limit]` · `--id --rev` · `--id [--from] [--to] [--text]` · `--id --rev [--fields] [--message] [--source]` | a ticket's revisions (TICKETS-7) |
 | `subtasks create` | `--parent --title [--kind] [--body] [--blocked-by]` | the next free `<parent>.N`, hidden from the nav |
 | `subtasks list` | `--parent [--after] [--limit]` | a ticket's subtasks |
-| `work ready` | `[--epic] [--filter] [--after] [--limit] [--summary] [--tz]` | the ready set |
+| `work ready` | `[--epic] [--filter] [--after] [--limit] [--summary] [--fields] [--tz]` | the ready set |
 | `work waves` | `--epics [--kinds]` | the order of work, in waves |
 | `work waves_under` · `waves_to` | `--id [--kinds]` | under one ticket · up to one ticket |
 | `work blockers` | `--id` | a ticket's blockers at their statuses |

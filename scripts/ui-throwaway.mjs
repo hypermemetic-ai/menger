@@ -181,7 +181,8 @@ export function synapse(server, sessionFile, ...argv) {
       return [];
     }
   });
-  const out = items.filter((i) => i.type === "data").map((i) => i.content);
+  // PERF-15: a page's `rows` read as the per-row events it carries (SYNAPSE-36 prints it as one line).
+  const out = items.filter((i) => i.type === "data").flatMap((i) => (i.content?.type === "rows" ? i.content.items : [i.content]));
   const err = items.find((i) => i.type === "error");
   if (err) out.push({ type: "error", ...(err.content ?? err) });
   if (r.status !== 0 && !items.length) throw new Error(`synapse ${argv.join(" ")} failed (${r.status}): ${r.stderr}`);

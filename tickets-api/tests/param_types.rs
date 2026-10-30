@@ -99,3 +99,15 @@ fn an_attribute_without_the_flag_is_found() {
     assert_eq!(attributes(with), [(1, true)]);
     assert!(attributes("//! `#[plexus_macros::activation(client, …)]`").is_empty());
 }
+
+/// PERF-15: `fields` is a list of the summary row's field names, refused by
+/// its type for any other — what dispatch answers `-32602 invalid_params`
+/// naming `fields` (tests/wire.rs `a_summary_page_carries_only_the_fields_asked`).
+#[test]
+fn fields_are_summary_row_names() {
+    use menger_tickets_api::vocab::SummaryField;
+    let ok: Vec<SummaryField> = serde_json::from_value(serde_json::json!(["id", "title", "kind", "status"])).expect("the board's four");
+    assert_eq!(ok.iter().map(|f| f.as_str()).collect::<Vec<_>>(), ["id", "title", "kind", "status"]);
+    let e = serde_json::from_value::<Vec<SummaryField>>(serde_json::json!(["id", "bogus"])).expect_err("not a field");
+    assert!(e.to_string().contains("bogus") && e.to_string().contains("child_count"), "{e}");
+}

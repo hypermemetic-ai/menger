@@ -152,7 +152,8 @@ async fn seed_flag_seeds_logs_persists_and_refuses_existing_unless_allowed() {
     let mut sub = call(&c1, "tickets.work.ready", json!({})).await;
     let first = sub.next().await.unwrap().unwrap();
     assert_eq!(first["type"], "data", "ready_set non-empty, got {first}");
-    assert_eq!(first["content"]["ticket"]["status"], "Ready");
+    // PERF-15: the page's rows are one `rows` event.
+    assert_eq!(first["content"]["items"][0]["ticket"]["status"], "Ready");
     drop(c1);
     drop(s1);
 
@@ -204,7 +205,11 @@ async fn collect(client: &WsClient, method: &str, params: Value) -> Vec<Value> {
         let item = item.unwrap();
         match item["type"].as_str() {
             Some("done") => return out,
-            Some("data") => out.push(item["content"].clone()),
+            // PERF-15: a page's `rows` read as the per-row events it carries.
+            Some("data") => match item["content"].clone() {
+                c if c["type"] == "rows" => out.extend(c["items"].as_array().cloned().unwrap_or_default()),
+                c => out.push(c),
+            },
             other => panic!("unexpected stream item type {other:?}: {item}"),
         }
     }

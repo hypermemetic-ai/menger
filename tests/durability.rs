@@ -158,7 +158,11 @@ async fn drain(client: &WsClient, method: &str, params: Value) -> Vec<Value> {
                 assert_eq!(page["type"], "page", "the last item is the page: {page}");
                 return out;
             }
-            Some("data") => out.push(item["content"].clone()),
+            // PERF-15: a page's `rows` read as the per-row events it carries.
+            Some("data") => match item["content"].clone() {
+                c if c["type"] == "rows" => out.extend(c["items"].as_array().cloned().unwrap_or_default()),
+                c => out.push(c),
+            },
             other => panic!("unexpected stream item type {other:?}: {item}"),
         }
     }
@@ -235,8 +239,10 @@ async fn acknowledged_mutations_survive_sigkill() {
     );
 
     let mut sub = call(&c2, "tickets.list", json!({"epic": "DUR"})).await;
-    let first = sub.next().await.unwrap().unwrap()["content"].clone();
-    let second = sub.next().await.unwrap().unwrap()["content"].clone();
+    // PERF-15: the page's rows are one `rows` event.
+    let page = sub.next().await.unwrap().unwrap()["content"].clone();
+    assert_eq!(page["type"], "rows", "{page}");
+    let (first, second) = (page["items"][0].clone(), page["items"][1].clone());
     assert_eq!(first["type"], "ticket");
     assert_eq!(
         first["ticket"], dur1_acked,

@@ -30,9 +30,9 @@ async fn link_yields_commits_linked_and_watch_carries_only_what_changed() {
     assert_eq!(wire["ticket"]["commits"], three);
     let got = serde_json::to_value(one(hub.get(operator(), "LC-1".into()).await).await).unwrap();
     assert_eq!(got["ticket"]["commits"], three, "get shows them, in link order");
-    let (rows, _) = ids_and_page(hub.list(operator(), None, None, None, None, None, Some(true), None, None, None, None).await).await;
+    let (rows, _) = ids_and_page(flat(hub.list(operator(), None, None, None, None, None, Some(true), None, None, None, None, None).await)).await;
     assert_eq!(rows, ["LC-1"]);
-    let evs: Vec<TicketsEvent> = Box::pin(hub.list(operator(), None, None, None, None, None, Some(true), None, None, None, None).await).collect().await;
+    let evs: Vec<TicketsEvent> = Box::pin(flat(hub.list(operator(), None, None, None, None, None, Some(true), None, None, None, None, None).await)).collect().await;
     assert_eq!(serde_json::to_value(&evs[0]).unwrap()["summary"]["commits"], three, "and the summary row");
 
     for (i, added) in [&["77df9a0"], &["0bb28b2"]].into_iter().enumerate() {
