@@ -64,6 +64,19 @@ pub struct ShellConfig {
     /// menger's session, stamps, policy and [`PLACEHOLDER`]. None: the build
     /// in [`Self::app`], as before.
     pub ui: Option<Arc<plexus_ui_service::UiStore>>,
+    /// STUDIO-2: the studio at `/studio/` (the framework's own bundle, kept
+    /// as `bundle:studio`), beside `/app/` — for a session [`Studio::may`]
+    /// admits, with the compiler module it compiles in. None: no studio.
+    pub studio: Option<Studio>,
+}
+
+/// STUDIO-2: who opens `/studio/`, and the module the studio compiles in.
+#[derive(Clone)]
+pub struct Studio {
+    /// Whether a session's identity may open it (menger: admin or `editor` on `*`).
+    pub may: Arc<dyn Fn(&plexus_core::plexus::AuthContext) -> bool + Send + Sync>,
+    /// `--ui-compiler`'s bytes, served at `/studio/ui-compiler.wasm`.
+    pub compiler: Option<Vec<u8>>,
 }
 
 /// UI-3: a version's files never change under its hash — kept a year
@@ -280,6 +293,18 @@ async fn router(cfg: ShellConfig, at: std::net::SocketAddr) -> Router {
             .stamps(stamps)
             .csp(csp)
             .placeholder(PLACEHOLDER);
+        // STUDIO-2: /studio/ beside /app/, inside the same session check.
+        let routes = match cfg.studio.clone() {
+            Some(s) => {
+                let may = s.may.clone();
+                let routes = routes.studio(move |ctx| may(ctx));
+                match s.compiler {
+                    Some(bytes) => routes.compiler_module(bytes),
+                    None => routes,
+                }
+            }
+            None => routes,
+        };
         app = routes.mount(app);
     }
     if let Some(login) = cfg.login.as_ref().filter(|l| l.require) {
@@ -519,4 +544,13 @@ mod tests {
         assert!(on.csp.contains("frame-src 'self' https://t.example"));
     }
 
+}
+
+/// STUDIO-2: who opens the studio — a principal holding `admin` or
+/// `editor` on `*` among `held`'s memberships (menger's book, teams and
+/// `everyone` included).
+pub fn studio_may<M: plexus_auth_core::Memberships + ?Sized>(held: &M, ctx: &plexus_core::plexus::AuthContext) -> bool {
+    let principal = ctx.principal().map(|p| p.to_string()).unwrap_or_else(|| ctx.user_id.clone());
+    let Ok(p) = principal.parse() else { return false };
+    held.held(&p).iter().any(|m| matches!(m.role.as_str(), "admin" | "editor") && m.scope == plexus_auth_core::ScopeRef::Everywhere)
 }

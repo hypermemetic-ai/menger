@@ -538,6 +538,12 @@ async fn run(args: Args) -> anyhow::Result<()> {
         Some(path) => Some(plexus_ui_service::Compiler::open(path).map_err(|e| anyhow::anyhow!("--ui-compiler {}: {e}", path.display()))?),
         None => None,
     };
+    // STUDIO-2: the studio compiles in the same module, in the browser.
+    let studio_module = match &args.ui_compiler {
+        Some(path) => Some(std::fs::read(path).map_err(|e| anyhow::anyhow!("--ui-compiler {}: {e}", path.display()))?),
+        None => None,
+    };
+    let book = access.book();
     let ui = ui.compiling(compiler);
     // STUDIO-3: the author key, made at first start when its file is missing.
     let author = match &args.ui_author_key {
@@ -621,6 +627,8 @@ async fn run(args: Args) -> anyhow::Result<()> {
             // APP-110: checked before anything opens, as the other origins are.
             // UI-3: `/app/` and `/app/<hash>/…` from the ui service's store.
             ui: Some(ui_store),
+            // STUDIO-2: /studio/ for admin or editor on *.
+            studio: Some(shell::Studio { may: std::sync::Arc::new(move |ctx| shell::studio_may(&*book, ctx)), compiler: studio_module }),
             framing: shell::Framing {
                 ancestors: args.frame_ancestor.iter().map(|o| shell::check_origin(o)).collect::<Result<_, _>>().map_err(|e| anyhow::anyhow!("--frame-ancestor: {e}"))?,
                 live: args.live_origin.as_deref().map(shell::check_origin).transpose().map_err(|e| anyhow::anyhow!("--live-origin: {e}"))?,
