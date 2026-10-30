@@ -16,5 +16,8 @@
   "#/waves/in/:epics": "work-waves",
   "#/waves/:id": "work-waves",
   "#/waves/to/:to": "work-waves",
-  "#/blockers/:id": "work-blockers"
+  "#/blockers/:id": "work-blockers",
+  "#/search": "search-page",
+  "#/search/:q": "search-page",
+  "#/search/:q/f/:filter": "search-page"
 }
