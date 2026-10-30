@@ -286,6 +286,9 @@ pub(crate) enum Entry {
     WaveBoard(String),
     /// Copy code / Copy codes: the text copied, and the words.
     Copy { text: String, words: &'static str },
+    /// TICKETS-36: Copy link — the ticket's permalink's path,
+    /// `/t/<uid>/<ID>-<slug>` (the view puts the origin before it).
+    CopyLink(String),
     Sub(Sub),
     /// ACT-10: a submenu's options drawn flat, its head and indent gone — a
     /// value chip's own chooser, first.
@@ -364,6 +367,10 @@ pub(crate) fn entries(f: &Facts) -> Vec<Entry> {
                 acts.push(Entry::WaveBoard(sc.to_string()));
             }
             acts.push(Entry::Copy { text: id.to_string(), words: "Copy code" });
+            // TICKETS-36: its permalink, by its uid — once its row says one.
+            if let Some(r) = row.filter(|r| r.uid.is_some()) {
+                acts.push(Entry::CopyLink(format!("/t/{}/{}", r.uid, crate::links::tail(&r.id, &r.title))));
+            }
         }
         None => acts.push(Entry::Copy { text: f.ids.join("\n"), words: "Copy codes" }),
     }
@@ -856,6 +863,7 @@ mod tests {
                 Entry::Wave(w) => w.words.clone(),
                 Entry::WaveBoard(_) => "Wave board".into(),
                 Entry::Copy { words, .. } => words.to_string(),
+                Entry::CopyLink(_) => "Copy link".into(),
                 Entry::Sub(s) => format!("{} ▸", s.words()),
                 Entry::Choice(s) => format!("[{}]", s.name()),
                 Entry::Form(f) => f.words().into(),
@@ -890,6 +898,23 @@ mod tests {
             ]
         );
         assert_eq!(heading(&i), "DEMAND-4");
+    }
+
+    /// TICKETS-36: Copy link beside Copy code — the ticket's permalink by its
+    /// uid, once its row says one; Copy code stays the id.
+    #[test]
+    fn one_ticket_with_a_uid_offers_its_link_beside_its_code() {
+        let mut r = row("DEMAND-4", Status::Ready, Kind::Build);
+        r.uid = "7k3mq2xa".parse().unwrap();
+        r.title = "Dark mode follows the system".into();
+        let (i, rows) = (ids(&["DEMAND-4"]), vec![r]);
+        let es = entries(&facts(&i, &rows, ALL));
+        assert_eq!(said(&es)[..5], ["Open", "Open in new tab", "Waves to DEMAND-4", "Copy code", "Copy link"]);
+        assert!(es.contains(&Entry::Copy { text: "DEMAND-4".into(), words: "Copy code" }));
+        assert!(es.contains(&Entry::CopyLink("/t/7k3mq2xa/DEMAND-4-dark-mode-follows-the-system".into())));
+        // A selection has no one link.
+        let two = ids(&["DEMAND-4", "DEMAND-5"]);
+        assert!(!said(&entries(&facts(&two, &rows, ALL))).contains(&"Copy link".to_string()));
     }
 
     /// A selection: "N tickets", Copy codes, every update but the one-ticket

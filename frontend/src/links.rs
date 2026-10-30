@@ -580,10 +580,233 @@ pub(crate) fn decide(follow: Follow, trusted: &[String], gesture: bool) -> Act {
     }
 }
 
-/// The ticket a `#/ticket/<ID>[?…]` route names.
+/// The ticket the page's route names, for a body's link dialog ("From
+/// …"): a name as the route writes it; TICKETS-36: a uid's key once the app
+/// has met it, else the uid.
 pub(crate) fn route_ticket(hash: &str) -> Option<String> {
-    let id = hash.strip_prefix("#/ticket/")?.split(['?', '/']).next()?;
-    (!id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).then(|| id.to_string())
+    match named(hash)? {
+        Named::Uid(uid) => Some(crate::cache::key_of(&uid).unwrap_or(uid)),
+        Named::Name(name) => name.chars().all(|c| c.is_ascii_alphanumeric() || "-.:/_".contains(c)).then_some(name),
+    }
+}
+
+// ---------------------------------------------------------------------
+// TICKETS-36: a ticket's link, made in one place
+//
+// Every link the app makes to a ticket is its uid: `#/t/<uid>/<ID>-<slug>`
+// in the app, `<origin>/t/<uid>/<ID>-<slug>` to share (Copy link). Only the
+// uid is read; `<ID>-<slug>` is for the reader, and the page rewrites a
+// stale one in place. A ticket the app knows no uid for (a server before
+// TICKETS-35, a forward reference, a row it never met) is linked by its
+// name, `#/ticket/<name>`, which the app resolves on open — and replaces by
+// its uid form ([`crate::resolve`]). Nothing else in the app spells a
+// ticket's route (the test `no_ticket_link_is_built_outside_links_rs`).
+
+/// The most a slug holds, cut at a word.
+pub(crate) const SLUG_MAX: usize = 48;
+
+/// The links to tickets in the app's own markup, for a selector.
+pub(crate) const TICKET_LINKS: &str = "a[href^='#/ticket/'], a[href^='#/t/']";
+
+/// What a ticket's route names it by.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Named {
+    /// `#/t/<uid>[/<ID>-<slug>]` — its uid, as the route spells it (lower
+    /// case; what follows it is ignored).
+    Uid(String),
+    /// `#/ticket/<name>` — an id, an address, a key, an old pinned id, a uid:
+    /// whatever `get` takes.
+    Name(String),
+}
+
+/// A Latin letter's base, as a slug spells it (`é` → `e`, `ß` → `ss`, `Œ`
+/// → `oe`); `None` for anything else.
+fn fold(c: char) -> Option<&'static str> {
+    Some(match c {
+        'à'..='å' | 'À'..='Å' | 'ā' | 'Ā' | 'ă' | 'Ă' | 'ą' | 'Ą' => "a",
+        'æ' | 'Æ' => "ae",
+        'ç' | 'Ç' | 'ć' | 'Ć' | 'ĉ' | 'Ĉ' | 'ċ' | 'Ċ' | 'č' | 'Č' => "c",
+        'ď' | 'Ď' | 'đ' | 'Đ' | 'ð' | 'Ð' => "d",
+        'è'..='ë' | 'È'..='Ë' | 'ē' | 'Ē' | 'ĕ' | 'Ĕ' | 'ė' | 'Ė' | 'ę' | 'Ę' | 'ě' | 'Ě' => "e",
+        'ĝ' | 'Ĝ' | 'ğ' | 'Ğ' | 'ġ' | 'Ġ' | 'ģ' | 'Ģ' => "g",
+        'ĥ' | 'Ĥ' | 'ħ' | 'Ħ' => "h",
+        'ì'..='ï' | 'Ì'..='Ï' | 'ĩ' | 'Ĩ' | 'ī' | 'Ī' | 'ĭ' | 'Ĭ' | 'į' | 'Į' | 'ı' | 'İ' => "i",
+        'ĳ' | 'Ĳ' => "ij",
+        'ĵ' | 'Ĵ' => "j",
+        'ķ' | 'Ķ' => "k",
+        'ĺ' | 'Ĺ' | 'ļ' | 'Ļ' | 'ľ' | 'Ľ' | 'ŀ' | 'Ŀ' | 'ł' | 'Ł' => "l",
+        'ñ' | 'Ñ' | 'ń' | 'Ń' | 'ņ' | 'Ņ' | 'ň' | 'Ň' => "n",
+        'ò'..='ö' | 'Ò'..='Ö' | 'ø' | 'Ø' | 'ō' | 'Ō' | 'ŏ' | 'Ŏ' | 'ő' | 'Ő' => "o",
+        'œ' | 'Œ' => "oe",
+        'ŕ' | 'Ŕ' | 'ŗ' | 'Ŗ' | 'ř' | 'Ř' => "r",
+        'ś' | 'Ś' | 'ŝ' | 'Ŝ' | 'ş' | 'Ş' | 'š' | 'Š' => "s",
+        'ß' => "ss",
+        'ţ' | 'Ţ' | 'ť' | 'Ť' | 'ŧ' | 'Ŧ' => "t",
+        'þ' | 'Þ' => "th",
+        'ù'..='ü' | 'Ù'..='Ü' | 'ũ' | 'Ũ' | 'ū' | 'Ū' | 'ŭ' | 'Ŭ' | 'ů' | 'Ů' | 'ű' | 'Ű' | 'ų' | 'Ų' => "u",
+        'ŵ' | 'Ŵ' => "w",
+        'ý' | 'Ý' | 'ÿ' | 'Ÿ' | 'ŷ' | 'Ŷ' => "y",
+        'ź' | 'Ź' | 'ż' | 'Ż' | 'ž' | 'Ž' => "z",
+        _ => return None,
+    })
+}
+
+/// A title's slug: its words in lower-case ASCII — a Latin letter folded to
+/// its base, an apostrophe inside a word dropped, anything else between
+/// words — joined by `-`, as many as fit in [`SLUG_MAX`] (a first word
+/// longer than that, cut). Empty for a title with no such word.
+pub(crate) fn slug(title: &str) -> String {
+    let mut words: Vec<String> = Vec::new();
+    let mut word = String::new();
+    for c in title.chars() {
+        if c.is_ascii_alphanumeric() {
+            word.push(c.to_ascii_lowercase());
+        } else if let Some(base) = fold(c) {
+            word.push_str(base);
+        } else if matches!(c, '\'' | '’' | 'ʼ') {
+            // `app's` is one word: `apps`.
+        } else if !word.is_empty() {
+            words.push(std::mem::take(&mut word));
+        }
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    let mut out = String::new();
+    for w in words {
+        let room = if out.is_empty() { SLUG_MAX } else { SLUG_MAX.saturating_sub(out.len() + 1) };
+        if w.len() > room {
+            if out.is_empty() {
+                out = w[..SLUG_MAX].to_string();
+            }
+            break;
+        }
+        if !out.is_empty() {
+            out.push('-');
+        }
+        out.push_str(&w);
+    }
+    out
+}
+
+/// `<ID>-<slug>`: the readable tail of a ticket's link — its id as a row
+/// shows it (`PERF.115-19` is `PERF-19`), then its title's slug; the id
+/// alone when the title has none.
+pub(crate) fn tail(id: &str, title: &str) -> String {
+    let shown = crate::epics::shown_id(id);
+    match slug(title) {
+        s if s.is_empty() => shown,
+        s => format!("{shown}-{s}"),
+    }
+}
+
+/// A ticket's route by its uid: `#/t/<uid>/<ID>-<slug>`.
+pub(crate) fn uid_href(uid: &str, id: &str, title: &str) -> String {
+    format!("#/t/{uid}/{}", tail(id, title))
+}
+
+/// A page by uid as an anchor spells it (no tail): `#/t/<uid>`.
+pub(crate) fn uid_route(uid: &str) -> String {
+    format!("#/t/{uid}")
+}
+
+/// A ticket's route by a name the app resolves on open: `#/ticket/<name>`.
+pub(crate) fn name_href(name: &str) -> String {
+    format!("#/ticket/{name}")
+}
+
+/// A ticket's page as a conversation's anchor spells it — by its key,
+/// `#/ticket/<key>`, as every anchor before TICKETS-36 did (a conversation
+/// is found by its `ticket`, and its drafts are kept under this route).
+pub(crate) fn anchor_route(key: &str) -> String {
+    name_href(key)
+}
+
+/// A ticket's page as an anchor pinned on it spells it (COMMENT-3's "one
+/// spelling per page"): by its uid once the app knows it, `#/t/<uid>` — so
+/// the pin keeps its ticket through a move, and its link never fits two —
+/// else by its key. The server reads both (TICKETS-35, `Seen::comment`).
+pub(crate) fn page_route(key: &str) -> String {
+    match crate::cache::uid_of(key) {
+        Some(uid) => uid_route(&uid),
+        None => anchor_route(key),
+    }
+}
+
+/// Whether two anchors' routes are one page: the same text, or two routes
+/// that name one ticket — a pin stored as `#/ticket/<id>` before TICKETS-36
+/// and the page now at `#/t/<uid>`, an id in another case.
+pub(crate) fn same_page(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    match (anchor_ticket(a), anchor_ticket(b)) {
+        (Some(x), Some(y)) => x.eq_ignore_ascii_case(&y),
+        _ => false,
+    }
+}
+
+/// The app's link to the ticket `id` (its key): by its uid when the app has
+/// met it — a row it holds, a row's `uid_of` — else by its name.
+pub(crate) fn ticket_href(id: &str) -> String {
+    match crate::cache::uid_of(id) {
+        Some(uid) => uid_href(&uid, id, &crate::cache::title_of(id).unwrap_or_default()),
+        None => name_href(id),
+    }
+}
+
+/// A row's link: by its own uid, else as [`ticket_href`].
+pub(crate) fn row_href(t: &menger_tickets_api::TicketSummary) -> String {
+    match t.uid.is_some() {
+        true => uid_href(&t.uid, &t.id, &t.title),
+        false => ticket_href(&t.id),
+    }
+}
+
+/// An anchor's route as a link: a page named by its key goes by its uid
+/// when the app has met it (`#/ticket/<key>` → `#/t/<uid>/…`); any other
+/// route as it is.
+pub(crate) fn anchor_href(route: &str) -> String {
+    match named(route) {
+        Some(Named::Name(key)) if route.trim_end_matches('/') == name_href(&key) => ticket_href(&key),
+        _ => route.to_string(),
+    }
+}
+
+/// A ticket's permalink — Copy link: `<origin>/t/<uid>/<ID>-<slug>`, which
+/// the shell answers with the app's route to it (src/shell.rs).
+pub(crate) fn permalink(origin: &str, uid: &str, id: &str, title: &str) -> String {
+    format!("{}/t/{uid}/{}", origin.trim_end_matches('/'), tail(id, title))
+}
+
+/// What a ticket's route names: `#/t/<uid>[/…]` its uid (case-blind), or
+/// `#/ticket/<name>`; a query (`?chat=…`) is the page's, not the route's.
+/// `None` for any other route.
+pub(crate) fn named(hash: &str) -> Option<Named> {
+    let path = hash.strip_prefix('#').unwrap_or(hash);
+    let path = path.strip_prefix('/').unwrap_or(path);
+    let path = path.split_once('?').map_or(path, |(p, _)| p);
+    if let Some(rest) = path.strip_prefix("t/") {
+        let uid = rest.split('/').next().unwrap_or_default();
+        return (!uid.is_empty()).then(|| Named::Uid(uid.to_ascii_lowercase()));
+    }
+    let name = path.strip_prefix("ticket/")?.trim_end_matches('/');
+    (!name.is_empty()).then(|| Named::Name(name.to_string()))
+}
+
+/// The ticket an anchor's route names — `#/ticket/<key>` its key (as every
+/// anchor on a ticket's page spells it), `#/t/<uid>` the key the app knows
+/// for the uid, else the uid.
+pub(crate) fn anchor_ticket(route: &str) -> Option<String> {
+    match named(route.trim())? {
+        Named::Uid(uid) => Some(crate::cache::key_of(&uid).unwrap_or(uid)),
+        Named::Name(name) => Some(name),
+    }
+}
+
+/// Whether `hash` is a ticket's page — by uid or by name.
+pub(crate) fn is_ticket_route(hash: &str) -> bool {
+    named(hash).is_some()
 }
 
 /// The domain as the dialog names it: an IDN both decoded and as the
@@ -1328,5 +1551,174 @@ mod tests {
         assert_eq!(route_ticket("#/waves/MENGER"), None);
         // ORG-9: a hyphenated shortcode's ticket.
         assert_eq!(route_ticket("#/ticket/SYNAPSE-CC-1?field=x"), Some("SYNAPSE-CC-1".into()));
+    }
+
+    /// TICKETS-36: the slug — the title folded to lower-case ASCII words
+    /// joined by `-`, cut at a word to 48 characters at most.
+    #[test]
+    fn a_slug_is_the_title_in_ascii_words_cut_at_a_word() {
+        assert_eq!(slug("Compression on the WebSocket"), "compression-on-the-websocket");
+        assert_eq!(slug("The app's look — themes, tokens and the dark set"), "the-apps-look-themes-tokens-and-the-dark-set");
+        assert_eq!(slug("A service’s tokens leak into another's frame"), "a-services-tokens-leak-into-anothers-frame", "both apostrophes join");
+        // Non-ASCII: a Latin letter folds to its base, anything else parts words.
+        assert_eq!(slug("Café — crème brûlée: déjà vu, Œuvre & Straße"), "cafe-creme-brulee-deja-vu-oeuvre-strasse");
+        assert_eq!(slug("日本語のテスト dark mode 🌙"), "dark-mode");
+        assert_eq!(slug("Ünïcödé ÅØÆ ĳ"), "unicode-aoae-ij");
+        // 48 at most, cut at a word: the next word would make 50.
+        let s = slug("Spring catalogue colours — which four swatches print true");
+        assert_eq!(s, "spring-catalogue-colours-which-four-swatches");
+        let s = slug("Dark mode follows the system until you pick one, and then it stays");
+        assert_eq!(s, "dark-mode-follows-the-system-until-you-pick-one");
+        assert_eq!(s.len(), 47);
+        for title in ["x ".repeat(60), "word ".repeat(30), "a".repeat(10) + " " + &"b".repeat(40)] {
+            let s = slug(&title);
+            assert!(s.len() <= SLUG_MAX && !s.ends_with('-') && !s.starts_with('-'), "{title:?} → {s:?}");
+        }
+        assert_eq!(slug("x ".repeat(60).as_str()).len(), 47, "24 words of one letter");
+        // One word longer than the most: cut inside it, never empty.
+        assert_eq!(slug(&"z".repeat(70)), "z".repeat(48));
+        // Empty and wordless titles have no slug.
+        assert_eq!(slug(""), "");
+        assert_eq!(slug("  —— ✓ "), "");
+        assert_eq!(slug("v2.0 (alpha) / beta_3"), "v2-0-alpha-beta-3");
+    }
+
+    /// TICKETS-36: a ticket's link — `#/t/<uid>/<ID>-<slug>`, the id as a row
+    /// shows it; the permalink is the same path at the origin's root.
+    #[test]
+    fn a_ticket_s_link_is_its_uid_then_its_shown_id_and_slug() {
+        assert_eq!(tail("PERF-19", "Compression on the WebSocket"), "PERF-19-compression-on-the-websocket");
+        assert_eq!(tail("PERF.115-19", "the schema answers 3.24 MB"), "PERF-19-the-schema-answers-3-24-mb", "a namesake's key is shown as its id");
+        assert_eq!(tail("KILN-2.1", "load the shelves"), "KILN-2.1-load-the-shelves", "a subtask keeps its id");
+        assert_eq!(tail("SYNAPSE-CC-9", ""), "SYNAPSE-CC-9", "an empty title: the id alone");
+        assert_eq!(tail("THEME-3", "日本語"), "THEME-3", "no ASCII word: the id alone");
+        assert_eq!(uid_href("7k3mq2xa", "PERF-19", "Compression on the WebSocket"), "#/t/7k3mq2xa/PERF-19-compression-on-the-websocket");
+        assert_eq!(uid_href("7k3mq2xa", "THEME-3", ""), "#/t/7k3mq2xa/THEME-3");
+        assert_eq!(
+            permalink("https://app.menger.sh", "q2r9wd4c", "PERF.115-19", "menger's tickets.schema answers 3.24 MB"),
+            "https://app.menger.sh/t/q2r9wd4c/PERF-19-mengers-tickets-schema-answers-3-24-mb"
+        );
+        assert_eq!(name_href("hypermemetic:PLEXUS/PERF-19"), "#/ticket/hypermemetic:PLEXUS/PERF-19");
+        // A ticket the app knows no uid for is linked by its name, which
+        // the app resolves on open.
+        assert_eq!(ticket_href("NOUID-1"), "#/ticket/NOUID-1");
+    }
+
+    /// TICKETS-36: what a ticket's route names — `#/t/<uid>` (any tail, any
+    /// query) or `#/ticket/<name>` (an id, an address) — and whether a hash
+    /// is a ticket's page at all.
+    #[test]
+    fn a_route_names_its_ticket_by_uid_or_by_name() {
+        let uid = |u: &str| Some(Named::Uid(u.into()));
+        assert_eq!(named("#/t/7k3mq2xa"), uid("7k3mq2xa"));
+        assert_eq!(named("#/t/7k3mq2xa/"), uid("7k3mq2xa"));
+        assert_eq!(named("#/t/7K3MQ2XA/PERF-19-compression"), uid("7k3mq2xa"), "a uid reads case-blind");
+        assert_eq!(named("#/t/7k3mq2xa/PERF-19-stale-words?chat=41&full"), uid("7k3mq2xa"));
+        assert_eq!(named("#/t/7k3mq2xa/x?comment=7"), uid("7k3mq2xa"));
+        assert_eq!(named("#/t/7k3mq2xa?rev=3"), uid("7k3mq2xa"));
+        let name = |n: &str| Some(Named::Name(n.into()));
+        assert_eq!(named("#/ticket/PERF-19"), name("PERF-19"));
+        assert_eq!(named("#/ticket/PERF-19?chat=41"), name("PERF-19"));
+        assert_eq!(named("#/ticket/PERF-19/"), name("PERF-19"));
+        assert_eq!(named("#/ticket/hypermemetic:PLEXUS/PERF-19"), name("hypermemetic:PLEXUS/PERF-19"));
+        assert_eq!(named("#/ticket/SYNAPSE-CC-9?field=x"), name("SYNAPSE-CC-9"));
+        for none in ["#/t/", "#/t", "#/ticket/", "#/ticket", "#/", "#/waves/PERF", "#/tickets/PERF-1", "", "#/t//x"] {
+            assert_eq!(named(none), None, "{none:?}");
+        }
+        for page in ["#/t/7k3mq2xa/PERF-19-x?chat=1", "#/t/7k3mq2xa", "#/ticket/PERF-19", "#/ticket/A-1?full"] {
+            assert!(is_ticket_route(page), "{page}");
+        }
+        for not in ["#/", "#/waves/PERF", "#/tickets", "#/t/", "#/ticket/", "#/chats/4"] {
+            assert!(!is_ticket_route(not), "{not}");
+        }
+        // The ticket the page's route names, for a body's link dialog: a
+        // name as before; a uid the app has not met, as the uid.
+        assert_eq!(route_ticket("#/t/7k3mq2xa/PERF-19-x"), Some("7k3mq2xa".into()));
+        assert_eq!(route_ticket("#/ticket/hypermemetic:PLEXUS/PERF-19"), Some("hypermemetic:PLEXUS/PERF-19".into()));
+    }
+
+    /// TICKETS-36: a pinned anchor's page — by its uid once the app knows
+    /// it — and two routes that are one page: the same text, or one ticket
+    /// by its id (any case) and by its uid.
+    #[test]
+    fn an_anchor_s_page_is_its_ticket_by_uid_or_by_id() {
+        assert_eq!(page_route("NOUID-2"), "#/ticket/NOUID-2");
+        crate::cache::learn_pair("m4c8tz1e".parse().unwrap(), "KNOWN-2", "known");
+        assert_eq!(page_route("KNOWN-2"), "#/t/m4c8tz1e");
+        assert_eq!(anchor_route("KNOWN-2"), "#/ticket/KNOWN-2", "a conversation's stays by key");
+        assert!(same_page("#/ticket/KNOWN-2", "#/t/m4c8tz1e"));
+        assert!(same_page("#/t/m4c8tz1e", "#/ticket/known-2"));
+        assert!(same_page("#/waves/PERF", "#/waves/PERF"));
+        assert!(!same_page("#/ticket/KNOWN-2", "#/ticket/KNOWN-3"));
+        assert!(!same_page("#/t/m4c8tz1e", "#/t/q2r9wd4c"));
+        assert!(!same_page("#/", "#/waves"));
+        assert_eq!(anchor_ticket("#/t/M4C8TZ1E"), Some("KNOWN-2".into()));
+        assert_eq!(anchor_ticket("#/ticket/KNOWN-2?comment=3"), Some("KNOWN-2".into()));
+        assert_eq!(anchor_ticket("#/comments"), None);
+        // An anchor's route as a link: a key the app knows goes by its uid.
+        assert_eq!(anchor_href("#/ticket/KNOWN-2"), "#/t/m4c8tz1e/KNOWN-2-known");
+        assert_eq!(anchor_href("#/ticket/NOUID-2"), "#/ticket/NOUID-2");
+        assert_eq!(anchor_href("#/waves/PERF"), "#/waves/PERF");
+        assert_eq!(ticket_href("KNOWN-2"), "#/t/m4c8tz1e/KNOWN-2-known");
+        assert_eq!(route_ticket("#/t/m4c8tz1e/x"), Some("KNOWN-2".into()), "the key the app knows");
+    }
+
+    /// TICKETS-36: no link to a ticket is built outside this file — every
+    /// `#/ticket/…` and `#/t/…` the app makes comes from the helper above.
+    /// A test module may write routes as data; nothing else may.
+    #[test]
+    fn no_ticket_link_is_built_outside_links_rs() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(dir).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    out.push(p);
+                }
+            }
+        }
+        walk(&src, &mut files);
+        let mut found = Vec::new();
+        for f in &files {
+            if f.file_name().is_some_and(|n| n == "links.rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(f).unwrap();
+            for (n, line) in code_lines(&text) {
+                if ["#/ticket/", "#/t/", "\"/ticket/", "/ticket/{"].iter().any(|p| line.contains(p)) {
+                    found.push(format!("{}:{n}: {}", f.strip_prefix(&src).unwrap().display(), line.trim()));
+                }
+            }
+        }
+        assert!(found.is_empty(), "{} ticket link(s) built outside links.rs — make them with links::ticket_href / row_href / uid_href:\n{}", found.len(), found.join("\n"));
+    }
+
+    /// A file's lines that are code: no `//` comment (a doc's included), no
+    /// line of its test module (from `#[cfg(test)] mod … {` on — a file's
+    /// tests are its last item). A `#[cfg(test)]` item outside it is code.
+    fn code_lines(text: &str) -> Vec<(usize, &str)> {
+        let mut out = Vec::new();
+        let lines: Vec<&str> = text.lines().collect();
+        for (i, &line) in lines.iter().enumerate() {
+            let t = line.trim_start();
+            let next = lines.get(i + 1).map_or("", |l| l.trim());
+            let module = next.strip_prefix("pub(crate) ").or(next.strip_prefix("pub ")).unwrap_or(next);
+            if t.starts_with("#[cfg(test)]") && module.starts_with("mod ") && next.ends_with('{') {
+                break;
+            }
+            if t.starts_with("//") || t.starts_with("*") || t.starts_with("/*") {
+                continue;
+            }
+            // A comment after code: only the code counts.
+            let code = match line.find("//") {
+                Some(at) if !line[..at].contains('"') => &line[..at],
+                _ => line,
+            };
+            out.push((i + 1, code));
+        }
+        out
     }
 }

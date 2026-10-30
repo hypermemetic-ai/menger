@@ -154,7 +154,11 @@ MCP client signs in at that server by itself — once one is hosted
 frontend it serves the day-one vanilla page instead — the binary alone
 always serves something live — and that page keeps its own URL,
 `/vanilla`, once the app is built. `/app/` is the app's asset root and
-the deep-link prefix (`/app/#/ticket/MNG-1`); it serves the app too.
+the deep-link prefix (`/app/#/t/<uid>/MNG-1-<slug>`, `/app/#/ticket/MNG-1`);
+it serves the app too. TICKETS-36: `/t/<uid>/…` — the link Copy link gives
+— and a ticket's name at the root (`/PERF-19`, `/PLEXUS/PERF-19`,
+`/hypermemetic:PLEXUS/PERF-19`) answer `302` into the app's route for it,
+behind the sign-in as `/app/` is ("The app's links by uid").
 
 Open the app in two browser windows; create a ticket or flip a status in
 one and watch the other update. No polling — the server pushes.
@@ -2993,6 +2997,41 @@ synapse -P 4455 menger tickets get --id 7k3mq2xa
 synapse -P 4455 menger tickets amend --id hypermemetic:MENGER/STORE/PERF-19 --body @b.md
 synapse -P 4455 menger tickets list --filter 'under 7k3mq2xa' --summary true
 ```
+
+#### The app's links by uid (TICKETS-36)
+
+Every link the app makes to a ticket is its uid. `links::ticket_href`
+(`frontend/src/links.rs`) is the one place a ticket's link is made — the
+board's and the nav's rows, the chips, the palette, waves, history, inputs,
+comments, chats, deploys, the menu; a native test fails on any other — and
+the vanilla page mirrors it.
+
+| form | what it is |
+| -- | -- |
+| `#/t/<uid>/<ID>-<slug>` | the app's route to a ticket. Only the uid is read: `<ID>` is the id as a row shows it (`PERF.115-19` is `PERF-19`), the slug its title folded to lower-case ASCII words joined by `-`, cut at a word to 48 characters. A stale one — the title amended, the ticket moved — is rewritten in place (`history.replaceState`, no history entry). A ticket page's query rides after it (`?chat=41&full`, `?comment=7`). |
+| `#/ticket/<name>` | any name `get` takes — an id, an address, a key, an old pinned id, a uid. The app asks once: one ticket, and the address bar becomes its `#/t/…`; several, the **collision page**; none, not found; a deleted one, its tombstone. Every link written before (a body's `[x](#/ticket/ID)`, a frame's `menger.navigate`) still opens its ticket. |
+| `<origin>/t/<uid>/<ID>-<slug>` | the link to share — **Copy link**, in the ticket's menu and on its page (Copy code stays the id). The shell answers it `302` to `/app/#/t/…`. |
+| `<origin>/<name>` | a ticket's name at the root (`/PERF-19`, `/PLEXUS/PERF-19`, `/hypermemetic:PLEXUS/PERF-19`): `302` to `/app/#/ticket/<name>`. Both redirects are behind the sign-in as `/app/` is (signed out: `/login?next=…`); every other path answers as before. |
+
+A ticket's page is keyed by the key `get` answered, never by the route's
+text: its body, scopes, children, comments and chat pane follow the ticket
+whatever name opened it, and its own calls name it by its uid (the
+original of two namesakes is keyed `PERF-19`, which as a name fits both).
+A comment pinned on a ticket's page is anchored at `#/t/<uid>` once the app
+knows the uid; one pinned before, at `#/ticket/<id>`, is still found there.
+
+**The collision page** (`frontend/src/collision.rs`): the name, *names two
+tickets*, then one row per `choices` entry in the store's order — its
+address (the hosts muted, its id in the accent), kind, status, title, its
+parent (id and title, a link by its uid) and where it lives (its epic; its
+organization too when the choices span several), its link by uid and *copy
+link*. A row opens its ticket at its own `#/t/…`. ↑ ↓ (k j) choose, ⏎ opens,
+`c` copies the chosen link, Esc goes to the board (`collision.*` in
+`bindings.rs`; Esc through `app.escape`, after an open overlay, before a
+selection). A choice out of the
+reader's reach is its address alone and no link. `scripts/collision-check.sh`
+holds it in Chromium on a throwaway with two shortcodes named PERF, at 390
+and 1440, light and dark.
 
 ### Organizations (ORG-4)
 

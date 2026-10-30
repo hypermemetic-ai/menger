@@ -115,7 +115,7 @@ pub(crate) fn source_label(source: &str) -> String {
 fn referrer_view(r: Referrer) -> impl IntoView {
     match r {
         Referrer::Ticket(id) => {
-            let href = format!("#/ticket/{id}");
+            let href = crate::links::ticket_href(&id);
             view! { <a class="code ref" href=href title="a ticket whose body uses it">{id}</a> }.into_any()
         }
         Referrer::Component(name) => {
@@ -148,7 +148,7 @@ fn row_view(row: Row) -> impl IntoView {
     let href = format!("#/components/{name}");
     let owner_view = match owner.clone() {
         Some(id) => {
-            let href = format!("#/ticket/{id}");
+            let href = crate::links::ticket_href(&id);
             view! { <a class="code owner" href=href title="the ticket whose body defines it">{id}</a> }.into_any()
         }
         None => view! {

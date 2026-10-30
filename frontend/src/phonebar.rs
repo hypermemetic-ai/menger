@@ -113,6 +113,9 @@ pub(crate) fn page_words(r: &Route) -> String {
     match r {
         Route::Board => "the board".into(),
         Route::Ticket(id) => crate::epics::shown_id(id),
+        // TICKETS-36: a name being resolved, or the collision page.
+        Route::Named(crate::links::Named::Name(n)) => crate::epics::shown_id(n),
+        Route::Named(crate::links::Named::Uid(_)) => "ticket".into(),
         Route::Waves(s) if s.is_empty() => "waves".into(),
         Route::Waves(s) => format!("waves · {s}"),
         Route::WavesOf(_) => "waves".into(),

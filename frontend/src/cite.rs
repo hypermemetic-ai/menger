@@ -190,7 +190,7 @@ fn clip(s: &str) -> String {
 pub(crate) fn route(cite: &Cite) -> String {
     let anchor = cite.section.anchor();
     let (key, value) = anchor.pair();
-    format!("#/ticket/{}?{key}={value}", cite.ticket)
+    format!("{}?{key}={value}", crate::links::name_href(&cite.ticket))
 }
 
 /// What the server answered the viewer's `get`.

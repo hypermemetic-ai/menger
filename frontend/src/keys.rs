@@ -955,7 +955,9 @@ fn global_keydown(ev: &web_sys::KeyboardEvent, overlay: RwSignal<Overlay>, board
         // it; MENGER-15: then full screen (the overlay; the browser's own
         // full screen takes its Esc itself); TICKETS-23: then a task's
         // sheet; ACT-3: then the selection.
-        Some("app.escape") => crate::questions::escape() || annotate::escape() || present::escape() || crate::tasks::escape() || selection::clear(),
+        // TICKETS-36: then the collision page, for the board (its promise,
+        // `esc board`) — before a selection it does not show.
+        Some("app.escape") => crate::questions::escape() || annotate::escape() || present::escape() || crate::tasks::escape() || crate::collision::escape() || selection::clear(),
         // The first key of a `g …` sequence: swallowed, the table armed.
         Some(bindings::PREFIX) => true,
         Some("go.board") => {
@@ -1017,6 +1019,11 @@ fn global_keydown(ev: &web_sys::KeyboardEvent, overlay: RwSignal<Overlay>, board
         if bindings::is(ev, Context::MockBox, "compare.toggle") && crate::compare::toggle_key(&key) {
             ev.prevent_default();
         }
+        return;
+    }
+    // TICKETS-36: the collision page's keys — choose, open, copy a link.
+    if crate::collision::key(ev) {
+        ev.prevent_default();
         return;
     }
     // APP-22: `c` — the ticket page's Conversation box.

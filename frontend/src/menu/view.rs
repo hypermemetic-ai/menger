@@ -291,11 +291,12 @@ fn entry_view(e: Entry, ctx: &Ctx) -> AnyView {
     match e {
         Entry::Rule => view! { <div class="rule" role="separator"></div> }.into_any(),
         Entry::Chat(c) => chat::item(c, ctx.open_sub, target),
+        // TICKETS-36: by its uid.
         Entry::Open(id) => {
-            view! { <a class="item" role="menuitem" data-act="open" href=format!("#/ticket/{id}") on:click=move |_| close()>"Open"</a> }.into_any()
+            view! { <a class="item" role="menuitem" data-act="open" href=crate::links::ticket_href(&id) on:click=move |_| close()>"Open"</a> }.into_any()
         }
         Entry::OpenNew(id) => view! {
-            <a class="item" role="menuitem" data-act="open-new" href=format!("#/ticket/{id}") target="_blank" rel="noopener" on:click=move |_| close()>
+            <a class="item" role="menuitem" data-act="open-new" href=crate::links::ticket_href(&id) target="_blank" rel="noopener" on:click=move |_| close()>
                 "Open in new tab"
             </a>
         }
@@ -313,6 +314,22 @@ fn entry_view(e: Entry, ctx: &Ctx) -> AnyView {
             </a>
         }
         .into_any(),
+        // TICKETS-36: the permalink, at this origin.
+        Entry::CopyLink(path) => {
+            let toaster = ctx.toaster;
+            let copy = move |_| {
+                let link = format!("{}{path}", dom::window().location().origin().unwrap_or_default());
+                close();
+                spawn_local(async move {
+                    let t = match copy_text(&link).await {
+                        Copied::Api | Copied::Legacy => Toast { text: format!("copied {link}"), manual: None, undo: None },
+                        Copied::Manual => Toast { text: "clipboard unavailable — copy it from here:".into(), manual: Some(link), undo: None },
+                    };
+                    show_toast(toaster.toast, toaster.gen, t);
+                });
+            };
+            view! { <button class="item" role="menuitem" data-act="copy-link" on:click=copy>"Copy link"</button> }.into_any()
+        }
         Entry::Copy { text, words } => {
             let toaster = ctx.toaster;
             let copy = move |_| {

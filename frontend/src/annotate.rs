@@ -111,7 +111,7 @@ pub(crate) fn pins(route: &str, comments: &[Comment], mut spot: impl FnMut(&Anch
     // not pinned to anything. COMMENT-8: a reply is drawn under its root.
     for c in comments
         .iter()
-        .filter(|c| c.state == CommentState::Open && comments::is_root(c) && c.anchor.route == route && !crate::conversation::is_whole(c))
+        .filter(|c| c.state == CommentState::Open && comments::is_root(c) && crate::links::same_page(&c.anchor.route, route) && !crate::conversation::is_whole(c))
     {
         let at = match spot(&c.anchor) {
             Spot::Found => PinAt::Element(c.anchor.path.clone()),
@@ -325,9 +325,11 @@ pub(crate) fn escape() -> bool {
     false
 }
 
-/// The page's route, as anchors spell it.
+/// The page's route, as anchors spell it. TICKETS-36: a ticket's page by
+/// its key, whatever name or uid the address bar opened it by — so a
+/// comment pinned there is where every comment on that page was.
 pub(crate) fn route_now() -> String {
-    crate::route_text(&crate::parse_route(&dom::window().location().hash().unwrap_or_default()))
+    crate::route_text(&crate::current_route())
 }
 
 /// Everything the mode drew, gone.
@@ -1161,6 +1163,24 @@ pub(crate) fn Layer() -> impl IntoView {
 mod tests {
     use super::*;
     use crate::comments::tests::{comment, resolved};
+
+    /// TICKETS-36: a comment pinned on a ticket's page before this change —
+    /// its route `#/ticket/<id>` — is still pinned there now that the page
+    /// is `#/t/<uid>`, beside one pinned since; another ticket's is not.
+    #[test]
+    fn a_pin_stored_by_id_is_found_on_the_page_by_uid() {
+        crate::cache::learn_pair("h8vn3k0p".parse().unwrap(), "DEMAND-7", "the demand");
+        let page = crate::links::page_route("DEMAND-7");
+        assert_eq!(page, "#/t/h8vn3k0p");
+        let all = vec![
+            comment(1, "#/ticket/DEMAND-7", "#t-status", Some("DEMAND-7")),
+            comment(2, &page, "#t-kind", Some("DEMAND-7")),
+            comment(3, "#/ticket/demand-7", "#t-parent", Some("DEMAND-7")),
+            comment(4, "#/ticket/DEMAND-8", "#t-status", Some("DEMAND-8")),
+        ];
+        let got = pins(&page, &all, |_| Spot::Found);
+        assert_eq!(got.iter().flat_map(|p| p.ids.clone()).collect::<Vec<u64>>(), [1, 2, 3]);
+    }
 
     /// The pins on a page: its open comments, one pin per element, numbered
     /// by each pin's oldest comment; the moved ones at their ticket's

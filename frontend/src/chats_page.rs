@@ -337,7 +337,7 @@ pub(crate) fn ChatsPage(#[prop(into)] pick: Signal<Pick>) -> impl IntoView {
         let (copy_link, leave) = (copy_link, leave.clone());
         Some(view! {
             {add_ok.then(|| view! { <button type="button" class="sbtn" on:click=move |_| adding.update(|a| *a = !*a)>"＋ add"</button> })}
-            {ticket.map(|t| view! { <a class="sbtn" href=format!("#/ticket/{t}?chat={}", c.id.get()) title="its ticket, the chat in its dock">{format!("{t} ⟩")}</a> })}
+            {ticket.map(|t| view! { <a class="sbtn" href=format!("{}?chat={}", crate::links::ticket_href(&t), c.id.get()) title="its ticket, the chat in its dock">{format!("{t} ⟩")}</a> })}
             <button type="button" class="sbtn smore" aria-label="more" aria-expanded=move || more.get().to_string() on:click=move |_| more.update(|m| *m = !*m)>"⋯"</button>
             {move || { let (leave, copy_link) = (leave.clone(), copy_link); more.get().then(|| view! {
                 <div class="smenu-pop" role="menu">

@@ -436,10 +436,12 @@ async fn vanilla_page_rows_link_to_app_ticket_pages() {
     let (status, _, body) = fetch(s.shell_port, Method::GET, "/vanilla", "").await;
     assert_eq!(status, StatusCode::OK);
     let text = String::from_utf8_lossy(&body);
+    // TICKETS-36: by its uid, as the app links it; by its id without one.
     assert!(
-        text.contains("/app/#/ticket/${t.id}"),
-        "row renderer hrefs the app's deep-link scheme, got:\n{text}"
+        text.contains("const href = ticketHref(t);") && text.contains("return `/app/#/t/${t.uid}/${shownId(t.id)}${s ? \"-\" + s : \"\"}`;"),
+        "row renderer hrefs the app's deep-link scheme by uid, got:\n{text}"
     );
+    assert!(text.contains("if (!t.uid) return `/app/#/ticket/${t.id}`;"), "a row with no uid by its id");
     // The links must not have cost the page its status control.
     assert!(
         text.contains("<select data-id="),
@@ -526,6 +528,58 @@ async fn fetch_with_headers(port: u16, path: &str) -> (StatusCode, hyper::Header
 
 fn header_of<'a>(h: &'a hyper::HeaderMap, name: &str) -> &'a str {
     h.get(name).and_then(|v| v.to_str().ok()).unwrap_or_default()
+}
+
+/// TICKETS-36: `GET path`, signed in (the shell's session cookie) or not:
+/// (status, `Location`).
+async fn redirect_of(port: u16, path: &str, signed_in: bool) -> (StatusCode, String) {
+    let mut sender = connect(port).await;
+    let mut req = request(port, Method::GET, path, "");
+    if !signed_in {
+        req.headers_mut().remove(header::COOKIE);
+    }
+    let resp = sender.send_request(req).await.expect("send request");
+    let to = resp.headers().get(header::LOCATION).and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
+    (resp.status(), to)
+}
+
+/// TICKETS-36: the shell answers a link by uid, `/t/<uid>[/…]`, and a path
+/// that names a ticket at the root — `/PERF-2`, `/PLEXUS/PERF-2`, its full
+/// address — with `302` into the app's route for it (`/app/#/t/<uid>/…`,
+/// `/app/#/ticket/<name>`), behind the login as `/app/` is: signed out, the
+/// sign-in page first, the path kept as `next`. Every other path answers as
+/// before — `/app/`, `/login`, `/ws`, a root file, an unknown path.
+#[tokio::test]
+async fn a_path_that_names_a_ticket_redirects_into_the_app_behind_the_login() {
+    let dist = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    std::fs::write(dist.path().join("index.html"), "<title>{{TITLE}}</title>").unwrap();
+    std::fs::write(dist.path().join("sw.js"), "sw").unwrap();
+    let s = spawn_server(dist.path()).await;
+    let port = s.shell_port;
+    let found = |to: &str| (StatusCode::FOUND, to.to_string());
+    let login = |next: &str| (StatusCode::SEE_OTHER, format!("/login?next={next}"));
+
+    // Signed in: into the app.
+    assert_eq!(redirect_of(port, "/PERF-2", true).await, found("/app/#/ticket/PERF-2"));
+    assert_eq!(redirect_of(port, "/PLEXUS/PERF-2", true).await, found("/app/#/ticket/PLEXUS/PERF-2"));
+    assert_eq!(redirect_of(port, "/hypermemetic:PLEXUS/PERF-2", true).await, found("/app/#/ticket/hypermemetic:PLEXUS/PERF-2"));
+    assert_eq!(redirect_of(port, "/t/7k3mq2xa/x", true).await, found("/app/#/t/7k3mq2xa/x"));
+    assert_eq!(redirect_of(port, "/t/7k3mq2xa", true).await, found("/app/#/t/7k3mq2xa"));
+    // Signed out: the sign-in page first, as for /app/.
+    assert_eq!(redirect_of(port, "/PERF-2", false).await, login("%2FPERF-2"));
+    assert_eq!(redirect_of(port, "/t/7k3mq2xa/x", false).await, login("%2Ft%2F7k3mq2xa%2Fx"));
+    assert_eq!(redirect_of(port, "/app/", false).await, login("%2Fapp%2F"));
+    // Unchanged: the app, the sign-in page, the socket's path, a root file
+    // and a path that names no ticket.
+    assert_eq!(redirect_of(port, "/app/", true).await, (StatusCode::OK, String::new()));
+    assert_eq!(redirect_of(port, "/login", false).await.0, StatusCode::OK);
+    for signed_in in [true, false] {
+        assert_eq!(redirect_of(port, "/ws", signed_in).await, (StatusCode::NOT_FOUND, String::new()), "/ws, signed in: {signed_in}");
+        assert_eq!(redirect_of(port, "/PERF", signed_in).await, (StatusCode::NOT_FOUND, String::new()), "a shortcode is no ticket");
+        assert_eq!(redirect_of(port, "/robots.txt", signed_in).await, (StatusCode::NOT_FOUND, String::new()));
+        assert_eq!(redirect_of(port, "/t/not-a-uid", signed_in).await.0, StatusCode::NOT_FOUND);
+        assert_eq!(redirect_of(port, "/sw.js", signed_in).await, (StatusCode::OK, String::new()));
+    }
 }
 
 /// `'sha256-…'` of an inline block, as a policy names it.

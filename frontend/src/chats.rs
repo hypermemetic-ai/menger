@@ -427,7 +427,7 @@ pub(crate) fn on_ticket(c: &Chat, ticket: &str) -> bool {
 /// its dock, or — outside tickets — `#/chats/ID`.
 pub(crate) fn href(c: &Chat) -> String {
     match &c.ticket {
-        Some(t) => format!("#/ticket/{t}?chat={}", c.id.get()),
+        Some(t) => format!("{}?chat={}", crate::links::ticket_href(t), c.id.get()),
         None => format!("#/chats/{}", c.id.get()),
     }
 }

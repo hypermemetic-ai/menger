@@ -213,7 +213,7 @@ pub(crate) fn Strip(chat: u64) -> impl IntoView {
 fn row_view(row: RowSignal) -> impl IntoView {
     let t: TicketSummary = row.get_untracked();
     let id = t.id.to_string();
-    let href = format!("#/ticket/{id}");
+    let href = crate::links::row_href(&t);
     let row = RwSignal::from(row);
     let status = move || row.with(|t| t.status.to_string());
     let title = move || row.with(|t| t.title.clone());

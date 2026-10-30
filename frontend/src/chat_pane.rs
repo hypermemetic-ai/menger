@@ -235,7 +235,7 @@ pub(crate) fn open_for(ticket: Option<&str>) -> bool {
 fn keep_url(chat: Option<u64>) {
     let w = dom::window();
     let hash = w.location().hash().unwrap_or_default();
-    if !hash.starts_with("#/ticket/") || chat_in(&hash) == chat {
+    if !crate::links::is_ticket_route(&hash) || chat_in(&hash) == chat {
         return;
     }
     if let Ok(h) = w.history() {

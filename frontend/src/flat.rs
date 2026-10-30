@@ -1038,7 +1038,8 @@ fn flat_row(
     let kind = Memo::new(move |_| ticket.with(|t| t.kind.as_str()));
     let key: Key = ticket.with_untracked(|t| (t.shortcode.to_string(), t.seq));
     let posinset = Memo::new(move |_| f.matches.with(|m| f.ranked.with(|r| r.pos_of(m.as_ref()?, &key))).map(|p| p + 1));
-    let href = format!("#/ticket/{id}");
+    // TICKETS-36: by its uid.
+    let href = move || ticket.with(crate::links::row_href);
     // FILTER-24: the open ticket, listed though the filter excludes it.
     let outside = {
         let id = id.clone();

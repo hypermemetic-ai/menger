@@ -1109,7 +1109,7 @@ fn card_view(p: Placed, on_board: Memo<HashSet<String>>) -> impl IntoView {
         }
     };
     let off = on_board.with_untracked(|b| off_board(&card, b));
-    let href = format!("#/ticket/{id}");
+    let href = crate::links::row_href(&card.summary);
     let kind = card.summary.kind.as_str();
     let placement = match card.placement {
         Placement::Wave { n } => format!("wave-{n}"),
@@ -1158,7 +1158,7 @@ fn card_view(p: Placed, on_board: Memo<HashSet<String>>) -> impl IntoView {
                 // DEPLOY-13: where it runs, a mark per environment.
                 {crate::deploys::row_marks(id.to_string())}
                 {off.into_iter().map(|b| {
-                    let href = format!("#/ticket/{b}");
+                    let href = crate::links::ticket_href(&b);
                     view! { <a class="off" href=href title=format!("waits on {b}, not on this board") data-tag=Tag::ticket(&b).attr()>"⧖ "{b.clone()}" ↗"</a> }
                 }).collect_view()}
             </div>
@@ -1528,7 +1528,7 @@ pub(crate) fn ScopedBoard(scope: Scope, socket: RwSignal<u32>, last_error: RwSig
     view! {
         <section id="waves" class="scoped" data-scope=kind data-scope-id=id.clone() data-tag-level="global" data-layout=move || layout.get().as_str()>
             <h2 class="scope-h">
-                {words}<a class="code" href=format!("#/ticket/{id}") data-ticket-id=id.clone()>{id.clone()}</a>
+                {words}<a class="code" href=crate::links::ticket_href(&id) data-ticket-id=id.clone()>{id.clone()}</a>
                 " "<span class="title">{title}</span>
             </h2>
             <p class="none about">{about}</p>

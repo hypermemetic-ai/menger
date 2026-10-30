@@ -312,7 +312,7 @@ async fn ask(p: Picked, tree: nav::Tree) -> Result<(), String> {
     let hash = match root {
         Some(r) => {
             chat_pane::open_view(&r, View::Chat(chat));
-            chat_pane::with_chat(&format!("#/ticket/{r}"), Some(chat))
+            chat_pane::with_chat(&crate::links::ticket_href(&r), Some(chat))
         }
         None => format!("#/chats/{chat}"),
     };

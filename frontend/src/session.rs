@@ -310,6 +310,7 @@ fn next_member() -> u64 {
 }
 
 fn remember(t: &TicketSummary) {
+    cache::learn(t);
     RECENT.with(|r| {
         let mut r = r.borrow_mut();
         r.retain(|x| x.id != t.id);
@@ -640,7 +641,7 @@ fn reshortcoded(moves: &[menger_tickets_api::ShortcodeMove], tickets: Vec<Ticket
 /// ACT-6: the ticket page at `id` instead of the one it is on — in place, so
 /// Back does not return to an id that only names this one.
 fn follow(id: &str) {
-    let _ = crate::dom::window().location().replace(&format!("#/ticket/{id}"));
+    let _ = crate::dom::window().location().replace(&crate::links::ticket_href(id));
 }
 
 /// ACT-5: `undeleted`: each ticket back as if born — its tombstone forgotten.
@@ -1214,7 +1215,7 @@ async fn refetch_open_body(client: &Client, last_error: RwSignal<Option<String>>
     let Some(id) = OPEN_BODY.with(|b| b.borrow().as_ref().map(|(id, _)| id.clone())) else {
         return;
     };
-    let Ok(ticket) = crate::typed::typed(&id) else { return };
+    let Ok(ticket) = crate::typed::ticket(&id) else { return };
     match client.get_all(ticket).await {
         Ok(events) => {
             for ev in events {
@@ -1231,7 +1232,7 @@ async fn refetch_open_body(client: &Client, last_error: RwSignal<Option<String>>
 /// MENGER-13: what restoring `id` would put back — the descendants its
 /// latest cancel canceled and nothing has moved since (empty on any failure).
 pub(crate) async fn restorable(client: &Client, id: &str) -> Vec<String> {
-    let Ok(ticket) = crate::typed::typed(id) else { return Vec::new() };
+    let Ok(ticket) = crate::typed::ticket(id) else { return Vec::new() };
     match client.history_all(ticket).await {
         Ok(events) => events
             .into_iter()
@@ -1294,7 +1295,8 @@ pub(crate) fn request_set_status(
         } else {
             false
         };
-        let failure = match crate::typed::typed(&id) {
+        // TICKETS-36: by its uid — its key may be a name that fits two.
+        let failure = match crate::typed::ticket(&id) {
             Ok(ticket) => match client
                 .set_status_all(ticket, chosen, Some(restore), Some(menger_tickets_api::vocab::CallerSource::App), None)
                 .await
@@ -1350,7 +1352,8 @@ pub(crate) fn load_ticket(
             // than claiming the ticket does not exist.
             return;
         };
-        let Ok(ticket) = crate::typed::typed::<menger_tickets_api::vocab::TicketRef>(&id) else { return };
+        // TICKETS-36: by its uid — its key may be a name that fits two.
+        let Ok(ticket) = crate::typed::ticket(&id) else { return };
         match client.get_all(ticket.clone()).await {
             Ok(events) => {
                 for ev in events {
@@ -1409,7 +1412,8 @@ pub(crate) fn load_rows(ids: Vec<String>, holder: cache::Holder) {
         let Some(client) = client() else {
             return; // not connected yet: the page asks again when it is
         };
-        let asked: Vec<menger_tickets_api::vocab::TicketRef> = ids.iter().filter_map(|id| id.parse().ok()).collect();
+        // TICKETS-36: each by its uid — through the row's `uid_of`.
+        let asked: Vec<menger_tickets_api::vocab::TicketRef> = ids.iter().filter_map(|id| crate::typed::ticket(id).ok()).collect();
         let gets = asked.into_iter().map(|id| client.get_all(id));
         for events in futures::future::join_all(gets).await.into_iter().flatten() {
             for ev in events {
@@ -1461,7 +1465,7 @@ pub(crate) fn load_children(
         let Some(filter) = kids.try_with_untracked(|k| k.list_filter().map(str::to_string)) else {
             return; // the page is gone
         };
-        let typed = || -> Result<_, String> { Ok((crate::typed::typed(&id)?, crate::typed::opt(after.clone())?, crate::typed::opt(filter.clone())?)) };
+        let typed = || -> Result<_, String> { Ok((crate::typed::ticket(&id)?, crate::typed::opt(after.clone())?, crate::typed::opt(filter.clone())?)) };
         let (parent, cursor, asked) = match typed() {
             Ok(t) => t,
             Err(why) => {
@@ -1551,7 +1555,11 @@ pub(crate) async fn find_under(query: String, limit: u32, filter: Option<String>
     let mut remaining = 0;
     for ev in events {
         match ev {
-            TicketsEvent::Summary { summary } => rows.push(summary),
+            // TICKETS-36: a row picked opens by its uid.
+            TicketsEvent::Summary { summary } => {
+                cache::learn(&summary);
+                rows.push(summary);
+            }
             TicketsEvent::Page { remaining: r, .. } => remaining = r,
             TicketsEvent::Error { message } => return Ok(Err(message)),
             _ => {}
@@ -1589,7 +1597,10 @@ pub(crate) async fn search_under(
     let (mut hits, mut matched, mut words) = (Vec::new(), 0, Vec::new());
     for ev in events {
         match ev {
-            TicketsEvent::Hit { summary, title, snippet, corrected } => hits.push(Hit { summary, title, snippet, corrected }),
+            TicketsEvent::Hit { summary, title, snippet, corrected } => {
+                cache::learn(&summary);
+                hits.push(Hit { summary, title, snippet, corrected });
+            }
             TicketsEvent::Searched { matched: m, words: w, .. } => (matched, words) = (m, w),
             TicketsEvent::Error { message } => return Ok(Err(message)),
             _ => {}

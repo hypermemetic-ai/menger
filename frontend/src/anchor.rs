@@ -410,9 +410,10 @@ pub(crate) fn label_of(chain: &[Node], text: &str) -> String {
 /// board row, a nav row) or the frame of a ticket's body (`iframe
 /// data-ticket`). `route` is [`crate::route_text`]'s.
 pub(crate) fn ticket_of(route: &str, chain: &[Node]) -> Option<String> {
-    if let Some(id) = route.strip_prefix("#/ticket/").filter(|id| !id.is_empty()) {
+    // TICKETS-36: the page's route, as an anchor spells it.
+    if let Some(id) = crate::links::anchor_ticket(route) {
         if chain.iter().any(|n| n.attr("id") == Some("ticket-page")) {
-            return Some(id.to_string());
+            return Some(id);
         }
     }
     chain.iter().find_map(|n| {

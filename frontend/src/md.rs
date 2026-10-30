@@ -329,10 +329,11 @@ fn wave_markup(id: &str, r: WaveRef) -> String {
     let mut esc = String::new();
     escape_html(&mut esc, id).expect("escaping into a String cannot fail");
     let mut href = String::new();
-    escape_href(&mut href, id).expect("escaping into a String cannot fail");
+    // TICKETS-36: the name the body wrote, resolved on open.
+    escape_href(&mut href, &crate::links::name_href(id)).expect("escaping into a String cannot fail");
     match r {
         WaveRef::Wave(n) => format!(
-            "<a class=\"wave-ref\" data-wave-ref=\"{esc}\" data-wave=\"{n}\" href=\"#/ticket/{href}\" title=\"{esc}: wave {n}\">wave {n}</a>"
+            "<a class=\"wave-ref\" data-wave-ref=\"{esc}\" data-wave=\"{n}\" href=\"{href}\" title=\"{esc}: wave {n}\">wave {n}</a>"
         ),
         WaveRef::Done => format!("<span class=\"wave-ref done\" data-wave-ref=\"{esc}\" title=\"{esc}: done\">done</span>"),
         WaveRef::Missing => format!(

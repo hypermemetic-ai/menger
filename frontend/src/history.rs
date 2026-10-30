@@ -155,11 +155,11 @@ fn row(t: Transition, show_ticket: bool) -> impl IntoView {
         TransitionField::Status => "",
     };
     let ticket = show_ticket.then(|| {
-        let href = format!("#/ticket/{}", t.ticket);
+        let href = crate::links::ticket_href(&t.ticket);
         view! { <a class="code" href=href data-ticket-id=t.ticket.to_string()>{t.ticket.to_string()}</a> }
     });
     let cause = t.cause_ticket.clone().filter(|_| !show_ticket).map(|c| {
-        let href = format!("#/ticket/{c}");
+        let href = crate::links::ticket_href(&c);
         view! { <span class="cause">"caused by "<a class="code" href=href data-ticket-id=c.clone()>{c.clone()}</a></span> }
     });
     view! {
@@ -221,7 +221,7 @@ pub(crate) fn HistoryView(ticket: String) -> impl IntoView {
             let Some(client) = session::client() else { return };
             let id = id.clone();
             spawn_local(async move {
-                let Ok(t) = crate::typed::typed(&id) else { return };
+                let Ok(t) = crate::typed::ticket(&id) else { return };
                 if let Ok(events) = client.revisions().list_all(t, None, Some(100)).await {
                     revs.try_set(crate::revisions::listed_of(events));
                 }
@@ -247,7 +247,7 @@ pub(crate) fn HistoryView(ticket: String) -> impl IntoView {
         let n = asked.get_value().wrapping_add(1);
         asked.set_value(n);
         spawn_local(async move {
-            let Ok(ticket) = crate::typed::typed(&id) else { return };
+            let Ok(ticket) = crate::typed::ticket(&id) else { return };
             let Ok(events) = client.history_all(ticket).await else { return };
             // Only the newest question's answer.
             if asked.try_get_value() == Some(n) {

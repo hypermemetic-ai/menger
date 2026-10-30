@@ -39,6 +39,13 @@
 //! `--app-dist` given → that directory; else, with the build embedded →
 //! `Embedded`; else → [`default_app_dist`] ([`preferred_app`]).
 //!
+//! TICKETS-36: a path no route claims that names a ticket goes to its route
+//! in the app — the link to share, `/t/<uid>/<ID>-<slug>`, to
+//! `/app/#/t/<uid>/…`; a ticket's name at the root (`/PERF-19`,
+//! `/hypermemetic:PLEXUS/PERF-19`) to `/app/#/ticket/<name>`, which the app
+//! resolves (or lists, when it fits several) — `302`, behind the session as
+//! `/app/` is ([`ticket_redirect`]). Every other path is `404` as before.
+//!
 //! SCAFFOLD-5: the table, the stamping, the app's routes, the hardening
 //! (IDENTITY-38) and [`AppSource`] are `plexus-shell`'s. This module is
 //! menger's part: the `/vanilla` page (and `/` falling back to it), the
@@ -377,6 +384,10 @@ async fn router(cfg: ShellConfig, at: std::net::SocketAddr) -> Router {
         );
         tracing::info!("Login:     http://{at}/login");
     }
+    // TICKETS-36: a path no route claims that names a ticket — `/t/<uid>/…`,
+    // `/PERF-19` — goes to its route in the app; any other is 404 as before.
+    let fallback_login = cfg.login.clone();
+    app = app.fallback(move |req: Request| ticket_or_not_found(fallback_login.clone(), req));
     // DNS rebinding: a page on another name resolving here gets nothing —
     // login or not (ACCESS-25), and before anything routes.
     let hosts = Arc::new(allowed_hosts(cfg.port, &cfg.allowed_hosts, cfg.login.as_deref()));
@@ -415,6 +426,12 @@ async fn require_session(
     if path.starts_with("/rest/") {
         return (StatusCode::UNAUTHORIZED, "sign in first").into_response();
     }
+    to_login(&req)
+}
+
+/// IDENTITY-19: the sign-in page, with the path asked for as `next`.
+fn to_login(req: &Request) -> Response {
+    let path = req.uri().path_and_query().map(|p| p.as_str()).unwrap_or("/");
     let to = format!("/login?next={}", url::form_urlencoded::byte_serialize(path.as_bytes()).collect::<String>());
     (StatusCode::SEE_OTHER, [(header::LOCATION, to)]).into_response()
 }
@@ -481,6 +498,84 @@ async fn host_is_ours(State(hosts): State<Arc<Vec<String>>>, req: Request, next:
     }
 }
 
+/// TICKETS-36: where a path that names a ticket goes in the app — `None`
+/// for any other path, which is answered as it was.
+///
+/// - `/t/<uid>[/…]` — the shareable link (Copy link): the app's route by
+///   uid, `/app/#/t/<uid>/…`, the tail kept as written (the app reads the
+///   uid alone and rewrites a stale tail);
+/// - `/<name>` — a ticket's id (`/PERF-19`), a short form of its address
+///   (`/PLEXUS/PERF-19`) or the whole of it (`/hypermemetic:PLEXUS/PERF-19`):
+///   `/app/#/ticket/<name>`, which the app resolves — to the ticket's own
+///   route, or to the collision page when the name fits several.
+///
+/// The address is read as the API reads a ticket's name (`TicketRef`), so a
+/// shortcode (`/PERF`), a bare word (`/ws`, `/robots.txt`) or a bare uid
+/// names no ticket here. Nothing is looked up: whether the ticket exists,
+/// and whether the reader may see it, is the app's `get` to say.
+pub fn ticket_redirect(path: &str) -> Option<String> {
+    use menger_tickets_api::vocab::Uid;
+    if let Some(rest) = path.strip_prefix("/t/") {
+        let (uid, tail) = rest.split_once('/').unwrap_or((rest, ""));
+        let uid: Uid = uid.parse().ok()?;
+        let tail = tail.trim_end_matches('/');
+        let safe = |c: char| c.is_ascii_alphanumeric() || "-._~".contains(c);
+        return Some(match tail.is_empty() || !tail.chars().all(safe) {
+            true => format!("/app/#/t/{uid}"),
+            false => format!("/app/#/t/{uid}/{tail}"),
+        });
+    }
+    let raw = path.strip_prefix('/')?;
+    let raw = raw.strip_suffix('/').unwrap_or(raw);
+    let name = unescaped(raw)?;
+    let ok = |c: char| c.is_ascii_alphanumeric() || "-.:/_".contains(c);
+    if name.is_empty() || name.len() > 512 || !name.chars().all(ok) || name.contains("//") || name.starts_with('/') {
+        return None;
+    }
+    if menger_tickets_api::vocab::uid_named(&name).is_some() {
+        return None;
+    }
+    let address = menger_tickets_api::Address::parse(&name).ok().filter(|a| a.names_ticket())?;
+    Some(format!("/app/#/ticket/{address}"))
+}
+
+/// A path's `%XX` escapes read (`hypermemetic%3APLEXUS` is
+/// `hypermemetic:PLEXUS`); `None` for a broken escape or text that is not
+/// UTF-8.
+fn unescaped(raw: &str) -> Option<String> {
+    let (bytes, mut out, mut i) = (raw.as_bytes(), Vec::with_capacity(raw.len()), 0);
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' => {
+                let hex = raw.get(i + 1..i + 3)?;
+                out.push(u8::from_str_radix(hex, 16).ok()?);
+                i += 3;
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// TICKETS-36: the shell's answer to a path no route claims — the app's
+/// route for a ticket the path names ([`ticket_redirect`], `302`), behind the
+/// sign-in as `/app/` is; any other, as before: `404`, and nothing more.
+async fn ticket_or_not_found(login: Option<Arc<crate::web_login::Login>>, req: Request) -> Response {
+    let to = matches!(*req.method(), axum::http::Method::GET | axum::http::Method::HEAD)
+        .then(|| ticket_redirect(req.uri().path()))
+        .flatten();
+    let Some(to) = to else { return StatusCode::NOT_FOUND.into_response() };
+    if let Some(login) = login.filter(|l| l.require) {
+        if login.session(req.headers()).is_none() {
+            return to_login(&req);
+        }
+    }
+    (StatusCode::FOUND, [(header::LOCATION, to)]).into_response()
+}
+
 /// ACCESS-28: the frame document, under its own policy: framed by the app
 /// alone. Small and fixed per release: an hour in the cache.
 async fn frame() -> Response {
@@ -508,6 +603,36 @@ async fn favicon() -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TICKETS-36: a link by uid, `/t/<uid>[/…]`, goes to the app's route
+    /// by uid, its tail kept; a path that names a ticket — its id, a short
+    /// form, its full address — goes to `#/ticket/<name>`, which the app
+    /// resolves (or lists, when it fits several). Every other path is
+    /// answered as it was: no redirect.
+    #[test]
+    fn a_path_that_names_a_ticket_goes_to_the_app() {
+        let to = |p: &str| ticket_redirect(p);
+        assert_eq!(to("/t/7k3mq2xa"), Some("/app/#/t/7k3mq2xa".into()));
+        assert_eq!(to("/t/7k3mq2xa/"), Some("/app/#/t/7k3mq2xa".into()));
+        assert_eq!(to("/t/7k3mq2xa/PERF-19-compression-on-the-websocket"), Some("/app/#/t/7k3mq2xa/PERF-19-compression-on-the-websocket".into()));
+        assert_eq!(to("/t/7K3MQ2XA/x"), Some("/app/#/t/7k3mq2xa/x".into()), "a uid reads case-blind");
+        assert_eq!(to("/PERF-19"), Some("/app/#/ticket/PERF-19".into()));
+        assert_eq!(to("/perf-19"), Some("/app/#/ticket/PERF-19".into()), "folded as the store spells it");
+        assert_eq!(to("/PLEXUS/PERF-19"), Some("/app/#/ticket/PLEXUS/PERF-19".into()));
+        assert_eq!(to("/hypermemetic:PLEXUS/PERF-19"), Some("/app/#/ticket/hypermemetic:PLEXUS/PERF-19".into()));
+        assert_eq!(to("/hypermemetic%3APLEXUS/PERF-19"), Some("/app/#/ticket/hypermemetic:PLEXUS/PERF-19".into()), "an escaped colon");
+        assert_eq!(to("/SYNAPSE-CC-9"), Some("/app/#/ticket/SYNAPSE-CC-9".into()));
+        assert_eq!(to("/KILN-2.1"), Some("/app/#/ticket/KILN-2.1".into()), "a subtask");
+        assert_eq!(to("/PERF-19/"), Some("/app/#/ticket/PERF-19".into()), "one trailing slash");
+        for other in [
+            "/", "/app", "/app/", "/app/index.html", "/app/#/ticket/X-1", "/login", "/login/start", "/ws", "/mcp", "/sw.js",
+            "/manifest.webmanifest", "/favicon.svg", "/vanilla", "/robots.txt", "/PERF", "/MENGER/STORE", "/t/", "/t",
+            "/t/not-a-uid/x", "/t/7k3mq2x", "/7k3mq2xa", "//evil.example/PERF-1", "/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/PERF-1x",
+            "/PERF-19\\x", "/%2e%2e/PERF-1", "/PERF-1%0a",
+        ] {
+            assert_eq!(to(other), None, "{other}");
+        }
+    }
 
     /// MFE-23: `menger.test` on the test environment, `menger` otherwise.
     #[test]

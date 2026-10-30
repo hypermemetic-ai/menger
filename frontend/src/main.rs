@@ -266,6 +266,8 @@ mod chat_strip;
 mod chats;
 mod carpet;
 mod cite;
+// TICKETS-36: what a name that fits several tickets opens.
+mod collision;
 mod compare;
 mod comments;
 mod comments_page;
@@ -342,6 +344,8 @@ mod needs;
 mod orgs;
 mod phonebar;
 mod registry;
+// TICKETS-36: a ticket's route resolved to its page.
+mod resolve;
 mod resume;
 mod rowclick;
 mod saved;
@@ -440,12 +444,23 @@ pub(crate) enum Conn {
 
 // ---------------------------------------------------------------------
 // Routing (MFE-7). The deep-link contract this ticket owns, recorded in
-// MFE-1: a ticket's page is `/app/#/ticket/{id}`.
+// MFE-1: a ticket's page is `/app/#/ticket/{id}`. TICKETS-36: by its uid,
+// `/app/#/t/{uid}/{ID}-{slug}` (src/links.rs); `#/ticket/{name}` resolves
+// to it (src/resolve.rs), or to the collision page (src/collision.rs).
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Route {
     Board,
+    /// The ticket page, keyed by the key `get` answered for it. TICKETS-36:
+    /// never read off a hash — a hash names a ticket ([`Route::Named`]) and
+    /// the page is what the name resolves to.
     Ticket(String),
+    /// TICKETS-36: a ticket's route — `#/t/<uid>[/<ID>-<slug>]` (its uid,
+    /// the rest ignored) or `#/ticket/<name>` (any name a call takes) — and
+    /// a query a ticket's page reads (`?chat=`, `&full`, `?comment=`). One
+    /// the app has resolved is [`Route::Ticket`]; one it has not resolves
+    /// on its page ([`crate::resolve::Resolver`]).
+    Named(links::Named),
     /// WAVE-5: `#/waves/<SHORTCODE>` — the wave board for the shortcode (held
     /// upper case: the route is case-insensitive) and every shortcode hosted
     /// under it; `#/waves` alone (an empty shortcode) lists the boards.
@@ -494,8 +509,11 @@ fn parse_route(hash: &str) -> Route {
     // WAVE-12, FILTER-11: the query is the filters' (`g=`, `n=`, `f=`) and a
     // page's own, not part of the route.
     let path = path.split_once('?').map_or(path, |(p, _)| p);
+    // TICKETS-36: `#/t/<uid>[/…]` and `#/ticket/<name>` name a ticket.
+    if let Some(named) = links::named(hash) {
+        return Route::Named(named);
+    }
     match path.split_once('/') {
-        Some(("ticket", id)) if !id.is_empty() => Route::Ticket(id.to_string()),
         // MENGER-31: `#/waves/under/<ID>`, `#/waves/to/<ID>`.
         Some(("waves", rest)) if waves::Scope::parse(rest).is_some() => {
             Route::WavesOf(waves::Scope::parse(rest).expect("just parsed"))
@@ -535,7 +553,9 @@ fn parse_route(hash: &str) -> Route {
 pub(crate) fn route_text(route: &Route) -> String {
     match route {
         Route::Board => "#/".to_string(),
-        Route::Ticket(id) => format!("#/ticket/{id}"),
+        Route::Ticket(id) => links::page_route(id),
+        Route::Named(links::Named::Uid(uid)) => links::uid_route(uid),
+        Route::Named(links::Named::Name(name)) => links::name_href(name),
         Route::Waves(sc) if sc.is_empty() => "#/waves".to_string(),
         Route::Waves(sc) => format!("#/waves/{sc}"),
         Route::WavesOf(scope) => scope.href(),
@@ -557,8 +577,22 @@ pub(crate) fn route_text(route: &Route) -> String {
     }
 }
 
-fn current_route() -> Route {
-    parse_route(&dom::window().location().hash().unwrap_or_default())
+/// The route the URL is now. TICKETS-36: a ticket the app has met by its
+/// uid is its page at once ([`Route::Ticket`], by its key); any other name
+/// is resolved on its page ([`Route::Named`]).
+pub(crate) fn current_route() -> Route {
+    known(parse_route(&dom::window().location().hash().unwrap_or_default()))
+}
+
+/// TICKETS-36: `route`, with a uid the app has met read as its ticket's key.
+fn known(route: Route) -> Route {
+    match route {
+        Route::Named(links::Named::Uid(uid)) => match cache::key_of(&uid) {
+            Some(key) => Route::Ticket(key),
+            None => Route::Named(links::Named::Uid(uid)),
+        },
+        r => r,
+    }
 }
 
 /// The route as a signal: seeded from the URL (deep links / cold loads),
@@ -583,7 +617,8 @@ fn use_route(lens: lens::Lens) -> RwSignal<Route> {
 pub(crate) fn navigate_to_ticket(id: &str) {
     // DESIGN-39: where the id stands now, for the page's head to move from.
     motion::note_origin(id);
-    let _ = dom::window().location().set_hash(&format!("/ticket/{id}"));
+    // TICKETS-36: by its uid, when the app has met it.
+    let _ = dom::window().location().set_hash(&links::ticket_href(id));
 }
 
 /// Unix seconds, human-readable: "2026-09-05T12:34:56Z (1788690896)".
@@ -1080,7 +1115,8 @@ fn Board(
                                     // FILTER-22: the id, the kind, the status and
                                     // the severity are tags; the rest of the row
                                     // keeps the ticket menu.
-                                    <a href=format!("#/ticket/{href_id}") data-tag=tags::Tag::ticket(&href_id).attr()>{crate::epics::shown_id(&row_id)}</a>
+                                    // TICKETS-36: by its uid, its id and title after it.
+                                    <a href=move || ticket.with(links::row_href) data-tag=tags::Tag::ticket(&href_id).attr()>{crate::epics::shown_id(&row_id)}</a>
                                     // AGS-20: no `parent` column — just the
                                     // mark that this row decomposes, and how
                                     // far (the nav is where the tree is).
@@ -1284,7 +1320,8 @@ fn dag_entry(id: String, dangling_when: Option<RwSignal<bool>>, lensed: Option<U
             {move || match found.get() {
                 Some(t) => {
                     let t = RwSignal::from(t);
-                    let href = format!("#/ticket/{id}");
+                    // TICKETS-36: through `uid_of` — the uid the page's row names it by.
+                    let href = links::ticket_href(&id);
                     let kind = move || t.with(|x| x.kind.as_str());
                     // FILTER-22: its kind, its id and its status are tags;
                     // its title keeps the ticket menu.
@@ -1312,7 +1349,7 @@ fn dag_entry(id: String, dangling_when: Option<RwSignal<bool>>, lensed: Option<U
                         .into_any()
                 }
                 None => {
-                    let href = format!("#/ticket/{id}");
+                    let href = links::ticket_href(&id);
                     view! { <a class="code" href=href data-tag=tags::Tag::ticket(&id).attr()>{crate::epics::shown_id(&id)}</a> }.into_any()
                 }
             }}
@@ -1635,6 +1672,8 @@ fn ticket_view(
     // DESIGN-39: the head in, the page opens — from the row it was opened
     // from, when it was.
     let head = NodeRef::<leptos::html::H2>::new();
+    // TICKETS-36: what Copy link is made of — redrawn only when one moves.
+    let link_parts = Memo::new(move |_| ticket.with(|t| t.uid.is_some().then(|| (t.uid.to_string(), t.id.to_string(), t.title.clone()))));
     let opened = header_id.clone();
     head.on_load(move |h2: web_sys::HtmlHeadingElement| motion::open_page(h2.into(), String::from(opened)));
     view! {
@@ -1650,6 +1689,8 @@ fn ticket_view(
                         el.scroll_into_view();
                     }
                 }>"History"</button>
+                // TICKETS-36: the ticket's permalink, by its uid.
+                {move || link_parts.get().map(|(uid, id, title)| copy_link_button(&uid, &id, &title))}
             </h2>
             {move || lensed.outside(&me).then(outside_notice)}
             // THEME-8: the body is the ticket's frame — its own token scope.
@@ -1714,7 +1755,7 @@ fn ticket_view(
                     <dd id="t-parent">
                         {move || match parent_id.get() {
                             Some(p) => {
-                                let (href, code) = (format!("#/ticket/{p}"), p.clone());
+                                let (href, code) = (links::ticket_href(&p), p.clone());
                                 // FILTER-22: the parent is a tag — its shortcode,
                                 // or `under` it.
                                 let tag = tags::Tag::ticket(&p).attr();
@@ -1973,9 +2014,32 @@ fn ask_members(epoch: MembersEpoch, gtext: Memo<Option<String>>, members: RwSign
 /// plain links.
 const WANT_MAX: usize = 400;
 
+/// TICKETS-36: Copy link on a ticket's page — its permalink,
+/// `<origin>/t/<uid>/<ID>-<slug>`, to share; the button says it was copied.
+fn copy_link_button(uid: &str, id: &str, title: &str) -> impl IntoView {
+    let origin = dom::window().location().origin().unwrap_or_default();
+    let link = links::permalink(&origin, uid, id, title);
+    let said = RwSignal::new(None::<&'static str>);
+    let title = format!("copy this ticket's link: {link}");
+    let copy = move |_| {
+        let link = link.clone();
+        spawn_local(async move {
+            let words = match menu::copy_text(&link).await {
+                menu::Copied::Manual => "Copy failed",
+                _ => "Copied",
+            };
+            said.try_set(Some(words));
+            set_timeout(move || { said.try_set(None); }, std::time::Duration::from_millis(1500));
+        });
+    };
+    view! {
+        <button class="histjump copylink" type="button" title=title on:click=copy>{move || said.get().unwrap_or("Copy link")}</button>
+    }
+}
+
 /// ACT-5: what a deleted ticket's page shows — its tombstone: which it was,
 /// who deleted it, when and why, and until when it can be brought back.
-fn tombstone_view(t: menger_tickets_api::Tombstone) -> impl IntoView {
+pub(crate) fn tombstone_view(t: menger_tickets_api::Tombstone) -> impl IntoView {
     let by = t.name.clone().unwrap_or_else(|| t.by.clone());
     let when = format!("{} ({})", fmt_unix(t.at_unix), fmt_relative(now_unix(), t.at_unix));
     let undo = match t.restorable_until_unix {
@@ -2028,6 +2092,13 @@ fn TicketPage(
     // SCALE-24: what this page fetches — its ticket, its blockers, its
     // children — it holds in the row cache while it is open.
     let holder = StoredValue::new(cache::Holder::new());
+    // TICKETS-36: the answer the route's resolution had — the page draws it
+    // at once; its own `get` (below) keeps it fresh.
+    if let Some(first) = resolve::take_handoff(&id) {
+        crate::epics::note_archived(&first.id, first.epic_archived.clone());
+        body.set(Some(first.body.clone()));
+        holder.get_value().hold(TicketSummary::from(&first));
+    }
     // FILTER-16: the global filter the page is under — its wire text; none
     // while it is empty, and then the page is what it always was.
     let lens = lens::use_lens();
@@ -2092,6 +2163,17 @@ fn TicketPage(
         let id = id.clone();
         Memo::new(move |_| cache::find(&id))
     };
+    // TICKETS-36: the address bar on the ticket's own route — a stale
+    // `<ID>-<slug>` rewritten in place (no history entry), again when its
+    // title moves.
+    Effect::new(move |_| {
+        let Some(row) = ticket.get() else { return };
+        let (uid, key, title) = row.with(|t| (t.uid.to_string(), t.id.to_string(), t.title.clone()));
+        let hash = dom::window().location().hash().unwrap_or_default();
+        if let Some(to) = resolve::canonical(&hash, &uid, &key, &title, false) {
+            resolve::replace_hash(&to);
+        }
+    });
     // FILTER-16: what the page asks the filter's verdict on — its ticket, its
     // blockers and unlocks, and its children while every one is shown.
     let want = {
@@ -2180,7 +2262,7 @@ fn TicketPage(
             ancestors(&id)
                 .into_iter()
                 .map(|a| {
-                    let (href, code) = (format!("#/ticket/{a}"), a.clone());
+                    let (href, code) = (links::ticket_href(&a), a.clone());
                     view! {
                         <span class="sep" aria-hidden="true">" / "</span>
                         <a class="crumb" data-ticket-id=a href=href>{crate::epics::shown_id(&code)}</a>
@@ -2608,6 +2690,7 @@ fn App() -> impl IntoView {
                             {move || match route.get() {
                                 Route::Board => "the live board (MFE-3)",
                                 Route::Ticket(_) => "ticket (MFE-7)",
+                                Route::Named(_) => "ticket (TICKETS-36)",
                                 Route::Waves(_) => "the wave board (WAVE-5)",
                                 Route::WavesOf(_) => "a ticket's wave board (MENGER-31)",
                                 Route::Components(_) => "components (COMP-6)",
@@ -2650,6 +2733,9 @@ fn App() -> impl IntoView {
                         Route::Ticket(id) => {
                             view! { <TicketPage id socket last_error /> }.into_any()
                         }
+                        // TICKETS-36: a name, resolved on its page — to the
+                        // ticket's, the collision page, not found or deleted.
+                        Route::Named(named) => view! { <resolve::Resolver named route socket last_error /> }.into_any(),
                         Route::Waves(shortcode) => {
                             view! { <waves::WaveBoard shortcode tree socket last_error /> }.into_any()
                         }
@@ -2717,6 +2803,7 @@ mod tests {
         board_layout, board_window, fmt_relative, parse_route, tally, Geom, Route, BOARD_MARGIN, BOARD_MAX_PX,
         BOARD_STEP,
     };
+    use crate::links::Named;
 
     /// WAVE-5: `#/waves/<SHORTCODE>` is the wave board, case-insensitive;
     /// `#/waves` lists the boards; the board's and the ticket page's routes
@@ -2728,7 +2815,8 @@ mod tests {
         assert_eq!(parse_route("#/waves/Plexus/"), Route::Waves("PLEXUS".into()));
         assert_eq!(parse_route("#/waves"), Route::Waves(String::new()));
         assert_eq!(parse_route("#/waves/"), Route::Waves(String::new()));
-        assert_eq!(parse_route("#/ticket/MNG-4"), Route::Ticket("MNG-4".into()));
+        // TICKETS-36: a ticket's route names it; the page is what it resolves to.
+        assert_eq!(parse_route("#/ticket/MNG-4"), Route::Named(Named::Name("MNG-4".into())));
         assert_eq!(parse_route("#/ticket/"), Route::Board);
         // DEPLOY-13: the deployments page, every project's or one's.
         assert_eq!(parse_route("#/deployments"), Route::Deployments(None));
@@ -2778,6 +2866,8 @@ mod tests {
         assert_eq!(at("#/?g=kind%20build&f=ready"), "#/");
         assert_eq!(at("#/ticket/DEMAND-2"), "#/ticket/DEMAND-2");
         assert_eq!(at("#/ticket/DEMAND-2?comment=7&g=x"), "#/ticket/DEMAND-2");
+        // TICKETS-36: a page by uid is its uid, its tail and query dropped.
+        assert_eq!(at("#/t/7k3mq2xa/DEMAND-2-the-demand?comment=7&g=x"), "#/t/7k3mq2xa");
         assert_eq!(at("#/waves/returns/?status=open"), "#/waves/RETURNS");
         assert_eq!(at("#/waves"), "#/waves");
         assert_eq!(at("#/components/M-Ticket"), "#/components/m-ticket");
@@ -2786,11 +2876,54 @@ mod tests {
         assert_eq!(at("#/settings"), "#/settings");
         assert_eq!(at("#/comments?under=RETURNS"), "#/comments");
         // Every route spells itself back.
-        for r in [Route::Board, Route::Ticket("A-1".into()), Route::Waves("A".into()), Route::Waves(String::new()), Route::Components(None),
-            Route::Components(Some("m-x".into())), Route::Inputs, Route::Settings, Route::Comments]
+        for r in [Route::Board, Route::Waves("A".into()), Route::Waves(String::new()), Route::Components(None),
+            Route::Components(Some("m-x".into())), Route::Inputs, Route::Settings, Route::Comments,
+            Route::Named(Named::Uid("7k3mq2xa".into())), Route::Named(Named::Name("A-1".into()))]
         {
             assert_eq!(parse_route(&route_text(&r)), r);
         }
+        // TICKETS-36: a page resolved spells its uid once the app has met
+        // it (a comment pinned there keeps its ticket), else its key — a name
+        // that resolves to that ticket again.
+        assert_eq!(route_text(&Route::Ticket("A-1".into())), "#/ticket/A-1");
+        crate::cache::learn_pair("q2r9wd4c".parse().unwrap(), "A-2", "x");
+        assert_eq!(route_text(&Route::Ticket("A-2".into())), "#/t/q2r9wd4c");
+        assert_eq!(parse_route(&route_text(&Route::Ticket("A-1".into()))), Route::Named(Named::Name("A-1".into())));
+    }
+
+    /// TICKETS-36: a ticket's two routes — by its uid, `#/t/<uid>` with any
+    /// tail (its id and slug, stale or none) and a ticket page's own query
+    /// (the chat pane, the full view, a comment, a task); and by a name to
+    /// resolve, `#/ticket/<name>` — an id, an address, a key.
+    #[test]
+    fn a_ticket_route_is_its_uid_or_a_name_to_resolve() {
+        let uid = Route::Named(Named::Uid("7k3mq2xa".into()));
+        for h in [
+            "#/t/7k3mq2xa",
+            "#/t/7k3mq2xa/",
+            "#/t/7k3mq2xa/PERF-19-compression-on-the-websocket",
+            "#/t/7k3mq2xa/PERF-19-a-stale-title",
+            "#/t/7K3MQ2XA/perf-19",
+            "#/t/7k3mq2xa/PERF-19-compression?chat=41",
+            "#/t/7k3mq2xa/PERF-19-compression?chat=41&full",
+            "#/t/7k3mq2xa/PERF-19-compression?comment=7",
+            "#/t/7k3mq2xa/PERF-19-compression?view=full&task=glaze",
+            "#/t/7k3mq2xa?rev=3",
+            "/t/7k3mq2xa/PERF-19",
+        ] {
+            assert_eq!(parse_route(h), uid, "{h}");
+        }
+        let name = |n: &str| Route::Named(Named::Name(n.into()));
+        assert_eq!(parse_route("#/ticket/PERF-19"), name("PERF-19"));
+        assert_eq!(parse_route("#/ticket/PERF-19?chat=41&full"), name("PERF-19"));
+        assert_eq!(parse_route("#/ticket/PLEXUS/PERF-19"), name("PLEXUS/PERF-19"));
+        assert_eq!(parse_route("#/ticket/hypermemetic:PLEXUS/PERF-19"), name("hypermemetic:PLEXUS/PERF-19"));
+        assert_eq!(parse_route("#/ticket/PERF.115-19"), name("PERF.115-19"));
+        assert_eq!(parse_route("#/ticket/7k3mq2xa"), name("7k3mq2xa"), "a uid by name resolves as any name");
+        for board in ["#/t/", "#/t", "#/ticket/", "#/ticket"] {
+            assert_eq!(parse_route(board), Route::Board, "{board}");
+        }
+        assert_eq!(super::route_text(&uid), "#/t/7k3mq2xa");
     }
     use crate::nav::roll_label;
 

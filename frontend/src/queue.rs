@@ -532,7 +532,7 @@ pub(crate) fn said(input: &Input, v: &InputValue) -> String {
 pub(crate) fn open_href(e: &QueueEntry) -> String {
     match &e.input {
         Some(i) => crate::needs::answer_href(&e.ticket, i),
-        None => format!("#/ticket/{}", e.ticket),
+        None => crate::links::ticket_href(&e.ticket),
     }
 }
 
@@ -1093,7 +1093,7 @@ fn answer_view(row: Row, s: Sheet, many: bool) -> impl IntoView {
     view! {
         <div class=format!("qd u-{}", e.urgency.as_str()) data-ticket-id=id.clone()>
             <div class="qhd">{hd}</div>
-            <h4><a class="code" href=format!("#/ticket/{id}")>{id.clone()}</a>" · "{row.ticket.title.clone()}</h4>
+            <h4><a class="code" href=crate::links::ticket_href(&id)>{id.clone()}</a>" · "{row.ticket.title.clone()}</h4>
             <p class="qwhy">{e.reason.clone()}</p>
             {(!e.mockups.is_empty()).then(|| crate::queue_views::strip(&e, s.views, s.phone.get_untracked()))}
             {match e.named().len() > 1 {

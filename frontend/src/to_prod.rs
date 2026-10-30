@@ -278,7 +278,7 @@ fn confirm_sheet(
                             <ul>
                                 {c.nodes.into_iter().map(|n| view! {
                                     <li data-ticket-id=n.id.clone()>
-                                        <a href=format!("#/ticket/{}", n.id) class="pid">{n.id.clone()}</a>
+                                        <a href=crate::links::ticket_href(&n.id) class="pid">{n.id.clone()}</a>
                                         <span class="ptitle2">{n.title.clone()}</span>
                                         <span class=format!("ns {}", n.state.class())>{n.state_words()}</span>
                                     </li>

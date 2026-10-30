@@ -91,6 +91,8 @@ pub(crate) enum Context {
     Board,
     /// A ticket's page, focus anywhere but the nav.
     TicketPage,
+    /// TICKETS-36: the collision page — a name that fits several tickets.
+    Collision,
     /// On any ticket: a row, a card, a ticket's page.
     Ticket,
     /// On any chip (a code, a status, a kind, a severity, a label).
@@ -133,12 +135,13 @@ pub(crate) enum Context {
 
 impl Context {
     #[cfg(test)]
-    pub(crate) const ALL: [Context; 23] = [
+    pub(crate) const ALL: [Context; 24] = [
         Context::Anywhere,
         Context::Global,
         Context::Nav,
         Context::Board,
         Context::TicketPage,
+        Context::Collision,
         Context::Ticket,
         Context::Chip,
         Context::Link,
@@ -167,6 +170,7 @@ impl Context {
             Context::Nav => "in the nav",
             Context::Board => "on the board",
             Context::TicketPage => "on a ticket page",
+            Context::Collision => "on the collision page",
             Context::Ticket => "on any ticket",
             Context::Chip => "on any chip",
             Context::Link => "on a link in a body",
@@ -212,7 +216,7 @@ impl Context {
         }
         // APP-44: a mockup's box is a region of its own: focus there is in
         // no other part of the ticket page.
-        let region = |c: Context| matches!(c, Context::Nav | Context::Board | Context::TicketPage | Context::MockBox);
+        let region = |c: Context| matches!(c, Context::Nav | Context::Board | Context::TicketPage | Context::Collision | Context::MockBox);
         if region(self) && region(other) {
             return false;
         }
@@ -302,12 +306,17 @@ pub(crate) const BINDINGS: &[Binding] = &[
     b("move.last", &[C::Nav, C::Board], &["End"], G::Move, "the last row"),
     // LOOK-3: the ticket page's section dock (owner, 2026-10-16: `}` / `{`,
     // so `]` / `[` stay the status keys).
+    // TICKETS-36: the collision page — the tickets a name fits.
+    b("collision.next", &[C::Collision], &["j", "ArrowDown"], G::Move, "the next ticket the name fits (wrapping; one out of your reach passed over)"),
+    b("collision.prev", &[C::Collision], &["k", "ArrowUp"], G::Move, "the previous ticket the name fits"),
     b("dock.next", &[C::TicketPage], &["}"], G::Move, "the ticket page's next section, from its dock (Shift+])"),
     b("dock.prev", &[C::TicketPage], &["{"], G::Move, "the ticket page's previous section (Shift+[)"),
     b("dock.input", &[C::TicketPage], &["i"], G::Move, "the ticket page's next input waiting on you, centred (wrapping)"),
     Binding { id: "focus.tab", contexts: &[C::Global], chords: &["Tab"], group: G::Move, does: "into the nav tree, the board rows, and the controls", native: true },
     // -- Open
     b("open.focused", &[C::Nav, C::Board], &["Enter"], G::Open, "open the focused ticket (a group's row in the nav opens or closes)"),
+    b("collision.open", &[C::Collision], &["Enter"], G::Open, "open the chosen ticket, at its own link by uid"),
+    b("collision.copy", &[C::Collision], &["c"], G::Open, "copy the chosen ticket's link — <origin>/t/<uid>/…, to share"),
     b("palette.open", &[C::Global], &["/"], G::Open, "jump to a ticket by its code, its title or words inside — or type `filter SC`, `filter <text>`, `deployed <env>`, `ready for <env>`, `theme <name>`"),
     b("palette.toggle", &[C::Anywhere, C::Frame], &["Mod+k"], G::Open, "the jump palette from anywhere — a text field, a dialog, a framed body; again, it closes"),
     b("go.board", &[C::Global], &["g h"], G::Open, "go to the board"),
@@ -370,7 +379,7 @@ pub(crate) const BINDINGS: &[Binding] = &[
     b("comment.focus", &[C::TicketPage], &["c"], G::Annotate, "comment on the ticket as a whole: its Conversation box, focused"),
     // -- View
     b("view.full-screen", &[C::TicketPage, C::Frame], &["z"], G::View, "the ticket's framed body full screen, and back (from inside the body too)"),
-    b("app.escape", &[C::Global, C::Frame], &["Escape"], G::View, "close the palette or this list; fold an open query tree; leave annotation mode; leave full screen; clear the selection"),
+    b("app.escape", &[C::Global, C::Frame], &["Escape"], G::View, "close the palette or this list; fold an open query tree; leave annotation mode; leave full screen; on the collision page, back to the board; clear the selection"),
     // APP-33: a mockup at any size (src/mocksize.rs).
     b("mockup.drag", &[C::Mockup], &["Click"], G::View, "drag a mockup device's right edge (its width) or corner (both), snapping to a standard width within 8 px"),
     b("mockup.drag-free", &[C::Mockup], &["Alt+Click"], G::View, "drag it without snapping"),

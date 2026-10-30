@@ -75,7 +75,7 @@ pub(crate) fn docs_route(name: &str) -> String {
 /// defines it any more), its help page.
 pub(crate) fn definition_route(name: &str, owner: Option<&str>) -> String {
     match owner {
-        Some(owner) => format!("#/ticket/{owner}?component={name}"),
+        Some(owner) => format!("{}?component={name}", crate::links::ticket_href(owner)),
         None => docs_route(name),
     }
 }
@@ -135,14 +135,19 @@ pub(crate) fn app_route(route: &str) -> Option<String> {
     if !route_chars_ok(path) || query.is_some_and(|q| !route_chars_ok(q)) {
         return None;
     }
+    let card = |q: Option<&str>| {
+        q.is_none_or(|q| {
+            q.strip_prefix("component=").is_some_and(is_component_name)
+                || q.strip_prefix("field=").is_some_and(section_name_ok)
+                || q.strip_prefix("anchor=").is_some_and(section_name_ok)
+        })
+    };
     let ok = match path.split_once('/') {
-        Some(("ticket", id)) => {
-            menger_tickets_api::address::split_key(id).is_some_and(|(epic, _)| !epic.contains('.'))
-                && query.is_none_or(|q| {
-                    q.strip_prefix("component=").is_some_and(is_component_name)
-                        || q.strip_prefix("field=").is_some_and(section_name_ok)
-                        || q.strip_prefix("anchor=").is_some_and(section_name_ok)
-                })
+        Some(("ticket", id)) => menger_tickets_api::address::split_key(id).is_some_and(|(epic, _)| !epic.contains('.')) && card(query),
+        // TICKETS-36: a ticket by its uid, its `<ID>-<slug>` after it.
+        Some(("t", rest)) => {
+            let (uid, tail) = rest.split_once('/').unwrap_or((rest, ""));
+            uid.parse::<menger_tickets_api::Uid>().is_ok() && tail.chars().all(|c| c.is_ascii_alphanumeric() || "-.".contains(c)) && card(query)
         }
         Some(("components", tag)) => (tag.is_empty() || is_component_name(tag)) && query.is_none(),
         Some(("waves", sc)) => sc.is_empty() || menger_tickets_api::address::is_code(sc),
@@ -184,8 +189,9 @@ impl Anchor {
 pub(crate) fn anchor(hash: &str) -> Option<Anchor> {
     let path = hash.strip_prefix('#').unwrap_or(hash);
     let path = path.strip_prefix('/').unwrap_or(path);
-    let (path, query) = path.split_once('?')?;
-    if !path.starts_with("ticket/") {
+    let (_, query) = path.split_once('?')?;
+    // TICKETS-36: a ticket's page by its uid or by a name.
+    if !crate::links::is_ticket_route(hash) {
         return None;
     }
     query.split('&').find_map(|kv| {
@@ -305,8 +311,15 @@ mod tests {
             ("#/ticket/SYNAPSE-CC-1", "#/ticket/SYNAPSE-CC-1"),
             ("#/ticket/synapse-cc-1?field=findings", "#/ticket/synapse-cc-1?field=findings"),
             ("#/waves/SYNAPSE-CC", "#/waves/SYNAPSE-CC"),
+            // TICKETS-36: a ticket by its uid, its tail and a card's query.
+            ("#/t/7k3mq2xa", "#/t/7k3mq2xa"),
+            ("#/t/7k3mq2xa/PERF-19-compression-on-the-websocket", "#/t/7k3mq2xa/PERF-19-compression-on-the-websocket"),
+            ("#/t/7k3mq2xa/KILN-2.1-load?field=findings", "#/t/7k3mq2xa/KILN-2.1-load?field=findings"),
         ] {
             assert_eq!(app_route(route).as_deref(), Some(want), "{route}");
+        }
+        for route in ["#/t/", "#/t/not-a-uid", "#/t/7k3mq2xa/x/y", "#/t/7k3mq2xa/x_y", "#/t/7k3mq2xa?evil=1", "#/t/7k3mq2xa/%22"] {
+            assert_eq!(app_route(route), None, "{route}");
         }
         for route in [
             "", "#", "#/", "/app/#/ticket/A-1", "https://example.com", "javascript:alert(1)", "#/ticket/", "#/ticket/A",
@@ -327,6 +340,10 @@ mod tests {
         assert_eq!(card_anchor("#/components/m-x?component=m-x"), None);
         assert_eq!(card_anchor("#/ticket/DEMO-5?component=nohyphen"), None);
         assert_eq!(card_anchor("#/ticket/DEMO-5?field=findings"), None);
+        // TICKETS-36: the page by its uid reads its anchor as by its id.
+        assert_eq!(card_anchor("#/t/7k3mq2xa/DEMO-5-the-demo?component=m-wave-summary").as_deref(), Some("m-wave-summary"));
+        assert_eq!(anchor("#/t/7k3mq2xa/DEMO-5?field=findings"), Some(Anchor::Field("findings".into())));
+        assert_eq!(anchor("#/waves/DEMO?component=m-x"), None);
     }
 
     /// COMP-14: a section anchor — by `data-field` or by id — read off a

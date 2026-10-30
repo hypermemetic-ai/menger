@@ -766,7 +766,7 @@ fn row(n: Node, open: RwSignal<Option<Open>>) -> impl IntoView {
 
 /// A chip that opens a ticket's summary when it is in flight, else its page.
 fn chip(id: String, in_flight: bool, open: RwSignal<Option<Open>>) -> impl IntoView {
-    let href = format!("#/ticket/{id}");
+    let href = crate::links::ticket_href(&id);
     let target = id.clone();
     view! {
         <a
@@ -792,7 +792,7 @@ fn TicketSheet(id: String, nodes: Memo<Vec<Node>>, project: Memo<Option<String>>
     };
     let held = deploys::held();
     let in_flight = move |x: &str| nodes.with_untracked(|ns| ns.iter().any(|n| n.id == x));
-    let href = format!("#/ticket/{id}");
+    let href = crate::links::ticket_href(&id);
     view! {
         <div class="shead">
             <span class="code">{id.clone()}</span>

@@ -204,7 +204,7 @@ pub(crate) fn host_of(el: &web_sys::Element) -> Option<web_sys::Element> {
     let near = |sel: &str| el.closest(sel).ok().flatten();
     near("[data-ticket-id]:not(section)")
         .or_else(|| {
-            near("a[href^='#/ticket/']")
+            near(crate::links::TICKET_LINKS)
                 .filter(|a| ticket_of(a).is_some() && a.closest("#tmenu, #tagmenu").ok().flatten().is_none())
         })
         .or_else(|| near("section[data-ticket-id]"))
@@ -220,10 +220,16 @@ fn ticket_of(host: &web_sys::Element) -> Option<String> {
 
 /// APP-57: the ticket a link inside the app opens — `#/ticket/<ID>`, with
 /// or without a query (`?chat=41`, `?comment=7`) — if it is one.
+/// TICKETS-36: `#/t/<uid>/…` too — the key the app knows for the uid, or
+/// the uid itself (every method takes it).
 pub(crate) fn ticket_in_href(href: &str) -> Option<String> {
-    let rest = href.strip_prefix("#/ticket/")?;
-    let end = rest.find(['?', '/', '#']).unwrap_or(rest.len());
-    frame_ticket(&rest[..end])
+    if !href.starts_with("#/") {
+        return None; // a link elsewhere, even one whose fragment is a route
+    }
+    match crate::links::named(href)? {
+        crate::links::Named::Uid(uid) => Some(crate::cache::key_of(&uid).unwrap_or(uid)),
+        crate::links::Named::Name(name) => frame_ticket(name.split('/').next().unwrap_or_default()),
+    }
 }
 
 /// ACT-4: whose filter the menu's filter items build, for a right-click on
@@ -326,7 +332,7 @@ struct Target {
 /// How a copy ended (see module doc): the async API, the legacy command,
 /// or neither — the id is offered selected for a manual copy.
 #[derive(Clone, Copy, PartialEq, Debug)]
-enum Copied {
+pub(crate) enum Copied {
     Api,
     Legacy,
     Manual,
@@ -483,7 +489,8 @@ fn key_target() -> Option<Target> {
     if let Some(t) = focused_ticket().filter(|t| !t.ids.is_empty()) {
         return Some(t);
     }
-    let crate::Route::Ticket(id) = crate::parse_route(&dom::window().location().hash().unwrap_or_default()) else { return None };
+    // TICKETS-36: the page's ticket by its key, whatever name opened it.
+    let crate::Route::Ticket(id) = crate::current_route() else { return None };
     let active = document().active_element();
     if active.as_ref().is_some_and(|a| a.closest("#nav .tree, #nav [role=treeitem]").ok().flatten().is_some()) {
         return None;
@@ -752,7 +759,7 @@ fn legacy_copy(text: &str) -> bool {
     ok
 }
 
-async fn copy_text(text: &str) -> Copied {
+pub(crate) async fn copy_text(text: &str) -> Copied {
     if let Some(p) = clipboard_write(text) {
         if JsFuture::from(p).await.is_ok() {
             return Copied::Api;
@@ -940,6 +947,13 @@ mod tests {
         assert_eq!(ticket_in_href("#/ticket/not a ticket"), None);
         assert_eq!(ticket_in_href("#/board"), None);
         assert_eq!(ticket_in_href("https://example.com/#/ticket/KILN-7"), None);
+        // TICKETS-36: a link by uid is its ticket — by the uid, until the
+        // app has met the ticket (every method takes a uid).
+        assert_eq!(ticket_in_href("#/t/7k3mq2xa/KILN-7-the-kiln?chat=41").as_deref(), Some("7k3mq2xa"));
+        crate::cache::learn_pair("q2r9wd4c".parse().unwrap(), "KILN-9", "the shelves");
+        assert_eq!(ticket_in_href("#/t/Q2R9WD4C/KILN-9").as_deref(), Some("KILN-9"), "the key the app knows");
+        assert_eq!(ticket_in_href("https://example.com/#/t/7k3mq2xa/x"), None);
+        assert_eq!(ticket_in_href("#/t/"), None);
     }
 
     /// MENGER-34: what a frame says is a ticket only when it has a ticket's
