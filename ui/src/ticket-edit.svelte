@@ -1,16 +1,16 @@
 <!-- SURFACE-4: a ticket's edit form (svelte/1), placed in the ticket page by
      <ticket-edit id={id}/> and opened by its button or `ticket.edit` on the
      bus (the page's `e`). Two saves, as the designer drew them: the fields —
-     title, severity, blockers and hidden through one `update`, the kind
-     through `set_kind`, the parent through `set_parent` (SURFACE-5's
-     ticket-picker in a bound mark, heard as `picked`, or an id typed) — and
-     the body through `amend`, its markdown previewed beside it by the host's
-     render. Each write's answer is said under its field, a refusal in the
-     store's words ([data-refused]); the ticket itself moves on the watch.
-     ctrl+enter saves, escape cancels (FRAME-36's keys, while the form is
-     open). -->
+     title, kind, severity, hidden, parent (SURFACE-5's ticket-picker in a
+     bound mark, heard as `picked`, or an id typed) and blockers — as one
+     `update`, all of it or none, set_kind's and set_parent's rules applied
+     by the store; and the body through `amend`, its markdown previewed beside
+     it by the host's render. Each write's answer is said under its form, a
+     refusal in the store's words ([data-refused]); the ticket itself moves on
+     the watch. ctrl+enter saves, escape cancels (FRAME-36's keys, while the
+     form is open); nothing is asked twice while a write is pending. -->
 <script module>
-  export const uses = ["tickets.get", "tickets.watch", "tickets.amend", "tickets.update", "tickets.set_kind", "tickets.set_parent"];
+  export const uses = ["tickets.get", "tickets.watch", "tickets.amend", "tickets.update"];
 </script>
 
 <script>
@@ -26,12 +26,29 @@
                         on: { amended: "upsert:ticket", status_changed: "upsert:ticket", kind_changed: "upsert:ticket", labels_changed: "upsert:ticket",
                               severity_changed: "upsert:ticket", hidden_changed: "upsert:ticket", blockers_changed: "upsert:ticket",
                               parent_changed: "upsert:ticket", frozen_changed: "upsert:ticket", deleted: "remove:ids" } });
-  const t = $derived($ticket.rows[0]);
+  // What the watch says of the ticket without carrying it (an undelete's tickets, a bulk update): each
+  // such event naming the id asks `get` again.
+  const said = live({ snapshot: "tickets.get", params: () => ({ id }), changes: "tickets.watch", key: "ids",
+                      on: { undeleted: "upsert:.", updated_many: "upsert:.", deleted: "upsert:." } });
+  let fresh = $state(null);
+  let heard = null;
+  $effect(() => {
+    const news = said.rows.filter((r) => Array.isArray(r.ids) && r.ids.includes(id));
+    if (heard === null) { heard = news; return; }
+    if (news.some((r) => !heard.includes(r))) regain();
+    heard = news;
+  });
+  async function regain() {
+    const r = await b.call("tickets.get", { id });
+    fresh = r.ok ? (r.events.find((e) => e?.type === "ticket")?.ticket ?? null) : null;
+  }
+  const t = $derived($ticket.rows[0] ?? (fresh?.id === id ? fresh : undefined));
 
   let open = $state(false);
   let draft = $state({ title: "", body: "", kind: "", severity: "none", parent: "", hidden: false, blockers: [], block: "" });
   // Each write's last answer: { said } or { refused }, by its method.
   let answers = $state({});
+  let pending = $state(0);
 
   const sevOf = (x) => x?.severity ?? "none";
   const parentOf = (x) => x?.parent ?? "";
@@ -41,7 +58,7 @@
     kind: draft.kind !== t.kind,
     severity: draft.severity !== sevOf(t),
     hidden: draft.hidden !== (t.hidden === true),
-    parent: draft.parent.trim() !== "" && draft.parent.trim() !== parentOf(t),
+    parent: draft.parent.trim() !== parentOf(t),
     blockers: !same(draft.blockers, t.blocked_by ?? []),
     body: draft.body !== t.body,
   } : {});
@@ -65,56 +82,49 @@
   $effect(() => {
     if (!open) return;
     return b.keys({
-      "ctrl+enter": { to: save, label: "save the edit", in_inputs: true },
-      escape: { to: cancel, label: "cancel the edit", in_inputs: true },
+      "ctrl+enter": { to: () => { if (!pending) save(); }, label: "save the edit", in_inputs: true },
+      escape: { to: () => { if (!pending) cancel(); }, label: "cancel the edit", in_inputs: true },
     });
   });
 
-  /** A write, its answer as FRAME-37 hands it — `{ ok, events, message }` —
-   *  or, before it lands, made so from the events (an in-band error, a
-   *  not_found) or the refusal thrown. */
-  async function ask(asked, params) {
-    let r;
-    try {
-      r = await asked;
-    } catch (e) {
-      return { ok: false, events: [], message: e?.message ?? String(e) };
-    }
-    if (r && !Array.isArray(r) && typeof r === "object" && "ok" in r) return r;
-    const events = Array.isArray(r) ? r : [];
-    const bad = events.find((e) => e?.type === "error" || e?.type === "not_found" || e?.type === "refused");
-    return { ok: !bad, events, message: bad ? (bad.message ?? bad.reason ?? `no ticket ${params.id ?? ""}`) : undefined };
-  }
-  async function write(key, asked, params, said) {
+  /** A write asked (`b.call("…", params)`, its method as written): its answer — FRAME-37's
+   *  `{ ok, events, message }`, the events array carrying the three — said under `key`. */
+  async function write(key, asked, said) {
+    pending += 1;
     answers[key] = { asking: true };
-    const r = await ask(asked, params);
-    answers[key] = r.ok ? { said: said(r.events[0] ?? {}) } : { refused: r.message ?? "refused" };
+    try {
+      const r = await asked;
+      answers[key] = r?.ok ? { said: said(r.events?.[0] ?? {}) } : { refused: r?.message ?? "refused" };
+      return r;
+    } finally {
+      pending -= 1;
+    }
   }
 
-  function saveFields() {
-    if (!open || !t) return;
+  function saveFields(chained = false) {
+    if (!open || !t || (pending && !chained)) return;
     const p = { id, source: "app" };
     if (dirty.title) p.title = draft.title;
+    if (dirty.kind) p.kind = draft.kind;
     if (dirty.severity) p.severity = draft.severity;
     if (dirty.hidden) p.hidden = draft.hidden;
+    // An emptied parent is asked as written: the store says whether a ticket may lose its parent.
+    if (dirty.parent) p.parent = draft.parent.trim();
     const block = draft.blockers.filter((x) => !(t.blocked_by ?? []).includes(x));
     const unblock = (t.blocked_by ?? []).filter((x) => !draft.blockers.includes(x));
     if (block.length) p.block = block;
     if (unblock.length) p.unblock = unblock;
     if (Object.keys(p).length > 2)
-      write("tickets.update", b.call("tickets.update", p), p, (e) => (e.changed?.length ? "saved " + e.changed.join(", ") : "nothing changed"));
-    if (dirty.kind)
-      write("tickets.set_kind", b.call("tickets.set_kind", { id, kind: draft.kind, source: "app" }), {}, (e) => `${e.previous} → ${e.ticket?.kind}`);
-    if (dirty.parent)
-      write("tickets.set_parent", b.call("tickets.set_parent", { id, parent: draft.parent.trim() }), { id }, (e) => `under ${e.ticket?.parent}`);
+      write("tickets.update", b.call("tickets.update", p), (e) => (e.changed?.length ? "saved " + e.changed.join(", ") : "nothing changed"));
   }
-  function saveBody() {
-    if (!open || !t || !dirty.body) return;
-    write("tickets.amend", b.call("tickets.amend", { id, body: draft.body }), { id }, (e) => (e.changed?.length ? "saved the body" : "nothing changed"));
+  function saveBody(chained = false) {
+    if (!open || !t || !dirty.body || (pending && !chained)) return;
+    write("tickets.amend", b.call("tickets.amend", { id, body: draft.body }), (e) => (e.changed?.length ? "saved the body" : "nothing changed"));
   }
   function save() {
-    saveFields();
-    saveBody();
+    if (pending) return;
+    saveFields(true);
+    saveBody(true);
   }
   function blockKeyed(ev) {
     if (ev.key !== "Enter") return;
@@ -152,12 +162,11 @@
             </label>
             <div class="te-f">
               <span class="te-l">kind{#if dirty.kind}<i class="dirty" title="changed"></i>{/if}</span>
-              <span class="seg" role="radiogroup" aria-label="kind" data-field="kind" data-action="tickets.set_kind">
+              <span class="seg" role="radiogroup" aria-label="kind" data-field="kind">
                 {#each KINDS as k (k)}
                   <button type="button" role="radio" data-kind-pick={k} aria-checked={draft.kind === k} onclick={() => (draft.kind = k)}><i class="kmark" data-kind={k} aria-hidden="true"></i>{k}</button>
                 {/each}
               </span>
-              {@render answer("tickets.set_kind")}
             </div>
             <div class="te-f">
               <span class="te-l">severity{#if dirty.severity}<i class="dirty" title="changed"></i>{/if}</span>
@@ -175,14 +184,13 @@
               <span class="te-l">parent{#if dirty.parent}<i class="dirty" title="changed"></i>{/if}</span>
               <span class="te-chips">
                 {#if t.parent}<Chip id={t.parent} kind="parent"/>{/if}
-                <input class="in" data-field="parent" data-action="tickets.set_parent" placeholder="an id" spellcheck="false" autocomplete="off"
-                       aria-invalid={answers["tickets.set_parent"]?.refused ? "true" : "false"} bind:value={draft.parent}/>
+                <input class="in" data-field="parent" placeholder="an id" spellcheck="false" autocomplete="off"
+                       bind:value={draft.parent}/>
               </span>
               <!-- SURFACE-5's picker, as `import Picker from "plexus-ui:ticket-picker"` draws it — a bound
                    mark the host fills; the import refuses the build until ticket-picker is in src/, so the
                    mark is written as the import resolves it (the merge turns it into the import). -->
               <div class="picker" data-slot="ticket-picker" data-component="ticket-picker" data-name="parent"></div>
-              {@render answer("tickets.set_parent")}
             </div>
             <div class="te-f span2">
               <span class="te-l">blocked by{#if dirty.blockers}<i class="dirty" title="changed"></i>{/if}</span>
@@ -195,7 +203,7 @@
             </div>
           </div>
           <div class="te-act">
-            <button type="button" class="btn primary" data-action="tickets.update" disabled={fields === 0} onclick={saveFields}>{fields === 0 ? "save fields" : `save ${fields} field${fields === 1 ? "" : "s"}`}</button>
+            <button type="button" class="btn primary" data-action="tickets.update" disabled={fields === 0 || pending > 0} onclick={() => saveFields()}>{fields === 0 ? "save fields" : `save ${fields} field${fields === 1 ? "" : "s"}`}</button>
             {@render answer("tickets.update")}
           </div>
         </div>
@@ -212,8 +220,8 @@
             </div>
           </div>
           <div class="te-act">
-            <button type="button" class="btn primary" data-action="tickets.amend" disabled={!dirty.body} onclick={saveBody}>save body</button>
-            <button type="button" class="btn ghost" data-action="cancel" onclick={cancel}>cancel</button>
+            <button type="button" class="btn primary" data-action="tickets.amend" disabled={!dirty.body || pending > 0} onclick={() => saveBody()}>save body</button>
+            <button type="button" class="btn ghost" data-action="cancel" disabled={pending > 0} onclick={cancel}>cancel</button>
             {@render answer("tickets.amend")}
             <span class="hint push"><kbd>ctrl</kbd><kbd>enter</kbd> save <kbd>esc</kbd> cancel</span>
           </div>

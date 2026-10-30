@@ -1,19 +1,24 @@
 <!-- SURFACE-4: what can be done to a ticket (svelte/1), placed in the ticket
      page by <ticket-actions id={id}/>, as the designer drew it in the side
-     column: the moves the lifecycle allows from the status (set_status;
-     Canceled and Superseded ask why), labels (a chip with ×, a field to
-     add), archive (a dry run first) and restore, rename (a dry run first), a
-     revision put back (the rev from `ticket.revision_picked` on the bus, or
-     typed), and the admin's freeze/unfreeze, reshortcode (a dry run first),
-     delete (what its children and waiters do) and undelete. Each action is
-     [data-action=<method>]; its answer is said beside it, a refusal in the
-     store's words ([data-refused]); an action the caller's roles do not hold
-     is drawn disabled, naming the role `auth requires` says it needs. -->
+     column: the lifecycle's moves from the status (set_status; the next steps
+     first, every other move the store allows under "more…"; Canceled and
+     Superseded ask why; leaving Canceled may restore what it canceled),
+     labels (a chip with ×, a field to add), archive (a dry run first) and
+     restore, rename (a dry run first), a revision put back (the rev from
+     `ticket.revision_picked` on the bus, or typed), and the admin's
+     freeze/unfreeze, reshortcode (a dry run first), delete (what its children
+     and waiters do) and undelete. Each action is [data-action=<method>] with
+     a message of its own; its answer is said beside it, a refusal in the
+     store's words ([data-refused]); nothing is asked twice while a write is
+     pending. An action the caller's roles on this ticket do not hold — the
+     grants of members.mine that cover it — is drawn disabled, naming the
+     roles `auth requires` says it needs. -->
 <script module>
-  export const uses = ["tickets.get", "tickets.watch", "auth.whoami", "auth.requires",
+  export const uses = ["tickets.get", "tickets.watch", "members.mine", "auth.requires",
     "tickets.set_status", "tickets.label", "tickets.archive", "tickets.restore", "tickets.rename", "tickets.revisions.restore",
     "tickets.freeze", "tickets.unfreeze", "tickets.reshortcode", "tickets.delete", "tickets.undelete"];
-  // The lifecycle's moves from each status, the next step first (the designer's).
+  // The designer's next steps from each status; the store allows any move but
+  // Complete over open children and nothing on a doc, so the rest are under "more…".
   const LIFE = {
     Draft: ["Pending", "Superseded", "Canceled"],
     Pending: ["Ready", "Draft", "Superseded", "Canceled"],
@@ -26,6 +31,7 @@
     Superseded: ["Pending"],
     Canceled: ["Pending"],
   };
+  const ALL = ["Draft", "Pending", "Ready", "Coding", "In Review", "Blocked", "Complete", "Epic", "Superseded", "Canceled"];
   const FIELDS = ["title", "body", "status", "kind", "severity", "parent", "blocked_by", "labels"];
 </script>
 
@@ -39,27 +45,73 @@
                         on: { amended: "upsert:ticket", status_changed: "upsert:ticket", kind_changed: "upsert:ticket", labels_changed: "upsert:ticket",
                               severity_changed: "upsert:ticket", hidden_changed: "upsert:ticket", blockers_changed: "upsert:ticket",
                               parent_changed: "upsert:ticket", frozen_changed: "upsert:ticket", deleted: "remove:ids" } });
-  const t = $derived($ticket.rows[0]);
-  // Who may: the caller's memberships, and the roles each class of action needs.
-  const who = live({ snapshot: "auth.whoami", params: {}, key: "principal" });
+  // What the watch says of the ticket without carrying it — an archive, a restore, an undelete, a bulk
+  // update, a delete: each such event naming the id asks `get` again, from this page or another session.
+  const said = live({ snapshot: "tickets.get", params: () => ({ id }), changes: "tickets.watch", key: "ids",
+                      on: { archived: "upsert:.", restored: "upsert:.", undeleted: "upsert:.", updated_many: "upsert:.", deleted: "upsert:." } });
+  let fresh = $state(null);
+  let heard = null;
+  $effect(() => {
+    const news = said.rows.filter((r) => Array.isArray(r.ids) && r.ids.includes(id));
+    if (heard === null) { heard = news; return; }
+    if (news.some((r) => !heard.includes(r))) regain();
+    heard = news;
+  });
+  async function regain() {
+    const r = await b.call("tickets.get", { id });
+    fresh = { ticket: r.ok ? (r.events.find((e) => e?.type === "ticket")?.ticket ?? null) : null };
+  }
+  const t = $derived($ticket.rows[0] ?? (fresh?.ticket?.id === id ? fresh.ticket : undefined));
+  const archived = $derived(fresh?.ticket?.id === id ? fresh.ticket.archived != null : t?.archived != null);
+
+  // Who may: the grants that cover this ticket, and the roles each class of action needs.
+  const mine = live({ snapshot: "members.mine", params: {}, key: "principal", on: { me: "upsert:.", grant: "upsert:grant" } });
   const needs = (method) => live({ snapshot: "auth.requires", params: { method }, key: "method" });
   const need = { edit: needs("tickets.set_status"), freeze: needs("tickets.freeze"), reshortcode: needs("tickets.reshortcode"), delete: needs("tickets.delete"), undelete: needs("tickets.undelete") };
-  const me = $derived($who.rows[0]);
-  const held = $derived((me?.memberships ?? []).map((m) => m.role));
-  /** The roles `auth requires` names for a class, when the caller holds none of them; else null. */
+  const me = $derived(mine.rows.find((r) => "admin_everywhere" in r));
+  const grants = $derived(mine.rows.filter((r) => r.role && r.scope));
+  // A grant `under X` covers the ticket when X is it or an ancestor: the chain asked once, when such a grant is held.
+  let ancestors = $state([]);
+  $effect(() => {
+    if (!t || !grants.some((g) => g.scope.startsWith("under "))) return;
+    let gone = false;
+    (async () => {
+      const chain = [];
+      let at = t.parent;
+      while (at && chain.length < 32 && !gone) {
+        chain.push(at);
+        const r = await b.call("tickets.get", { id: at });
+        at = r.ok ? r.events.find((e) => e?.type === "ticket")?.ticket?.parent : null;
+      }
+      if (!gone) ancestors = chain;
+    })();
+    return () => (gone = true);
+  });
+  function covers(scope, x) {
+    if (scope === "*") return true;
+    const org = (x.address ?? "").split(":")[0];
+    if (scope === org + ":" || scope === "org:" + org) return true;
+    if (scope === x.shortcode || scope === x.epic || scope === `${org}:${x.shortcode}` || scope === x.id) return true;
+    const under = /^under\s+(.+)$/.exec(scope)?.[1];
+    return !!under && (under === x.id || ancestors.includes(under));
+  }
+  const held = $derived(me?.admin_everywhere ? ["admin"] : t ? [...new Set(grants.filter((g) => covers(g.scope, t)).map((g) => g.role))] : []);
+  /** The roles `auth requires` names for a class, when the caller holds none of them here; else null. */
   function lacks(store) {
     const roles = store?.rows?.[0]?.roles;
     if (!me || !roles) return null;
     return held.some((r) => roles.includes(r)) ? null : roles;
   }
   const lack = $derived({ edit: lacks(need.edit), freeze: lacks(need.freeze), reshortcode: lacks(need.reshortcode), delete: lacks(need.delete), undelete: lacks(need.undelete) });
-  const why = (roles) => `${roles.join(" or ")} · you hold ${held.join(", ") || "nothing"}`;
+  const why = (roles) => `${roles.join(" or ")} · you hold ${held.join(", ") || "nothing"} here`;
 
-  let msg = $state("");
+  // A message per action.
+  let msgs = $state({ status: "", archive: "", rename: "", reshortcode: "", delete: "", revision: "" });
   let ask = $state(""); // Canceled or Superseded, waiting for its why
+  let moreMoves = $state(false);
+  let restoreChildren = $state(false);
   let refusedOn = $state("");
   let label = $state("");
-  let arch = $state(""); // "" the store's word, else "archived" / "live" after a write here
   let withChildren = $state(true);
   let dry = $state({ archive: null, rename: null, reshortcode: null }); // null, or { text } while confirming
   let renameTo = $state("");
@@ -71,6 +123,8 @@
   let rev = $state("");
   let revFields = $state([]);
   let answers = $state({});
+  let pending = $state(0);
+  const busy = $derived(pending > 0);
 
   b.on("ticket.revision_picked", (data) => {
     if (data?.rev != null) {
@@ -79,46 +133,45 @@
     }
   });
 
-  /** A write, its answer as FRAME-37 hands it — `{ ok, events, message }` —
-   *  or, before it lands, made so from the events (an in-band error, a
-   *  not_found) or the refusal thrown. */
-  async function settle(asked, params) {
-    let r;
+  /** A write asked (`b.call("…", params)`, its method as written): FRAME-37's answer —
+   *  `{ ok, events, message }`, the events array carrying the three. */
+  async function settle(asked) {
+    pending += 1;
     try {
-      r = await asked;
-    } catch (e) {
-      return { ok: false, events: [], message: e?.message ?? String(e) };
+      const r = await asked;
+      return r && "ok" in r ? { ok: r.ok, events: r.events ?? r, message: r.message } : { ok: false, events: [], message: "no answer" };
+    } finally {
+      pending -= 1;
     }
-    if (r && !Array.isArray(r) && typeof r === "object" && "ok" in r) return r;
-    const events = Array.isArray(r) ? r : [];
-    const bad = events.find((e) => e?.type === "error" || e?.type === "not_found" || e?.type === "refused");
-    return { ok: !bad, events, message: bad ? (bad.message ?? bad.reason ?? `no ticket ${id}`) : undefined };
   }
-  /** A write asked (`b.call("…", params)`, its method as written); its answer said under `key` — `said(event)` or the refusal. */
-  async function write(key, asked, params, said) {
+  /** Its answer said under `key` — `said(event)` or the refusal's words. */
+  async function write(key, asked, said) {
     answers[key] = { asking: true };
-    const r = await settle(asked, params);
-    answers[key] = r.ok ? { said: said ? said(r.events[0] ?? {}, params) : "" } : { refused: r.message ?? "refused" };
+    const r = await settle(asked);
+    answers[key] = r.ok ? { said: said ? said(r.events[0] ?? {}) : "" } : { refused: r.message ?? "refused" };
     return r;
   }
-  const withWhy = (p) => (msg.trim() ? { ...p, message: msg.trim() } : p);
+  const withWhy = (key, p) => (msgs[key].trim() ? { ...p, message: msgs[key].trim() } : p);
   const moves = (e) => (e.moves ?? []).map((m) => `${m.from} → ${m.to}`).join(", ");
 
   // The lifecycle.
   async function move(to) {
+    if (busy) return;
     if ((to === "Canceled" || to === "Superseded") && ask !== to) {
       ask = to;
       return;
     }
-    if (ask === to && !msg.trim()) return;
+    if (ask === to && !msgs.status.trim()) return;
     ask = "";
     refusedOn = to;
-    const p = withWhy({ id, status: to, source: "app" });
-    const r = await write("tickets.set_status", b.call("tickets.set_status", p), p,
-      (e, p) => `${e.previous} → ${e.ticket?.status}${p.message ? ` · “${p.message}”` : ""}`);
+    const p = withWhy("status", { id, status: to, source: "app" });
+    if (t?.status === "Canceled" && restoreChildren) p.restore_children = true;
+    const r = await write("tickets.set_status", b.call("tickets.set_status", p),
+      (e) => `${e.previous} → ${e.ticket?.status}${p.message ? ` · “${p.message}”` : ""}`);
     if (r.ok) {
       refusedOn = "";
-      msg = "";
+      msgs.status = "";
+      restoreChildren = false;
     }
   }
 
@@ -127,17 +180,18 @@
     if (ev.key !== "Enter") return;
     ev.preventDefault();
     const l = label.trim();
-    if (!l) return;
+    if (!l || busy) return;
     label = "";
-    const p = { id, add: [l] };
-    write("tickets.label", b.call("tickets.label", p), p);
+    write("tickets.label", b.call("tickets.label", { id, add: [l] }));
   }
-  const unlabel = (l) => { const p = { id, remove: [l] }; return write("tickets.label", b.call("tickets.label", p), p); };
+  const unlabel = (l) => !busy && write("tickets.label", b.call("tickets.label", { id, remove: [l] }));
 
   // The archive.
   async function dryArchive() {
+    if (busy) return;
     dry.archive = { text: `archives ${id} with its whole subtree` };
-    const r = await settle(b.call("tickets.archive", { ids: [id], dry_run: true }), {});
+    answers["tickets.archive"] = undefined;
+    const r = await settle(b.call("tickets.archive", { ids: [id], dry_run: true }));
     if (!r.ok) {
       dry.archive = null;
       answers["tickets.archive"] = { refused: r.message };
@@ -147,26 +201,23 @@
     if (dry.archive) dry.archive = { text: `archives ${(e.ids ?? []).join(", ")} · ${(e.ids ?? []).length} out of every view${e.live?.length ? `, ${e.live.length} still live` : ""}` };
   }
   async function archive() {
+    if (busy) return;
     dry.archive = null;
-    arch = "archived";
-    const p = withWhy({ ids: [id] });
-    const r = await write("tickets.archive", b.call("tickets.archive", p), p, (e) => `archived ${(e.ids ?? []).join(", ")}`);
-    if (!r.ok) arch = "";
+    const r = await write("tickets.archive", b.call("tickets.archive", withWhy("archive", { ids: [id] })), (e) => `archived ${(e.ids ?? []).join(", ")}`);
+    if (r.ok) msgs.archive = "";
   }
   async function restore() {
-    arch = "live";
-    const p = withWhy({ ids: [id], with_children: withChildren });
-    const r = await write("tickets.archive", b.call("tickets.restore", p), p,
+    if (busy) return;
+    const r = await write("tickets.archive", b.call("tickets.restore", withWhy("archive", { ids: [id], with_children: withChildren })),
       (e) => `restored ${(e.ids ?? []).join(", ")}${e.still_archived?.length ? ` · still archived: ${e.still_archived.join(", ")}` : ""}`);
-    if (!r.ok) arch = "";
+    if (r.ok) msgs.archive = "";
   }
-  const archived = $derived(arch === "" ? t?.archived != null : arch === "archived");
 
   // Rename and reshortcode: a dry run, then the move.
   async function dryRun(kind, method, asked) {
     dry[kind] = { text: "…" };
     answers[method] = undefined;
-    const r = await settle(asked, {});
+    const r = await settle(asked);
     if (!r.ok) {
       dry[kind] = null;
       answers[method] = { refused: r.message };
@@ -174,36 +225,40 @@
   }
   async function moveTo(kind, method, asked) {
     dry[kind] = null;
-    const r = await write(method, asked, {}, (e) => `moved ${moves(e)}`);
+    const r = await write(method, asked, (e) => `moved ${moves(e)}`);
+    if (r.ok) msgs[kind] = "";
     const to = r.ok && r.events[0]?.moves?.[0]?.to;
     if (to) b.navigate("#/ticket/" + to);
   }
-  const renameP = (dry) => withWhy({ id, to: renameTo.trim(), ...(dry ? { dry_run: true } : {}) });
-  const reshortP = (dry) => withWhy({ ids: [id], to: rcTo.trim(), ...(dry ? { dry_run: true } : {}) });
+  const renameP = (dryRun) => withWhy("rename", { id, to: renameTo.trim(), ...(dryRun ? { dry_run: true } : {}) });
+  const reshortP = (dryRun) => withWhy("reshortcode", { ids: [id], to: rcTo.trim(), ...(dryRun ? { dry_run: true } : {}) });
 
   // A revision put back.
   function toggleField(f, on) {
     revFields = on ? [...revFields.filter((x) => x !== f), f] : revFields.filter((x) => x !== f);
   }
-  function restoreRevision() {
+  async function restoreRevision() {
     const n = Number(rev);
-    if (!(n > 0)) return;
-    const p = withWhy({ id, rev: n, source: "app" });
+    if (!(n > 0) || busy) return;
+    const p = withWhy("revision", { id, rev: n, source: "app" });
     if (revFields.length) p.fields = revFields;
-    write("tickets.revisions.restore", b.call("tickets.revisions.restore", p), p,
+    const r = await write("tickets.revisions.restore", b.call("tickets.revisions.restore", p),
       (e) => (e.changed?.length ? `from rev ${e.from_rev}: ${e.changed.join(", ")}` : `nothing differs from rev ${e.from_rev}`));
+    if (r.ok) msgs.revision = "";
   }
 
   // The admin's.
-  const freeze = (on) => write("tickets.freeze", on ? b.call("tickets.freeze", { id }) : b.call("tickets.unfreeze", { id }), { id }, () => (on ? "frozen" : "growing again"));
+  const freeze = (on) => !busy && write("tickets.freeze", on ? b.call("tickets.freeze", { id }) : b.call("tickets.unfreeze", { id }), () => (on ? "frozen" : "growing again"));
   async function del() {
+    if (busy) return;
     dlOpen = false;
     answers["tickets.undelete"] = undefined;
-    const p = withWhy({ ids: [id], unblock: dlUnblock });
+    const p = withWhy("delete", { ids: [id], unblock: dlUnblock });
     if (dlChildren) p.children = dlChildren;
-    await write("tickets.delete", b.call("tickets.delete", p), p, (e) => `deleted ${(e.ids ?? []).join(", ")} · undelete within 30 days`);
+    const r = await write("tickets.delete", b.call("tickets.delete", p), (e) => `deleted ${(e.ids ?? []).join(", ")} · undelete within 30 days`);
+    if (r.ok) msgs.delete = "";
   }
-  const undelete = () => write("tickets.undelete", b.call("tickets.undelete", { ids: [id] }), { ids: [id] }, (e) => `back: ${(e.ids ?? []).join(", ")}`);
+  const undelete = () => !busy && write("tickets.undelete", b.call("tickets.undelete", { ids: [id] }), (e) => `back: ${(e.ids ?? []).join(", ")}`);
 </script>
 
 {#snippet answer(method)}
@@ -214,6 +269,14 @@
 {#snippet needing(roles, method)}
   <span class="why" data-needs={method}>{why(roles)}</span>
 {/snippet}
+{#snippet note(key)}
+  <input class="in" data-field="message" placeholder="a message, if any" autocomplete="off" bind:value={msgs[key]}/>
+{/snippet}
+{#snippet moveButton(s)}
+  <button type="button" class="btn" data-action="tickets.set_status" data-to={s} disabled={!!lack.edit || busy}
+          data-refused-on={answers["tickets.set_status"]?.refused && refusedOn === s ? "true" : "false"}
+          aria-pressed={ask === s} onclick={() => move(s)}>{s}{s === "Superseded" || s === "Canceled" ? "…" : ""}</button>
+{/snippet}
 
 <section class="ticket-actions" data-surface="ticket-actions" data-ticket={id}>
   {#if $ticket.status === "pending"}
@@ -222,7 +285,7 @@
   {#if t}
     <div data-group="status">
       <h2 class="sec">Status
-        {#if me}<span class="aside ta-who" data-field="who">as <b>{me.name}</b> · {(me.memberships ?? []).map((m) => m.role + (m.scope === "*" ? "" : " on " + m.scope)).join(", ")}</span>{/if}
+        {#if me}<span class="aside ta-who" data-field="who">as <b>{me.name ?? me.principal}</b> · {me.admin_everywhere ? "admin" : held.join(", ") || "nothing"} here</span>{/if}
       </h2>
       <div class="ta-row" data-field="status-moves">
         <span class="tag status" data-status={t.status} data-field="status">{t.status}</span>
@@ -230,22 +293,25 @@
           <span class="hint" data-empty>a doc has no lifecycle</span>
         {:else}
           <span class="ar">→</span>
-          {#each LIFE[t.status] ?? [] as s (s)}
-            <button type="button" class="btn" data-action="tickets.set_status" data-to={s} disabled={!!lack.edit}
-                    data-refused-on={answers["tickets.set_status"]?.refused && refusedOn === s ? "true" : "false"}
-                    aria-pressed={ask === s} onclick={() => move(s)}>{s}{s === "Superseded" || s === "Canceled" ? "…" : ""}</button>
-          {/each}
+          {#each LIFE[t.status] ?? [] as s (s)}{@render moveButton(s)}{/each}
+          {#if moreMoves}
+            {#each ALL.filter((s) => s !== t.status && !(LIFE[t.status] ?? []).includes(s)) as s (s)}{@render moveButton(s)}{/each}
+          {/if}
+          <button type="button" class="btn ghost" data-action="more-moves" aria-pressed={moreMoves} onclick={() => (moreMoves = !moreMoves)}>{moreMoves ? "fewer" : "more…"}</button>
         {/if}
       </div>
       {#if lack.edit}<p class="why" data-needs="tickets.set_status">{why(lack.edit)}</p>{/if}
+      {#if t.status === "Canceled" && !lack.edit}
+        <label class="hint check"><input type="checkbox" data-field="restore-children" bind:checked={restoreChildren}/> put back what its cancel canceled</label>
+      {/if}
       {#if ask}
         <div class="ta-line" data-ask={ask}>
-          <input class="in" data-field="message" placeholder={"why " + ask + " (required)"} autocomplete="off" bind:value={msg}/>
-          <button type="button" class="btn primary" data-action="tickets.set_status" data-confirm={ask} onclick={() => move(ask)}>{ask}</button>
+          <input class="in" data-field="message" placeholder={"why " + ask + " (required)"} autocomplete="off" bind:value={msgs.status}/>
+          <button type="button" class="btn primary" data-action="tickets.set_status" data-confirm={ask} disabled={busy} onclick={() => move(ask)}>{ask}</button>
           <button type="button" class="btn ghost" data-action="unask" onclick={() => (ask = "")}>cancel</button>
         </div>
       {:else if !lack.edit}
-        <div class="ta-line"><input class="in" data-field="message" placeholder="a message, if any" autocomplete="off" bind:value={msg}/></div>
+        <div class="ta-line">{@render note("status")}</div>
       {/if}
       {@render answer("tickets.set_status")}
     </div>
@@ -254,7 +320,7 @@
       <h2 class="sec">Labels</h2>
       <div class="ta-row" data-field="labels">
         {#each t.labels ?? [] as l (l)}
-          <span class="label" data-label={l}>{l}{#if !lack.edit}<button type="button" class="x" data-action="tickets.label" data-remove={l} aria-label={"remove " + l} onclick={() => unlabel(l)}>×</button>{/if}</span>
+          <span class="label" data-label={l}>{l}{#if !lack.edit}<button type="button" class="x" data-action="tickets.label" data-remove={l} aria-label={"remove " + l} disabled={busy} onclick={() => unlabel(l)}>×</button>{/if}</span>
         {/each}
         {#if lack.edit}
           {#if !(t.labels ?? []).length}<span class="hint" data-empty>none</span>{/if}
@@ -273,17 +339,19 @@
       {#if archived}
         <div class="ta-row">
           <span class="hint" data-archived>archived · out of every view</span>
-          <button type="button" class="btn" data-action="tickets.restore" disabled={!!lack.edit} onclick={restore}>restore</button>
+          <button type="button" class="btn" data-action="tickets.restore" disabled={!!lack.edit || busy} onclick={restore}>restore</button>
           <label class="hint check"><input type="checkbox" data-field="with-children" bind:checked={withChildren}/> with children</label>
         </div>
+        {#if !lack.edit}<div class="ta-line">{@render note("archive")}</div>{/if}
       {:else if dry.archive}
         <p class="ta-dry" data-dry-answer="tickets.archive">{dry.archive.text}</p>
         <div class="ta-line">
-          <button type="button" class="btn primary" data-action="tickets.archive" onclick={archive}>archive</button>
+          {@render note("archive")}
+          <button type="button" class="btn primary" data-action="tickets.archive" disabled={busy} onclick={archive}>archive</button>
           <button type="button" class="btn ghost" data-action="undry" onclick={() => (dry.archive = null)}>cancel</button>
         </div>
       {:else}
-        <div class="ta-row"><button type="button" class="btn" data-action="tickets.archive" data-dry disabled={!!lack.edit} onclick={dryArchive}>archive…</button><span class="hint">a dry run first</span></div>
+        <div class="ta-row"><button type="button" class="btn" data-action="tickets.archive" data-dry disabled={!!lack.edit || busy} onclick={dryArchive}>archive…</button><span class="hint">a dry run first</span></div>
       {/if}
       {@render answer("tickets.archive")}
     </div>
@@ -292,12 +360,13 @@
       <h2 class="sec">Rename</h2>
       <div class="ta-line">
         <input class="in" data-field="rename-to" placeholder={(t.parent ?? t.id) + ".1"} spellcheck="false" autocomplete="off" bind:value={renameTo} oninput={() => (dry.rename = null)}/>
-        <button type="button" class="btn" data-action="tickets.rename" data-dry disabled={!!lack.edit || !renameTo.trim()} onclick={() => dryRun("rename", "tickets.rename", b.call("tickets.rename", renameP(true)))}>dry run</button>
+        <button type="button" class="btn" data-action="tickets.rename" data-dry disabled={!!lack.edit || busy || !renameTo.trim()} onclick={() => dryRun("rename", "tickets.rename", b.call("tickets.rename", renameP(true)))}>dry run</button>
       </div>
       {#if dry.rename}
         <p class="ta-dry" data-dry-answer="tickets.rename">{dry.rename.text}</p>
         <div class="ta-line">
-          <button type="button" class="btn primary" data-action="tickets.rename" onclick={() => moveTo("rename", "tickets.rename", b.call("tickets.rename", renameP(false)))}>rename</button>
+          {@render note("rename")}
+          <button type="button" class="btn primary" data-action="tickets.rename" disabled={busy} onclick={() => moveTo("rename", "tickets.rename", b.call("tickets.rename", renameP(false)))}>rename</button>
           <button type="button" class="btn ghost" data-action="undry" onclick={() => (dry.rename = null)}>cancel</button>
         </div>
       {/if}
@@ -319,9 +388,10 @@
           {/each}
         </div>
         <div class="ta-line">
-          <span class="hint">{revFields.length ? revFields.join(", ") : "every field it keeps"}</span>
-          <button type="button" class="btn" data-action="tickets.revisions.restore" disabled={!!lack.edit} onclick={restoreRevision}>restore rev {rev}</button>
+          {@render note("revision")}
+          <button type="button" class="btn" data-action="tickets.revisions.restore" disabled={!!lack.edit || busy} onclick={restoreRevision}>restore rev {rev}</button>
         </div>
+        <p class="hint">{revFields.length ? revFields.join(", ") : "every field it keeps"}</p>
       {/if}
       {@render answer("tickets.revisions.restore")}
     </div>
@@ -330,9 +400,9 @@
       <h2 class="sec">Admin</h2>
       <div class="ta-grid">
         {#if t.frozen}
-          <button type="button" class="btn" data-action="tickets.unfreeze" disabled={!!lack.freeze} onclick={() => freeze(false)}>unfreeze</button>
+          <button type="button" class="btn" data-action="tickets.unfreeze" disabled={!!lack.freeze || busy} onclick={() => freeze(false)}>unfreeze</button>
         {:else}
-          <button type="button" class="btn" data-action="tickets.freeze" disabled={!!lack.freeze} onclick={() => freeze(true)}>freeze</button>
+          <button type="button" class="btn" data-action="tickets.freeze" disabled={!!lack.freeze || busy} onclick={() => freeze(true)}>freeze</button>
         {/if}
         {#if lack.freeze}{@render needing(lack.freeze, "tickets.freeze")}{:else}<span class="hint" data-frozen={t.frozen ? "true" : "false"}>{t.frozen ? "frozen · no new children or numbers" : "no new children or numbers"}</span>{/if}
 
@@ -343,7 +413,7 @@
           <span class="ta-line tight">
             {#if rcOpen}
               <input class="in" data-field="reshortcode-to" placeholder="a shortcode" spellcheck="false" autocomplete="off" bind:value={rcTo} oninput={() => (dry.reshortcode = null)}/>
-              <button type="button" class="btn" data-action="tickets.reshortcode" data-dry disabled={!rcTo.trim()} onclick={() => dryRun("reshortcode", "tickets.reshortcode", b.call("tickets.reshortcode", reshortP(true)))}>dry run</button>
+              <button type="button" class="btn" data-action="tickets.reshortcode" data-dry disabled={busy || !rcTo.trim()} onclick={() => dryRun("reshortcode", "tickets.reshortcode", b.call("tickets.reshortcode", reshortP(true)))}>dry run</button>
             {/if}
           </span>
         {/if}
@@ -351,7 +421,10 @@
           <span></span>
           <span>
             <p class="ta-dry" data-dry-answer="tickets.reshortcode">{dry.reshortcode.text}</p>
-            <span class="ta-line"><button type="button" class="btn primary" data-action="tickets.reshortcode" onclick={() => moveTo("reshortcode", "tickets.reshortcode", b.call("tickets.reshortcode", reshortP(false)))}>move</button></span>
+            <span class="ta-line">
+              {@render note("reshortcode")}
+              <button type="button" class="btn primary" data-action="tickets.reshortcode" disabled={busy} onclick={() => moveTo("reshortcode", "tickets.reshortcode", b.call("tickets.reshortcode", reshortP(false)))}>move</button>
+            </span>
           </span>
         {/if}
 
@@ -368,7 +441,8 @@
           <span></span>
           <span class="ta-line tight">
             <span class="hint warn">deletes {t.id} for good; a tombstone stays 30 days</span>
-            <button type="button" class="btn danger" data-action="tickets.delete" data-confirm onclick={del}>delete</button>
+            {@render note("delete")}
+            <button type="button" class="btn danger" data-action="tickets.delete" data-confirm disabled={busy} onclick={del}>delete</button>
           </span>
         {/if}
       </div>
@@ -384,7 +458,7 @@
       <p class="empty" data-empty>No ticket {id} here — deleted, moved or never filed.</p>
       {@render answer("tickets.delete")}
       <div class="ta-row">
-        <button type="button" class="btn" data-action="tickets.undelete" disabled={!!lack.undelete} onclick={undelete}>undelete</button>
+        <button type="button" class="btn" data-action="tickets.undelete" disabled={!!lack.undelete || busy} onclick={undelete}>undelete</button>
         {#if lack.undelete}{@render needing(lack.undelete, "tickets.undelete")}{/if}
       </div>
     </div>
