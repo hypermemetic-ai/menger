@@ -142,6 +142,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 plexus-shell = { path = "plexus-shell", version = "0.1.3", default-features = false, features = ["build"] }
 
 [dev-dependencies]
+# PERF-5 (spike): examples/perf5_describe.rs samples `_info` / `hash` / `schema` in process.
+pprof = { version = "0.15", features = ["flamegraph"] }
 # Wire-level tests speak the same protocol as web/index.html.
 jsonrpsee = { version = "0.26", features = ["server", "macros", "ws-client"] }
 serde_json = "1"

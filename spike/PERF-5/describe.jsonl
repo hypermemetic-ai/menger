@@ -1,0 +1,8 @@
+{"median_ms":135.339437,"n":20,"step":"plugin_schema of the hub itself"}
+{"median_ms":156.95157300000002,"n":20,"step":"compute_hash (the whole hub)"}
+{"median_ms":864.834279,"n":20,"step":"view(admin) — the caller's view"}
+{"median_ms":312.223896,"n":20,"step":"view(anonymous)"}
+{"median_ms":267.346596,"n":20,"step":"info(admin) — _info's content"}
+{"median_ms":738.4197260000001,"n":20,"step":"route menger.hash (admin), drained"}
+{"median_ms":1062.7352409999999,"n":20,"step":"route tickets.schema (admin), drained"}
+{"median_ms":0.012133000000000001,"n":20,"step":"route tickets.health (admin), drained — the baseline"}
