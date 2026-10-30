@@ -55,6 +55,7 @@ case " $* " in
   *menger-call.mjs*)
     echo "keyfile=${MENGER_DEPLOY_KEY_FILE:-} key=${MENGER_DEPLOY_KEY:-}" >>"$STUB_ARGV"
     all=" $* "
+    [[ $all == *" --principal "* ]] && { echo "key:$(printf "ab%.0s" {1..32})"; exit 0; }
     while [[ $# -gt 0 ]]; do [[ $1 == --params ]] && rec=$2; shift; done
     if [[ $rec == "{}" ]]; then
       # STUB_HEALTH=anon: an anonymous socket reaches past the auth door (what the smoke must catch)
@@ -89,6 +90,7 @@ stub curl 'echo "curl $*" >>"$STUB_ARGV"
 url=""; for a in "$@"; do [[ $a == http://* || $a == https://* ]] && url=$a; done
 host=${url#*://}; host=${host%%/*}
 case $url in
+  http://127.0.0.1:*/login) [[ ${STUB_LOCAL_LOGIN:-ok} == ok ]] && echo "<h1>Sign in</h1>" || echo "<h1>Not found</h1>" ;;
   http://127.0.0.1:*) echo "<meta name=\"menger-ws-port\" content=\"${STUB_WS_PORT:-1}\">" ;;
   http://*) printf "308 https://%s/" "$host" ;;
   */.well-known/oauth-protected-resource/ws) printf "{\"resource\":\"https://%s/ws\"}" "$host" ;;
@@ -590,7 +592,7 @@ case "$1 $2" in
   logs\ *) echo "menger: a log line" ;;
 esac; exit 0'
 LI=menger:$I1
-lrun() { : >"$STUB_DOCKER"; : >"$STUB_SYNAPSE_ARGV"; : >"$HF"; HOME=$H3 STUB_WS_PORT=4470 MENGER_LOCAL_WAIT=2 HF_OUTPUTS=$HF run "$@"; }
+lrun() { : >"$STUB_DOCKER"; : >"$STUB_SYNAPSE_ARGV"; : >"$STUB_ARGV"; : >"$HF"; HOME=$H3 STUB_WS_PORT=4470 MENGER_LOCAL_WAIT=2 MENGER_DEPLOY_KEY_FILE=${LKEY-$K} HF_OUTPUTS=$HF run "$@"; }
 lrun local
 same "local, no image: exits 1" "$code" 1
 has "local, no image: said" "$err" "local needs an image: deploy/pipeline local --image menger:<release>"
@@ -603,6 +605,11 @@ STUB_NOIMAGE=1 lrun local --image "$LI"
 same "local, no such image: exits 1" "$code" 1
 has "local, no such image: said" "$err" "no image '$LI' in this machine's Docker — run: deploy/pipeline image"
 [[ $(<"$STUB_DOCKER") != *"docker run"* ]] && ok || bad "local, no such image: ran something"
+# ACCESS-24 (RUN-36): no open mode — the container's admin is the pipeline's key, so none, no run
+LKEY=none lrun local --image "$LI"
+same "local, no pipeline key: exits 1" "$code" 1
+has "local, no pipeline key: said" "$err" "local needs the pipeline's key"
+[[ $(<"$STUB_DOCKER") != *"docker run"* ]] && ok || bad "local, no pipeline key: ran something"
 # the first run: a volume made, a container started, health waited for
 STUB_LABEL=$I1 lrun local --image "$LI"
 same "local: exits 0" "$code" 0
@@ -617,7 +624,10 @@ has "local: the container told its ports" "$r" "-e MENGER_WS_PORT=4470 -e MENGER
 has "local: the image last" "$r" " $LI"
 [[ $r != *0.0.0.0* ]] && ok || bad "local: published beyond loopback: $r"
 [[ $(<"$STUB_DOCKER") != *"docker rm"* ]] && ok || bad "local, first run: removed something"
-has "local: health over synapse on 4470" "$(<"$STUB_SYNAPSE_ARGV")" "synapse -P 4470 menger tickets health"
+has "local: health as the pipeline's key on 4470" "$(<"$STUB_ARGV")" "menger-call.mjs --url ws://127.0.0.1:4470 --agent pipeline --timeout 10 tickets.health"
+has "local: the container signs keys in, the pipeline's key its admin" "$r" "-e MENGER_AUTH_PROVIDERS=key=ws://127.0.0.1:4470 -e MENGER_ADMINS=key:$(printf 'ab%.0s' {1..32}) "
+has "local: its public URL on loopback" "$r" "-e MENGER_PUBLIC_URL=http://localhost:4471 "
+has "local: the sign-in page on 4471" "$(<"$STUB_ARGV")" "curl -fsS -m 5 http://127.0.0.1:4471/login"
 same "local: a line in deployments.log, no deployment" "$(tail -n 1 "$D3/deployments.log" | cut -f2-)" $'app-local\trun\t'"$I1"$'\tok '"$LI"
 same "local: the log line is no record" "$("$REPO/deploy/record" --from pipeline-log "$D3/deployments.log" -c | grep -c app-local)" 0
 # the second run replaces the container and keeps the volume
@@ -634,10 +644,10 @@ same "local, no health: no url" "$(<"$SCRATCH/out")$(<"$HF")" ""
 has "local, no health: said" "$err" "no tickets.health on :4470"
 has "local, no health: its log shown" "$err" "menger: a log line"
 same "local, no health: logged" "$(tail -n 1 "$D3/deployments.log" | cut -f3,5)" $'run\tnot healthy'
-# a page stamped with another port is not the local app
-HOME=$H3 STUB_WS_PORT=1 MENGER_LOCAL_WAIT=1 HF_OUTPUTS=$HF run local --image "$LI"
-same "local, the page stamped another port: exits 1" "$code" 1
-has "local, the page stamped another port: said" "$err" "no page stamped :4470 on :4471"
+# ACCESS-24: a shell with no sign-in page is not the local app
+STUB_LOCAL_LOGIN=fail lrun local --image "$LI"
+same "local, no sign-in page: exits 1" "$code" 1
+has "local, no sign-in page: said" "$err" "no sign-in page at :4471/login"
 STUB_RUN_FAIL=1 lrun local --image "$LI"
 same "local, docker run fails: exits 1" "$code" 1
 has "local, docker run fails: said" "$err" "docker run $LI failed"
@@ -697,6 +707,36 @@ m=$(mark); MENGER_APP_YML=$SCRATCH/app.yml rrun remote prod
 same "remote prod: recorded as app-prod, test's release" "$(since "$m" '[.environment, .state, .revision, .release, .from]')" \
   "[\"app-prod\",\"started\",\"$ISHA\",\"$I1\",\"test\"] [\"app-prod\",\"succeeded\",\"$ISHA\",\"$I1\",\"test\"]"
 same "remote prod: the log names the release" "$(tail -n 1 "$D3/deployments.log" | cut -f2-5)" $'app-prod\trun\t'"$I1"$'\tok'
+# RUN-36: the owner's direct way — an image named on the command line with the owner's words and the
+# ticket that holds them; infra's direct.yml, never promote.yml; only once that release's suite passed
+GI2=ghcr.io/hypermemetic-ai/menger:$I2 I2SHA=$(sed -E 's/.*-//' <<<"$I2")
+MENGER_APP_YML=$SCRATCH/app.yml rrun remote prod --because "the owner's words" --ticket RUN-36
+same "remote prod --because, no image: exits 1" "$code" 1
+has "remote prod --because, no image: said" "$err" "--because and --ticket go with --image"
+MENGER_APP_YML=$SCRATCH/app.yml rrun remote prod --image "$GI2" --ticket RUN-36
+same "remote prod --image, no reason: exits 1" "$code" 1
+has "remote prod --image, no reason: said" "$err" "remote prod --image needs --because"
+MENGER_APP_YML=$SCRATCH/app.yml rrun remote prod --image "$GI2" --because "the owner's words"
+same "remote prod --image, no ticket: exits 1" "$code" 1
+has "remote prod --image, no ticket: said" "$err" "remote prod --image needs --ticket ID"
+m=$(mark); MENGER_APP_YML=$SCRATCH/app.yml rrun remote prod --image "$GI2" --because "the owner's words" --ticket RUN-36
+same "remote prod --image, no suite result: exits 1" "$code" 1
+has "remote prod --image, no suite result: said" "$err" "$I2 has no suite result here"
+same "remote prod --image, refused: infra never asked, nothing recorded" "$(<"$SCRATCH/infra.argv")$(since "$m" .state)" ""
+chmod u+w "$D3/releases/$I2"; echo "passed 2026-10-30T23:00:00Z — workspace 3 passed, 0 failed; frontend 1 passed, 0 failed" >"$D3/releases/$I2/SUITE"; chmod a-w "$D3/releases/$I2"
+m=$(mark); MENGER_APP_YML=$SCRATCH/app.yml rrun remote prod --image "$GI2" --because "have it just test locally and deploy to prod directly" --ticket RUN-36
+same "remote prod --image: exits 0" "$code" 0
+same "remote prod --image: infra's direct.yml, the image and the owner's words, never promote.yml" "$(<"$SCRATCH/infra.argv")" \
+  "infra direct.yml -e app_dir=$(dirname "$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)") -e {\"image\":\"$GI2\",\"because\":\"have it just test locally and deploy to prod directly (RUN-36)\"}"
+has "remote prod --image: says it goes past test" "$err" "DIRECT, not through test — the owner's word on RUN-36"
+same "remote prod --image: recorded as app-prod, that release, the ticket named, no from" "$(since "$m" '[.environment, .state, .revision, .release, .tickets, .from]')" \
+  "[\"app-prod\",\"started\",\"$I2SHA\",\"$I2\",[\"RUN-36\"],null] [\"app-prod\",\"succeeded\",\"$I2SHA\",\"$I2\",[\"RUN-36\"],null]"
+same "remote prod --image: the log says direct, and the ticket" "$(tail -n 1 "$D3/deployments.log" | cut -f2-5)" $'app-prod\trun\t'"$I2"$'\tok direct (RUN-36)'
+same "remote prod --image: url" "$(<"$HF")" "url=https://app.menger.sh/"
+# a CI stage's $IMAGE never makes remote prod direct: test's image, through promote.yml, as ever
+IMAGE=$GI2 MENGER_APP_YML=$SCRATCH/app.yml rrun remote prod
+same "remote prod, \$IMAGE set: exits 0" "$code" 0
+has "remote prod, \$IMAGE set: promote.yml, as ever" "$(<"$SCRATCH/infra.argv")" "infra promote.yml -e app_dir="
 INF2=$SCRATCH/infra-fails; mkdir -p "$INF2/bin"; printf '#!/usr/bin/env bash\nexit 2\n' >"$INF2/bin/infra"; chmod +x "$INF2/bin/infra"
 m=$(mark); HOME=$H3 MENGER_INFRA_DIR=$INF2 MENGER_APP_YML=$SCRATCH/app.yml run remote test --image "$LI"
 same "remote test, infra fails: exits 1" "$code" 1

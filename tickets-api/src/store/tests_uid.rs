@@ -165,6 +165,36 @@ async fn verify_derived_finds_a_uid_blanked_or_doubled_by_hand() {
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { uids: Some(3), .. }));
 }
 
+/// RUN-36: a file a newer menger stored — v2's form 16 (V2-4) — is refused
+/// by the open before anything writes to it: read as its own, its cells
+/// would be misread, and the open's migrations would write into what that
+/// build keeps (a uid minted for the row it holds without one, the journal
+/// mode, the stamp). Refused, the stamp stays 16, no uid is minted, and not
+/// a byte of the file moves.
+#[tokio::test]
+async fn a_file_in_a_newer_form_is_refused_and_left_as_it_was() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t.db");
+    {
+        let store = Store::open(&path).unwrap();
+        store.create(SYS, new("KILN", "the kiln", Kind::Scope, None)).await.unwrap();
+        store.create(SYS, new("KILN", "a firing", Kind::Build, Some("KILN-1"))).await.unwrap();
+    }
+    {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch("UPDATE derived_state SET form = 16; UPDATE tickets SET uid = NULL WHERE id = 'KILN-2';").unwrap();
+        conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(())).unwrap();
+    }
+    let before = std::fs::read(&path).unwrap();
+    let said = format!("{:#}", Store::open(&path).err().expect("a file in form 16 is refused"));
+    assert!(said.contains("form 16") && said.contains("this build's 15"), "{said}");
+    assert_eq!(std::fs::read(&path).unwrap(), before, "not a byte of the file moved");
+    let conn = Connection::open(&path).unwrap();
+    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 16, "the stamp as it was");
+    let kiln2: Option<String> = conn.query_row("SELECT uid FROM tickets WHERE id = 'KILN-2'", [], |r| r.get(0)).unwrap();
+    assert_eq!(kiln2, None, "no uid minted");
+}
+
 #[tokio::test]
 async fn the_uid_is_kept_through_every_move() {
     let store = Store::new();
