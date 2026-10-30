@@ -162,3 +162,7 @@ tar = { version = "0.4", default-features = false }
 # MNG-8's `[patch.crates-io]` on the plexus-transport-v0.2.3 tag went with
 # MFE-10: the REST bridge fixes it carried are on plexus-transport `main`
 # (0.5.0), consumed by path above.
+
+# LOCAL-3 (spike): the sibling plexus-transport needs its vendored jsonrpsee-server.
+[patch.crates-io]
+jsonrpsee-server = { path = "../plexus-transport/vendor/jsonrpsee-server" }
