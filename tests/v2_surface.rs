@@ -207,3 +207,44 @@ async fn a_saved_filter_holding_a_dropped_cell_is_refused_when_used() {
     let why = refusal(&c, "tickets.list", json!({"filter": "saved Held"})).await;
     assert!(why.contains("queued"), "{why}");
 }
+
+/// One method's `returns`: its event's variants, by their `type`.
+fn variants<'a>(schema: &'a Value, method: &str) -> Vec<&'a Value> {
+    let m = schema["methods"].as_array().unwrap().iter().find(|m| m["name"] == method).unwrap_or_else(|| panic!("{method} in the schema"));
+    m["returns"]["oneOf"].as_array().unwrap_or_else(|| panic!("{method} returns a oneOf: {}", m["returns"])).iter().collect()
+}
+
+/// A variant's `type`.
+fn tag(v: &Value) -> &str {
+    v["properties"]["type"]["const"].as_str().or_else(|| v["properties"]["type"]["enum"][0].as_str()).unwrap_or_default()
+}
+
+/// PERF-15: the schema says a page is one event — every paged read
+/// (`list`, `work.ready`, `nav.tree`, `find`, `search`) and the board's
+/// listings (`nav.groups`, `nav.extents`, `nav.counts`) return a `rows`
+/// variant whose `items` are the per-row events as they were (`summary`,
+/// `ticket`, `node`, `hit`, `group`, `extent`, `count`), each by its `type`.
+/// The schema's hash moves with it, and the bundle's contract with that.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_page_is_one_rows_event_in_the_schema() {
+    let port = start_server().await;
+    let c = support::connect(port).await;
+    let tickets = one(&c, "tickets.schema", json!({})).await;
+    let nav = one(&c, "tickets.nav.schema", json!({})).await;
+    let work = one(&c, "tickets.work.schema", json!({})).await;
+    for (schema, method) in [(&tickets, "list"), (&tickets, "find"), (&tickets, "search"), (&work, "ready"), (&nav, "tree"), (&nav, "groups"), (&nav, "extents"), (&nav, "counts")] {
+        let vs = variants(schema, method);
+        let rows = vs.iter().find(|v| tag(v) == "rows").unwrap_or_else(|| panic!("{method}: no `rows` variant among {:?}", vs.iter().map(|v| tag(v)).collect::<Vec<_>>()));
+        assert_eq!(rows["required"], json!(["type", "items"]), "{method}: rows {{ items }}: {rows}");
+        assert_eq!(rows["properties"]["items"]["type"], "array", "{method}: items is a list: {rows}");
+        // The item: a `$ref` to the one row type, or the variants inline.
+        let item = &rows["properties"]["items"]["items"];
+        let defs = &schema["methods"].as_array().unwrap().iter().find(|m| m["name"] == method).unwrap()["returns"]["$defs"];
+        let item = match item["$ref"].as_str() {
+            Some(r) => &defs[r.trim_start_matches("#/$defs/")],
+            None => item,
+        };
+        let kinds: BTreeSet<String> = item["oneOf"].as_array().unwrap_or_else(|| panic!("{method}: an item is one of the row events: {item}")).iter().map(|v| tag(v).to_string()).collect();
+        assert_eq!(kinds, set(&["summary", "ticket", "node", "hit", "group", "extent", "count"]), "{method}: the items are the per-row events");
+    }
+}

@@ -61,8 +61,16 @@ FRAME-17's steps after the boot on the page's clock, each with its median
 and every run — the boot done, the first call and `tickets.list` sent,
 `tickets.list` answered (first data, `done`), the nav drawn, the first
 titled row (a MutationObserver's stamp) — then each `plexus-ui:*` mark the
-host sets (or a line saying the release sets none), the waterfall by kind,
-and one JSON line. The hand gate is three runs of five, the release before
+host sets (or a line saying the release sets none), the bytes per call
+(PERF-15: every frame the page's sockets received, from CDP's
+`Network.webSocketFrameReceived` — its payload's UTF-8 length — matched to its
+call by the ack's id and the items' subscription: each call's frames and
+bytes, the median over the runs, then every call's), the waterfall by kind,
+and one JSON line. On app-test before PERF-15 (976 tickets, 83 shortcodes) the
+board's calls are 465 frames and ~247 KB — `tickets.list` 203 frames and
+149 KB, `nav.groups`, `nav.extents` and `nav.counts` 85 apiece — and the
+stream row (first data → done) 40–130 ms; with a page one `rows` frame the
+list is three frames and that row ~0. The hand gate is three runs of five, the release before
 and after, in the same hour.
 
 ## The concurrency ladder — `concurrency.mjs` (PERF-12)

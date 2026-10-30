@@ -2779,3 +2779,206 @@ async fn an_unknown_parameter_is_refused_before_the_method_runs() {
     let ev = content(sub.next().await.unwrap().unwrap());
     assert_eq!((ev["type"].as_str(), ev["ticket"]["kind"].as_str()), (Some("created"), Some("scope")), "{ev}");
 }
+
+// ---------------------------------------------------------------------------
+// PERF-15: a page is one frame. Every paged read answers its rows as one
+// `rows { items }` event — each item the per-row event it was (`summary`,
+// `ticket`, `node`, `hit`) — then its one trailing event (`page`, or
+// `searched`), then `done`: three frames, not one per row. The board's whole
+// listings (`nav.groups`, `extents`, `counts`) the same, with nothing
+// trailing. A watch still sends each change as its own event.
+
+/// One call's frames as they crossed: every item of the subscription, whole
+/// (envelope and all), through `done`. One item is one WebSocket message.
+async fn frames(client: &WsClient, method: &str, params: Value) -> Vec<Value> {
+    let mut sub = call(client, method, params).await;
+    let mut out = Vec::new();
+    while let Some(item) = tokio::time::timeout(Duration::from_secs(20), sub.next()).await.expect("the call answers").map(|i| i.unwrap()) {
+        let end = item["type"] != "data";
+        out.push(item);
+        if end {
+            break;
+        }
+    }
+    out
+}
+
+/// What each frame is: `data:<event type>` or the item's own type.
+fn frame_kinds(frames: &[Value]) -> Vec<String> {
+    frames
+        .iter()
+        .map(|f| match f["type"].as_str() {
+            Some("data") => format!("data:{}", f["content"]["type"].as_str().unwrap_or("?")),
+            other => other.unwrap_or("?").to_string(),
+        })
+        .collect()
+}
+
+/// The one `rows` frame's items, the frames asserted to be `rows`, then
+/// `trailing` (when given), then `done`.
+fn one_rows_frame(what: &str, frames: &[Value], trailing: Option<&str>) -> Vec<Value> {
+    let mut want = vec!["data:rows".to_string()];
+    want.extend(trailing.map(|t| format!("data:{t}")));
+    want.push("done".into());
+    let kinds = frame_kinds(frames);
+    assert_eq!(kinds.len(), want.len(), "{what}: a page is {want:?}, one frame for its rows — it crossed as {} frames ({} {:?} …)", kinds.len(), kinds.iter().filter(|k| *k == &kinds[0]).count(), kinds.first());
+    assert_eq!(kinds, want, "{what}");
+    frames[0]["content"]["items"].as_array().unwrap_or_else(|| panic!("{what}: rows carries items: {}", frames[0])).clone()
+}
+
+/// `n` tickets in `epic`: its scope root, then `n - 1` builds under it,
+/// titled `row 2` … `row n`.
+async fn seed_rows(client: &WsClient, epic: &str, n: usize) {
+    let root = answer(client, "tickets.create", json!({"epic": epic, "title": "the root", "kind": "scope"})).await;
+    assert_eq!(root["type"], "created", "{root}");
+    for i in 2..=n {
+        let ev = answer(client, "tickets.create", json!({"epic": epic, "title": format!("row {i}"), "kind": "build"})).await;
+        assert_eq!(ev["type"], "created", "{ev}");
+    }
+}
+
+/// PERF-15: `list { summary, limit: 200 }` over 300 tickets — one `rows`
+/// frame of 200 `summary` items in the store's order, then `page`, then
+/// `done`; no per-row frame. Without `summary`, the same with `ticket`
+/// items (bodies and all).
+#[tokio::test]
+async fn a_list_page_is_one_frame() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    seed_rows(&client, "ONE", 300).await;
+
+    let fs = frames(&client, "tickets.list", json!({"summary": true, "limit": 200})).await;
+    let items = one_rows_frame("list { summary, limit: 200 }", &fs, Some("page"));
+    assert_eq!(items.len(), 200, "the page's 200 rows in the one frame");
+    assert!(items.iter().all(|i| i["type"] == "summary" && i["summary"].get("body").is_none()), "each item a summary row, no body: {}", items[0]);
+    assert_eq!((items[0]["summary"]["id"].as_str(), items[199]["summary"]["id"].as_str()), (Some("ONE-1"), Some("ONE-200")), "in the store's order");
+    assert_eq!(fs[1]["content"], json!({"type": "page", "next": "ONE-200", "remaining": 100}), "the page after the rows, as it was");
+    assert!(!frame_kinds(&fs).iter().any(|k| k == "data:summary" || k == "data:ticket"), "no per-row frame");
+
+    let fs = frames(&client, "tickets.list", json!({"limit": 50, "after": "ONE-200"})).await;
+    let items = one_rows_frame("list { limit: 50, after }", &fs, Some("page"));
+    assert_eq!(items.len(), 50);
+    assert!(items.iter().all(|i| i["type"] == "ticket" && i["ticket"]["body"].is_string()), "without summary: whole tickets: {}", items[0]);
+    assert_eq!(items[0]["ticket"]["id"], "ONE-201");
+    assert_eq!(fs[1]["content"], json!({"type": "page", "next": "ONE-250", "remaining": 50}));
+
+    // A filter (FILTER-4's cells) pages the same way, `first` on its page.
+    let fs = frames(&client, "tickets.list", json!({"summary": true, "limit": 200, "filter": "kind build", "at": 0})).await;
+    let items = one_rows_frame("list { filter, at }", &fs, Some("page"));
+    assert_eq!(items.len(), 200);
+    assert_eq!(fs[1]["content"]["first"], 0);
+}
+
+/// PERF-15: `work.ready { summary, limit: 200 }` — one `rows` frame, then
+/// `page`, then `done`.
+#[tokio::test]
+async fn a_ready_page_is_one_frame() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    seed_rows(&client, "RDY", 300).await;
+    let moved = answer(&client, "tickets.update_many", json!({"filter": "kind build", "status": "Ready", "max": 500})).await;
+    assert_eq!(moved["type"], "updated_many", "{moved}");
+
+    let fs = frames(&client, "tickets.work.ready", json!({"summary": true, "limit": 200})).await;
+    let items = one_rows_frame("work.ready { summary, limit: 200 }", &fs, Some("page"));
+    assert_eq!(items.len(), 200);
+    assert!(items.iter().all(|i| i["type"] == "summary" && i["summary"]["status"] == "Ready"), "{}", items[0]);
+    assert_eq!(fs[1]["content"]["type"], "page");
+    assert!(fs[1]["content"]["next"].is_string(), "more after the page: {}", fs[1]);
+}
+
+/// PERF-15: `nav.tree { parent, filter, limit: 200 }` — one `rows` frame of
+/// `node` items (`summary`, `matched`, `below`, as each node was), then
+/// `page`, then `done`.
+#[tokio::test]
+async fn a_tree_page_is_one_frame() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    seed_rows(&client, "TRE", 300).await;
+
+    let fs = frames(&client, "tickets.nav.tree", json!({"parent": "TRE-1", "filter": "kind build", "limit": 200})).await;
+    let items = one_rows_frame("nav.tree { parent, filter, limit: 200 }", &fs, Some("page"));
+    assert_eq!(items.len(), 200);
+    assert_eq!(items[0], json!({"type": "node", "summary": items[0]["summary"].clone(), "matched": true, "below": 0}), "a node item as the node event was");
+    assert_eq!(items[0]["summary"]["id"], "TRE-2");
+    assert_eq!(fs[1]["content"], json!({"type": "page", "next": "TRE-201", "remaining": 99}));
+}
+
+/// PERF-15: `find { query, limit: 200 }` — one `rows` frame of `summary`
+/// items, then `page`, then `done`.
+#[tokio::test]
+async fn a_find_page_is_one_frame() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    seed_rows(&client, "FND", 300).await;
+
+    let fs = frames(&client, "tickets.find", json!({"query": "row", "limit": 200})).await;
+    let items = one_rows_frame("find { query, limit: 200 }", &fs, Some("page"));
+    assert_eq!(items.len(), 200);
+    assert!(items.iter().all(|i| i["type"] == "summary"), "{}", items[0]);
+    assert_eq!(items[0]["summary"]["id"], "FND-2", "the root's title has no `row`");
+    assert_eq!(fs[1]["content"]["type"], "page");
+}
+
+/// PERF-15: `search { query, limit: 100 }` — one `rows` frame of `hit`
+/// items (`summary`, `title`, `snippet`, `corrected`), then `searched`,
+/// then `done`.
+#[tokio::test]
+async fn a_search_page_is_one_frame() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    seed_rows(&client, "SRC", 300).await;
+
+    let fs = frames(&client, "tickets.search", json!({"query": "row", "limit": 100})).await;
+    let items = one_rows_frame("search { query, limit: 100 }", &fs, Some("searched"));
+    assert_eq!(items.len(), 100);
+    assert!(items.iter().all(|i| i["type"] == "hit" && i["summary"]["id"].is_string() && i.get("snippet").is_some()), "{}", items[0]);
+    assert_eq!(fs[1]["content"]["matched"], 299);
+}
+
+/// PERF-15: the board's whole listings — `nav.groups`, `nav.extents`,
+/// `nav.counts` — are one `rows` frame each (one item per shortcode, as
+/// each event was), then `done`: on app-test they were 84 frames apiece
+/// (83 shortcodes), 97 KB of the board's 247.
+#[tokio::test]
+async fn the_boards_listings_are_one_frame() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    for epic in ["LA", "LB", "LC"] {
+        seed_rows(&client, epic, 4).await;
+    }
+    for (method, kind) in [("tickets.nav.groups", "group"), ("tickets.nav.extents", "extent"), ("tickets.nav.counts", "count")] {
+        let fs = frames(&client, method, json!({})).await;
+        let items = one_rows_frame(method, &fs, None);
+        assert_eq!(items.len(), 3, "{method}: one item per shortcode");
+        assert!(items.iter().all(|i| i["type"] == kind), "{method}: {kind} items: {}", items[0]);
+    }
+    let fs = frames(&client, "tickets.nav.counts", json!({})).await;
+    assert_eq!(fs[0]["content"]["items"][0], json!({"type": "count", "epic": "LA", "shortcode": "LA", "held": 4}), "a count item as the count event was");
+}
+
+/// PERF-15: a watch is not a page — each change is still its own frame,
+/// the per-row `created` (and the transition after it) as before; nothing
+/// on a watch is ever a `rows`.
+#[tokio::test]
+async fn a_watch_still_sends_one_ticket_per_change() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    answer(&client, "tickets.create", json!({"epic": "WCH", "title": "the root", "kind": "scope"})).await;
+    let mut watch = call(&client, "tickets.watch", json!({})).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    for i in 2..=4 {
+        answer(&client, "tickets.create", json!({"epic": "WCH", "title": format!("row {i}"), "kind": "build"})).await;
+    }
+    let mut created = Vec::new();
+    while created.len() < 3 {
+        let item = tokio::time::timeout(Duration::from_secs(10), watch.next()).await.expect("a change").expect("open").unwrap();
+        assert_eq!(item["type"], "data", "{item}");
+        let ev = &item["content"];
+        assert_ne!(ev["type"], "rows", "a watch never batches: {ev}");
+        if ev["type"] == "created" {
+            created.push(ev["ticket"]["id"].as_str().unwrap().to_string());
+        }
+    }
+    assert_eq!(created, ["WCH-2", "WCH-3", "WCH-4"], "one created frame per ticket, in order");
+}

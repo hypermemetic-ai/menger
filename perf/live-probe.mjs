@@ -25,6 +25,13 @@
 // row — then every mark the host sets itself (`performance.mark`, `plexus-ui:*`: components parsed,
 // each section and the layout mounted, each component's handlers compiled, the first call, answer
 // and row; CONTRACT.md's host chapter), or a line saying the engine sets none.
+//
+// PERF-15: the bytes per call — every frame the page's sockets received, from CDP's
+// Network.webSocketFrameReceived (its payload's UTF-8 length, as PLEXUS-10 measured), matched to its
+// call by the request id (the ack) and the subscription (each item): per call its frames and bytes,
+// the median over the runs, and the whole of the board's calls. Today `tickets.list` is 202 frames
+// (a frame per row, the page, done); after PERF-15 three (one `rows`, the page, done), and the stream
+// row (first data → done) ~0.
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -79,7 +86,21 @@ const MARKS = `(() => {
 })();`;
 
 const browser = await chromium.launch();
-const firsts = [], ttfbs = [], sockets = [], marks = [];
+const firsts = [], ttfbs = [], sockets = [], marks = [], calls = [];
+// PERF-15: each call's frames and bytes (the ack's included), keyed by its method — a method asked
+// more than once (the three watches) summed under its name.
+function perCall(wire) {
+  const len = (s) => Buffer.byteLength(s, "utf8");
+  const byId = new Map(), bySub = new Map(), out = {};
+  for (const [sock, d] of wire.sent) { try { const m = JSON.parse(d); if (m.id != null) byId.set(`${sock}/${m.id}`, m.params?.method ?? m.method); } catch {} }
+  const add = (method, n) => { const c = (out[method] ||= { frames: 0, bytes: 0 }); c.frames++; c.bytes += n; };
+  for (const [sock, d] of wire.recv) {
+    let m; try { m = JSON.parse(d); } catch { continue; }
+    if (m.id != null && byId.has(`${sock}/${m.id}`)) { const method = byId.get(`${sock}/${m.id}`); if (m.result != null) bySub.set(`${sock}/${m.result}`, method); add(method, len(d)); continue; }
+    add(bySub.get(`${sock}/${m.params?.subscription}`) ?? "(other)", len(d));
+  }
+  return out;
+}
 let last = null;
 for (let i = 0; i <= runs; i++) {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
@@ -87,6 +108,12 @@ for (let i = 0; i <= runs; i++) {
   const page = await ctx.newPage();
   await page.addInitScript(MARKS);
   const opened = []; page.on("websocket", () => opened.push(Date.now()));
+  // PERF-15: what crossed, per frame, off the page's clock (CDP's network view).
+  const wire = { sent: [], recv: [] };
+  const cdp = await ctx.newCDPSession(page);
+  await cdp.send("Network.enable");
+  cdp.on("Network.webSocketFrameSent", ({ requestId, response }) => wire.sent.push([requestId, response.payloadData]));
+  cdp.on("Network.webSocketFrameReceived", ({ requestId, response }) => wire.recv.push([requestId, response.payloadData]));
   const t0 = Date.now();
   await page.goto(origin + route, { waitUntil: "commit" });
   const ok = await page.waitForSelector(".board-row[data-id] [data-field=title]", { timeout: 30000 }).then(() => true).catch(() => false);
@@ -104,7 +131,8 @@ for (let i = 0; i <= runs; i++) {
   const snap = frames.sent.find((f) => f[1] && !f[1].startsWith("ui.") && !f[1].endsWith(".watch") && !f[1].endsWith("call_unsub"));
   Object.assign(mark, { first_call: snap?.[0] ?? null, list_sent: ask?.[0] ?? null, list_acked: ack ?? null, list_first_data: of_list("data"), list_done: of_list("done") });
   for (const m of await page.evaluate(() => performance.getEntriesByType("mark").map((m) => [m.name, m.startTime]))) if (m[0].startsWith("plexus-ui:")) mark[m[0]] ??= m[1];
-  if (i > 0) { firsts.push(first); ttfbs.push(nav.ttfb); sockets.push(opened.length ? opened[0] - t0 : null); marks.push(mark); last = { res, nav, first }; }
+  const bytes = perCall(wire);
+  if (i > 0) { firsts.push(first); ttfbs.push(nav.ttfb); sockets.push(opened.length ? opened[0] - t0 : null); marks.push(mark); calls.push(bytes); last = { res, nav, first }; }
   await ctx.close();
 }
 await browser.close();
@@ -131,7 +159,7 @@ const gaps = [
   ["`tickets.list` sent − the socket open (acceptance: ≤ 20 ms)", gap("list_sent", "socket_open")],
   ["the ack wait: `tickets.list` sent → acknowledged (PLEXUS-10)", gap("list_acked", "list_sent")],
   ["acknowledged → its first data", gap("list_first_data", "list_acked")],
-  ["the stream: first data → done (PERF-15)", gap("list_done", "list_first_data")],
+  ["the stream: first data → done (PERF-15: one `rows` frame, ~0 after)", gap("list_done", "list_first_data")],
   ["the board's draw: `drawn:tickets.list` − `answered:tickets.list` (acceptance: ≤ 20 ms for 200 rows)", gap("plexus-ui:drawn:tickets.list", "plexus-ui:answered:tickets.list")],
   ["the first draw: `plexus-ui:first-row` − `plexus-ui:first-answer`", gap("plexus-ui:first-row", "plexus-ui:first-answer")],
   ["done → the first titled row", gap("first_row", "list_done")],
@@ -141,6 +169,12 @@ for (const k of hostMarks) steps.push([`\`${k}\``, (m) => m[k]]);
 console.log("| mark | median | runs |\n| -- | -- | -- |");
 for (const [what, f] of steps) { const xs = marks.map((m) => f(m) ?? null); console.log(`| ${what} | +${ms(median(xs))} ms | ${xs.map(ms).join(", ")} |`); }
 if (!hostMarks.length) console.log("  (the engine sets no plexus-ui:* marks: a release before FRAME-17)");
+// PERF-15: the bytes per call (the ack included), the median over the runs, biggest first.
+const methods = [...new Set(calls.flatMap((c) => Object.keys(c)))].sort((a, b) => median(calls.map((c) => c[b]?.bytes ?? 0)) - median(calls.map((c) => c[a]?.bytes ?? 0)));
+console.log("| call | frames | bytes (median) | runs |\n| -- | -- | -- | -- |");
+for (const k of methods) console.log(`| \`${k}\` | ${median(calls.map((c) => c[k]?.frames ?? 0))} | ${median(calls.map((c) => c[k]?.bytes ?? 0))} | ${calls.map((c) => c[k]?.bytes ?? 0).join(", ")} |`);
+const totals = calls.map((c) => Object.values(c).reduce((a, x) => ({ frames: a.frames + x.frames, bytes: a.bytes + x.bytes }), { frames: 0, bytes: 0 }));
+console.log(`| every call | ${median(totals.map((t) => t.frames))} | ${median(totals.map((t) => t.bytes))} | ${totals.map((t) => t.bytes).join(", ")} |`);
 console.log("| gap | median | runs |\n| -- | -- | -- |");
 for (const [what, f] of gaps) { const xs = marks.map((m) => f(m)); console.log(`| ${what} | ${ms(median(xs))} ms | ${xs.map(ms).join(", ")} |`); }
 const kind = (n) => n.includes("engine.wasm") ? "engine.wasm" : n.includes("engine.js") ? "engine.js" : n.includes("host.js") ? "host.js" : n.includes("/components") ? "components" : n.includes("manifest") ? "manifest" : "other";
@@ -151,4 +185,4 @@ for (const [k, rs] of Object.entries(by)) {
   const s = Math.min(...rs.map(r => r.start)), e = Math.max(...rs.map(r => r.start + r.dur));
   console.log(`  ${k.padEnd(12)} ${String(rs.length).padStart(3)} req  ${(enc / 1024).toFixed(0).padStart(5)} KiB wire (${(dec / 1024).toFixed(0)} KiB)  +${ms(s)} → +${ms(e)} ms`);
 }
-console.log(JSON.stringify({ origin, route, runs, first_row_ms: firsts.map(x => x == null ? null : Math.round(x)), median_ms: median(firsts) == null ? null : Math.round(median(firsts)), ttfb_ms: ttfbs.map(Math.round), socket_open_ms: sockets, marks: marks.map((m) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, v == null ? null : Math.round(v)]))), socket_open_before_wasm: before, requests }));
+console.log(JSON.stringify({ origin, route, runs, first_row_ms: firsts.map(x => x == null ? null : Math.round(x)), median_ms: median(firsts) == null ? null : Math.round(median(firsts)), ttfb_ms: ttfbs.map(Math.round), socket_open_ms: sockets, marks: marks.map((m) => Object.fromEntries(Object.entries(m).map(([k, v]) => [k, v == null ? null : Math.round(v)]))), socket_open_before_wasm: before, requests, calls }));
