@@ -106,6 +106,9 @@ deploy/pipeline suite R          # DEPLOY-52: the full suite (workspace + fronte
                                  # (PERF-6: ../plexus-bench, every PERF scenario against its golden); marks R passed / failed
 deploy/pipeline remote prod      # what test runs → app.menger.sh (infra's promote.yml) — refused unless
                                  # its suite passed; the owner's
+deploy/pipeline remote prod --image IMG --because TEXT --ticket ID
+                                 # RUN-36: the owner's direct way past test, on their word alone (infra's
+                                 # direct.yml) — that release, its suite passed; never a default
 deploy/pipeline status           # what test and prod run, their suites, health, last records; the runner
 deploy/pipeline releases         # every release: its suite, tested?, where it runs
 deploy/pipeline backfill         # deployments.log → menger's deployments (DEPLOY-12; idempotent)
@@ -134,7 +137,9 @@ retired: they say so and exit 2.
   commit on main, so merge first; a change to the app's look is followed by
   `deploy/pipeline media`, its files committed, then `landing`.
 - **Production changes only through `remote prod`**, and only to a release
-  that passed test and whose suite passed (DEPLOY-52). A `cargo build` or `trunk build` in a checkout
+  that passed test and whose suite passed (DEPLOY-52) — or, on the owner's
+  own word recorded on its ticket, one whose suite passed and test never ran
+  (`--image … --because … --ticket …`, RUN-36). A `cargo build` or `trunk build` in a checkout
   changes nothing that is serving.
 - Merging to main is not deploying, and **Complete means deployed to the
   lowest environment** (owner, 2026-10-17; DEPLOY-22): the merge links its

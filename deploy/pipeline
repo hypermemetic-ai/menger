@@ -29,11 +29,17 @@
 #                                           (DEPLOY-52: test is app-test); passing marks it TESTED
 #   deploy/pipeline remote prod             app.menger.sh through infra's promote.yml: what test runs,
 #                                           refused unless that release's suite passed (DEPLOY-52)
+#   deploy/pipeline remote prod --image IMAGE --because TEXT --ticket ID
+#                                           RUN-36: the owner's direct way past test — that release to
+#                                           app.menger.sh through infra's direct.yml, refused unless its
+#                                           suite passed; the owner's words on the box's log, the
+#                                           ticket that holds them in the record. Never a default
 #   deploy/pipeline smoke test|prod         the smoke against app-test / app.menger.sh, on its own
 #   deploy/pipeline local --image IMAGE     RUN-25: IMAGE here as the container menger-app-local
 #                                           (127.0.0.1:4470 WebSocket, :4471 shell, volume
 #                                           menger-app-local-data) — a CI throwaway, not an
 #                                           environment; replaced when run again; prints url=…
+#                                           (ACCESS-24: it signs keys in, the pipeline's key its admin)
 #   deploy/pipeline remote-secret test|prod [--check] [--from FILE]
 #                                           IDENTITY-45: the WorkOS API key on app-test / app.menger.sh
 #                                           (infra's secret.yml: a 0400 file the container reads, then
@@ -117,6 +123,7 @@ OUTBOX=${MENGER_DEPLOY_OUTBOX:-$HOME_DIR/outbox}
 SENT=$HOME_DIR/sent
 SEND_TIMEOUT=${MENGER_DEPLOY_RECORD_TIMEOUT:-10}
 RUN="" RUN_AT="" # this run's id and when it began (begin_run): its records and its log line carry the id
+DIRECT_TICKET="" # RUN-36: remote prod --image — the ticket that holds the owner's go, named in its records
 # DEPLOY-17: the landing page — menger.sh is landing/ at the commit pinned in
 # hypermemetic-infra (menger_landing_commit), which the edge role reads with
 # git show and git archive from this checkout, never a working tree.
@@ -226,7 +233,9 @@ tell_() {
   local args=(--project menger --env "$env" --state "$state" --revision "$rev" --release "$rel" --at "$at"
               --source-system menger-pipeline --source-run "${RUN:-$state@$at}" -c)
   [[ -n $p ]] && args+=(--previous "$p")
-  from=$(promotes_from "$env"); [[ -n $from ]] && args+=(--promotes-from "$from")
+  # RUN-36: a direct promotion names the ticket that holds the owner's go, and leaves `from` as it was
+  if [[ -n $DIRECT_TICKET ]]; then args+=(--tickets "$DIRECT_TICKET")
+  else from=$(promotes_from "$env"); [[ -n $from ]] && args+=(--promotes-from "$from"); fi
   # DEPLOY-37: run for a request (deploy/runner.mjs sets MENGER_REQUEST), its records name it.
   [[ -n ${MENGER_REQUEST:-} ]] && args+=(--request "$MENGER_REQUEST")
   # Its commits: git log previous..revision in the build checkout, when the
@@ -554,8 +563,14 @@ cmd_local() {
     (( p >= 4450 && p <= 4462 )) && die "port $p is prod's, test's or a dev server's (4450–4462) — the local app keeps to its own"
   done
   [[ $LOCAL_WS_PORT != "$LOCAL_SHELL_PORT" ]] || die "the WebSocket and the shell need two ports"
-  need docker; need synapse; need curl
+  need docker; need curl; need node
   docker image inspect "$img" >/dev/null 2>&1 || die "no image '$img' in this machine's Docker — run: deploy/pipeline image"
+  # ACCESS-24 (RUN-36): menger has no open mode — bound beyond loopback inside the container with no
+  # provider it refuses to start. The container signs keys in and the pipeline's key is its admin, so
+  # it starts and answers health to that key (V2-7's arrangement on v2, without the ui signer).
+  [[ -n $DEPLOY_KEY_FILE ]] || die "local needs the pipeline's key (MENGER_DEPLOY_KEY_FILE, default ~/.plexus/keys/pipeline.key): the container's admin"
+  local principal; principal=$(env -u MENGER_DEPLOY_KEY MENGER_DEPLOY_KEY_FILE="$DEPLOY_KEY_FILE" node "$CALL_JS" --principal 2>/dev/null || true)
+  [[ $principal =~ ^key:[0-9a-f]{64}$ ]] || die "the pipeline's key ($DEPLOY_KEY_FILE) names no principal"
   local rel; rel=$(docker image inspect -f '{{index .Config.Labels "sh.menger.release"}}' "$img" 2>/dev/null || true)
   [[ -n $rel && $rel != "<no value>" ]] || rel=${img##*:}
   step "local: $img as $LOCAL_CONTAINER on 127.0.0.1:$LOCAL_WS_PORT (WebSocket) and :$LOCAL_SHELL_PORT (shell)"
@@ -569,15 +584,17 @@ cmd_local() {
       --label sh.menger.deploy=local --label "sh.menger.release=$rel" \
       -v "$LOCAL_VOLUME:/data" \
       -e "MENGER_WS_PORT=$LOCAL_WS_PORT" -e "MENGER_SHELL_PORT=$LOCAL_SHELL_PORT" \
+      -e "MENGER_AUTH_PROVIDERS=key=ws://127.0.0.1:$LOCAL_WS_PORT" -e "MENGER_ADMINS=$principal" \
+      -e "MENGER_PUBLIC_URL=http://localhost:$LOCAL_SHELL_PORT" \
       -p "127.0.0.1:$LOCAL_WS_PORT:$LOCAL_WS_PORT" -p "127.0.0.1:$LOCAL_SHELL_PORT:$LOCAL_SHELL_PORT" \
       "$img" >/dev/null \
     || { record app-local run "$rel" "docker run failed"; die "docker run $img failed (is :$LOCAL_WS_PORT or :$LOCAL_SHELL_PORT held by something else?)"; }
   local h="" page="" until=$((SECONDS + LOCAL_WAIT))
   while (( SECONDS < until )); do
-    [[ -n $h ]] || h=$(timeout 5 synapse -P "$LOCAL_WS_PORT" menger tickets health 2>/dev/null | sed -n 's/^ *ticket_count: *//p' || true)
+    [[ -n $h ]] || { h=$(health_of "ws://127.0.0.1:$LOCAL_WS_PORT"); [[ $h =~ ^[0-9]+$ ]] || h=""; }
+    # ACCESS-24: the shell is behind its login (/ is a 303 to it), so the page is the sign-in page;
     # grep reads the whole page (DEPLOY-6: no -q under pipefail)
-    [[ -n $page ]] || page=$(curl -fsS -m 5 "http://127.0.0.1:$LOCAL_SHELL_PORT/" 2>/dev/null \
-                              | grep -o "name=\"menger-ws-port\" content=\"$LOCAL_WS_PORT\"" || true)
+    [[ -n $page ]] || page=$(curl -fsS -m 5 "http://127.0.0.1:$LOCAL_SHELL_PORT/login" 2>/dev/null | grep -o '<h1>Sign in</h1>' || true)
     [[ -n $h && -n $page ]] && break
     docker container inspect -f '{{.State.Running}}' "$LOCAL_CONTAINER" 2>/dev/null | grep true >/dev/null || break
     sleep 0.5
@@ -586,10 +603,10 @@ cmd_local() {
     say "local: its log, the last lines:"
     docker logs --tail 20 "$LOCAL_CONTAINER" 2>&1 | sed 's/^/  /' >&2 || true
     record app-local run "$rel" "not healthy"
-    die "$LOCAL_CONTAINER did not answer in ${LOCAL_WAIT}s:${h:+ health ok}${h:- no tickets.health on :$LOCAL_WS_PORT};${page:+ page ok}${page:- no page stamped :$LOCAL_WS_PORT on :$LOCAL_SHELL_PORT} — the container is left for a look (docker logs $LOCAL_CONTAINER)"
+    die "$LOCAL_CONTAINER did not answer in ${LOCAL_WAIT}s:${h:+ health ok}${h:- no tickets.health on :$LOCAL_WS_PORT};${page:+ page ok}${page:- no sign-in page at :$LOCAL_SHELL_PORT/login} — the container is left for a look (docker logs $LOCAL_CONTAINER)"
   fi
-  say "ok   tickets.health on :$LOCAL_WS_PORT — $h tickets"
-  say "ok   the app on :$LOCAL_SHELL_PORT, stamped with :$LOCAL_WS_PORT"
+  say "ok   tickets.health on :$LOCAL_WS_PORT — $h tickets (as the pipeline's key, the container's admin)"
+  say "ok   the shell on :$LOCAL_SHELL_PORT — its sign-in page at /login"
   record app-local run "$rel" "ok $img"
   hf_output "url=http://127.0.0.1:$LOCAL_SHELL_PORT/"
 }
@@ -609,9 +626,26 @@ cmd_remote() {
   local env=${1:-}; shift || true
   case $env in
     test|prod) local url host; url=$(app_url "$env")/; host=${url#https://}; host=${host%%/*} ;;
-    *) die "usage: deploy/pipeline remote test --image IMAGE | remote prod" ;;
+    *) die "usage: deploy/pipeline remote test --image IMAGE | remote prod [--image IMAGE --because TEXT --ticket ID]" ;;
   esac
-  local img; img=$(image_arg "$@")
+  local img="" because="" ticket=""
+  if [[ $env == test ]]; then img=$(image_arg "$@")
+  else
+    # RUN-36: prod takes an image only named on the command line (never $IMAGE, which a CI stage
+    # sets), with the owner's words and the ticket that holds them — the owner's direct way past test
+    while [[ $# -gt 0 ]]; do
+      case $1 in
+        --image) [[ $# -ge 2 ]] || die "--image needs a value"; img=$2; shift ;;
+        --image=*) img=${1#--image=} ;;
+        --because) [[ $# -ge 2 ]] || die "--because needs the owner's words"; because=$2; shift ;;
+        --because=*) because=${1#--because=} ;;
+        --ticket) [[ $# -ge 2 ]] || die "--ticket needs the ticket that holds the owner's go"; ticket=$2; shift ;;
+        --ticket=*) ticket=${1#--ticket=} ;;
+        *) die "unknown argument '$1'" ;;
+      esac; shift
+    done
+    [[ -n $img || -z $because$ticket ]] || die "--because and --ticket go with --image: remote prod --image IMAGE --because TEXT --ticket ID"
+  fi
   if [[ ! -f $APP_YML ]]; then
     die "$host is not declared yet (RUN-11): menger has no deploy/app.yml for hypermemetic-infra to deploy — nothing was changed"
   fi
@@ -643,9 +677,21 @@ cmd_remote() {
     say "test ($host) runs $rel — smoke passed; its suite runs next (deploy/pipeline suite $rel)"
   else
     # promote.yml ships the image test (app-test) runs — the release test last ran ok (DEPLOY-28),
-    # and only once that release's suite has passed (DEPLOY-52)
-    local rel good s; rel=$(last_good test); good=$(last_good app-prod)
-    [[ -n $rel ]] || die "test runs no release this log knows — nothing to promote (deploy/pipeline remote test first)"
+    # and only once that release's suite has passed (DEPLOY-52). RUN-36: with --image, the owner's
+    # direct way — that release, test never ran, through infra's direct.yml, the owner's words on
+    # the box's log and the ticket that holds them in the record — and only once its suite passed.
+    local rel good s ref=""; good=$(last_good app-prod)
+    if [[ -n $img ]]; then
+      [[ -n ${because//[[:space:]]/} ]] || die "remote prod --image needs --because: the owner's words that send it to prod past test"
+      [[ $ticket =~ ^[A-Z][A-Z0-9]*-[0-9]+$ ]] || die "remote prod --image needs --ticket ID: the ticket that holds the owner's go"
+      rel=${img##*:}
+      [[ -n $(sha_of "$rel") ]] || die "'$img' names no release (menger:<release>, the release ending in its commit)"
+      [[ -d $RELEASES/$rel ]] || die "no release '$rel' here (deploy/pipeline releases)"
+      ref=$IMAGE_GHCR:$rel DIRECT_TICKET=$ticket
+    else
+      rel=$(last_good test)
+      [[ -n $rel ]] || die "test runs no release this log knows — nothing to promote (deploy/pipeline remote test first)"
+    fi
     s=$(suite_of "$rel")
     case $s in
       passed) ;;
@@ -654,15 +700,25 @@ cmd_remote() {
       *) die "$rel has no suite result here — run: deploy/pipeline suite $rel, then promote once it has passed" ;;
     esac
     begin_run remote-prod
-    step "remote prod: test's image ($rel, suite passed) → $host (bin/infra promote.yml)"
-    tell app-prod started "$rel" "$good"
-    "$INFRA/bin/infra" promote.yml -e "app_dir=$src" >&2 \
-      || { record app-prod run "$rel" "infra failed"; tell app-prod failed "$rel" "$good"; die "infra did not promote to $host (it rolls prod back by itself)"; }
+    if [[ -n $ref ]]; then
+      if [[ $img != "$ref" ]] && ! docker image inspect "$ref" >/dev/null 2>&1; then
+        docker tag "$img" "$ref" || die "could not tag $img as $ref (is $img in this machine's Docker?)"
+      fi
+      step "remote prod: $ref ($rel, suite passed) DIRECT, not through test — the owner's word on $ticket: $because → $host (bin/infra direct.yml)"
+      tell app-prod started "$rel" "$good"
+      "$INFRA/bin/infra" direct.yml -e "app_dir=$src" -e "$(jq -cn --arg i "$ref" --arg b "$because ($ticket)" '{image: $i, because: $b}')" >&2 \
+        || { record app-prod run "$rel" "infra failed"; tell app-prod failed "$rel" "$good"; die "infra did not promote $ref to $host (it rolls prod back by itself)"; }
+    else
+      step "remote prod: test's image ($rel, suite passed) → $host (bin/infra promote.yml)"
+      tell app-prod started "$rel" "$good"
+      "$INFRA/bin/infra" promote.yml -e "app_dir=$src" >&2 \
+        || { record app-prod run "$rel" "infra failed"; tell app-prod failed "$rel" "$good"; die "infra did not promote to $host (it rolls prod back by itself)"; }
+    fi
     if ! smoke_remote prod "$rel"; then
       record app-prod run "$rel" "smoke failed"; tell app-prod failed "$rel" "$good"
       die "$host runs $rel and its smoke FAILED — bin/infra rollback.yml returns it (deploy/README.md \"On the Linode\")"
     fi
-    record app-prod run "$rel" ok
+    record app-prod run "$rel" "ok${ref:+ direct ($ticket)}"
     tell app-prod succeeded "$rel" "$good"
   fi
   hf_output "url=$url"

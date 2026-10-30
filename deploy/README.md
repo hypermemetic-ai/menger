@@ -82,6 +82,8 @@ deploy/pipeline remote test --image IMG   # app-test.menger.sh through infra, th
 deploy/pipeline suite RELEASE             # DEPLOY-52: the full suite at the release's commit, plexus-bench beside it (PERF-6); marks the release
 deploy/pipeline suite --status RELEASE    # suite: passed | failed | running | none
 deploy/pipeline remote prod               # what test runs → app.menger.sh, only once its suite passed
+deploy/pipeline remote prod --image IMG --because TEXT --ticket ID
+                                          # RUN-36: the owner's direct way past test — that release, its suite passed
 deploy/pipeline smoke test|prod           # the smoke against app-test / app.menger.sh, on its own
 deploy/pipeline status                    # what test and prod run, their suites, health, last records; the runner; the disk
 deploy/pipeline releases                  # every release: its suite, tested?, where it runs
@@ -146,6 +148,21 @@ Review ("Automatic test", below); prod is the owner's.
    app.menger.sh; recorded as `app-prod` (from `test`). A failed smoke is
    recorded `failed`; `bin/infra rollback.yml -e app_dir=<checkout>` puts prod
    back on its previous image ("On the Linode").
+
+   **The owner's direct way** (RUN-36). `remote prod --image IMG --because
+   TEXT --ticket ID` sends a release to app.menger.sh that test never ran —
+   for a release the owner sends past test by their own word (RUN-36, owner
+   2026-10-30: *"have it just test locally and deploy to prod directly"*,
+   then *"that is my direction. push when ready"*; test ran v2 for another
+   session's work). All three are required — the image named on the command
+   line (never `$IMAGE`, which a CI stage sets), the owner's words, and the
+   ticket that holds them — and the release's suite must have `passed`, as
+   for any promotion. It runs infra's `direct.yml` (the image and the words,
+   never `promote.yml`): converge, health, and on a failed check prod back on
+   its previous image by itself; the box's log says `promote-direct` with the
+   words. The records are `app-prod`'s, naming the ticket (`tickets`) and
+   claiming no `from`; the log line says `ok direct (<ticket>)`. It is never
+   the pipeline's default and never the runner's.
 
 **Smoke checks** (`smoke test|prod`; `remote` runs them after infra): from
 outside, as a person or an agent meets the deployment, reading only — `http://`
@@ -366,10 +383,15 @@ synapse -P 44104 lforge-v5 hyperforge ci menger-app trigger --run N --stage depl
   4450–4462 are refused — prod's, test's and a dev server's). Each port is
   the same number inside the container and out (`MENGER_WS_PORT` /
   `MENGER_SHELL_PORT` set in it), because until RUN-9 the page dials the
-  WebSocket on the port it was stamped with. Login is off, as the image's
-  defaults have it; nothing is reachable beyond loopback. It waits (90 s,
-  `MENGER_LOCAL_WAIT`) for `tickets.health` over synapse on 4470 and the
-  page on 4471 stamped with 4470, then answers `url=http://127.0.0.1:4471/`
+  WebSocket on the port it was stamped with. ACCESS-24 (there is no open
+  mode, and bound beyond loopback inside the container with no provider
+  menger refuses to start; RUN-36): the container signs keys in
+  (`MENGER_AUTH_PROVIDERS=key=ws://127.0.0.1:4470`), the pipeline's key is
+  its admin (`MENGER_ADMINS`, the key's principal; `MENGER_DEPLOY_KEY_FILE`),
+  and its public URL is `http://localhost:4471`; nothing is reachable beyond
+  loopback. It waits (90 s, `MENGER_LOCAL_WAIT`) for `tickets.health` as the
+  pipeline's key on 4470 and the sign-in page at 4471's `/login`, then
+  answers `url=http://127.0.0.1:4471/`
   (and appends it to `$HF_OUTPUTS`). Run again, it removes the old
   container and starts the new one on the same volume, so the local app's
   tickets survive a new image. A container that does not answer is left
