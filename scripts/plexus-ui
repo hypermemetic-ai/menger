@@ -5,9 +5,13 @@
 # arguments given: `scripts/plexus-ui build ui -o dist/ui.tar`, `sign`,
 # `push`, … (`scripts/plexus-ui --help`). What scripts/ui-build.sh and
 # ui-sign did; the engine it builds (`build --prebuild`) comes from the
-# same checkout.
+# same checkout. FRAME-20: `PLEXUS_UI_SRC` (the tool's own variable: the
+# checkout it builds the engine from) names the checkout the tool is built
+# from too — the svelte/1 face is compiled into the tool — so a framework
+# worktree is measured whole.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 target=${CARGO_TARGET_DIR:-$root/target}
-cargo build --quiet --manifest-path "$root/../plexus-ui/Cargo.toml" -p plexus-ui-cli --target-dir "$target" >&2
+src=${PLEXUS_UI_SRC:-$root/../plexus-ui}
+cargo build --quiet --manifest-path "$src/Cargo.toml" -p plexus-ui-cli --target-dir "$target" >&2
 exec "$target/debug/plexus-ui" "$@"

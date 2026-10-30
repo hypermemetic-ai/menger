@@ -7,7 +7,9 @@
      rhx's; no timer of its own), drawn at its offset. Filtered (the route's `filter`): the count is
      `nav counts { filter }`'s sum and the page is `list { filter, at }`.
      `created` moves the count and puts the row in; `status_changed` patches it
-     in place (a keyed each: the same element). -->
+     in place (a keyed each: the same element). FRAME-20: the window iterates
+     the handle's getter, `rows.rows`, not the store's `$rows.rows`: a row a
+     change leaves alone is the same object, so only the changed row renders. -->
 <script module>
   export const uses = ["tickets.nav.extents", "tickets.watch", "tickets.nav.counts", "tickets.list"];
 </script>
@@ -33,8 +35,6 @@
     on: { created: "upsert:ticket", status_changed: "upsert:ticket", amended: "upsert:ticket",
           kind_changed: "upsert:ticket", labels_changed: "upsert:ticket", deleted: "remove:ids" },
     debounce_ms: 20 });
-  const list = $derived($rows.rows);
-
   const held = (e) => (e.last_seq ?? e.seq) - (e.holes ?? []).length;
   const total = $derived(filter == null ? $extents.rows.reduce((a, e) => a + held(e), 0) : $counts.rows.reduce((a, c) => a + c.held, 0));
 
@@ -74,12 +74,12 @@
   <header class="board-head">
     <span class="board-count">{total}</span>
     <span class="board-count-label">tickets</span>
-    {#if $rows.status !== "live"}<span class="board-status" data-board-status={$rows.status}>{$rows.status}</span>{/if}
+    {#if rows.status !== "live"}<span class="board-status" data-board-status={rows.status}>{rows.status}</span>{/if}
   </header>
   <div class="board-scroll" data-row-height="28" onscroll={scrolled}>
     <div class="board-space" style={"height:" + PITCH * total + "px"}>
       <div class="board-window" style={"transform:translateY(" + PITCH * first + "px)"}>
-      {#each list as r (r.id)}
+      {#each rows.rows as r (r.id)}
         <a class="board-row" data-id={r.id} data-status={r.status} href={base + "ticket/" + r.id}>
           <span class="row-id" data-field="id">{r.id}</span>
           <span class="row-title" data-field="title">{r.title}</span>

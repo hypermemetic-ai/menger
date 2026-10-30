@@ -4,7 +4,8 @@
      children (nav-children-sv); Flat is one page of `list { filter, summary,
      limit: 200 }` in store order (nav-flat-sv). Under a filter each row says
      how many match. FRAME-25: the two are siblings imported from ui/src
-     (FRAME-19), bundled into this module and on its bus. -->
+     (FRAME-19), bundled into this module and on its bus. FRAME-20: Tree iterates the handle's getter,
+     `groups.rows` (only a changed group renders). -->
 <script module>
   export const uses = ["tickets.nav.groups", "tickets.watch", "tickets.nav.counts"];
 </script>
@@ -19,7 +20,6 @@
 
   const groups = live({ snapshot: "tickets.nav.groups", params: {}, changes: "tickets.watch", key: "shortcode", on: { group_changed: "upsert:group" } });
   const counts = live({ snapshot: "tickets.nav.counts", params: () => ({ filter: filter ?? null }), key: "shortcode", on: { count: "upsert:." } });
-  const list = $derived($groups.rows);
   let flat = $state(false);
   let open = $state([]);
 
@@ -36,7 +36,7 @@
     <NavFlat {filter}/>
   {:else}
     <ul class="nav-groups">
-      {#each list as g (g.shortcode)}
+      {#each groups.rows as g (g.shortcode)}
         <li class="nav-group" data-nav-group={g.shortcode}>
           <div class="nav-group-row">
             <button class="nav-toggle" data-nav-toggle={g.shortcode} aria-expanded={open.includes(g.shortcode) ? "true" : "false"} onclick={() => toggle(g.shortcode)}>{open.includes(g.shortcode) ? "▾" : "▸"}</button>
