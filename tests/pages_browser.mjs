@@ -619,6 +619,8 @@ async function main() {
         await sleep(800);
         calls = (await sentCalls(page)).slice(asked).filter((c) => c.method === "tickets.find");
         assert(calls.at(-1)?.params.query === "zap-34", `the last find is zap-34: ${JSON.stringify(calls.map((c) => c.params.query))}`);
+        // FRAME-25: one find per burst of keys typed within the pause — `zap`, then `zap-34`, nothing between.
+        assert(JSON.stringify(calls.map((c) => c.params.query)) === JSON.stringify(["zap", "zap-34"]), `one find per burst (zap, then zap-34): ${JSON.stringify(calls.map((c) => c.params.query))}`);
         const drawn = await attrs(palette(page, B).locator("[data-palette-hit]"), "data-palette-hit");
         assert(JSON.stringify(drawn) === JSON.stringify(zap34.slice(0, drawn.length)) && drawn.length > 0, `only zap-34's hits are drawn: ${JSON.stringify(drawn)} vs ${JSON.stringify(zap34)}`);
 
