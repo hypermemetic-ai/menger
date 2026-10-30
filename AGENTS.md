@@ -98,7 +98,16 @@ whichever the live pointer names at `/app/`:
   stored and made live in one transaction. `ui rollback --to <hash>`,
   `ui versions`, `ui preview [--version]`, `ui watch`.
 - **Sections**: `ui slots list | set | clear` — what component fills each
-  slot of each layout, over the live manifest's defaults.
+  slot of each layout, over the live manifest's defaults. **A page composed
+  from bundles** (FRAME-15): a bundle pushed with `--no-live` (`ui.push
+  { live: false }`) is kept and made live by nothing — a bundle of
+  components alone, with no `index.html`, can only be kept that way; a
+  section is set to one of its components by hash (`--version`) or by
+  the bundle's name (`--follow NAME`, the `name` the tool's `build --name`
+  writes in the manifest), and a follower moves with every push carrying
+  that name, said as `slot_changed`; a set by version, or a clear, ends
+  the following. `../plexus-ui/CONTRACT.md` "A page composed from bundles"
+  has the rules.
 - **Its flags**: `--ui-db-path` (`MENGER_UI_DB_PATH`; default `ui.db` beside
   the database), `--ui-signer` (`MENGER_UI_SIGNERS`, `;`-separated 64-hex
   public keys; none: every push refused `no_signer`), `--ui-compiler`
