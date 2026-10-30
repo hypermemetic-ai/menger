@@ -621,7 +621,8 @@ async function main() {
         await sleep(500);
         assert(trimmed(await tp.locator("[data-ticket-status]").textContent({ timeout: 1000 })) === t.status, `the status is ${t.status}`);
         assert(trimmed(await tp.locator("[data-ticket-kind]").textContent({ timeout: 1000 })) === t.kind, `the kind is ${t.kind}`);
-        const kids = (await sentCalls(page)).filter((c) => c.method === "tickets.list");
+        // SURFACE-3: the head asks the parent's children too (the siblings, `fields: ["id"]`).
+        const kids = (await sentCalls(page)).filter((c) => c.method === "tickets.list" && c.params.parent === t.id);
         assert(kids.length === 1 && kids[0].params.parent === t.id, `one list { parent: ${t.id} } (${JSON.stringify(kids.map((k) => k.params))})`);
         const bodyEl = tp.locator("[data-ticket-body]");
         const text = await bodyEl.textContent({ timeout: 1000 });
