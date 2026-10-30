@@ -132,7 +132,8 @@ const gaps = [
   ["the ack wait: `tickets.list` sent → acknowledged (PLEXUS-10)", gap("list_acked", "list_sent")],
   ["acknowledged → its first data", gap("list_first_data", "list_acked")],
   ["the stream: first data → done (PERF-15)", gap("list_done", "list_first_data")],
-  ["the draw: `plexus-ui:first-row` − `plexus-ui:first-answer` (acceptance: ≤ 20 ms)", gap("plexus-ui:first-row", "plexus-ui:first-answer")],
+  ["the board's draw: `drawn:tickets.list` − `answered:tickets.list` (acceptance: ≤ 20 ms for 200 rows)", gap("plexus-ui:drawn:tickets.list", "plexus-ui:answered:tickets.list")],
+  ["the first draw: `plexus-ui:first-row` − `plexus-ui:first-answer`", gap("plexus-ui:first-row", "plexus-ui:first-answer")],
   ["done → the first titled row", gap("first_row", "list_done")],
 ];
 const hostMarks = [...new Set(marks.flatMap((m) => Object.keys(m).filter((k) => k.startsWith("plexus-ui:"))))].sort((a, b) => median(of(a)) - median(of(b)));
