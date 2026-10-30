@@ -6,7 +6,9 @@
 //   [data-layout=board-frame][data-slot=top] app-top   `[data-surface=app-top]`, `[data-field=epic]` (its name,
 //                       `[data-epic-name]`; a link to #/epics), `[data-field=health]` (`[data-health-count]`, live),
 //                       `[data-form=search] input` (enter → #/search/:q), `[data-link=board|ready|waves|filters|new|me]`,
-//                       `[data-action="palette.open"]` (emits palette.open)
+//                       `[data-action="palette.open"]` (emits palette.open); STUDIO-11: for an editor
+//                       (auth.requires ui.author, held on *) `[data-action="page.edit"]` — the pencil, ctrl+e —
+//                       to /studio/#/page/<the hash, encodeURIComponent'd>; a viewer has neither
 //   board-rows-sv       `.board-row[data-id]` with `[data-selected]` (one) and `[data-checked]` (any), the check
 //                       box `[data-check=<id>]` (`[data-action=check]`), `[data-field=checked]` (how many)
 //   keys-help           `[data-surface=keys-help]` (the `keys` section) with `[data-chord]` rows; it says what it
@@ -17,8 +19,10 @@
 // The keys are FRAME-36's: a window listener the test adds before the page's
 // scripts (an init script) records each press and reads `defaultPrevented`
 // after the host had it; a document listener says whether it reached the page.
+import { makeKey, readToken, sessionCookies, writeSession } from "../../scripts/throwaway-login.mjs";
+
 export default async (ctx) => {
-  const { test, assert, eventually, sleep, openPage, sy, main, section, boardUp, BOARDS } = ctx;
+  const { test, assert, eventually, sleep, openPage, sy, main, section, boardUp, BOARDS, server, path } = ctx;
   const B = BOARDS.sv;
 
   const SPY = () => {
@@ -254,5 +258,58 @@ export default async (ctx) => {
     await page.keyboard.press("t");
     const t = await lastKey(page);
     assert(t.prevented === false && t.reached === true, `t, unbound, is the page's: ${JSON.stringify(t)}`);
+  });
+
+  await test("ctrl_e_edits_this_page_for_an_editor", async () => {
+    const { page } = await board("#/f/ready");
+    const pencil = top(page).locator('[data-action="page.edit"]');
+    await eventually("the pencil is lit for an editor", async () => (await pencil.count()) === 1, 5_000);
+    const want = "/studio/#/page/" + encodeURIComponent("#/f/ready");
+    assert(((await pencil.getAttribute("href")) ?? "") === want, `the pencil goes to ${want}: ${await pencil.getAttribute("href")}`);
+    assert(((await pencil.textContent()) ?? "").includes(want.replace("/studio/", "")) || ((await pencil.getAttribute("title")) ?? "").includes("#/f/ready"), "its tooltip names where it goes");
+    // The host's overlay lists it under app-top.
+    await calm(page);
+    await page.keyboard.press("?");
+    const overlay = page.locator("[data-engine-keys]");
+    await eventually("? opens the overlay", async () => (await overlay.count()) === 1, 2_000);
+    const mine = await overlay.locator("[data-component=app-top] [data-chord]").evaluateAll((els) => els.map((e) => [e.getAttribute("data-chord"), e.querySelector("[data-label]")?.textContent ?? ""]));
+    assert(mine.some(([c, l]) => c === "ctrl+e" && l.includes("edit this page")), `the overlay lists ctrl+e · edit this page under app-top: ${JSON.stringify(mine)}`);
+    await page.keyboard.press("Escape");
+    await calm(page);
+    await page.keyboard.press("Control+e");
+    await eventually(`ctrl+e goes to ${want}`, async () => {
+      const u = new URL(page.url());
+      return u.pathname + u.hash === want;
+    }, 5_000);
+  });
+
+  await test("ctrl_e_does_nothing_for_a_viewer", async () => {
+    const keyFile = path.join(server.work, "viewer-edit.key");
+    const principal = makeKey(keyFile);
+    const g = sy("members", "grant", "--principal", principal, "--scope", "*", "--role", "viewer");
+    assert(g.some((e) => e.type === "grant"), `viewer granted: ${JSON.stringify(g)}`);
+    const file = path.join(server.work, "viewer-edit.session");
+    await writeSession(`ws://127.0.0.1:${server.ws}`, keyFile, file, "viewer");
+    const { context, page: first } = await openPage("");
+    await first.close();
+    await context.clearCookies();
+    await context.addCookies(sessionCookies(server.origin, readToken(file)));
+    await context.addInitScript(SPY);
+    const page = await context.newPage();
+    try {
+      await page.goto(`${server.origin}/app/#/f/ready`);
+      await boardUp(page, B);
+      await eventually("app-top drawn", async () => (await top(page).count()) === 1, 5_000);
+      await sleep(1_000);
+      assert((await top(page).locator('[data-action="page.edit"]').count()) === 0, "a viewer has no pencil");
+      await calm(page);
+      await page.keyboard.press("Control+e");
+      await sleep(500);
+      const u = new URL(page.url());
+      assert(u.pathname === "/app/" && u.hash === "#/f/ready", `ctrl+e moved a viewer to ${page.url()}`);
+    } finally {
+      await context.close();
+      sy("members", "revoke", "--principal", principal, "--scope", "*");
+    }
   });
 };
