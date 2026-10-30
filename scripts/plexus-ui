@@ -12,6 +12,5 @@
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 target=${CARGO_TARGET_DIR:-$root/target}
-src=${PLEXUS_UI_SRC:-$root/../plexus-ui}
-cargo build --quiet --manifest-path "$src/Cargo.toml" -p plexus-ui-cli --target-dir "$target" >&2
+cargo build --quiet --manifest-path "${PLEXUS_UI_SRC:-$root/../plexus-ui}/Cargo.toml" -p plexus-ui-cli --target-dir "$target" >&2
 exec "$target/debug/plexus-ui" "$@"

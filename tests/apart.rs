@@ -289,7 +289,7 @@ fn tool_build_line(script: &str) -> Option<(usize, &str)> {
     script
         .lines()
         .enumerate()
-        .find(|(_, l)| l.contains("--manifest-path") && l.contains("../plexus-ui/") && l.contains("-p plexus-ui-cli"))
+        .find(|(_, l)| l.contains("--manifest-path") && l.contains("../plexus-ui") && l.contains("-p plexus-ui-cli"))
         .map(|(n, l)| (n + 1, l))
 }
 
