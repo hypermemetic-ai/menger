@@ -41,7 +41,7 @@
 <script>
   import { bus, live } from "plexus-ui/host";
 
-  let { ids = null } = $props();
+  let { ids = null, sheet = null } = $props();
   const b = bus();
 
   let sel = $state([]);
@@ -133,9 +133,10 @@
   <div class="sel">
     {#if byFilter}
       <span class="n" data-bulk-count>{counted}</span><span class="l">match the filter</span>
-      {#if counts.status === "pending" || counts.status === "resyncing"}<span class="skeleton" data-loading aria-hidden="true"></span>{/if}
+      {#if sheet === "loading" || counts.status === "pending" || counts.status === "resyncing"}<span class="skeleton" data-loading aria-hidden="true"></span>{/if}
     {:else}
       <span class="n" data-bulk-count>{selIds.length}</span><span class="l">selected</span>
+      {#if sheet === "loading"}<span class="skeleton" data-loading aria-hidden="true"></span>{/if}
     {/if}
     <input class="filter" data-field="filter" type="search" spellcheck="false" autocomplete="off" aria-label="or a filter"
            placeholder="or a filter — status Draft and in KILN" bind:value={() => filter, (v) => { filter = v; reset(); }}/>
@@ -211,23 +212,23 @@
   .l { color: var(--muted); }
   .filter { flex: 1; min-width: 180px; max-width: 420px; }
   input, select { padding: 3px 8px; font: inherit; color: var(--ink); background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius); transition: border-color var(--motion-fast) var(--ease); }
-  input:hover, select:hover { border-color: var(--muted); }
-  input:focus-visible, select:focus-visible { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px var(--sel); }
+  input:hover, select:hover, input:global([data-sheet~=hover]), select:global([data-sheet~=hover]) { border-color: var(--muted); }
+  input:focus-visible, select:focus-visible, input:global([data-sheet~=focus]), select:global([data-sheet~=focus]) { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px var(--sel); }
   .max { display: inline-flex; gap: 4px; align-items: center; color: var(--muted); }
   .max input { width: 72px; }
   .b { padding: 3px 12px; font: inherit; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; transition: background-color var(--motion-fast) var(--ease); }
-  .b:hover { background: var(--hover); }
-  .b:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-  .b:disabled { color: var(--disabled); cursor: default; background: var(--card); }
+  .b:hover, .b:global([data-sheet~=hover]) { background: var(--hover); }
+  .b:focus-visible, .b:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .b:disabled, .b:global([data-sheet~=disabled]) { color: var(--disabled); cursor: default; background: var(--card); }
   .b.go { color: var(--accent); background: var(--sel); border-color: var(--accent); }
-  .b.go:hover { background: var(--row-sel); }
+  .b.go:hover, .b.go:global([data-sheet~=hover]) { background: var(--row-sel); }
   .b.quiet { color: var(--muted); }
   .warn, .refused { color: var(--warn); }
   .refused { font-size: 12px; }
   .landed { color: var(--live); }
   .row { display: inline-flex; gap: 6px; align-items: center; padding: 1px 8px; font-size: 12px; color: var(--chip-fg); text-decoration: none; background: var(--chip-bg); border: var(--border) solid var(--chip-line); border-radius: var(--radius-pill); }
-  .row:hover { background: var(--hover); }
-  .row:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .row:hover, .row:global([data-sheet~=hover]) { background: var(--hover); }
+  .row:focus-visible, .row:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
   .row-id { color: var(--accent); }
   .row-status { font-size: 11px; color: var(--muted); }
   .more { align-self: center; color: var(--muted); font-size: 12px; }

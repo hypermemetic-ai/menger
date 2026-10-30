@@ -13,4 +13,8 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 target=${CARGO_TARGET_DIR:-$root/target}
 cargo build --quiet --manifest-path "${PLEXUS_UI_SRC:-$root/../plexus-ui}/Cargo.toml" -p plexus-ui-cli --target-dir "$target" >&2
+# SURFACE-10: menger's bundle paints with ui/theme.toml's tokens alone — a
+# literal colour in a component's <style> refuses the build, naming its file
+# and line, where the tool alone only warns.
+if [[ ${1:-} == build ]]; then set -- build --strict-colours "${@:2}"; fi
 exec "$target/debug/plexus-ui" "$@"

@@ -88,9 +88,9 @@
 <style>
   .app-top { display: flex; align-items: center; gap: 12px; height: 44px; padding: 0 max(14px, env(safe-area-inset-left)); background: var(--panel); border-bottom: var(--border) solid var(--line); white-space: nowrap; }
   .brand { font-family: var(--font-display); font-weight: var(--weight-bold); color: var(--ink); text-decoration: none; padding: 2px 4px; border-radius: var(--radius); transition: color var(--motion-fast) var(--ease); }
-  .brand:hover { color: var(--accent); }
+  .brand:hover, .brand:global([data-sheet~=hover]) { color: var(--accent); }
   .top-epic { display: inline-flex; gap: 6px; align-items: center; padding: 2px 9px; font-size: 12px; color: var(--ink); text-decoration: none; background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); transition: border-color var(--motion-fast) var(--ease); }
-  .top-epic:hover { border-color: var(--muted); }
+  .top-epic:hover, .top-epic:global([data-sheet~=hover]) { border-color: var(--muted); }
   .top-epic .lbl { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
   .top-health { display: inline-flex; gap: 5px; align-items: baseline; font-size: 12px; color: var(--muted); }
   .top-health b { color: var(--ink); font-weight: var(--weight-bold); font-variant-numeric: tabular-nums; }
@@ -101,17 +101,17 @@
   .top-health[data-loading]::before { background: var(--skeleton); }
   .top-links { display: flex; gap: 2px; margin-left: 6px; }
   .top-links a { padding: 4px 10px; color: var(--muted); text-decoration: none; border: var(--border) solid transparent; border-radius: var(--radius); transition: color var(--motion-fast) var(--ease), background-color var(--motion-fast) var(--ease); }
-  .top-links a:hover { color: var(--ink); background: var(--hover); }
+  .top-links a:hover, .top-links a:global([data-sheet~=hover]) { color: var(--ink); background: var(--hover); }
   .top-links a[aria-current=page] { color: var(--ink); background: var(--card); border-color: var(--line); }
-  .top-links a:focus-visible, .top-epic:focus-visible, .brand:focus-visible, .top-jump:focus-visible, .top-edit:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .top-links a:focus-visible, .top-epic:focus-visible, .brand:focus-visible, .top-jump:focus-visible, .top-edit:focus-visible, .top-links a:global([data-sheet~=focus]), .top-epic:global([data-sheet~=focus]), .brand:global([data-sheet~=focus]), .top-jump:global([data-sheet~=focus]), .top-edit:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
   .top-search { margin-left: auto; display: flex; }
   .top-search input { width: 260px; padding: 4px 10px; color: var(--ink); background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius); transition: border-color var(--motion-fast) var(--ease); }
-  .top-search input:hover { border-color: var(--muted); }
-  .top-search input:focus-visible { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px var(--sel); }
+  .top-search input:hover, .top-search input:global([data-sheet~=hover]) { border-color: var(--muted); }
+  .top-search input:focus-visible, .top-search input:global([data-sheet~=focus]) { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px var(--sel); }
   .top-jump { display: inline-flex; gap: 6px; align-items: center; padding: 3px 8px; font-size: 12px; color: var(--muted); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; transition: color var(--motion-fast) var(--ease), border-color var(--motion-fast) var(--ease); }
-  .top-jump:hover { color: var(--ink); border-color: var(--muted); }
+  .top-jump:hover, .top-jump:global([data-sheet~=hover]) { color: var(--ink); border-color: var(--muted); }
   .top-edit { position: relative; display: inline-flex; gap: 6px; align-items: center; padding: 3px 8px; font-size: 12px; color: var(--accent); text-decoration: none; background: var(--sel); border: var(--border) solid var(--accent); border-radius: var(--radius); cursor: pointer; transition: background-color var(--motion-fast) var(--ease); }
-  .top-edit:hover { background: var(--card); }
+  .top-edit:hover, .top-edit:global([data-sheet~=hover]) { background: var(--card); }
   .top-edit svg { width: 13px; height: 13px; flex: none; }
   .top-edit .top-kbd { color: var(--accent); border-color: var(--accent); }
   .top-tip { position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; display: none; padding: 5px 9px; font-size: 11px; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); box-shadow: 0 6px 18px var(--shadow); white-space: nowrap; text-align: left; pointer-events: none; }

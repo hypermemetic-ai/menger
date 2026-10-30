@@ -93,11 +93,11 @@
   .nf-name { display: block; margin-bottom: 3px; font-size: 11px; color: var(--muted); }
   .nf-chips { display: flex; flex-wrap: wrap; gap: 4px; }
   .nf-chip { display: inline-flex; gap: 5px; align-items: center; padding: 0 3px 0 8px; font: inherit; font-size: 11px; line-height: 20px; color: var(--chip-fg); background: var(--chip-bg); border: var(--border) solid var(--chip-line); border-radius: var(--radius-pill); cursor: pointer; transition: background-color var(--motion-fast) var(--ease), border-color var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease); }
-  .nf-chip:hover { color: var(--ink); background: var(--hover); border-color: var(--muted); }
-  .nf-chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-  .nf-chip[data-selected] { color: var(--accent); background: var(--sel); border-color: var(--accent); }
+  .nf-chip:hover, .nf-chip:global([data-sheet~=hover]) { color: var(--ink); background: var(--hover); border-color: var(--muted); }
+  .nf-chip:focus-visible, .nf-chip:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .nf-chip[data-selected], .nf-chip:global([data-sheet~=selected]) { color: var(--accent); background: var(--sel); border-color: var(--accent); }
   .nf-n { padding: 0 6px; line-height: 16px; color: var(--muted); background: var(--card); border-radius: var(--radius-pill); font-variant-numeric: tabular-nums; }
-  .nf-chip[data-selected] .nf-n { color: var(--accent); }
+  .nf-chip[data-selected] .nf-n, .nf-chip:global([data-sheet~=selected]) .nf-n { color: var(--accent); }
   .nf-field[data-field=status] .nf-chip[data-value=Draft] .nf-v { color: var(--st-draft-fg); }
   .nf-field[data-field=status] .nf-chip[data-value=Pending] .nf-v { color: var(--st-pending-fg); }
   .nf-field[data-field=status] .nf-chip[data-value=Ready] .nf-v { color: var(--st-ready-fg); }
@@ -105,6 +105,10 @@
   .nf-field[data-field=status] .nf-chip[data-value="In Review"] .nf-v { color: var(--st-in-review-fg); }
   .nf-field[data-field=status] .nf-chip[data-value=Complete] .nf-v { color: var(--st-complete-fg); }
   .nf-field[data-field=status] .nf-chip[data-value=Blocked] .nf-v { color: var(--st-blocked-fg); }
+  .nf-field[data-field=status] .nf-chip[data-value=Superseded] .nf-v { color: var(--st-superseded-fg); }
+  .nf-field[data-field=status] .nf-chip[data-value=Canceled] .nf-v { color: var(--st-canceled-fg); }
+  .nf-field[data-field=status] .nf-chip[data-value=Epic] .nf-v { color: var(--st-epic-fg); }
+  .nf-field[data-field=status] .nf-chip[data-value=Doc] .nf-v { color: var(--st-doc-fg); }
   .nf-note { margin: 4px 0; font-size: 11px; color: var(--muted); }
   .nf-note[data-refused] { color: var(--warn); }
   .nf-skel-wrap { display: flex; flex-direction: column; gap: 6px; }

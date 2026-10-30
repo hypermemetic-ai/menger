@@ -13,7 +13,9 @@
      A `>` prefix is a command: the commands whose name starts with what
      follows, each with its route; one that takes an argument
      (`>waves to GLAZE-12`) fills its route with it, and without one says
-     what it needs. A command asks no ticket. -->
+     what it needs. A command asks no ticket.
+     SURFACE-10: `sheet`, a query, draws it open on that query for the sheet
+     (#/sheet) — its field not focused, its keys not bound. -->
 <script module>
   // PERF-15: a row is the four fields drawn, not the whole summary row.
   const FIELDS = ["id", "title", "kind", "status"];
@@ -48,11 +50,12 @@
 <script>
   import { bus, live } from "plexus-ui/host";
 
+  let { sheet = null } = $props();
   const b = bus();
   const base = location.hash.startsWith("#/sv/") ? "#/sv/" : "#/";
 
-  let open = $state(false);
-  let q = $state("");
+  let open = $state(sheet != null);
+  let q = $state(sheet ?? "");
   let sel = $state(""); // "f:ID", "s:ID", "c:NAME"; "" the first
   let need = $state("");
   const command = $derived(q.startsWith(">"));
@@ -120,7 +123,7 @@
   b.on("palette.close", close);
   // The open palette's keys: bound while it is open, let go when it closes.
   $effect(() => {
-    if (!open) return;
+    if (!open || sheet != null) return;
     return b.keys({
       "escape": { to: close, in_inputs: true, label: "close the palette" },
       "arrowdown": { to: () => step(1), in_inputs: true, label: "the next hit" },
@@ -129,11 +132,11 @@
     });
   });
   function focus(node) {
-    node.focus();
+    if (sheet == null) node.focus();
   }
 </script>
 
-<div class="jump-palette" data-palette data-surface="jump-palette-sv">
+<div class="jump-palette" data-palette data-surface="jump-palette-sv" data-sheet-open={sheet != null ? "" : undefined}>
   {#if open}
     <div class="scrim" data-scrim onclick={close} aria-hidden="true"></div>
     <div class="palette-sheet" role="dialog" aria-label="jump to a ticket">
@@ -172,13 +175,14 @@
 <style>
   .jump-palette .scrim { position: fixed; inset: 0; z-index: 9; background: var(--shadow); }
   .jump-palette .palette-sheet { position: fixed; z-index: 10; top: 12vh; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; width: min(640px, calc(100vw - 32px)); max-height: 70vh; overflow: hidden; background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-xl); box-shadow: 0 10px 30px var(--shadow); }
+  .jump-palette[data-sheet-open] .palette-sheet { top: 8px; left: 8px; right: 8px; width: auto; max-height: calc(100% - 16px); transform: none; }
   .jump-palette .palette-input { padding: 12px 14px; font-size: 14px; color: var(--ink); background: none; border: 0; border-bottom: var(--border) solid var(--line); outline: none; }
-  .jump-palette .palette-input:focus-visible { box-shadow: inset 0 -2px 0 var(--focus); }
+  .jump-palette .palette-input:focus-visible, .jump-palette .palette-input:global([data-sheet~=focus]) { box-shadow: inset 0 -2px 0 var(--focus); }
   .jump-palette .palette-hits { list-style: none; margin: 0; padding: 4px; overflow: auto; }
   .jump-palette .palette-hit, .jump-palette .palette-cmd { cursor: pointer; display: flex; gap: 10px; align-items: center; height: var(--pitch); padding: 0 10px; overflow: hidden; white-space: nowrap; color: var(--ink); text-decoration: none; border-radius: var(--radius); transition: background-color var(--motion-fast) var(--ease); }
-  .jump-palette .palette-hit:hover, .jump-palette .palette-cmd:hover { background: var(--hover); }
-  .jump-palette .palette-hit[data-selected], .jump-palette .palette-cmd[data-selected] { background: var(--row-sel); box-shadow: inset 3px 0 0 var(--accent); }
-  .jump-palette .palette-hit:focus-visible, .jump-palette .palette-cmd:focus-visible { outline: none; background: var(--row-sel); box-shadow: inset 0 0 0 2px var(--focus); }
+  .jump-palette .palette-hit:hover, .jump-palette .palette-cmd:hover, .jump-palette .palette-hit:global([data-sheet~=hover]), .jump-palette .palette-cmd:global([data-sheet~=hover]) { background: var(--hover); }
+  .jump-palette .palette-hit[data-selected], .jump-palette .palette-cmd[data-selected], .jump-palette .palette-hit:global([data-sheet~=selected]), .jump-palette .palette-cmd:global([data-sheet~=selected]) { background: var(--row-sel); box-shadow: inset 3px 0 0 var(--accent); }
+  .jump-palette .palette-hit:focus-visible, .jump-palette .palette-cmd:focus-visible, .jump-palette .palette-hit:global([data-sheet~=focus]), .jump-palette .palette-cmd:global([data-sheet~=focus]) { outline: none; background: var(--row-sel); box-shadow: inset 0 0 0 2px var(--focus); }
   .jump-palette .row-id { flex: none; color: var(--accent); font-variant-numeric: tabular-nums; }
   .jump-palette .row-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .jump-palette .gt { color: var(--muted); }

@@ -23,8 +23,8 @@
 
 <style>
   .chip { display: inline-flex; gap: 6px; align-items: center; max-width: 100%; padding: 2px 10px 2px 8px; font-size: 12px; white-space: nowrap; color: var(--chip-fg); text-decoration: none; background: var(--chip-bg); border: var(--border) solid var(--chip-line); border-radius: var(--radius-pill); transition: background-color var(--motion-fast) var(--ease), border-color var(--motion-fast) var(--ease); }
-  .chip:hover { background: var(--hover); border-color: var(--line); }
-  .chip:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .chip:hover, .chip:global([data-sheet~=hover]) { background: var(--chip-hover); border-color: var(--line); }
+  .chip:focus-visible, .chip:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
   .chip-kind { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
   .chip-code { color: var(--accent); }
   .chip-title { max-width: 28ch; overflow: hidden; text-overflow: ellipsis; color: var(--ink); }

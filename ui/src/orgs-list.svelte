@@ -8,6 +8,8 @@
 
 <script>
   import { live } from "plexus-ui/host";
+  // SURFACE-10: the sheet holds the loading state by its mark (data-sheet="loading").
+  let { sheet = null } = $props();
 
   const orgs = live({ snapshot: "orgs.list", params: {}, key: "name", on: {} });
   const root = (r) => r.split(":").pop();
@@ -30,7 +32,7 @@
         <span class="roots" data-field="roots">{#each o.roots ?? [] as r (r)}<span class="chip">{root(r)}</span>{/each}</span>
       </div>
     {/each}
-    {#if $orgs.status === "pending"}<div class="tr"><span data-loading="">hypermemetic</span></div>{/if}
+    {#if sheet === "loading" || $orgs.status === "pending"}<div class="tr"><span data-loading="">hypermemetic</span></div>{/if}
     {#if $orgs.status === "live" && orgs.rows.length === 0}<p class="empty" data-empty="">You hold a role in no organization.</p>{/if}
     {#if $orgs.status === "error" || $orgs.status === "refused"}<p class="empty" data-refused="">refused: {$orgs.message}</p>{/if}
   </div>
@@ -47,7 +49,7 @@
   .th { padding-top: 6px; padding-bottom: 6px; font-size: 11px; font-weight: var(--weight-medium); color: var(--muted); border-bottom: var(--border) solid var(--line); }
   .tr { min-height: 34px; padding-top: 4px; padding-bottom: 4px; border-bottom: var(--border) solid var(--line); transition: background-color var(--motion-fast) var(--ease); }
   .tr:last-child { border-bottom: 0; }
-  .tr:hover { background: var(--hover); }
+  .tr:hover, .tr:global([data-sheet~=hover]) { background: var(--hover); }
   .name { color: var(--accent); font-weight: var(--weight-medium); }
   .meta { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .roots { display: flex; flex-wrap: wrap; gap: 4px; }

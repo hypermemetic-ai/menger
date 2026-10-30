@@ -33,5 +33,7 @@
   "#/filters/:filter": "filters-saved",
   "#/facets": "nav-facets",
   "#/facets/:filter": "nav-facets",
-  "#/counts/:filter": "nav-counts"
+  "#/counts/:filter": "nav-counts",
+  "#/sheet": "sheet-page",
+  "#/sheet/:id": "sheet-page"
 }

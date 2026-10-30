@@ -14,7 +14,7 @@
   import Chip from "./ticket-chip-sv.svelte";
   import Subtasks from "plexus-ui:ticket-subtasks";
 
-  let { id } = $props();
+  let { id, sheet = null } = $props();
   const base = location.hash.startsWith("#/sv/") ? "#/sv/" : "#/";
   const FIELDS = ["id", "title", "kind", "status"];
   const ticket = live({ snapshot: "tickets.get", params: () => ({ id }), changes: "tickets.watch", key: "id",
@@ -33,7 +33,7 @@
 <section class="ticket-relations" data-surface="ticket-relations">
   <h2 class="sec">Children <span class="n">{kids.length}</span><span class="aside"><b>{done}</b> of {kids.length} done</span></h2>
   <div class="rows" data-field="children">
-    {#if children.status === "pending"}<div data-loading aria-busy="true"><i class="bone"></i><i class="bone"></i></div>{/if}
+    {#if sheet === "loading" || children.status === "pending"}<div data-loading aria-busy="true"><i class="bone"></i><i class="bone"></i></div>{/if}
     {#each kids as c (c.id)}
       <a class="row" data-id={c.id} data-ticket-child={c.id} data-status={c.status} href={base + "ticket/" + c.id}>
         <i class="kmark" data-kind={c.kind} aria-hidden="true"></i>
@@ -65,8 +65,8 @@
   .ticket-relations .aside b { color: var(--live); font-weight: var(--weight-medium); }
   .ticket-relations .rows { border-top: var(--border) solid var(--line); }
   .ticket-relations .row { display: grid; grid-template-columns: 10px 84px minmax(0, 1fr) auto auto; gap: 10px; align-items: center; height: var(--pitch); padding: 0 8px; color: var(--ink); text-decoration: none; white-space: nowrap; border-bottom: var(--border) solid var(--line); transition: background-color var(--motion-fast) var(--ease); }
-  .ticket-relations .row:hover { background: var(--hover); }
-  .ticket-relations .row:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
+  .ticket-relations .row:hover, .ticket-relations .row:global([data-sheet~=hover]) { background: var(--hover); }
+  .ticket-relations .row:focus-visible, .ticket-relations .row:global([data-sheet~=focus]) { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
   .ticket-relations .row-id { color: var(--accent); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; }
   .ticket-relations .row-title { overflow: hidden; text-overflow: ellipsis; }
   .ticket-relations .row-kind { color: var(--muted); font-size: 11px; }
@@ -79,12 +79,15 @@
   .ticket-relations .row[data-status=Blocked] .row-status { background: var(--st-blocked-bg); color: var(--st-blocked-fg); }
   .ticket-relations .row[data-status=Superseded] .row-status { background: var(--st-superseded-bg); color: var(--st-superseded-fg); }
   .ticket-relations .row[data-status=Canceled] .row-status { background: var(--st-canceled-bg); color: var(--st-canceled-fg); }
+  .ticket-relations .row[data-status="Draft"] .row-status { background: var(--st-draft-bg); color: var(--st-draft-fg); }
+  .ticket-relations .row[data-status="Epic"] .row-status { background: var(--st-epic-bg); color: var(--st-epic-fg); }
+  .ticket-relations .row[data-status="Doc"] .row-status { background: var(--st-doc-bg); color: var(--st-doc-fg); }
   .ticket-relations .kmark { display: inline-block; width: 8px; height: 8px; background: var(--kind-build); border-radius: 50%; }
   .ticket-relations .kmark[data-kind=scope] { background: var(--kind-scope); border-radius: var(--radius-xs); transform: rotate(45deg) scale(.85); }
   .ticket-relations .kmark[data-kind=gap] { background: var(--kind-gap); border-radius: 0; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
   .ticket-relations .kmark[data-kind=spike] { background: none; border: 2px solid var(--kind-spike); }
   .ticket-relations .kmark[data-kind=execution] { background: var(--kind-execution); border-radius: var(--radius-xs); }
-  .ticket-relations .kmark[data-kind=doc] { width: 7px; height: 9px; background: none; border: var(--border) solid var(--muted); border-radius: var(--radius-xs); }
+  .ticket-relations .kmark[data-kind=doc] { width: 7px; height: 9px; background: none; border: var(--border) solid var(--kind-doc); border-radius: var(--radius-xs); }
   .ticket-relations .empty { display: block; padding: 8px 6px; font-size: 12px; color: var(--muted); }
   .ticket-relations .hole:empty { display: flex; align-items: center; min-height: 34px; padding: 6px 10px; border: var(--border) dashed var(--tree-line); border-radius: var(--radius); }
   .ticket-relations .hole:empty::before { content: "<work-blockers id/>"; font-size: 11px; color: var(--muted); }

@@ -107,12 +107,15 @@
   .ticket-head .status[data-status=Blocked] { background: var(--st-blocked-bg); color: var(--st-blocked-fg); }
   .ticket-head .status[data-status=Superseded] { background: var(--st-superseded-bg); color: var(--st-superseded-fg); }
   .ticket-head .status[data-status=Canceled] { background: var(--st-canceled-bg); color: var(--st-canceled-fg); }
+  .ticket-head .status[data-status="Draft"] { background: var(--st-draft-bg); color: var(--st-draft-fg); }
+  .ticket-head .status[data-status="Epic"] { background: var(--st-epic-bg); color: var(--st-epic-fg); }
+  .ticket-head .status[data-status="Doc"] { background: var(--st-doc-bg); color: var(--st-doc-fg); }
   .ticket-head .kmark { display: inline-block; width: 8px; height: 8px; flex: none; background: var(--kind-build); border-radius: 50%; }
   .ticket-head .kmark[data-kind=scope] { background: var(--kind-scope); border-radius: var(--radius-xs); transform: rotate(45deg) scale(.85); }
   .ticket-head .kmark[data-kind=gap] { background: var(--kind-gap); border-radius: 0; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
   .ticket-head .kmark[data-kind=spike] { background: none; border: 2px solid var(--kind-spike); }
   .ticket-head .kmark[data-kind=execution] { background: var(--kind-execution); border-radius: var(--radius-xs); }
-  .ticket-head .kmark[data-kind=doc] { width: 7px; height: 9px; background: none; border: var(--border) solid var(--muted); border-radius: var(--radius-xs); }
+  .ticket-head .kmark[data-kind=doc] { width: 7px; height: 9px; background: none; border: var(--border) solid var(--kind-doc); border-radius: var(--radius-xs); }
   .ticket-head .sev { display: inline-flex; gap: 5px; align-items: center; }
   .ticket-head .bars { display: inline-flex; gap: 2px; align-items: flex-end; width: 14px; height: 12px; }
   .ticket-head .bars i { display: block; width: 3px; background: var(--line); border-radius: var(--radius-xs); }
@@ -126,15 +129,15 @@
   .ticket-head .badge { padding: 0 6px; font-size: 10px; line-height: 16px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); border: var(--border) dashed var(--muted); border-radius: var(--radius-sm); }
   .ticket-head .sib { display: flex; gap: 10px; margin-left: auto; }
   .ticket-head .sib a { color: var(--muted); text-decoration: none; border-radius: var(--radius-sm); transition: color var(--motion-fast) var(--ease); }
-  .ticket-head .sib a:hover { color: var(--accent); }
-  .ticket-head .sib a:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .ticket-head .sib a:hover, .ticket-head .sib a:global([data-sheet~=hover]) { color: var(--accent); }
+  .ticket-head .sib a:focus-visible, .ticket-head .sib a:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
   .ticket-head .labels { display: inline-flex; flex-wrap: wrap; gap: 5px; }
   .ticket-head .label { display: inline-flex; align-items: center; padding: 0 8px; font-size: 11px; line-height: 18px; color: var(--chip-fg); background: var(--chip-bg); border: var(--border) solid var(--chip-line); border-radius: var(--radius-pill); }
   .ticket-head .none { font-size: 11px; color: var(--disabled); }
   .ticket-head .status-menu { display: flex; gap: 6px; align-items: center; margin-left: auto; font-size: 11px; }
   .ticket-head .status-menu select { padding: 1px 4px; color: var(--ink); font: inherit; background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); transition: border-color var(--motion-fast) var(--ease); }
-  .ticket-head .status-menu select:hover { border-color: var(--muted); }
-  .ticket-head .status-menu select:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .ticket-head .status-menu select:hover, .ticket-head .status-menu select:global([data-sheet~=hover]) { border-color: var(--muted); }
+  .ticket-head .status-menu select:focus-visible, .ticket-head .status-menu select:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
   @media (prefers-reduced-motion: reduce) {
     .ticket-head .sib a, .ticket-head .status-menu select { transition: none; }
   }

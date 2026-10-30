@@ -37,8 +37,10 @@
   .nav-row[data-status=Blocked]::before { background: var(--st-blocked-fg); }
   .nav-row[data-status=Superseded]::before { background: var(--st-superseded-fg); }
   .nav-row[data-status=Canceled]::before { background: var(--st-canceled-fg); }
-  .nav-row:hover { background: var(--hover); }
-  .nav-row:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
+  .nav-row[data-status="Epic"]::before { background: var(--st-epic-fg); }
+  .nav-row[data-status="Doc"]::before { background: var(--st-doc-fg); }
+  .nav-row:hover, .nav-row:global([data-sheet~=hover]) { background: var(--hover); }
+  .nav-row:focus-visible, .nav-row:global([data-sheet~=focus]) { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
   .row-id { flex: none; color: var(--accent); font-variant-numeric: tabular-nums; }
   .row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .empty { padding: 4px 6px; color: var(--muted); font-size: 11px; }
