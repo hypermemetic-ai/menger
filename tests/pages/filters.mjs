@@ -19,7 +19,8 @@
 //       (`[data-refused]`), saved names offered as `[data-complete=<name>]`
 //   PERF-22: the board's `[data-board][data-surface=board-rows]` gains `[data-drawn]` once its first
 //       answer is drawn (and says `board.drawn` on the bus); the nav's facets and saved filters ask then —
-//       FRAME-50: because the frame places them with `after="board.drawn"`, never from a look at the page
+//       FRAME-50: because the frame places them with `after="board.drawn"`, never from a look at the page;
+//       FRAME-53: `board.drawn` is sticky, so a section remounted after the board drew hears it at once
 import { bundle, push, sentCalls } from "../../scripts/ui-throwaway.mjs";
 
 export default async (ctx) => {
@@ -84,8 +85,8 @@ export default async (ctx) => {
 
   // FRAME-50 (review): nav-facets swapped alone after the board drew — the
   // board stays, says no second `board.drawn`, and the remounted facets
-  // (given `after="board.drawn"`) find the board's `[data-drawn]` and draw
-  // their chips (a facets that waited for the topic alone would draw none).
+  // (given `after="board.drawn"`) hear the kept, sticky `board.drawn`
+  // (FRAME-53, `{ last: true }`) and draw their chips.
   await test("a_facets_swapped_in_after_the_board_drew_asks", async () => {
     const { v2, server, session, sy, fs, path } = ctx;
     const work = path.dirname(session);

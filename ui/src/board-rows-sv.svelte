@@ -18,8 +18,10 @@
      (the bulk bar, SURFACE-5, hears the first); `/` says `filter.focus`
      (the filter line's to take); `ctrl+k` is the palette's own. The host draws
      `?`'s overlay from the labels. PERF-22: its first answer drawn, it says
-     `board.drawn` once on the bus and keeps `[data-drawn]`: the nav's facets,
-     saved filters and counts ask then, not beside the rows. -->
+     `board.drawn` once on the bus — sticky (FRAME-53): kept for a nav section
+     mounted after it — and keeps `[data-drawn]` (the tests' mark; no component
+     looks at it): the nav's facets, saved filters and counts ask then, not
+     beside the rows. -->
 <script module>
   // PERF-15: a row is the four fields drawn, not the whole summary row.
   const FIELDS = ["id", "title", "kind", "status"];
@@ -56,7 +58,7 @@
     untrack(() => {
       if (drawn) return;
       drawn = true;
-      b.emit("board.drawn", {});
+      b.emit("board.drawn", {}, { sticky: true });
     });
   });
   const held = (e) => (e.last_seq ?? e.seq) - (e.holes ?? []).length;

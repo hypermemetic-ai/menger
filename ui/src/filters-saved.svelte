@@ -33,7 +33,7 @@
 </script>
 
 <script>
-  import { tick, untrack } from "svelte";
+  import { untrack } from "svelte";
   import { bus, live } from "plexus-ui/host";
 
   let { filter = null, compact = null, after = null } = $props();
@@ -52,20 +52,13 @@
   // call — the board's frame passes "board.drawn", the rows being what the
   // person waits for; none (a page of its own, the sheet's tiles): at once.
   // A section cannot assume its siblings are mounted, so it never guesses
-  // there is no board. One look is left: waiting for "board.drawn", a
-  // remount after the board drew (a hot-swap) finds the board's mark
-  // (`[data-drawn]`) and asks — a stopgap until a late `on` can hear a topic
-  // said before it (FRAME-53).
+  // there is no board. FRAME-53: the topic is sticky (board-rows-sv says
+  // `board.drawn` with `{ sticky: true }`), so `{ last: true }` hears it at
+  // once when it was said before this mounted — a remount after the board
+  // drew (a hot-swap, a section set) asks at once; nothing looks at the page.
   const wait = untrack(() => after);
   let drawn = $state(!wait);
-  if (wait) {
-    b.on(wait, () => (drawn = true));
-    if (wait === "board.drawn") {
-      tick().then(() => {
-        if (document.querySelector("[data-board][data-drawn]")) drawn = true;
-      });
-    }
-  }
+  if (wait) b.on(wait, () => (drawn = true), { last: true });
   const saved = live({ snapshot: "tickets.filters.list", params: {}, changes: "tickets.watch", key: "name",
                        on: { filter_saved: "upsert:filter", filter_deleted: "remove:name" }, when: () => drawn });
   // a pause before the get: a row picked by the save that made it is asked once the save has landed
