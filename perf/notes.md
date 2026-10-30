@@ -839,8 +839,9 @@ mounts after them, `nav.facets` went out during the mount, its ~270 frames (~30 
 the turns, and `the_navs_sections_ask_after_the_first_rows` failed. Now the three nav components take
 `after` — a bus topic heard before their first call, none: at once — and board-frame passes
 `after="board.drawn"` to the facets and the saved filters; `#/filters`, `#/facets/:filter`,
-`#/counts/:filter` and the sheet's tiles pass none. Nothing is guessed from the page (a remount after
-the board drew finds `[data-drawn]` and asks). `tests/pages_browser.mjs --group all`: 100 / 100 on main's
+`#/counts/:filter` and the sheet's tiles pass none. None of them guesses there is no board; one look is
+left — waiting for `board.drawn`, a remount after the board drew (a hot-swap of the facets alone) finds
+the board's `[data-drawn]` and asks, until a late `on` can hear a topic said before it (FRAME-53). `tests/pages_browser.mjs --group all`: 100 / 100 on main's
 engine and on FRAME-50's. The probe again with it, the same pairs (load 1.5–14; the loaded runs marked):
 
 | run | 10³ before | 10³ after | 10⁶ before | 10⁶ after |

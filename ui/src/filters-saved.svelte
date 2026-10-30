@@ -51,16 +51,20 @@
   // PERF-22, FRAME-50: `after` names a bus topic to hear before the first
   // call — the board's frame passes "board.drawn", the rows being what the
   // person waits for; none (a page of its own, the sheet's tiles): at once.
-  // A section cannot assume its siblings are mounted, so nothing is guessed
-  // from the page; a remount after the board drew (a hot-swap) finds its
-  // mark (`[data-drawn]`) and asks.
+  // A section cannot assume its siblings are mounted, so it never guesses
+  // there is no board. One look is left: waiting for "board.drawn", a
+  // remount after the board drew (a hot-swap) finds the board's mark
+  // (`[data-drawn]`) and asks — a stopgap until a late `on` can hear a topic
+  // said before it (FRAME-53).
   const wait = untrack(() => after);
   let drawn = $state(!wait);
   if (wait) {
     b.on(wait, () => (drawn = true));
-    tick().then(() => {
-      if (document.querySelector("[data-board][data-drawn]")) drawn = true;
-    });
+    if (wait === "board.drawn") {
+      tick().then(() => {
+        if (document.querySelector("[data-board][data-drawn]")) drawn = true;
+      });
+    }
   }
   const saved = live({ snapshot: "tickets.filters.list", params: {}, changes: "tickets.watch", key: "name",
                        on: { filter_saved: "upsert:filter", filter_deleted: "remove:name" }, when: () => drawn });
