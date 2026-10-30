@@ -123,12 +123,18 @@ pub async fn mint_session(ws_port: u16) -> String {
 /// `auth.login {flow: {session}}` — `session.login` went with the `session`
 /// activation (IDENTITY-42's flow is the protocol's now).
 pub async fn mint_session_for(seed: &[u8; 32], ws_port: u16) -> String {
+    mint_session_with(seed, ws_port, serde_json::json!({})).await
+}
+
+/// STUDIO-6: [`mint_session_for`] with `session` as the flow's own params —
+/// a `ceiling` (`["editor@MENGER-5"]`), a `ttl_secs`.
+pub async fn mint_session_with(seed: &[u8; 32], ws_port: u16, session: serde_json::Value) -> String {
     use jsonrpsee::core::client::{Subscription, SubscriptionClientT};
     use jsonrpsee::core::params::ObjectParams;
     let c = connect_as(seed, ws_port).await;
     let mut p = ObjectParams::new();
     p.insert("method", "auth.login").unwrap();
-    p.insert("params", serde_json::json!({ "flow": { "session": {} } })).unwrap();
+    p.insert("params", serde_json::json!({ "flow": { "session": session } })).unwrap();
     let mut s: Subscription<serde_json::Value> = c.subscribe("menger.call", p, "menger.call_unsub").await.unwrap();
     let item = s.next().await.expect("an answer").unwrap();
     item["content"]["token"].as_str().unwrap_or_else(|| panic!("auth.login: {item}")).to_string()

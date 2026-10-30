@@ -918,7 +918,8 @@ function filesOf(buf) { // a tar's regular files, or null: no tar
 }
 const refuse = (reason, message) => { out({ type: "refused", reason, message }); process.exit(0); };
 if (method === "ui.push") {
-  fs.appendFileSync(process.env.STUB_ORDER, "push\n");
+  // STUDIO-6: a push `live: false` (the studio's) says push-kept, the app's push.
+  fs.appendFileSync(process.env.STUB_ORDER, p.live === false ? "push-kept\n" : "push\n");
   if (params !== null) refuse("bad_bundle", "the stand-in takes ui.push's params on stdin only: a bundle of 16 MiB cannot ride argv");
   const signer = process.env.STUB_UI_SIGNER || "";
   if (!signer) refuse("no_signer", "no --ui-signer is configured on this server: every push is refused");
@@ -932,13 +933,17 @@ if (method === "ui.push") {
   let m = null; try { m = JSON.parse(String(p.manifest)); } catch {}
   if (!m || typeof m !== "object" || typeof m.contract !== "string" || !m.contract || typeof m.abi !== "string" || !m.abi) refuse("bad_manifest", "the manifest is no JSON naming contract and abi");
   const hash = digest.toString("hex"), fresh = !versions.some((v) => v.hash === hash);
-  if (fresh) versions.unshift({ hash, commit: p.commit ?? null, contract: m.contract, abi: m.abi, manifest: p.manifest, pushed_by: principal, pushed_at: Math.floor(Date.now() / 1000) });
-  fs.writeFileSync(vf, JSON.stringify(versions)); fs.writeFileSync(lf, hash + "\n");
+  // STUDIO-6: a push `live: false` (the studio's) is kept beside, the pointer where it was;
+  // STUB_UI_REFUSE_KEPT refuses every such push.
+  const kept = p.live === false;
+  if (kept && process.env.STUB_UI_REFUSE_KEPT) refuse("bad_bundle", "the stand-in keeps nothing aside today");
+  if (fresh) versions.unshift({ hash, commit: p.commit ?? null, contract: m.contract, abi: m.abi, manifest: p.manifest, pushed_by: principal, pushed_at: Math.floor(Date.now() / 1000), ...(m.name ? { name: m.name } : {}) });
+  fs.writeFileSync(vf, JSON.stringify(versions)); if (!kept) fs.writeFileSync(lf, hash + "\n");
   fs.writeFileSync(path.join(state, `${hash}.html`), files["index.html"]);
   // UI-11: the manifest's contract against the running tickets service's hash (STUB_UI_CONTRACT):
   // `unknown` is null, the same hash true, any other false
   const contract_matches = m.contract === "unknown" ? null : m.contract === (process.env.STUB_UI_CONTRACT ?? "");
-  out({ type: "pushed", version: hash, live: true, new: fresh, contract_matches });
+  out({ type: "pushed", version: hash, live: !kept, new: fresh, contract_matches });
 } else if (method === "ui.versions") {
   if (process.env.STUB_UI_VERSIONS !== "none") for (const v of versions) out({ type: "version", ...v, live: v.hash === live });
 } else if (method === "auth.login") {
@@ -963,31 +968,32 @@ echo "plexus-ui $*" >>"${STUB_ARGV:-/dev/null}"
 cmd=${1:-}; shift
 case $cmd in
   build)
-    ui="" engine="" contract=unknown commit=unknown out="" prebuild=0
+    ui="" engine="" contract=unknown commit=unknown out="" prebuild=0 name=""
     while [[ $# -gt 0 ]]; do case $1 in
-      --prebuild) prebuild=1; shift ;; --engine) engine=$2; shift 2 ;; --contract) contract=$2; shift 2 ;;
+      --prebuild) prebuild=1; shift ;; --engine) engine=$2; shift 2 ;; --contract) contract=$2; shift 2 ;; --name) name=$2; shift 2 ;;
       --commit) commit=$2; shift 2 ;; -o|--out) out=$2; shift 2 ;; --*) shift 2 ;; *) ui=$1; shift ;; esac; done
     if [[ $prebuild == 1 ]]; then mkdir -p "$engine" && echo 'export default 1;' >"$engine/engine.js" && printf '\0asm\1\0\0\0' >"$engine/engine.wasm"; exit; fi
     [[ -f $engine/engine.js && -f $engine/engine.wasm ]] || { echo "plexus-ui (stand-in): no engine in $engine" >&2; exit 1; }
     [[ -d $ui/src ]] || { echo "plexus-ui (stand-in): $ui: no src/" >&2; exit 1; }
     st=$(mktemp -d); cp "$ui/index.html" "$st/index.html"
-    jq -n --arg c "$contract" --arg m "$commit" '{abi: "engine/1", contract: $c, commit: $m, routes: {}, slots: {}, components: {}}' >"$st/manifest.json"
+    jq -n --arg c "$contract" --arg m "$commit" --arg n "$name" '{abi: "engine/1"} + (if $n == "" then {} else {name: $n} end) + {contract: $c, commit: $m, routes: {}, slots: {}, components: {}}' >"$st/manifest.json"
     mkdir -p "$(dirname "$out")"
     tar --mtime=@0 --owner=0 --group=0 --numeric-owner --format=gnu -C "$st" -cf "$out" index.html manifest.json; rm -rf "$st"; echo "$out" ;;
   push)
-    url="" as="" keyfile="" commit="" tar=""
+    url="" as="" keyfile="" commit="" tar="" nolive=""
     while [[ $# -gt 0 ]]; do case $1 in
       --url) url=$2; shift 2 ;; --as) as=$2; shift 2 ;; --key-file) keyfile=$2; shift 2 ;; --commit) commit=$2; shift 2 ;;
-      --json) shift ;; --*) shift 2 ;; *) tar=$1; shift ;; esac; done
+      --json) shift ;; --no-live) nolive=1; shift ;; --*) shift 2 ;; *) tar=$1; shift ;; esac; done
     out=$("$REALNODE" -e '
       const fs = require("fs"), c = require("crypto"), { execFileSync } = require("child_process");
-      const [tar, kf, commit] = process.argv.slice(1);
+      const [tar, kf, commit, nolive] = process.argv.slice(1);
       const bytes = fs.readFileSync(tar), seed = Buffer.from(fs.readFileSync(kf, "utf8").trim(), "base64");
       const k = c.createPrivateKey({ key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), seed]), format: "der", type: "pkcs8" });
       const p = { bundle: bytes.toString("base64"), manifest: execFileSync("tar", ["-xOf", tar, "manifest.json"]).toString().trimEnd(),
                   signature: c.sign(null, c.createHash("sha256").update(bytes).digest(), k).toString("base64") };
       if (commit) p.commit = commit;
-      process.stdout.write(JSON.stringify(p) + "\n");' "$tar" "$keyfile" "$commit" \
+      if (nolive) p.live = false;
+      process.stdout.write(JSON.stringify(p) + "\n");' "$tar" "$keyfile" "$commit" "$nolive" \
       | MENGER_DEPLOY_KEY_FILE=$keyfile "$REALNODE" "$FAKE_UI" --url "$url" --agent "$as" ui.push)
     echo "$out"; grep -q '"type":"pushed"' <<<"$out" ;;
   *) echo "plexus-ui (stand-in): no $cmd" >&2; exit 2 ;;
@@ -1071,6 +1077,8 @@ B=$SCRATCH/v2b; BR=$B/menger; H5=$SCRATCH/home5; D5=$H5/.local/share/menger-depl
 mkdir -p "$BR/deploy/launch" "$BR/scripts" "$BR/src" "$B/bin" "$D5/releases"
 cp "$DEPLOY/pipeline" "$BR/deploy/pipeline"; cp "$REPO"/deploy/launch/* "$BR/deploy/launch/"; cp "$REPO/scripts/disk-check.sh" "$BR/scripts/"
 mkdir -p "$BR/ui/src" "$B/plexus-ui" && : >"$B/plexus-ui/Cargo.toml"
+# STUDIO-6: the framework's studio beside it, a stand-in: a page and one source
+mkdir -p "$B/plexus-ui/studio/src" && printf '<!doctype html><title>studio</title>\n' >"$B/plexus-ui/studio/index.html" && printf '<p>s</p>\n' >"$B/plexus-ui/studio/src/s-page.rhx"
 printf '<!doctype html><title>{{TITLE}}</title><p>x</p>\n' >"$BR/ui/index.html"; printf '<p>x</p>\n' >"$BR/ui/src/x-row.rhx"
 gitf() { git -C "$BR" -c user.name=t -c user.email=t@t "$@"; }
 printf '[workspace]\nmembers = ["."]\n' >"$BR/Cargo.toml"
@@ -1180,7 +1188,10 @@ same "$T1: build --branch v2 exits 0" "$code" 0
 VR=$(tail -n 1 "$SCRATCH/out"); RF=$D5/releases/$VR/RELEASE
 same "$T1: a release of v2's tip" "$(field commit "$RF")" "$VSHA"
 same "$T1: the release names its branch" "$(field branch "$RF")" "v2"
-same "$T1: the release's steps" "$(field steps "$RF")" "cargo build, plexus-ui, ui-prebuild, ui-build, ui-compiler-wasm"
+same "$T1: the release's steps" "$(field steps "$RF")" "cargo build, plexus-ui, ui-prebuild, ui-build, studio-build, ui-compiler-wasm"
+# STUDIO-6: the studio built by the same tool from ../plexus-ui/studio, named, carried by the release
+has "$T1: the studio built by the tool, named studio" "$(<"$STUB_UI_TOOL_LOG")" "plexus-ui build $B/menger-build/../plexus-ui/studio --engine $B/menger-build/dist/engine --name studio"
+same "$T1: the release's dist/studio.tar is the studio's, named" "$(tar -xOf "$D5/releases/$VR/dist/studio.tar" manifest.json 2>/dev/null | jq -r .name 2>/dev/null)" "studio"
 same "$T1: no trunk, no npm ran" "$(<"$B/browser.log")" ""
 same "$T1: cargo build --release of the workspace's packages: menger alone" "$(grep -o 'cargo build --release -p .*' "$STUB_CARGO_LOG")" "cargo build --release -p menger"
 has "$T1: the tool built from ../plexus-ui beside the build checkout" "$(<"$STUB_CARGO_LOG")" "cargo build --release --manifest-path $B/menger-build/../plexus-ui/Cargo.toml -p plexus-ui-cli"
@@ -1313,6 +1324,7 @@ v2release() { # DIR N WASM(0/1) [BUNDLE] [DAY] → a v2 release at IC[N], laid o
   cp "$REPO/deploy/launch/run-menger" "$r/bin/run-menger"; chmod +x "$r/bin/"*
   cp "${4:-$UBC/dist/ui.tar}" "$r/dist/ui.tar"
   [[ $3 == 1 ]] && printf '\0asm\1\0\0\0' >"$r/dist/ui-compiler.wasm"
+  [[ -n ${STUDIO_TAR:-} ]] && cp "$STUDIO_TAR" "$r/dist/studio.tar"
   chmod -R a-w "$r"; echo "$id"
 }
 V6=$(v2release "$D6/releases" 1 1) V6N=$(v2release "$D6/releases" 2 0)
@@ -1457,6 +1469,38 @@ tail -n 1 "$D4/deployments.log" | grep -q bad_signature && ok || bad "$T4: local
 has "$T4: … and it is app-local's" "$(tail -n 1 "$D4/deployments.log" | cut -f2,3,4)" $'app-local\trun\t'"$V4B"
 same "$T4: local: the version live before stays live" "$(cat "$STUB_UI_STATE/live")" "$PREV"
 [[ $(cat "$STUB_UI_STATE/calls" "$STUB_SYNAPSE_ARGV" "$STUB_ARGV" 2>/dev/null | grep -c 'ui.rollback') == 0 ]] && ok || bad "$T4: the pipeline moved the pointer itself (ui.rollback)"
+unset STUB_UI_SIGNER
+
+# ── STUDIO-6 the_studio_is_pushed_after_the_app ────────────────────────────
+# A release carrying dist/studio.tar (the framework's studio, built --name studio): after the app's
+# push the deploy pushes it --no-live as the pipeline key — kept beside, the live pointer the app's —
+# before the smoke; a stand-in that refuses it leaves the run ok, the refusal said and recorded as
+# `studio … refused: <reason>`, never as a failed run (the backfill would make that a failed test).
+T9=the_studio_is_pushed_after_the_app
+export STUB_UI_SIGNER=$PUB2
+US=$V2/uis; mkdir -p "$US/stage" "$US/dist"
+printf '<!doctype html><title>studio</title>\n' >"$US/stage/index.html"
+printf '{"abi":"engine/1","name":"studio","contract":"unknown","routes":{},"components":{},"slots":{}}\n' >"$US/stage/manifest.json"
+tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --format=gnu -C "$US/stage" -cf "$US/dist/studio.tar" index.html manifest.json
+STUDIO_SHA=$(sha256sum "$US/dist/studio.tar" | cut -d' ' -f1)
+rm -rf "$STUB_UI_STATE"; mkdir -p "$STUB_UI_STATE"
+V9=$(STUDIO_TAR=$US/dist/studio.tar v2release "$D4/releases" 1 1 "" 19)
+m=$(mark); v2run remote test --image "menger:$V9"
+same "$T9: remote test with a studio: exits 0" "$code" 0
+has "$T9: the studio kept, said" "$err" "ok   the studio kept on wss://app-test.menger.sh/ws: ${STUDIO_SHA:0:12}"
+order=$(paste -sd' ' "$STUB_ORDER")
+[[ $order =~ (^|\ )push\ push-kept\ .*smoke ]] && ok || bad "$T9: the app's push, then the studio's, then the smoke: $order"
+same "$T9: the app live, the studio kept beside" "$(cat "$STUB_UI_STATE/live")" "$BUNDLE_SHA"
+same "$T9: the studio among the versions, by its name" "$(uivers '[.[] | select(.name == "studio") | .hash]')" "[\"$STUDIO_SHA\"]"
+has "$T9: pushed --no-live by the release's tool" "$(<"$STUB_ARGV")" "--no-live $D4/releases/$V9/dist/studio.tar"
+same "$T9: recorded started, succeeded" "$(since "$m" '[.environment, .state]')" '["test","started"] ["test","succeeded"]'
+# refused: the run still ok, the refusal its own record, never a run line
+m=$(mark); STUB_UI_REFUSE_KEPT=1 v2run remote test --image "menger:$V9"
+same "$T9: the studio refused: the deploy still exits 0" "$code" 0
+has "$T9: the refusal said" "$err" "FAIL the studio's push to wss://app-test.menger.sh/ws"
+has "$T9: recorded as studio, refused, with the reason" "$(grep -P '\tstudio\t' "$D4/deployments.log" | tail -n 1 | cut -f2-5)" $'test\tstudio\t'"$V9"$'\trefused: '
+same "$T9: the run itself succeeded" "$(since "$m" '[.environment, .state]')" '["test","started"] ["test","succeeded"]'
+same "$T9: the app still live" "$(cat "$STUB_UI_STATE/live")" "$BUNDLE_SHA"
 unset STUB_UI_SIGNER
 
 # ── UI-12 the_smoke_holds_the_push_to_its_contract ─────────────────────────
