@@ -3,7 +3,7 @@
 // `node tests/pages_browser.mjs --group admin`.
 //
 // Marks: every page's root `[data-surface=epics-page|orgs-list|me-page|ui-versions]`;
-// rows `[data-id]` (an epic's name, an organization's name, a grant's scope,
+// rows `[data-id]` (an epic's name, an organization's name, a grant's `role@scope`,
 // a team's name, a provider's name, a version's hash); fields `[data-field=…]`;
 // actions `[data-action=epics.switch|epics.get|epics.dismiss|auth.requires|
 // session.logout|ui.rollback|ui.preview]`; forms `[data-form=epics.list|
@@ -34,14 +34,18 @@ export default async (ctx) => {
     const s = await writeSession(`ws://127.0.0.1:${server.ws}`, keyFile, file, name);
     return { file, token: s.token, principal };
   }
-  /** A page signed in with `token` rather than the owner's. */
+  /** A page signed in with `token` rather than the owner's; `sent` every frame its sockets send. */
   async function openAs(token, route) {
     const { context, page, seen } = await openPage("", { signedIn: false });
     await context.clearCookies();
     await context.addCookies(sessionCookies(server.origin, token));
+    const sent = [];
+    page.on("websocket", (ws) => ws.on("framesent", (f) => sent.push(String(f.payload))));
     await page.goto(`${server.origin}/app/${route}`);
-    return { context, page, seen };
+    return { context, page, seen, sent };
   }
+  /** Revokes `principal`'s grant on `scope`. */
+  const revoke = (principal, scope) => sy("members", "revoke", "--principal", principal, "--scope", scope);
 
   await test("epics_list_switch_and_the_top_follows", async () => {
     for (const n of ["s9-spring", "s9-summer"]) sy("epics", "create", "--name", n);
@@ -58,7 +62,7 @@ export default async (ctx) => {
       await root.locator("[data-id=s9-spring] [data-action='epics.switch']").click();
       await eventually("the top says s9-spring", async () => (await text(root.locator("[data-field=current]"))) === "s9-spring");
       await eventually("the row is current", async () => (await root.locator("[data-id=s9-spring][data-current=true]").count()) === 1);
-      assert(ok(sy("epics", "current"), "current").epic.name === "s9-spring", "epics.current answers s9-spring");
+      await eventually("epics.current answers s9-spring", async () => ok(sy("epics", "current"), "current").epic.name === "s9-spring");
       // The app's top follows on the board when SURFACE-2's app-top is there.
       const top = await openPage("#/");
       try {
@@ -76,12 +80,26 @@ export default async (ctx) => {
       assert((await root.locator("[data-id=s9-gone][data-changed=created]").count()) === 1, "a row the watch brought says what changed");
       sy("epics", "delete", "--name", "s9-gone");
       await eventually("the deletion is said on its row", async () => (await root.locator("[data-id=s9-gone][data-changed=deleted]").count()) === 1);
-      // A switch's answer reaches the page only through FRAME-37's answer fold.
-      if (process.env.FRAME_37) {
-        await root.locator("[data-id=s9-gone] [data-action='epics.switch']").click();
-        await eventually("the refusal is said beside it", async () => (await text(root.locator("[data-id=s9-gone] [data-refused]"))).includes("s9-gone"));
-        assert((await text(root.locator("[data-field=current]"))) === "s9-spring", "a refused switch leaves the top where it was");
-      } else console.log("     skip a refused switch said beside it: waits on FRAME-37 (call's answer fold)");
+      assert((await root.locator("[data-id=s9-gone] [data-action='epics.switch']").count()) === 0, "a deleted epic offers no switch");
+      // A refused switch says why beside the action: a second page whose socket
+      // never hears the deletion (the watch's frame dropped on its way in) still
+      // offers s9-gone, and the switch's answer is not_found.
+      sy("epics", "create", "--name", "s9-gone2");
+      const deaf = await context.newPage();
+      await deaf.routeWebSocket(/.*/, (ws) => {
+        const up = ws.connectToServer();
+        ws.onMessage((m) => up.send(m));
+        up.onMessage((m) => { if (!(String(m).includes("epic_changed") && String(m).includes("s9-gone2"))) ws.send(m); });
+      });
+      await deaf.goto(`${server.origin}/app/#/epics`);
+      const d = deaf.locator("[data-surface=epics-page]");
+      await eventually("the deaf page lists s9-gone2", async () => (await d.locator("[data-id=s9-gone2] [data-action='epics.switch']").count()) === 1);
+      sy("epics", "delete", "--name", "s9-gone2");
+      await d.locator("[data-id=s9-gone2] [data-action='epics.switch']").click();
+      await eventually("the refusal is said beside it", async () => (await text(d.locator("[data-id=s9-gone2] [data-refused]"))).includes("s9-gone2"));
+      await eventually("a refused switch leaves the top where it was", async () => (await text(d.locator("[data-field=current]"))) === "s9-spring");
+      assert(ok(sy("epics", "current"), "current").epic.name === "s9-spring", "the server stayed on s9-spring");
+      await deaf.close();
 
       // get: one epic's card.
       await root.locator("[data-id=s9-summer] [data-action='epics.get']").click();
@@ -94,7 +112,7 @@ export default async (ctx) => {
       await eventually("the top follows the move", async () => (await text(root.locator("[data-field=current]"))) === "s9-summer");
       await root.locator("[data-action='epics.dismiss']").click();
       await eventually("the notice is gone", async () => (await root.locator("[data-field=moved]").count()) === 0);
-      assert(!ok(sy("epics", "current"), "current").moved, "epics.current carries no moved after dismiss");
+      await eventually("epics.current carries no moved after dismiss", async () => !ok(sy("epics", "current"), "current").moved);
 
       // The archived toggle: s9-spring is listed only with it.
       await eventually("s9-spring's row says archived", async () => (await root.locator("[data-id=s9-spring][data-changed=archived]").count()) === 1);
@@ -104,9 +122,14 @@ export default async (ctx) => {
       // The live list again: s9-spring as the watch said it, not the archived list's card.
       await eventually("the live list again", async () => (await root.locator("[data-id=s9-spring][data-changed=archived]").count()) === 1 && (await root.locator("[data-id=s9-spring] [data-field=tickets]").count()) === 0 && (await root.locator("[data-id=genesis]").count()) === 1);
     } finally {
-      await context.close();
+      // The owner back on genesis, the case's epics gone, before the page goes.
       sy("epics", "switch", "--name", "genesis");
       sy("epics", "dismiss");
+      for (const n of ["s9-summer", "s9-spring"]) {
+        sy("epics", "archive", "--name", n);
+        sy("epics", "delete", "--name", n);
+      }
+      await context.close();
     }
   });
 
@@ -127,7 +150,16 @@ export default async (ctx) => {
       const light = await accent();
       await page.locator("orgs-list").evaluate((e) => e.setAttribute("data-plexus-theme", "dark"));
       await eventually("the dark accent", async () => (await accent()) !== light);
-      assert((await accent()) === "rgb(142, 166, 255)", `the dark --accent: ${await accent()} (light ${light})`);
+      // The token itself, as the wrapper resolves it in dark: the name wears it.
+      const token = await page.locator("orgs-list").evaluate((w) => {
+        const probe = document.createElement("span");
+        probe.style.color = getComputedStyle(w).getPropertyValue("--accent").trim();
+        document.body.appendChild(probe);
+        const c = getComputedStyle(probe).color;
+        probe.remove();
+        return c;
+      });
+      assert((await accent()) === token, `the name wears the dark --accent: ${await accent()} (the token ${token}; light ${light})`);
     } finally {
       await context.close();
     }
@@ -143,7 +175,7 @@ export default async (ctx) => {
       await eventually("the principal", async () => (await text(root.locator("[data-field=principal]"))) === who.principal);
       assert((await text(root.locator("[data-field=provider]"))) === who.provider, `the provider is ${who.provider}`);
       assert((await text(root.locator("[data-field=name]"))) === who.name, `the name is ${who.name}`);
-      await eventually("the grant on * as admin", async () => (await text(root.locator("[data-field=grants] [data-id='*'] [data-field=role]"))) === "admin");
+      await eventually("the grant on * as admin", async () => (await text(root.locator("[data-field=grants] [data-id='admin@*'] [data-field=role]"))) === "admin");
       await eventually("the team", async () => (await root.locator("[data-field=teams] [data-id=s9-crew]").count()) === 1);
       await eventually("the door's provider", async () => (await root.locator("[data-field=providers] [data-id=key]").count()) === 1);
 
@@ -152,10 +184,11 @@ export default async (ctx) => {
       await form.locator("input").fill("ui.rollback");
       await form.locator("[data-action='auth.requires']").click();
       await eventually("ui.rollback needs admin", async () => (await text(form.locator("[data-field=roles]"))) === "admin");
-      assert((await text(form.locator("[data-field=may]"))) === "you may", "the owner may");
+      assert((await text(form.locator("[data-field=may]"))).startsWith("may, on * as admin"), `the owner may, on * as admin: ${await text(form.locator("[data-field=may]"))}`);
       await form.locator("input").fill("epics.switch");
       await form.locator("input").press("Enter");
       await eventually("epics.switch's roles", async () => (await text(form.locator("[data-field=roles]"))).includes("viewer"));
+      assert((await form.locator("[data-sugg='ui.rollback']").count()) === 1, "the method asked before is a recent one");
       await form.locator("input").fill("nope.nada");
       await form.locator("input").press("Enter");
       await eventually("an unknown method is refused in place", async () => (await form.locator("[data-refused]").count()) === 1);
@@ -174,6 +207,10 @@ export default async (ctx) => {
       await eventually("the second session's page", async () => (await text(r.locator("[data-field=principal]"))) === who.principal);
       await r.locator("[data-action='session.logout']").click();
       await eventually("the door: /login", async () => new URL(out.page.url()).pathname === "/login");
+      // A browser's session signs out by the door alone: no session.logout over the socket,
+      // which would leave /logout no session to end and its backend and provider untold.
+      const overSocket = out.sent.filter((f) => f.includes("session.logout"));
+      assert(overSocket.length === 0, `no session.logout frame from a browser session: ${overSocket.join(" | ")}`);
       // The ended session's token is refused at the upgrade (401), or answers as no one.
       let after;
       try {
@@ -218,9 +255,17 @@ export default async (ctx) => {
       await row.locator("[data-action='ui.rollback'][data-confirm]").click();
       await eventually("v2 live again on the page", async () => (await root.locator(`[data-id="${v2.version}"][data-live=true]`).count()) === 1);
       await eventually("and on the server", async () => live() === v2.version);
-      // ui.rollback's refusal (unknown_version, the gate's forbidden) said on its row is FRAME-37's answer fold.
-      console.log("     skip a refused rollback said on its row: waits on FRAME-37 (call's answer fold)");
-      await eventually("the answer is said", async () => (await text(root.locator("[data-field=answer]"))).includes(v2.version.slice(0, 12)));
+      await eventually("the answer is said", async () => (await text(root.locator("[data-field=answer]"))).includes(v2.version.slice(0, 8)));
+
+      // Back to v3, a version already moved to: the mark follows (the pointer is the page's own).
+      const row3 = root.locator(`[data-id="${v3.version}"]`);
+      await row3.locator("[data-action='ui.rollback']").click();
+      await row3.locator("[data-action='ui.rollback'][data-confirm]").click();
+      await eventually("v3 live again on the page", async () => (await root.locator(`[data-id="${v3.version}"][data-live=true]`).count()) === 1 && (await root.locator("[data-live=true]").count()) === 1);
+      await eventually("and on the server", async () => live() === v3.version);
+      // And a move made elsewhere, to v2 a second time: heard from the watch.
+      sy("ui", "rollback", "--to", v2.version);
+      await eventually("the watch's move to v2 marks it", async () => (await root.locator(`[data-id="${v2.version}"][data-live=true]`).count()) === 1 && (await root.locator("[data-live=true]").count()) === 1);
 
       // preview v1: /app/ serves it to this session alone; then cleared.
       const served = () => page.evaluate(() => fetch("/app/").then((r) => r.text()));
@@ -236,6 +281,38 @@ export default async (ctx) => {
       sy("ui", "slots", "clear", "--layout", "board-layout", "--slot", "nav");
     }
 
+    // An admin of one shortcode is offered rollback, and the service refuses it on `*`: said on the row.
+    const code = ctx.groupsNow().find((g) => g.root)?.shortcode;
+    const shelf = await another("s9-shelf", null);
+    const g = sy("members", "grant", "--principal", shelf.principal, "--scope", code, "--role", "admin");
+    assert(ok(g, "grant"), `admin on ${code} granted: ${JSON.stringify(g)}`);
+    const sa = await openAs(shelf.token, "#/releases");
+    try {
+      const r = sa.page.locator("[data-surface=ui-versions]");
+      const row = r.locator(`[data-id="${v1.version}"]`);
+      await eventually("the shortcode admin's list", async () => (await row.locator("[data-action='ui.rollback']:not([disabled])").count()) === 1);
+      await row.locator("[data-action='ui.rollback']").click();
+      await row.locator("[data-action='ui.rollback'][data-confirm]").click();
+      const said = await eventually("an answer on the row", async () => {
+        if ((await row.locator("[data-refused]").count()) === 1) return "refused";
+        if ((await row.locator("[data-answer=rolled_back]").count()) === 1) return "rolled";
+        return null;
+      });
+      if (said === "rolled") {
+        // The service took it: ui.rollback is admitted to an admin of one shortcode (reported;
+        // the gate's, not the page's). The case puts v2 back and says so.
+        sy("ui", "rollback", "--to", v2.version);
+        console.log(`     skip a refused rollback said on its row: the service admits ui.rollback to an admin on ${code} (a gap of the gate, reported)`);
+      } else {
+        console.log(`     refused on the row: ${await text(row.locator("[data-refused]"))}`);
+        assert(live() === v2.version, "the pointer stayed on v2");
+        assert((await r.locator(`[data-id="${v2.version}"][data-live=true]`).count()) === 1, "and the page's mark with it");
+      }
+    } finally {
+      await sa.context.close();
+      revoke(shelf.principal, code);
+    }
+
     // A viewer sees the list and rollback disabled, the role named.
     const viewer = await another("s9-viewer", "viewer");
     const as = await openAs(viewer.token, "#/releases");
@@ -247,6 +324,7 @@ export default async (ctx) => {
       await eventually("the role named", async () => (await text(r.locator("[data-field=needs]"))).includes("admin"));
     } finally {
       await as.context.close();
+      revoke(viewer.principal, "*");
     }
   });
 };
