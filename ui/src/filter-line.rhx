@@ -1,11 +1,28 @@
 <script>
-  // UI-8: the filter line — one field in FILTER-3's language. Enter (the
-  // field's change) moves the route to `#/f/<text>`, which the layout hands
+  // UI-8: the filter line — one field in FILTER-3's language. Enter moves
+  // the route to `#/f/<text>` (SURFACE-6: Enter, not the field's change,
+  // which a blur — a click on a completion — would fire), which the layout hands
   // its sections; the refused chunk is what `nav counts` says of it, shown
   // under the field. `nav counts { filter }` is the nav's and the board's
   // own live too, so the three share one call.
+  //
+  // SURFACE-6: what is typed is checked on each pause (`filters.check`,
+  // 200 ms of quiet — the first key too: a `when`-held collection's first
+  // ask waits its debounce — nothing asked before a key) and said under the
+  // line — `ok` and how many it admits, or the refusal's own words;
+  // "checking…" while an ask is out (the previous answer stays drawn during
+  // the pause itself: the engine says nothing until it asks). An open
+  // `saved "…` completes from the saved filters (`filters.list`, asked
+  // only then); Escape in the field (its own keydown — not keys(), which
+  // would take Escape from the whole page and the rhx palette's close with
+  // it) clears the line and the route's filter. The field is drawn again (keyed by `gen`)
+  // when a fold sets its text: the engine sets `value` as an attribute,
+  // which a field already typed in does not show.
   prop("filter");
+  state(#{ q: "", typed: false, gen: 0, naming: false, partial: "" });
   let counts = live(#{ snapshot: "tickets.nav.counts", params: #{ filter: filter }, key: "shortcode", on: #{ count: "upsert:." } });
+  let checked = live(#{ snapshot: "tickets.filters.check", params: #{ filter: state.q }, key: "filter", debounce_ms: 200, when: state.q });
+  let saved = live(#{ snapshot: "tickets.filters.list", params: #{}, key: "name", when: state.naming });
   fn apply(state, ev) {
     let t = ev.value;
     t.trim();
@@ -15,21 +32,104 @@
     if t == "" { navigate("#/"); } else { navigate("#/f/" + t); }
     state
   }
+  fn typed(state, ev) {
+    let t = ev.value;
+    state.q = t;
+    state.typed = true;
+    // an open `saved "…` at the end: the last one, with no closing quote after it
+    let at = -1;
+    let i = t.index_of("saved \"");
+    while i >= 0 { at = i; i = t.index_of("saved \"", i + 1); }
+    state.naming = false;
+    state.partial = "";
+    if at >= 0 {
+      let rest = t.sub_string(at + 7);
+      if !rest.contains("\"") { state.naming = true; state.partial = rest; }
+    }
+    state
+  }
+  fn complete(state, ev) {
+    let name = ev.target.data["complete"];
+    let t = state.q;
+    let at = -1;
+    let i = t.index_of("saved \"");
+    while i >= 0 { at = i; i = t.index_of("saved \"", i + 1); }
+    if at < 0 { return state; }
+    state.q = t.sub_string(0, at) + "saved \"" + name + "\"";
+    state.typed = true;
+    state.naming = false;
+    state.partial = "";
+    state.gen += 1;
+    state
+  }
+  fn keyed(state, ev) {
+    if ev.key == "Enter" { return apply(state, ev); }
+    if ev.key != "Escape" { return state; }
+    state.q = "";
+    state.partial = "";
+    state.typed = true;
+    state.naming = false;
+    state.gen += 1;
+    if ev.props.filter != () { navigate("#/"); }
+    state
+  }
 </script>
 
-<div class="filter-line" data-filter-line>
-  <input class="filter-input" data-filter-input type="search" spellcheck="false" autocomplete="off"
-         placeholder="filter — e.g. status Ready and kind build" aria-label="filter"
-         value={if filter == () { "" } else { filter }} on:change={apply}/>
+<div class="filter-line" data-filter-line data-surface="filter-line">
+  {#each [state.gen] as g (g)}
+    {#if g > 0}
+    <input autofocus="" class="filter-input" data-filter-input type="search" spellcheck="false" autocomplete="off"
+           placeholder="filter — e.g. status Ready and kind build" aria-label="filter" data-gen={g}
+           value={if state.typed { state.q } else if filter == () { "" } else { filter }} on:input={typed} on:keydown={keyed}/>
+    {:else}
+    <input class="filter-input" data-filter-input type="search" spellcheck="false" autocomplete="off"
+           placeholder="filter — e.g. status Ready and kind build" aria-label="filter" data-gen={g}
+           value={if state.typed { state.q } else if filter == () { "" } else { filter }} on:input={typed} on:keydown={keyed}/>
+    {/if}
+  {/each}
+  {#if state.naming}
+    <ul class="filter-complete" data-complete-list role="listbox" aria-label="saved filters">
+      {#each saved.rows.filter(|s| s.name.to_lower().starts_with(state.partial.to_lower())) as s (s.name)}
+        <li><button class="filter-complete-row" type="button" data-complete={s.name} on:click={complete}><span class="kw">saved</span> "{s.name}"<span class="filter-complete-count">{s.count}</span></button></li>
+      {/each}
+    </ul>
+  {/if}
+  {#if state.typed && state.q != ""}
+    {#if checked.status == "error" || checked.status == "refused"}
+      <p class="filter-check" data-filter-check="refused" data-refused role="status">{if checked.message == () { "this filter is not taken" } else { checked.message }}</p>
+    {:else}
+      {#if checked.status == "live" && checked.rows.len() > 0}
+        <p class="filter-check" data-filter-check="ok" role="status"><span class="ok">ok</span> · <span data-field="count">{checked.rows[0].count}</span> match</p>
+      {:else}
+        <p class="filter-check" data-filter-check="pending" data-loading>checking…</p>
+      {/if}
+    {/if}
+  {/if}
   {#if counts.status == "error" || counts.status == "refused"}
-    <p class="filter-refused" data-filter-refused role="alert">{if counts.message == () { "this filter is not taken" } else { counts.message }}</p>
+    <p class="filter-refused" data-filter-refused data-refused role="alert">{if counts.message == () { "this filter is not taken" } else { counts.message }}</p>
   {/if}
 </div>
 
 <style>
-  :scope { display: block; flex: 1; min-width: 0; }
+  :scope { display: block; flex: 1; min-width: 0; position: relative; }
   .filter-input { width: 100%; max-width: 640px; padding: 5px 10px; color: var(--ink); background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius); transition: border-color var(--motion-fast) var(--ease); }
   .filter-input:hover { border-color: var(--muted); }
   .filter-input:focus-visible { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px var(--sel); }
   .filter-refused { margin: 4px 0 0; color: var(--warn); font-size: 11px; }
+  .filter-check { margin: 4px 0 0; font-size: 11px; color: var(--muted); }
+  .filter-check[data-refused] { color: var(--warn); }
+  .filter-check[data-loading] { color: var(--disabled); }
+  .filter-check .ok { color: var(--live); font-weight: var(--weight-medium); }
+  .filter-check [data-field=count] { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .filter-complete { position: absolute; z-index: 5; top: 34px; left: 0; width: min(420px, 100%); max-height: 240px; overflow: auto; list-style: none; margin: 0; padding: 4px; background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-lg); box-shadow: 0 6px 18px var(--shadow); }
+  .filter-complete:empty { display: none; }
+  .filter-complete-row { display: flex; gap: 6px; align-items: center; width: 100%; height: var(--pitch); padding: 0 8px; color: var(--ink); text-align: left; background: none; border: 0; border-radius: var(--radius); cursor: pointer; transition: background-color var(--motion-fast) var(--ease); }
+  .filter-complete-row > * { pointer-events: none; } /* the fold reads data-complete off ev.target */
+  .filter-complete-row:hover { background: var(--hover); }
+  .filter-complete-row:focus-visible { outline: none; background: var(--row-sel); box-shadow: inset 0 0 0 2px var(--focus); }
+  .filter-complete-row .kw { color: var(--accent); }
+  .filter-complete-count { margin-left: auto; padding: 0 7px; font-size: 11px; line-height: 18px; color: var(--chip-fg); background: var(--chip-bg); border: var(--border) solid var(--chip-line); border-radius: var(--radius-pill); font-variant-numeric: tabular-nums; }
+  @media (prefers-reduced-motion: reduce) {
+    .filter-input, .filter-complete-row { transition: none; }
+  }
 </style>

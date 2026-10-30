@@ -28,5 +28,10 @@
   "#/epics": "epics-page",
   "#/orgs": "orgs-list",
   "#/me": "me-page",
-  "#/releases": "ui-versions"
+  "#/releases": "ui-versions",
+  "#/filters": "filters-saved",
+  "#/filters/:filter": "filters-saved",
+  "#/facets": "nav-facets",
+  "#/facets/:filter": "nav-facets",
+  "#/counts/:filter": "nav-counts"
 }

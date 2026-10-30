@@ -1241,8 +1241,9 @@ const BOARD_SIBLINGS: [&str; 3] = ["nav-flat", "nav-children", "ticket-chip"];
 /// a svelte/1 module mounts no section, plexus-ui@40aa390). Its sections
 /// hold the Svelte components: `top` the app's top (app-top, SURFACE-2), `bar`
 /// the Svelte half of `board-layout` (the top bar and its filter line), then
-/// the nav, the board's keymap (keys-help), the board, the bulk bar under it
-/// (bulk-bar, SURFACE-5) and the palette.
+/// the nav, the facets (nav-facets) and the saved filters (filters-saved,
+/// SURFACE-6) under it, the board's keymap (keys-help), the board, the bulk
+/// bar under it (bulk-bar, SURFACE-5) and the palette.
 const SV_FRAME: &str = "board-frame";
 
 /// What FRAME-14 finds missing from the board's two profiles, given the
@@ -1250,7 +1251,7 @@ const SV_FRAME: &str = "board-frame";
 /// a component without its `.rhx` or its real `-sv.svelte`; a route of
 /// either board that is not there; a section default that is not the rhx
 /// one on the rhx board, or not the Svelte one in the frame; a frame that
-/// marks not all seven of its sections.
+/// marks not all nine of its sections.
 fn board_breaks(sources: &[(String, String)], routes: &str, slots: &str) -> Vec<String> {
     let mut out = Vec::new();
     let text = |f: &str| sources.iter().find(|(n, _)| n == f).map(|(_, t)| t.as_str());
@@ -1285,7 +1286,7 @@ fn board_breaks(sources: &[(String, String)], routes: &str, slots: &str) -> Vec<
     }
     let slots: Value = serde_json::from_str(slots).unwrap_or_else(|e| panic!("slots.json: {e}"));
     let rhx = [("nav", "nav-tree"), ("main", "board-rows"), ("palette", "jump-palette")];
-    let sv = [("top", "app-top"), ("bar", "board-layout-sv"), ("nav", "nav-tree-sv"), ("keys", "keys-help"), ("main", "board-rows-sv"), ("bulk", "bulk-bar"), ("palette", "jump-palette-sv")];
+    let sv = [("top", "app-top"), ("bar", "board-layout-sv"), ("nav", "nav-tree-sv"), ("facets", "nav-facets"), ("saved", "filters-saved"), ("keys", "keys-help"), ("main", "board-rows-sv"), ("bulk", "bulk-bar"), ("palette", "jump-palette-sv")];
     for (layout, want) in [("board-layout", &rhx[..]), (SV_FRAME, &sv[..])] {
         for (slot, component) in want {
             let have = slots.get(layout).and_then(|l| l.get(slot)).and_then(Value::as_str);
@@ -1328,16 +1329,16 @@ fn each_board_component_has_both_profiles() {
     // The check, on what it is given first.
     let sv = "<script module>\n  export const uses = [];\n</script>\n<p/>\n";
     let mut good: Vec<(String, String)> = BOARD.iter().chain(BOARD_SIBLINGS.iter()).flat_map(|n| [(format!("{n}.rhx"), "<p/>".to_string()), (format!("{n}-sv.svelte"), sv.to_string())]).collect();
-    good.push((format!("{SV_FRAME}.rhx"), r#"<slot name="top" filter={filter}/><slot name="bar"/><slot name="nav"/><slot name="keys"/><slot name="main"/><slot name="bulk"/><slot name="palette"/>"#.into()));
+    good.push((format!("{SV_FRAME}.rhx"), r#"<slot name="top" filter={filter}/><slot name="bar"/><slot name="nav"/><slot name="facets"/><slot name="saved"/><slot name="keys"/><slot name="main"/><slot name="bulk"/><slot name="palette"/>"#.into()));
     let routes = r##"{ "#/": "board-frame", "#/f/:filter": "board-frame", "#/ticket/:id": "ticket-page-sv", "#/rhx/": "board-layout", "#/rhx/f/:filter": "board-layout", "#/rhx/ticket/:id": "ticket-page", "#/sv/": "board-frame", "#/sv/f/:filter": "board-frame", "#/sv/ticket/:id": "ticket-page-sv" }"##;
-    let slots = r#"{ "board-layout": { "nav": "nav-tree", "main": "board-rows", "palette": "jump-palette" }, "board-frame": { "top": "app-top", "bar": "board-layout-sv", "nav": "nav-tree-sv", "keys": "keys-help", "main": "board-rows-sv", "bulk": "bulk-bar", "palette": "jump-palette-sv" } }"#;
+    let slots = r#"{ "board-layout": { "nav": "nav-tree", "main": "board-rows", "palette": "jump-palette" }, "board-frame": { "top": "app-top", "bar": "board-layout-sv", "nav": "nav-tree-sv", "facets": "nav-facets", "saved": "filters-saved", "keys": "keys-help", "main": "board-rows-sv", "bulk": "bulk-bar", "palette": "jump-palette-sv" } }"#;
     assert_eq!(board_breaks(&good, routes, slots), Vec::<String>::new());
     let chipless: Vec<(String, String)> = good.iter().filter(|(f, _)| f != "ticket-chip-sv.svelte").cloned().collect();
     assert_eq!(board_breaks(&chipless, routes, slots), ["ui/src/ticket-chip-sv.svelte is missing (the Svelte ticket-chip)"]);
     let mut bad = good.clone();
     bad.retain(|(f, _)| f != "nav-tree-sv.svelte" && f != "board-rows.rhx");
     bad.iter_mut().filter(|(f, _)| f == "jump-palette-sv.svelte").for_each(|(_, t)| *t = "<script>\n</script>\n<p/>\n".into());
-    let swapped = r#"{ "board-layout": { "nav": "nav-tree", "main": "board-rows-sv", "palette": "jump-palette" }, "board-frame": { "top": "app-top", "bar": "board-layout-sv", "nav": "nav-tree-sv", "keys": "keys-help", "main": "board-rows-sv", "bulk": "bulk-bar", "palette": "jump-palette-sv" } }"#;
+    let swapped = r#"{ "board-layout": { "nav": "nav-tree", "main": "board-rows-sv", "palette": "jump-palette" }, "board-frame": { "top": "app-top", "bar": "board-layout-sv", "nav": "nav-tree-sv", "facets": "nav-facets", "saved": "filters-saved", "keys": "keys-help", "main": "board-rows-sv", "bulk": "bulk-bar", "palette": "jump-palette-sv" } }"#;
     assert_eq!(
         board_breaks(&bad, r##"{ "#/": "board-frame", "#/f/:filter": "board-frame", "#/ticket/:id": "ticket-page-sv", "#/rhx/": "board-layout", "#/rhx/f/:filter": "board-layout", "#/rhx/ticket/:id": "ticket-page", "#/sv/": "board-frame", "#/sv/ticket/:id": "ticket-page" }"##, swapped),
         [
@@ -1350,12 +1351,12 @@ fn each_board_component_has_both_profiles() {
         ]
     );
     let frameless: Vec<(String, String)> = good.iter().filter(|(f, _)| f != "board-frame.rhx").cloned().chain([("board-frame.rhx".to_string(), r#"<slot name="nav"/>"#.to_string())]).collect();
-    assert_eq!(board_breaks(&frameless, routes, slots).len(), 6, "a frame that marks one section of seven");
+    assert_eq!(board_breaks(&frameless, routes, slots).len(), 8, "a frame that marks one section of nine");
     let busy: Vec<(String, String)> = good
         .iter()
         .filter(|(f, _)| f != "board-frame.rhx")
         .cloned()
-        .chain([("board-frame.rhx".to_string(), "<script>\n  prop(\"filter\");\n  let n = live(#{ snapshot: \"tickets.nav.counts\", key: \"shortcode\" });\n</script>\n<div class=\"board-layout\"><filter-line filter={filter}/><slot name=\"top\"/><slot name=\"bar\"/><slot name=\"nav\"/><slot name=\"keys\"/><slot name=\"main\"/><slot name=\"bulk\"/><slot name=\"palette\"/></div>".to_string())])
+        .chain([("board-frame.rhx".to_string(), "<script>\n  prop(\"filter\");\n  let n = live(#{ snapshot: \"tickets.nav.counts\", key: \"shortcode\" });\n</script>\n<div class=\"board-layout\"><filter-line filter={filter}/><slot name=\"top\"/><slot name=\"bar\"/><slot name=\"nav\"/><slot name=\"facets\"/><slot name=\"saved\"/><slot name=\"keys\"/><slot name=\"main\"/><slot name=\"bulk\"/><slot name=\"palette\"/></div>".to_string())])
         .collect();
     assert_eq!(
         board_breaks(&busy, routes, slots),

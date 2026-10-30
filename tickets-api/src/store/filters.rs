@@ -227,7 +227,8 @@ impl Store {
 
     /// FILTER-46: `name` in `org` renamed `to` — its filter, author and
     /// first time kept. `to` may differ from `name` in case alone; another
-    /// filter's name is refused.
+    /// filter's name is refused. Said as `Saved { renamed_from }`, then
+    /// `Deleted { name: <old> }` (SURFACE-6) when the name moved.
     pub async fn rename_filter(&self, on: On<Editor>, org: &OrgId, name: &str, to: &str) -> Result<SavedFilter, StoreError> {
         Self::in_org(&on, org)?;
         let to = clean_name(to)?;
@@ -252,7 +253,15 @@ impl Store {
                 cache.saved.put(&o, kept)
             },
             move |(), (), tx| {
+                // SURFACE-6: and the old name said gone, right after — a
+                // reader keyed by name (the app's live list) takes the old
+                // row out by `filter_deleted` alone. A case-only rename says
+                // it too: the key is the name as written.
+                let old = (before.name != row.name).then(|| before.name.clone());
                 tx.send(Change::Filters(FilterChange::Saved { filter: row.clone(), renamed_from: Some(before.name) }));
+                if let Some(name) = old {
+                    tx.send(Change::Filters(FilterChange::Deleted { name }));
+                }
                 row
             },
         )
