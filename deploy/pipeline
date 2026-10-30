@@ -508,10 +508,15 @@ build_v2() { # V2-7, FRAME-8: every step on this machine — the release, the to
   lr=$(log_path build-contract); say "log: $lr"
   contract_read "$lr" "$CARGO_TARGET_DIR/release/menger"
   say "contract: $CONTRACT (the tickets service's hash, tickets.schema)"
-  # the bundle: the components compiled in-process, the manifest, the tar — no cargo, no container
+  # the bundle: the components compiled in-process, the manifest, the tar — no cargo, no container.
+  # FRAME-13: a svelte/1 component (ui/src/<name>.svelte, real Svelte) is compiled by the tool in Node 22+
+  # with svelte and esbuild from ../plexus-ui's node_modules — its package.json pins them, `npm ci` in
+  # ../plexus-ui installs them; an rhx-only UI needs neither (FRAME-14 brings menger's first .svelte)
   step "ui-build (plexus-ui build --contract $CONTRACT)"
   lr=$(log_path build-ui); say "log: $lr"
-  (cd "$BUILD" && "$UI_TOOL" build "$BUILD/ui" --engine "$BUILD/dist/engine" --contract "$CONTRACT" --commit "menger@$short" -o "$BUILD/dist/ui.tar") >"$lr" 2>&1 \
+  if compgen -G "$BUILD/ui/src/*.svelte" >/dev/null; then command -v node >/dev/null || die "ui-build: ui/src holds svelte/1 components (.svelte), built in Node, and there is no node on PATH — install Node 22 or newer"; say "svelte/1: node $(node --version)"; fi
+  if compgen -G "$BUILD/ui/src/*.svelte" >/dev/null; then [[ -f $BUILD/../plexus-ui/node_modules/svelte/package.json && -f $BUILD/../plexus-ui/node_modules/esbuild/package.json ]] || die "ui-build: ui/src holds svelte/1 components (.svelte) and ../plexus-ui has no node_modules/svelte and node_modules/esbuild — run npm ci in ../plexus-ui"; fi
+  (cd "$BUILD" && "$UI_TOOL" build "$BUILD/ui" --engine "$BUILD/dist/engine" --contract "$CONTRACT" --commit "menger@$short" -o "$BUILD/dist/ui.tar" --node-modules "$BUILD/../plexus-ui/node_modules") >"$lr" 2>&1 \
     || { red_run; die "ui-build failed — $lr"; }
   # DEPLOY-6: no -q under pipefail (b82f5bd's rule) — grep reads the whole listing, or tar dies of SIGPIPE
   tar -tf "$BUILD/dist/ui.tar" 2>/dev/null | grep -x 'index.html' >/dev/null || die "ui-build: $BUILD/dist/ui.tar is no tar holding index.html"
