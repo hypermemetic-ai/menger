@@ -2735,3 +2735,41 @@ async fn revisions_over_the_wire() {
     }
     assert!(!heard.iter().any(|e| e["type"] == "revised"), "{heard:?}");
 }
+
+/// MACRO-31: under `typed_params` a key no parameter claims is refused at
+/// dispatch, before the method runs — `-32602 invalid_params`, the message
+/// naming the key and the method's parameters, sorted, with the words
+/// `unknown field` synapse reads to know its cached schema is stale.
+/// MACRO-29 measured the hole: `{sumary: true}` listed full rows, and
+/// `create {kindd: "gap"}` made a build. Now neither runs: nothing is
+/// created.
+#[tokio::test]
+async fn an_unknown_parameter_is_refused_before_the_method_runs() {
+    let port = start_server().await;
+    let client = connect(port).await;
+
+    let m = invalid(&client, "tickets.list", json!({"sumary": true})).await;
+    assert_eq!(
+        m,
+        "Invalid params: unknown field `sumary`; tickets.list takes: after, at, epic, filter, keep, limit, parent, status, summary, tz"
+    );
+    let m = invalid(&client, "tickets.list", json!({"summary": true, "limt": 1})).await;
+    assert!(m.contains("unknown field `limt`"), "{m}");
+
+    let m = invalid(&client, "tickets.create", json!({"epic": "WIRE", "title": "a gap, misspelled", "kindd": "gap"})).await;
+    assert_eq!(
+        m,
+        "Invalid params: unknown field `kindd`; tickets.create takes: blocked_by, body, epic, kind, org, parent, path, severity, title"
+    );
+    // The store is untouched: the create never ran.
+    let mut sub = call(&client, "tickets.health", json!({})).await;
+    let ev = content(sub.next().await.unwrap().unwrap());
+    assert_eq!(ev["type"], "health");
+    assert_eq!(ev["ticket_count"], 0, "a refused create wrote nothing: {ev}");
+    assert!(rows(call(&client, "tickets.list", json!({"summary": true})).await).await.is_empty());
+
+    // A call naming only its own parameters runs as before.
+    let mut sub = call(&client, "tickets.create", json!({"epic": "WIRE", "title": "a gap", "kind": "gap"})).await;
+    let ev = content(sub.next().await.unwrap().unwrap());
+    assert_eq!((ev["type"].as_str(), ev["ticket"]["kind"].as_str()), (Some("created"), Some("gap")), "{ev}");
+}
