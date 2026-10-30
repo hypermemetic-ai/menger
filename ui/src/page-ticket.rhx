@@ -13,8 +13,11 @@
   // spec word for word, so the page holds one `get` and one stream of it.
   // Keys: `e` says `ticket.edit` on the bus (ticket-edit hears it; the page
   // counts it in `data-edit-asked` and the edit's mark flashes), `escape`
-  // and `g b` go to the board; `[` and `]` are ticket-head's, which knows
-  // the siblings.
+  // and `g b` go to the board — `#/` under either prefix: rhx reads no
+  // route prefix, and `#/sv/` is the same board's alias; `[` and `]` are
+  // ticket-head's, which knows the siblings (and keeps the prefix). The key
+  // strip says them; the palette is the page's `palette` section
+  // (jump-palette-sv by ui/slots.json: app-top's jump button and ctrl+k).
   prop("id");
   prop("sheet"); // SURFACE-10: the sheet's held state, "loading" its skeleton
   state(#{ knocked: 0 });
@@ -37,6 +40,7 @@
 <section class="page page-ticket">
   <slot name="top" here="ticket"/>
   <article class="ticket-page" data-surface="ticket-page" data-ticket={id} data-edit-asked={state.knocked}>
+    <nav class="crumbs" aria-hidden="true"><span class="keys" data-keys><kbd>e</kbd> edit<i class="sep"></i><kbd>esc</kbd> board<i class="sep"></i><kbd>[</kbd><kbd>]</kbd> siblings<i class="sep"></i><kbd>?</kbd> keys</span></nav>
     {#if latest.rows.filter(|r| r.ticket == id && type_of(r.fields) == "array" && "deleted" in r.fields).len() > 0 || (latest.rows.filter(|r| r.ticket == id && type_of(r.fields) == "array" && "undeleted" in r.fields).len() == 0 && ticket.rows.filter(|r| type_of(r.tombstones) == "array").len() > 0)}
       <section class="tp">
         <div class="gone" data-deleted>
@@ -73,12 +77,17 @@
       {/if}
     {/if}
   </article>
+  <slot name="palette"/>
 </section>
 
 <style>
   :scope { display: block; }
   .page-ticket { min-height: 100vh; min-height: 100dvh; color: var(--ink); background: var(--bg); font-family: var(--font-text); font-size: var(--text-size); }
   .page-ticket > [data-slot=top] { position: sticky; top: 0; z-index: 4; }
+  .crumbs { display: flex; align-items: center; padding: 8px max(28px, calc((100% - 1284px) / 2)) 0; font-size: 11px; color: var(--muted); }
+  .keys { display: flex; gap: 5px; align-items: center; margin-left: auto; }
+  .sep { display: inline-block; width: 8px; }
+  kbd { display: inline-block; min-width: 16px; padding: 0 4px; font-family: var(--font-text); font-size: 10px; line-height: 15px; text-align: center; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-bottom-width: 2px; border-radius: var(--radius-sm); }
   .tp { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 0 36px; align-items: start; max-width: 1340px; margin: 0 auto; padding: 16px 28px 48px; }
   .head { grid-column: 1 / -1; grid-row: 1; }
   .main { grid-column: 1; grid-row: 3 / span 2; min-width: 0; }
@@ -105,6 +114,7 @@
   .badge { padding: 0 6px; font-size: 10px; line-height: 16px; text-transform: uppercase; letter-spacing: .06em; color: var(--warn); border: var(--border) dashed var(--warn); border-radius: var(--radius-sm); }
   @media (max-width: 960px) {
     .tp { grid-template-columns: minmax(0, 1fr); padding: 12px 16px 40px; }
+    .crumbs { display: none; }
     .head, .main, .side, .revs, .revs:has([data-open="true"]) { grid-column: 1; grid-row: auto; }
   }
   @media (prefers-reduced-motion: reduce) {

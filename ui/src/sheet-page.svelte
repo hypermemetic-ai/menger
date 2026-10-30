@@ -146,7 +146,8 @@
     ["the palette and the search", [
       ["jump-palette-sv", JumpPaletteSv, (t) => ({ sheet: code(t) }), ["hover", "focus", "selected"], { empty: { sheet: "zzqqxxjj" } }, false, HITS],
       ["jump-palette", JumpPalette, (t) => ({ sheet: code(t) }), ["hover", "focus"], { empty: { sheet: "zzqqxxjj" } }, false, HITS],
-      ["search-page", SearchPage, (t) => ({ q: t }), ["hover", "focus", "disabled", "selected"], { loading: { q: t0(), sheet: "loading" }, empty: { q: "zzqqxxjj" }, refused: { q: "ready", filter: REFUSED } }, true],
+      // STUDIO-12: its jump button is app-top's now — disabled is the pager's prev, on a query the bodies answer.
+      ["search-page", SearchPage, (t) => ({ q: t }), ["hover", "focus", "disabled", "selected"], { disabled: { q: "ready" }, loading: { q: t0(), sheet: "loading" }, empty: { q: "zzqqxxjj" }, refused: { q: "ready", filter: REFUSED } }, true, { disabled: ["[data-action=prev]"] }],
     ]],
     ["the ticket", [
       ["ticket-page", TicketPage, ID, ["hover", "focus"], gone, true],

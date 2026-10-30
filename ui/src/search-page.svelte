@@ -5,10 +5,9 @@
      first), each hit's title and passage marked as the method marked them,
      paged by offset eight at a time — the `searched` event (matched, next)
      is the pager, kept as a row by `upsert:.`. A filter the service refuses
-     is said in its words. The jump button asks the palette on the bus
-     (`palette.open`). STUDIO-12: the page is page-search's (rhx) — the board
-     link is app-top's in its `top` section, the palette its `palette`
-     section's; this is the query's lists. -->
+     is said in its words. STUDIO-12: the page is page-search's (rhx) — the
+     board link and the jump button are app-top's in its `top` section, the
+     palette its `palette` section's; this is the query's lists. -->
 <script module>
   // PERF-15: a row is the four fields drawn, not the whole summary row.
   const FIELDS = ["id", "title", "kind", "status"];
@@ -54,7 +53,6 @@
   function next() { paged = { asked, offset: offset + LIMIT }; }
   function prev() { paged = { asked, offset: Math.max(0, offset - LIMIT) }; }
   function everything() { b.navigate("#/search/" + encodeURIComponent(q)); }
-  function jump() { b.emit("palette.open", {}); }
 </script>
 
 <article class="search-page" data-surface="search-page" data-q={q}>
@@ -68,7 +66,6 @@
       {:else}
         <span class="sp-filter">every ticket</span>
       {/if}
-      <button class="btn jump" data-action="palette.open" onclick={jump}>jump <kbd>ctrl</kbd><kbd>k</kbd></button>
     </div>
     {#if refused}<p class="sp-refused" data-refused role="alert">{refused}</p>{/if}
     {#if corrected.length}
@@ -115,8 +112,6 @@
 
 <style>
   .search-page { display: block; max-width: 1180px; margin: 0 auto; padding: 16px 20px 40px; color: var(--ink); font-family: var(--font-text); font-size: var(--text-size); }
-  .search-page .jump { margin-left: auto; }
-  .search-page kbd { display: inline-block; min-width: 18px; padding: 0 5px; font: 11px/17px var(--font-text); text-align: center; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-bottom-width: 2px; border-radius: var(--radius-sm); }
   .search-page .btn { padding: 3px 10px; font: inherit; font-size: 12px; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; transition: border-color var(--motion-fast) var(--ease), background-color var(--motion-fast) var(--ease); }
   .search-page .btn:hover:not(:disabled), .search-page .btn:global([data-sheet~=hover]):not(:disabled) { border-color: var(--muted); background: var(--hover); }
   .search-page .btn:focus-visible, .search-page .btn:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }

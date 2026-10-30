@@ -1,6 +1,7 @@
 <script>
   // STUDIO-12: the me page — an rhx page the studio edits, placing its
-  // svelte/1 component by its mark, the app's top in its `top` section
+  // svelte/1 component by its mark, the app's top in its `top` section and the palette in its
+  // `palette` section (app-top's jump button and ctrl+k open it)
   // (app-top by ui/slots.json). #/me: me-page.
 </script>
 
@@ -8,6 +9,7 @@
   <slot name="top" here="me"/>
   <header class="page-title"><h1>me</h1></header>
   <me-page/>
+  <slot name="palette"/>
 </section>
 
 <style>

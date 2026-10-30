@@ -918,18 +918,20 @@ the board's draws an rhx page, `src/page-<name>.rhx` — a `<section
 class="page page-<name>">` that places the feature's svelte/1 components
 by their marks (`<search-page q={q} filter={filter}/>`, a bound mark the
 host fills, its props from the route) and carries the app's top as its
-`top` section (`app-top`, `slots.json`), so the studio's "edit this page"
+`top` section (`app-top`, `slots.json`) and the palette as its `palette`
+section (`jump-palette-sv`: the top's jump button and `ctrl+k` open it), so the studio's "edit this page"
 edits every page in the browser while the components stay svelte/1 and the
 repository's: `page-ticket` (`#/ticket/:id`; the head, body, edit,
 relations, actions, commits, history and revisions — the ticket page's
 skeleton, "no such ticket", the deleted notice and its keys `e`, `escape`,
-`g b` are the page's), `page-new`, `page-search` (its `palette` section the
-palette), `page-ready`, `page-waves`, `page-filters`, `page-epics`,
-`page-orgs`, `page-me`, `page-releases`; `page-bulk`, `page-blockers`,
+`g b` are the page's, `escape` and `g b` to `#/` under either prefix, and
+its key strip), `page-new`, `page-search`, `page-ready` and `page-waves`
+(full-height columns: the list scrolls in its own box under its bar), `page-filters`, `page-epics`,
+`page-orgs`, `page-me`, `page-releases`, `page-sheet`; `page-bulk`, `page-blockers`,
 `page-edit`, `page-actions`, `page-facets` and `page-counts` draw one
 component alone for its browser cases. A placed component keeps its
 behaviour and its look and loses the page's chrome to the page — the board
-link (app-top's), the page's title, the palette's mark. No route draws a
+link and the jump button (app-top's), the page's title, the palette's mark. No route draws a
 svelte/1 component; `tests/apart.rs` holds it to that.
 `../plexus-ui`'s `plexus-ui` tool (FRAME-8; `scripts/plexus-ui` builds it
 from the sibling into this checkout's target and runs it) builds it into

@@ -11,7 +11,8 @@
 // `[data-surface=work-blockers]` with `[data-side=blocker|unlocks]` and its
 // chips `[data-surface=work-blocker] [data-id]`.
 //
-// The data is synthetic, made here in shortcodes of the cases' own.
+// The data is synthetic, made here in shortcodes of the cases' own. STUDIO-12:
+// the scrollers `.wr-scroll` and `.ww-scroll` bounded by the window.
 export default async (ctx) => {
   const { test, assert, eventually, openPage, sy } = ctx;
 
@@ -76,6 +77,33 @@ export default async (ctx) => {
       assert(light !== dark, `the dark scheme repaints the status chip (${light} → ${dark})`);
     } finally {
       await context.close();
+    }
+  });
+
+  // STUDIO-12: the pages are full-height columns — the list scrolls in its own
+  // box under its bar, the count and the filter staying in view.
+  await test("the_lists_scroll_in_their_own_box", async () => {
+    const root = create("WRKS", "the scroll probe", "--kind", "scope");
+    for (let i = 0; i < 45; i++) status(create("WRKS", `a ready row ${i}`, "--kind", "build", "--parent", root), "Ready");
+    for (const [route, scroller, head] of [[`#/ready/${enc("in WRKS")}`, "[data-surface=work-ready] .wr-scroll", "[data-surface=work-ready] [data-field=count]"],
+                                           ["#/waves/in/WRKS", "[data-surface=work-waves] .ww-scroll", "[data-surface=work-waves] [data-field=summary]"]]) {
+      const { page, context } = await openPage(route);
+      try {
+        await eventually(`${route} draws its rows`, async () => (await page.locator(`${scroller} [data-id]`).count()) >= 40, 15_000);
+        const box = async () => page.evaluate(([sel, h]) => {
+          const e = document.querySelector(sel), t = document.querySelector(h);
+          return { bottom: e.getBoundingClientRect().bottom, client: e.clientHeight, scroll: e.scrollHeight, inner: innerHeight, head: t.getBoundingClientRect().top, page: document.scrollingElement.scrollHeight };
+        }, [scroller, head]);
+        const b = await box();
+        assert(b.bottom <= b.inner + 1 && b.client < b.inner, `${route}: the scroller is bounded by the window: ${JSON.stringify(b)}`);
+        assert(b.page <= b.inner + 1, `${route}: the page itself does not scroll: ${JSON.stringify(b)}`);
+        if (scroller.includes("wr-scroll")) assert(b.scroll > b.client, `${route}: the rows overflow the box and scroll in it: ${JSON.stringify(b)}`);
+        await page.evaluate((sel) => (document.querySelector(sel).scrollTop = 10_000), scroller);
+        const after = await box();
+        assert(after.head >= 0 && after.head < after.inner, `${route}: the bar stays in view: ${JSON.stringify(after)}`);
+      } finally {
+        await context.close();
+      }
     }
   });
 

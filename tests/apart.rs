@@ -2019,7 +2019,8 @@ fn the_tokens_are_whole() {
 /// `page-<name>`), the routes that draw it and the Svelte components it
 /// places by their marks (`<ticket-head id={id}/>`, a bound mark the host
 /// fills). The first eleven are the app's pages and carry the app's top
-/// (`<slot name="top"/>`, app-top by `slots.json`); the rest draw one
+/// (`<slot name="top"/>`, app-top by `slots.json`) and the palette its jump
+/// button opens (`<slot name="palette"/>`, jump-palette-sv); the rest draw one
 /// component alone for its browser cases.
 const PAGES: [(&str, &[&str], &[&str]); 17] = [
     ("page-ticket", &["#/ticket/:id", "#/sv/ticket/:id"], &["ticket-head", "ticket-body", "ticket-edit", "ticket-relations", "ticket-actions", "ticket-commits", "ticket-history", "ticket-revisions"]),
@@ -2090,7 +2091,7 @@ fn page_breaks(sources: &[(String, String)], routes: &str, slots: &str) -> Vec<S
             match text(&format!("{c}.svelte")) {
                 Some(s) if real_svelte(s) => {
                     // The sheet places every component, the palettes among them: a tile, not its chrome.
-                    for chrome in ["data-back", "\"plexus-ui:jump-palette"].iter().filter(|_| *c != "sheet-page") {
+                    for chrome in ["data-back", "\"plexus-ui:jump-palette", "data-action=\"palette.open\""].iter().filter(|_| *c != "sheet-page") {
                         if s.contains(chrome) {
                             out.push(format!("ui/src/{c}.svelte keeps the page's chrome (`{chrome}`): it is {page}'s"));
                         }
@@ -2100,12 +2101,14 @@ fn page_breaks(sources: &[(String, String)], routes: &str, slots: &str) -> Vec<S
             }
         }
         if i < APP_PAGES {
-            if !t.contains("<slot name=\"top\"") {
-                out.push(format!("ui/src/{page}.rhx marks no section top (<slot name=\"top\" …/>)"));
-            }
-            let top = slots.get(page).and_then(|l| l.get("top")).and_then(Value::as_str);
-            if top != Some("app-top") {
-                out.push(format!("slots.json: {page}'s top defaults to {}, not app-top", top.unwrap_or("nothing")));
+            for (slot, want) in [("top", "app-top"), ("palette", "jump-palette-sv")] {
+                if !t.contains(&format!("<slot name=\"{slot}\"")) {
+                    out.push(format!("ui/src/{page}.rhx marks no section {slot} (<slot name=\"{slot}\" …/>)"));
+                }
+                let have = slots.get(page).and_then(|l| l.get(slot)).and_then(Value::as_str);
+                if have != Some(want) {
+                    out.push(format!("slots.json: {page}'s {slot} defaults to {}, not {want}", have.unwrap_or("nothing")));
+                }
             }
         }
     }
@@ -2122,7 +2125,7 @@ fn every_route_is_an_rhx_page() {
     let mut routes = serde_json::Map::new();
     let mut slots = serde_json::Map::new();
     for (i, (page, at, places)) in PAGES.iter().enumerate() {
-        let top = if i < APP_PAGES { "<slot name=\"top\"/>" } else { "" };
+        let top = if i < APP_PAGES { "<slot name=\"top\"/><slot name=\"palette\"/>" } else { "" };
         let marks: String = places.iter().map(|c| format!("<{c} id={{id}}/>")).collect();
         good.push((format!("{page}.rhx"), format!("<section class=\"page {page}\">{top}{marks}</section>")));
         for c in *places {
@@ -2134,7 +2137,7 @@ fn every_route_is_an_rhx_page() {
             routes.insert(r.to_string(), Value::from(*page));
         }
         if i < APP_PAGES {
-            slots.insert(page.to_string(), serde_json::json!({ "top": "app-top" }));
+            slots.insert(page.to_string(), serde_json::json!({ "top": "app-top", "palette": "jump-palette-sv" }));
         }
     }
     good.push(("board-frame.rhx".into(), "<slot name=\"top\"/>".into()));
@@ -2161,6 +2164,7 @@ fn every_route_is_an_rhx_page() {
     routes2.insert("#/sv/ticket/:id".into(), Value::from("ticket-page-sv"));
     let mut slots2 = slots.clone();
     slots2.insert("page-ready".into(), serde_json::json!({ "top": "board-layout-sv" }));
+    slots2.insert("page-me".into(), serde_json::json!({ "top": "app-top" }));
     let mut got = page_breaks(&bad, &Value::Object(routes2).to_string(), &Value::Object(slots2).to_string());
     got.sort();
     let mut want = vec![
@@ -2173,6 +2177,8 @@ fn every_route_is_an_rhx_page() {
         "ui/src/page-ticket.rhx places no ticket-commits (<ticket-commits …/>)",
         "ui/src/page-ticket.rhx marks no section top (<slot name=\"top\" …/>)",
         "slots.json: page-ready's top defaults to board-layout-sv, not app-top",
+        "slots.json: page-ready's palette defaults to nothing, not jump-palette-sv",
+        "slots.json: page-me's palette defaults to nothing, not jump-palette-sv",
         "ui/src/search-page.svelte keeps the page's chrome (`data-back`): it is page-search's",
         "ui/src/search-page.svelte keeps the page's chrome (`\"plexus-ui:jump-palette`): it is page-search's",
     ];
