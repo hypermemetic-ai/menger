@@ -577,3 +577,34 @@ nine calls leave within 2 ms; their acks come back in bursts — at ~20, ~60–8
 in the same millisecond — not in the order sent, and the list waited 58, 165 and 160 ms for its
 ack, then 54–244 ms more to its `done`. Not one call after another, but held and released together
 (PLEXUS-10); the 200 frames' share is PERF-15's.
+
+### After, on app-test (release 20261030T015638Z-e75a127, 2026-10-30 02:11Z, load ~2, both boards)
+
+`node perf/live-probe.mjs --path / | '/#/sv/'`, three runs of five cold loads each, after deploy 21
+(FRAME-17) with the session minted before the deploy still signed in (FRAME-21). The before was
+measured on release a45dbdb at 01:56Z (the machine at load 9–10, so its medians are noisy:
+885, 459, 476 ms on the rhx board).
+
+| board | first titled row (three runs' medians) | first `live` snapshot sent | ack wait | stream | done → row | components |
+|---|---|---|---|---|---|---|
+| rhx `/` | 0.366, 0.343, 0.435 s | +178–233 ms | 33–36 ms | 66–91 ms | 19–22 ms | 1 req, 5 KiB |
+| Svelte `#/sv/` | 0.384, 0.418, 0.869 s | +253–307 ms | 51–66 ms | 31–35 ms | 7–8 ms | 5 req, 84 KiB |
+
+The rhx board: the list leaves ~85 ms earlier than before FRAME-17 (+180 instead of +265), its
+ack waits a third of what it did (it goes first), the draw is 19 ms (was 37), and the components
+are one request. Its stream grew (66–91 ms, was 25–45): the list is first now and its 200 frames
+interleave with the other eight calls' answers — PERF-15's share got larger, not smaller, by
+moving ahead of the queue.
+
+The Svelte board: the draw is 7–8 ms (Svelte's compiled DOM against rhx's interpreted tree), but
+its first call leaves ~75 ms later than the rhx board's: its five modules (84 KiB brotli, each
+with its own Svelte runtime) must import before the frame's sections mount and their `live` runs,
+and a module's specs cannot be sent early (FRAME-17 derives only rhx specs; FRAME-23 does not
+change that). Five of its fifteen loads hit ~0.9 s against one of fifteen on rhx; in those the
+module fetches ended at +550 ms instead of +200. From curl the same five files answer in 66–95 ms
+each, five at once (brotli, served) — the delay is not the server's; it tracks the client and the
+network's hour, and the Svelte board has five more things to wait for. A shared runtime file
+(one fetch, cached across versions) would shrink the 84 KiB to ~25 and the five requests to one.
+
+Net, on this machine to the Linode, same hour: rhx 0.34–0.44 s, Svelte 0.38–0.42 s in its fast
+mode with a fatter tail. The owner's call for the default (FRAME-14).
