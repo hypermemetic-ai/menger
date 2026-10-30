@@ -410,6 +410,7 @@ const UI_ROLES: &[(&str, &str, &str)] = &[
     ("ui", "show", "editor"),
     ("ui", "sessions", "editor"),
     ("ui", "here", "viewer"),
+    ("ui", "follow", "viewer"),
 ];
 
 /// V2-11, acceptance (the table's second row): `ui push --help` says the
