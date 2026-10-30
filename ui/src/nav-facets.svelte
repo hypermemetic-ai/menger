@@ -9,7 +9,8 @@
      cut: a chip puts it whole beside its rule, `(<filter>) and <rule>`, and
      no chip is drawn selected on it. Asked again when the route's filter
      moves (the prop `filter`). Placed by a mark, `<nav-facets
-     filter={filter}/>`, or on its own at `#/facets/:filter`. -->
+     filter={filter}/>`, or on its own at `#/facets/:filter`. PERF-22: beside
+     the board it asks once the board's first rows are drawn. -->
 <script module>
   export const uses = ["tickets.nav.facets"];
   const FIELDS = ["status", "category", "kind", "severity", "in", "ready", "blocked", "has commits", "menger doc"];
@@ -45,11 +46,21 @@
 </script>
 
 <script>
+  import { tick } from "svelte";
   import { bus, live } from "plexus-ui/host";
 
   let { filter = null } = $props();
   const b = bus();
-  const facets = live({ snapshot: "tickets.nav.facets", params: () => ({ filter: filter ?? null, base: "not category done" }), key: "field" });
+  // PERF-22: on the board, asked once its first rows are drawn (`board.drawn`;
+  // `[data-drawn]` when it drew before this mounted) — the rows are what the
+  // person waits for; with no board on the page, at once (a tick after the
+  // mount, the layout's sections all in place by then).
+  let drawn = $state(false);
+  b.on("board.drawn", () => (drawn = true));
+  tick().then(() => {
+    if (!document.querySelector("[data-board][data-surface=board-rows]:not([data-drawn])")) drawn = true;
+  });
+  const facets = live({ snapshot: "tickets.nav.facets", params: () => ({ filter: filter ?? null, base: "not category done" }), key: "field", when: () => drawn });
   const byField = $derived(FIELDS.map((f) => [f, facets.rows.filter((r) => r.field === f)]).filter(([, rows]) => rows.length > 0));
 
   function narrow(field, rule) {

@@ -12,7 +12,8 @@
      `{ ok, events, message }` (FRAME-37; today's bus answers the events
      alone, an in-band `error` among them a refusal), and a refusal is said
      in its words beside the action that was refused; the save's fields stay
-     until it is ok. -->
+     until it is ok. PERF-22: in the board's nav it asks once the board's
+     first rows are drawn. -->
 <script module>
   export const uses = ["tickets.filters.list", "tickets.watch", "tickets.filters.get", "tickets.filters.check",
                        "tickets.filters.save", "tickets.filters.rename", "tickets.filters.delete"];
@@ -31,7 +32,7 @@
 </script>
 
 <script>
-  import { untrack } from "svelte";
+  import { tick, untrack } from "svelte";
   import { bus, live } from "plexus-ui/host";
 
   let { filter = null, compact = null } = $props();
@@ -46,8 +47,17 @@
   let rowRefused = $state("");  // the picked row's
   let busy = $state(false);
 
+  // PERF-22: on the board, asked once its first rows are drawn (`board.drawn`;
+  // `[data-drawn]` when it drew before this mounted) — the rows are what the
+  // person waits for; with no board on the page, at once (a tick after the
+  // mount, the layout's sections all in place by then).
+  let drawn = $state(false);
+  b.on("board.drawn", () => (drawn = true));
+  tick().then(() => {
+    if (!document.querySelector("[data-board][data-surface=board-rows]:not([data-drawn])")) drawn = true;
+  });
   const saved = live({ snapshot: "tickets.filters.list", params: {}, changes: "tickets.watch", key: "name",
-                       on: { filter_saved: "upsert:filter", filter_deleted: "remove:name" } });
+                       on: { filter_saved: "upsert:filter", filter_deleted: "remove:name" }, when: () => drawn });
   // a pause before the get: a row picked by the save that made it is asked once the save has landed
   const one = live({ snapshot: "tickets.filters.get", params: () => ({ name: sel }), key: "name", debounce_ms: 250, when: () => sel !== "" });
   const trimmed = $derived(text.trim());

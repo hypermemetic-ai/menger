@@ -760,3 +760,39 @@ The list's stream (first data → done) 66–91 ms → 3–5 ms; `tickets.list` 
 (the machine at load 12–44 during its runs: 0.5–3 s) — to be re-measured in a quiet window; its modules were 5 requests /
 85 KiB brotli before and 6 / 33 KiB after (the runtime once, 21 KiB, and four modules of ~2 KiB — FRAME-26). The session
 minted before the deploy stood after it (FRAME-21).
+
+## The nav's sections ask after the first rows (PERF-22, 2026-10-30)
+
+SURFACE-6 put `nav-facets` and `filters-saved` in the frame's nav, each asking at its mount — before the
+board's own `tickets.list` was sent. At 10⁶ `nav.facets { base: "not category done" }` takes the server
+~40–60 ms (sent +94, first data +174, done +214), and the list's answer waited behind it: first data
++197 against +165 without the two sections. The modules are not the cost: two more ~2 KiB files fetched in
+parallel with the other seven (the last of them in +69 against +65), the two mounts ~4 ms. Now
+`board-rows-sv` says `board.drawn` once its first answer is drawn (and keeps `[data-drawn]`), and the
+nav's facets, saved filters and counts hold their `live` on `when` until then — at once on a page with no
+board (`#/filters`, `#/facets/:filter`, `#/counts/:filter`). Phase 0's waterfall, one throwaway at 10⁶,
+the three bundles interleaved by `ui rollback`, 7 loads each (ms on the page's clock, median):
+
+| | first titled row | `tickets.list` sent / first data | `nav.facets` sent / done | `filters.list` sent |
+|---|---|---|---|---|
+| v2 97b7000 (before) | 209 | 98 / 197 | 94 / 214 | 95 |
+| PERF-22 (after) | 178 | 100 / 170 | 178 / 234 | 178 |
+| the two sections taken out of the frame | 172 | 92 / 165 | — | — |
+
+`node perf/pages-probe.mjs --seed 1000000`, three runs before and after, interleaved (the machine at load
+3–15 from other builders' gates; one after run that measured another worktree's tree is dropped):
+
+| run | load | before (v2 97b7000) | after (PERF-22) |
+|---|---|---|---|
+| 1 | 10 · 8 | 0.202 s | 0.277 s (172–303 ms, spread by the load) |
+| 2 | 15 · 8 | 0.203 s | 0.195 s |
+| 3 | 7 · 6 | 0.214 s | 0.187 s |
+| 4 | 5 · 4 | 0.208 s | 0.175 s |
+| 5 | 6 · 3 | 0.216 s | 0.172 s |
+| 6 | 4 | 0.213 s | — |
+| merged with v2 38c278a | 8 | | 0.182 s |
+
+The sections cost the first row nothing now: after is within noise of the frame without them. The 0.13 s
+of the gate is not reached in this hour; the floor without the sections is 0.16–0.17 s at this load
+(FRAME-30's 0.146 was a quiet machine), and every call's ack lands ~45 ms after it is sent, the socket's
+own first answers (`epics.current`, `health`) included — that is where the rest goes, not in the nav.

@@ -17,6 +17,10 @@
 //       `#/` once SURFACE-2 makes the Svelte board the default, `#/` and `#/sv/` before)
 //       `input[data-filter-input]`, `[data-filter-check=ok|refused]`
 //       (`[data-refused]`), saved names offered as `[data-complete=<name>]`
+//   PERF-22: the board's `[data-board][data-surface=board-rows]` gains `[data-drawn]` once its first
+//       answer is drawn (and says `board.drawn` on the bus); the nav's facets and saved filters ask then
+import { sentCalls } from "../../scripts/ui-throwaway.mjs";
+
 export default async (ctx) => {
   const { test, assert, eventually, openPage, marked, sameDocument, sy, summaries } = ctx;
   const trimmed = (t) => String(t ?? "").trim();
@@ -31,6 +35,48 @@ export default async (ctx) => {
   const svelteFirst = routes["#/f/:filter"] === "board-frame";
   const boardLayout = svelteFirst ? "board-frame" : "board-layout";
   const held = (filter) => sy("tickets", "nav", "counts", "--filter", filter).filter((e) => e.type === "count").reduce((a, c) => a + c.held, 0);
+
+  // PERF-22: the rows are what the person waits for. On the board the nav's
+  // facets (nav.facets) and saved filters (filters.list) ask once the board's
+  // first rows are drawn — after the first tickets.list answer, never beside
+  // it; on a page of their own, at once.
+  await test("the_navs_sections_ask_after_the_first_rows", async () => {
+    const mark = (page, name) => page.evaluate((name) => performance.getEntriesByType("mark").find((e) => e.name === name)?.startTime ?? null, name);
+    {
+      const { page, context } = await openPage("");
+      try {
+        await eventually("the board's rows", async () => (await page.locator(".board-row[data-id]").count()) > 0, 10000);
+        await eventually("the facets' chips and the saved filters drawn", async () =>
+          (await facets(page).locator("[data-facet]").count()) > 0 && (await saved(page).locator('[data-id="Needs you"]').count()) === 1, 5000);
+        assert((await page.locator("[data-board][data-surface=board-rows][data-drawn]").count()) === 1, "the board is marked [data-drawn]");
+        const answered = await mark(page, "plexus-ui:answered:tickets.list");
+        assert(answered != null, "the host marks the list's first answer");
+        const calls = await sentCalls(page);
+        const list = calls.find((c) => c.method === "tickets.list");
+        const at = (m) => calls.find((c) => c.method === m)?.t;
+        for (const m of ["tickets.nav.facets", "tickets.filters.list"]) {
+          assert(at(m) != null, `${m} is asked on the board`);
+          assert(at(m) > list.t && at(m) >= answered, `${m} asked after the first tickets.list answer (sent +${at(m)?.toFixed(1)}, the list sent +${list.t.toFixed(1)}, answered +${answered.toFixed(1)})`);
+        }
+        assert(calls.filter((c) => c.method === "tickets.nav.facets").length === 1 && calls.filter((c) => c.method === "tickets.filters.list").length === 1, "each asked once");
+      } finally {
+        await context.close();
+      }
+    }
+    for (const [route, method, drawn] of [["#/filters", "tickets.filters.list", '[data-surface=filters-saved] [data-id="Needs you"]'],
+                                         ["#/facets/kind%20build", "tickets.nav.facets", "[data-surface=nav-facets] [data-facet]"]]) {
+      const { page, context } = await openPage(route);
+      try {
+        await eventually(`${route} drawn`, async () => (await page.locator(drawn).count()) > 0, 5000);
+        const calls = await sentCalls(page);
+        const first = await mark(page, "plexus-ui:first-call");
+        const t = calls.find((c) => c.method === method)?.t;
+        assert(t != null && first != null && t - first < 50, `${route}: ${method} asked at once, no board to wait for (+${(t - first).toFixed(1)} ms after the first call)`);
+      } finally {
+        await context.close();
+      }
+    }
+  });
 
   await test("a_filter_is_saved_and_listed", async () => {
     const { page, context } = await openPage("#/filters/status%20Ready");
