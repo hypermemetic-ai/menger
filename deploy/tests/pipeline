@@ -956,7 +956,9 @@ JS
 # FRAME-8: plexus-ui as the pipeline meets it — a stand-in for ../plexus-ui's tool, on PATH (and
 # what the stand-in cargo builds as plexus-ui-cli). Its argv kept in $STUB_ARGV (and, where it
 # ran, in $STUB_UI_TOOL_LOG); `build --prebuild --engine D` writes D's engine; `build UI --engine D
-# --contract H --commit C -o OUT` a GNU tar of UI/index.html and a manifest naming H and C;
+# --contract H --commit C -o OUT` a GNU tar of UI/index.html and a manifest naming H and C, a
+# component per UI/src/<name>.rhx whose `uses` are the quoted `service.method` names in its source
+# (SURFACE-11: what the real compiler reads from live() and the handlers);
 # `push … TAR` makes ui.push's params here — the signature real, Ed25519 over the bundle's sha256
 # by --key-file's seed — and sends them to the stand-in ui service on stdin, as the agent --as
 # names, printing its answer (--json's lines) and failing unless it pushed.
@@ -976,8 +978,13 @@ case $cmd in
     [[ -f $engine/engine.js && -f $engine/engine.wasm ]] || { echo "plexus-ui (stand-in): no engine in $engine" >&2; exit 1; }
     [[ -d $ui/src ]] || { echo "plexus-ui (stand-in): $ui: no src/" >&2; exit 1; }
     st=$(mktemp -d); cp "$ui/index.html" "$st/index.html"
-    jq -n --arg c "$contract" --arg m "$commit" --arg n "$name" '{abi: "engine/1"} + (if $n == "" then {} else {name: $n} end) + {contract: $c, commit: $m, routes: {}, slots: {}, components: {}}' >"$st/manifest.json"
+    comps='{}'; for f in "$ui"/src/*.rhx; do [[ -f $f ]] || continue
+      u=$(grep -oE '"[a-z_]+(\.[a-z_]+)+"' "$f" | tr -d '"' | jq -Rsc 'split("\n") | map(select(. != ""))')
+      comps=$(jq -c --arg n "$(basename "$f" .rhx)" --argjson u "$u" '. + {($n): {profile: "rhx/1", uses: $u}}' <<<"$comps"); done
+    jq -n --arg c "$contract" --arg m "$commit" --arg n "$name" --argjson cs "$comps" '{abi: "engine/1"} + (if $n == "" then {} else {name: $n} end) + {contract: $c, commit: $m, routes: {}, slots: {}, components: $cs}' >"$st/manifest.json"
     mkdir -p "$(dirname "$out")"
+    # STUB_TOOL_BROKEN=app|studio: that bundle's manifest.json is no JSON (SURFACE-11: an unreadable manifest)
+    [[ -n ${STUB_TOOL_BROKEN:-} && $STUB_TOOL_BROKEN == "${name:-app}" ]] && echo 'not json' >"$st/manifest.json"
     tar --mtime=@0 --owner=0 --group=0 --numeric-owner --format=gnu -C "$st" -cf "$out" index.html manifest.json; rm -rf "$st"; echo "$out" ;;
   push)
     url="" as="" keyfile="" commit="" tar="" nolive=""
@@ -1078,8 +1085,8 @@ mkdir -p "$BR/deploy/launch" "$BR/scripts" "$BR/src" "$B/bin" "$D5/releases"
 cp "$DEPLOY/pipeline" "$BR/deploy/pipeline"; cp "$REPO"/deploy/launch/* "$BR/deploy/launch/"; cp "$REPO/scripts/disk-check.sh" "$BR/scripts/"
 mkdir -p "$BR/ui/src" "$B/plexus-ui" && : >"$B/plexus-ui/Cargo.toml"
 # STUDIO-6: the framework's studio beside it, a stand-in: a page and one source
-mkdir -p "$B/plexus-ui/studio/src" && printf '<!doctype html><title>studio</title>\n' >"$B/plexus-ui/studio/index.html" && printf '<p>s</p>\n' >"$B/plexus-ui/studio/src/s-page.rhx"
-printf '<!doctype html><title>{{TITLE}}</title><p>x</p>\n' >"$BR/ui/index.html"; printf '<p>x</p>\n' >"$BR/ui/src/x-row.rhx"
+mkdir -p "$B/plexus-ui/studio/src" && printf '<!doctype html><title>studio</title>\n' >"$B/plexus-ui/studio/index.html" && printf '<p>{live(#{ snapshot: "ui.versions" })}</p>\n' >"$B/plexus-ui/studio/src/s-page.rhx"
+printf '<!doctype html><title>{{TITLE}}</title><p>x</p>\n' >"$BR/ui/index.html"; printf '<p>{live(#{ snapshot: "tickets.list" })}</p>\n' >"$BR/ui/src/x-row.rhx"
 gitf() { git -C "$BR" -c user.name=t -c user.email=t@t "$@"; }
 printf '[workspace]\nmembers = ["."]\n' >"$BR/Cargo.toml"
 gitf init -q -b main && gitf add -A && gitf commit -qm "main: v2's shape"
@@ -1153,6 +1160,22 @@ MENGER
 # $HOME/.plexus/keys (the link the menger made: the same HOME) — any other key is refused; then,
 # and only then, `menger tickets schema` answers (-j's lines) with CONTRACT_HASH, else 77 (sign
 # in). STUB_SCHEMA=fail: the read fails; nohash: a schema with no hash.
+# SURFACE-11: `menger ui contract --uses M[,M…]` (the flag repeated or comma-separated) answers
+# `contract { contract }` over the services the methods name, by contract_over below (the tickets
+# service's hash is CONTRACT_HASH: a bundle naming tickets alone is stamped as UI-12 stamped it);
+# `null` for none. STUB_CONTRACT=fail: the call fails; nohash: no contract event; refused: an
+# unknown_method refusal; null: contract null — each only for uses naming the service
+# STUB_CONTRACT_ON, when it is set.
+cat >"$B/contract-over.sh" <<'OVER'
+# contract_over SERVICE… → the stand-in's contract over those services (sorted, once each):
+# one service, its hash; several, a hash over `service=hash;` of each
+svc_hash() { [[ $1 == tickets ]] && echo "$CONTRACT_HASH" || printf 'svc:%s' "$1" | sha256sum | cut -c1-16; }
+contract_over() { local s pairs="" n=0
+  for s in $(printf '%s\n' "$@" | sort -u); do pairs+="$s=$(svc_hash "$s");"; n=$((n + 1)); done
+  (( n == 0 )) && return 0
+  (( n == 1 )) && { svc_hash "${pairs%%=*}"; return 0; }
+  printf '%s' "$pairs" | sha256sum | cut -c1-16; }
+OVER
 cat >"$B/bin/synapse" <<'SYNAPSE'
 #!/usr/bin/env bash
 echo "HOME=$HOME XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-} $*" >>"$STUB_BUILD_SYNAPSE"
@@ -1171,13 +1194,26 @@ case " $* " in
       nohash) echo '{"type":"data","content":{"namespace":"tickets","methods":[]}}'; echo '{"type":"done"}'; exit 0 ;;
     esac
     printf '{"type":"data","content":{"namespace":"tickets","methods":[],"hash":"%s"}}\n{"type":"done"}\n' "$CONTRACT_HASH"; exit 0 ;;
+  *" menger ui contract "*)
+    [[ -f $signed ]] || { echo "synapse (stand-in): sign in to reach ui contract" >&2; exit 77; }
+    uses=() prev=""; for a in "$@"; do [[ $prev == --uses ]] && IFS=, read -ra more <<<"$a" && uses+=("${more[@]}"); prev=$a; done
+    svcs=(); for m in "${uses[@]}"; do [[ -n $m ]] && svcs+=("${m%%.*}"); done
+    mode=${STUB_CONTRACT:-ok}; [[ -n ${STUB_CONTRACT_ON:-} && " ${svcs[*]} " != *" $STUB_CONTRACT_ON "* ]] && mode=ok
+    case $mode in
+      fail) echo "synapse (stand-in): Protocol handshake failed" >&2; exit 1 ;;
+      nohash) echo '{"type":"done"}'; exit 0 ;;
+      refused) printf '{"type":"data","content":{"type":"refused","reason":"unknown_method","message":"the bundle uses %s, which the running %s service does not expose","method":"%s","service":"%s"}}\n{"type":"done"}\n' "${uses[0]}" "${svcs[0]}" "${uses[0]}" "${svcs[0]}"; exit 0 ;;
+      null) echo '{"type":"data","content":{"type":"contract","contract":null}}'; echo '{"type":"done"}'; exit 0 ;;
+    esac
+    . "$STUB_CONTRACT_OVER"; c=$(contract_over "${svcs[@]}")
+    jq -cn --arg c "$c" '{type: "data", content: {type: "contract", contract: (if $c == "" then null else $c end)}}'; echo '{"type":"done"}'; exit 0 ;;
 esac
 echo "synapse (stand-in): no answer for: $*" >&2; exit 1
 SYNAPSE
 chmod +x "$B/bin/"* "$B/fake-menger"
 export STUB_CARGO_LOG=$B/cargo.log STUB_BUILD_DOCKER=$B/docker.argv STUB_UI_COMPILER_RAN=$B/ui-compiler.ran \
   STUB_FAKE_MENGER=$B/fake-menger STUB_MENGER_UP=$B/up STUB_MENGER_RAN=$B/menger.ran STUB_BUILD_SYNAPSE=$B/synapse.argv \
-  STUB_MENGER_PIDS=$B/menger.pids STUB_UI_TOOL_LOG=$B/plexus-ui.log
+  STUB_MENGER_PIDS=$B/menger.pids STUB_UI_TOOL_LOG=$B/plexus-ui.log STUB_CONTRACT_OVER=$B/contract-over.sh
 # the build's TMPDIR: where mktemp makes its scratch (UI-12: the binary's HOME and data directory)
 T5TMP=$SCRATCH/tmp5; mkdir -p "$T5TMP"
 bb() { : >"$STUB_CARGO_LOG"; : >"$STUB_BUILD_DOCKER"; : >"$STUB_UI_TOOL_LOG"; : >"$B/browser.log"; : >"$STUB_UI_COMPILER_RAN"; : >"$STUB_MENGER_RAN"; : >"$STUB_BUILD_SYNAPSE"; : >"$STUB_MENGER_PIDS"
@@ -1243,9 +1279,10 @@ has "$T1: suite: the release marked passed" "$(cat "$D5/releases/$SR5/SUITE" 2>/
 # The build starts the menger it just built (the stand-in above: up on the port it is given,
 # no socket opened) on loopback in local mode — no provider, so the binary makes its own admin
 # key in a scratch data directory and the build holds no key material — under a scratch HOME
-# and XDG_RUNTIME_DIR (mktemp's, under the build's TMPDIR); signs in with that key, reads
-# tickets.schema's hash with synapse (--no-hold: no connection holder outlives the build, and
-# the sign-in moves no default agent of this machine's), stops it, and builds the bundle with
+# and XDG_RUNTIME_DIR (mktemp's, under the build's TMPDIR); signs in with that key, asks
+# `ui contract --uses` the methods the bundle's components use (SURFACE-11: read from the manifest
+# of a first, unstamped build) with synapse (--no-hold: no connection holder outlives the build, and
+# the sign-in moves no default agent of this machine's), stops it, and builds the bundle again with
 # `plexus-ui build --contract HASH` (FRAME-8) — the tool asks no socket of its own. A read that fails, a
 # binary that dies or never answers, is a failed build, said, within about MENGER_CONTRACT_WAIT
 # seconds, and no release is made: no bundle saying `unknown` is ever released.
@@ -1285,18 +1322,23 @@ syn=$(<"$STUB_BUILD_SYNAPSE")
 same "$T6: every synapse call under the binary's HOME and XDG_RUNTIME_DIR" "$(sed -n 's/^\(HOME=[^ ]* XDG_RUNTIME_DIR=[^ ]*\) .*/\1/p' <<<"$syn" | sort -u)" "HOME=$mhome XDG_RUNTIME_DIR=$mxdg"
 same "$T6: every synapse call --no-hold" "$(grep -vc -- ' --no-hold ' <<<"$syn")" 0
 has "$T6: signed in with the binary's own key, on its port" "$(grep -- "-P $mport" <<<"$syn")" "_login menger --key menger-local"
-has "$T6: the hash read from the port it started" "$(grep -- "-P $mport" <<<"$syn")" "menger tickets schema"
+has "$T6: the contract asked of the port it started, for the bundle's uses" "$(grep -- "-P $mport" <<<"$syn")" "menger ui contract --uses tickets.list"
+same "$T6: tickets.schema no longer asked" "$(grep -c 'tickets schema' <<<"$syn")" 0
+has "$T6: the build says the services the contract covers" "$err" "over tickets"
+has "$T6: the first build is unstamped, its uses read" "$(<"$STUB_UI_TOOL_LOG")" "plexus-ui build $B/menger-build/ui --engine $B/menger-build/dist/engine --commit menger@${VSHA:0:7} -o"
 has "$T6: the bundle built with --contract HASH" "$(<"$STUB_UI_TOOL_LOG")" "--contract $CONTRACT_HASH --commit"
 [[ $(grep -c -- '--contract-from' "$STUB_UI_TOOL_LOG") == 0 ]] && ok || bad "$T6: the tool asks a server (--contract-from): $(<"$STUB_UI_TOOL_LOG")"
 has "$T6: the build says the hash" "$err" "$CONTRACT_HASH"
 same "$T6: the build's scratch removed" "$(ls -A "$T5TMP")" ""
-for how in fail nohash; do
+for how in fail nohash refused null; do
   n=$(ls "$D5/releases" | wc -l)
-  next_second; STUB_SCHEMA=$how MENGER_CONTRACT_WAIT=2 bb build --branch v2 --no-gate
-  same "$T6: the hash read fails ($how): exits 1" "$code" 1
-  has "$T6: the hash read fails ($how): said, naming tickets.schema" "$err" "tickets.schema"
-  none_made "$T6: the hash read fails ($how)" "$n"
-  [[ $(grep -c -- ' -o ' "$STUB_UI_TOOL_LOG") == 0 ]] && ok || bad "$T6: the hash read fails ($how): the bundle built all the same"
+  next_second; STUB_CONTRACT=$how MENGER_CONTRACT_WAIT=2 bb build --branch v2 --no-gate
+  same "$T6: the contract read fails ($how): exits 1" "$code" 1
+  has "$T6: the contract read fails ($how): said, naming ui.contract" "$err" "ui.contract"
+  [[ $how == refused ]] && has "$T6: refused: the refusal said" "$err" "unknown_method"
+  [[ $how == null ]] && has "$T6: null: said, naming no service" "$err" "names no service"
+  none_made "$T6: the contract read fails ($how)" "$n"
+  [[ $(grep -c -- '--contract ' "$STUB_UI_TOOL_LOG") == 0 ]] && ok || bad "$T6: the contract read fails ($how): a bundle stamped all the same"
   stopped "$T6: the hash read fails ($how)"
 done
 # the binary dies at once, or never answers: said (its start, or the wait), within about the wait
@@ -1309,8 +1351,76 @@ for how in crash never-up; do
   (( took <= 8 )) && ok || bad "$T6: the binary $how: took ${took}s with MENGER_CONTRACT_WAIT=2"
   [[ -s $STUB_MENGER_RAN ]] && ok || bad "$T6: the binary $how: (setup) nothing was started — the check proves nothing"
   none_made "$T6: the binary $how" "$n"
-  [[ $(grep -c -- ' -o ' "$STUB_UI_TOOL_LOG") == 0 ]] && ok || bad "$T6: the binary $how: the bundle built all the same"
+  [[ $(grep -c -- '--contract ' "$STUB_UI_TOOL_LOG") == 0 ]] && ok || bad "$T6: the binary $how: a bundle stamped all the same"
   stopped "$T6: the binary $how"
+done
+
+# ── SURFACE-11 the_contract_covers_every_service_the_bundle_names ──────────
+# ui.push hashes the services the bundle's uses name (contract_named → contract_over), so the
+# build stamps that: a first build with no --contract, its manifest's components.*.uses read from
+# the tar, `ui contract --uses` them asked of the menger just built, the second build carrying
+# --contract with its answer. A bundle naming tickets.list and epics.current is stamped over both
+# services (not tickets.schema's hash); the studio likewise over its own uses; the log names the
+# services; a studio whose contract cannot be read fails the build as the app's does.
+T10=the_contract_covers_every_service_the_bundle_names
+. "$STUB_CONTRACT_OVER"
+gitf checkout -q -b surface v2
+printf '<h1>{live(#{ snapshot: "epics.current" })}</h1>\n' >"$BR/ui/src/e-head.rhx"
+gitf add -A && gitf commit -qm "surface: a component naming epics" && gitf checkout -q main
+SSHA=$(gitf rev-parse surface)
+BOTH=$(contract_over tickets epics) STUDIO_C=$(contract_over ui)
+[[ -n $BOTH && $BOTH != "$CONTRACT_HASH" && $STUDIO_C != "$BOTH" ]] && ok || bad "$T10: (setup) the stand-in's contracts are not distinct: '$BOTH' '$CONTRACT_HASH' '$STUDIO_C'"
+next_second; bb build --branch surface --no-gate
+[[ $code == 0 ]] && ok || bad "$T10: build exits 0, got $code: $(tail -n 3 <<<"$err")"
+SR=$(tail -n 1 "$SCRATCH/out")
+same "$T10: the release is the branch's" "$(field commit "$D5/releases/$SR/RELEASE")" "$SSHA"
+same "$T10: the release's manifest names the contract over epics and tickets" "$(contract_of "$SR")" "$BOTH"
+syn=$(<"$STUB_BUILD_SYNAPSE")
+has "$T10: ui contract asked for the bundle's uses, every one, once each" "$syn" "menger ui contract --uses epics.current,tickets.list"
+same "$T10: tickets.schema not asked" "$(grep -c 'tickets schema' <<<"$syn")" 0
+has "$T10: the second build stamped with that answer" "$(<"$STUB_UI_TOOL_LOG")" "plexus-ui build $B/menger-build/ui --engine $B/menger-build/dist/engine --contract $BOTH --commit menger@${SSHA:0:7} -o $B/menger-build/dist/ui.tar"
+same "$T10: the app built twice: once to read its uses, once stamped" "$(grep -c "plexus-ui build $B/menger-build/ui " "$STUB_UI_TOOL_LOG")" 2
+has "$T10: the log names the services the contract covers" "$err" "contract: $BOTH over epics, tickets"
+# the studio: its own uses (ui.versions), its own contract
+has "$T10: ui contract asked for the studio's uses" "$syn" "menger ui contract --uses ui.versions"
+has "$T10: the studio stamped with its own contract" "$(<"$STUB_UI_TOOL_LOG")" "plexus-ui build $B/menger-build/../plexus-ui/studio --engine $B/menger-build/dist/engine --name studio --contract $STUDIO_C --commit"
+same "$T10: the release's studio names its contract" "$(tar -xOf "$D5/releases/$SR/dist/studio.tar" manifest.json 2>/dev/null | jq -r .contract 2>/dev/null)" "$STUDIO_C"
+has "$T10: the log names the studio's services" "$err" "studio contract: $STUDIO_C over ui"
+same "$T10: the menger started once for both" "$(grep -c . "$STUB_MENGER_RAN")" 1
+stopped "$T10: after the build"
+same "$T10: the build's scratch removed" "$(ls -A "$T5TMP")" ""
+# a tickets-only bundle still stamps the tickets service's hash, through the new call (T6 above)
+same "$T10: tickets alone: the old path's value" "$(contract_of "$CR")" "$CONTRACT_HASH"
+# the studio's contract unreadable: the build fails, named, and no release
+for how in fail refused; do
+  n=$(ls "$D5/releases" | wc -l)
+  next_second; STUB_CONTRACT=$how STUB_CONTRACT_ON=ui MENGER_CONTRACT_WAIT=2 bb build --branch surface --no-gate
+  same "$T10: the studio's contract read fails ($how): exits 1" "$code" 1
+  has "$T10: the studio's contract read fails ($how): said, naming the studio and ui.contract" "$err" "studio contract: ui.contract"
+  none_made "$T10: the studio's contract read fails ($how)" "$n"
+  [[ $(grep -c -- '--contract ' "$STUB_UI_TOOL_LOG") == 0 ]] && ok || bad "$T10: the studio's contract read fails ($how): a bundle stamped all the same"
+  stopped "$T10: the studio's contract read fails ($how)"
+done
+# a studio naming no service: built unstamped, never asked, said
+cp "$B/plexus-ui/studio/src/s-page.rhx" "$B/s-page.rhx.away"; printf '<p>s</p>\n' >"$B/plexus-ui/studio/src/s-page.rhx"
+next_second; bb build --branch surface --no-gate
+[[ $code == 0 ]] && ok || bad "$T10: a studio naming no service: build exits 0, got $code: $(tail -n 3 <<<"$err")"
+NR=$(tail -n 1 "$SCRATCH/out")
+same "$T10: a studio naming no service: its manifest says unknown" "$(tar -xOf "$D5/releases/$NR/dist/studio.tar" manifest.json 2>/dev/null | jq -r .contract 2>/dev/null)" "unknown"
+same "$T10: a studio naming no service: the app still stamped over both" "$(contract_of "$NR")" "$BOTH"
+same "$T10: a studio naming no service: ui contract asked once, for the app" "$(grep -c 'menger ui contract' "$STUB_BUILD_SYNAPSE")" 1
+same "$T10: a studio naming no service: no studio build stamped" "$(grep -- '--name studio' "$STUB_UI_TOOL_LOG" | grep -c -- '--contract ')" 0
+has "$T10: a studio naming no service: said" "$err" "studio contract: none"
+mv "$B/s-page.rhx.away" "$B/plexus-ui/studio/src/s-page.rhx"
+# a bundle whose manifest cannot be read: the build fails, naming it, never "names no service" nor a studio shipped unstamped
+for which in app studio; do
+  n=$(ls "$D5/releases" | wc -l)
+  next_second; STUB_TOOL_BROKEN=$which bb build --branch surface --no-gate
+  same "$T10: the $which's manifest unreadable: exits 1" "$code" 1
+  has "$T10: the $which's manifest unreadable: said" "$err" "no readable manifest.json"
+  [[ $err != *"names no service"* ]] && ok || bad "$T10: the $which's manifest unreadable: said as naming no service: $err"
+  none_made "$T10: the $which's manifest unreadable" "$n"
+  same "$T10: the $which's manifest unreadable: nothing started" "$(grep -c . "$STUB_MENGER_RAN")" 0
 done
 
 # ── V2-7 the_image_carries_the_bundle_and_the_flags ────────────────────────

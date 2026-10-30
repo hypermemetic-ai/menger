@@ -406,19 +406,24 @@ cargo_release() { # LOG — cargo build --release of WS_PKGS; dies red, naming t
   for p in $WS_PKGS; do [[ -s $CARGO_TARGET_DIR/release/$p ]] || die "release build: $CARGO_TARGET_DIR/release/$p is missing or empty"; done
 }
 # ── UI-12: the contract a release's bundle is built against ──────────────────
-# The bundle names the tickets service it was built against (manifest.contract), and ui.push
-# answers whether the running service is that one (contract_matches). The build reads that
-# hash from the menger it has just built: it starts that binary on two free loopback ports in
+# The bundle names the services it was built against (manifest.contract), and ui.push answers
+# whether the running services are those (contract_matches): its hash over the services the
+# bundle's components' `uses` name (contract_named → contract_over, ../plexus-ui/service/src/push.rs).
+# SURFACE-11: the build stamps that hash, never tickets.schema's alone — a bundle naming epics,
+# orgs or ui beside tickets hashes differently. The bundle is built once unstamped, its
+# manifest's components.*.uses read from the tar (bundle_uses), and the menger just built is
+# asked `ui contract --uses` them (ui.contract: the hash a push of them computes). The build reads
+# that from the menger it has just built: it starts that binary on two free loopback ports in
 # local mode — no login provider, so the binary makes its own admin key in its (scratch) data
 # directory and links it for synapse as menger-local: the build holds no key material, and a
 # throwaway key is all there is — under a scratch HOME and XDG_RUNTIME_DIR (mktemp's), signs
-# in with that key, reads `tickets.schema`'s hash with synapse (--no-hold: no connection holder
+# in with that key, asks `ui contract` for each bundle with synapse (--no-hold: no connection holder
 # outlives the build; the sign-in lands in the scratch HOME, so no default agent of this
 # machine's moves), and stops it — always, by on_exit's contract_stop too. The hash goes to the
-# bundle's build as `plexus-ui build --contract HASH`: the build asks no socket of its own. A binary that dies, never answers within MENGER_CONTRACT_WAIT seconds (60), or
-# a read with no hash, fails the build, named: no bundle saying `unknown` is released.
+# bundle's second build as `plexus-ui build --contract HASH`: the tool asks no socket of its own. A binary that dies, never answers within MENGER_CONTRACT_WAIT seconds (60), or
+# a read with no hash (a refusal, a bundle naming no service), fails the build, named: no bundle saying `unknown` is released.
 CONTRACT_WAIT=${MENGER_CONTRACT_WAIT:-60}
-CONTRACT="" CONTRACT_PID="" CONTRACT_SCRATCH=""
+CONTRACT="" CONTRACTS=() CONTRACT_PID="" CONTRACT_SCRATCH=""
 contract_stop() {
   local n=0
   if [[ -n $CONTRACT_PID ]]; then
@@ -442,10 +447,20 @@ free_port() { # [NOT] → a port on loopback nothing listens on, far from every 
   done
   return 1
 }
-contract_read() { # LOG BINARY → CONTRACT (the tickets service's hash), or dies naming why
-  local lg=$1 bin=$2 port shell until out h
+bundle_uses() { # TAR → every method its manifest's components use, once each, sorted, comma-separated ("" for none);
+  # 1 when the tar holds no manifest.json, or one that is no JSON — never read as a bundle naming nothing
+  local m
+  m=$(tar -xOf "$1" manifest.json 2>/dev/null) && [[ -n $m ]] || return 1
+  jq -er '[.components // {} | .[] | .uses // [] | .[]] | unique | join(",")' <<<"$m" 2>/dev/null
+}
+uses_services() { # USES (comma-separated) → the services they name, once each: "epics, tickets"
+  jq -rR 'split(",") | map(select(. != "") | split(".")[0]) | unique | join(", ")' <<<"$1"
+}
+contract_read() { # LOG BINARY WHAT USES [WHAT USES…] → CONTRACTS (a hash per USES, ui.contract's over the services they name), or dies naming WHAT and why
+  local lg=$1 bin=$2 port shell until what uses out h why i=0
+  shift 2
   need synapse
-  CONTRACT=""
+  CONTRACT="" CONTRACTS=()
   CONTRACT_SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/menger-contract.XXXXXX") || die "contract: no scratch directory"
   mkdir -p "$CONTRACT_SCRATCH/home" "$CONTRACT_SCRATCH/run" && chmod 0700 "$CONTRACT_SCRATCH/run"
   port=$(free_port) && shell=$(free_port "$port") || die "contract: no free loopback port to start $bin on"
@@ -465,12 +480,21 @@ contract_read() { # LOG BINARY → CONTRACT (the tickets service's hash), or die
     (( SECONDS >= until )) && { red_run; die "contract: the release's menger did not answer on :$port within ${CONTRACT_WAIT}s — $lg"; }
     sleep 0.5
   done
-  out=$("${env[@]}" timeout 30 synapse --no-hold --reconnect-for 5s -P "$port" --as menger-local -j menger tickets schema 2>>"$lg") || true
-  h=$(jq -rR 'fromjson? | .content.hash? // empty' <<<"$out" 2>/dev/null | head -n 1)
+  # each bundle's uses, a list as one comma-separated flag (synapse ≥ 3.14.2)
+  while [[ $# -ge 2 ]]; do
+    what=$1 uses=$2; shift 2
+    out=$("${env[@]}" timeout 30 synapse --no-hold --reconnect-for 5s -P "$port" --as menger-local -j menger ui contract --uses "$uses" 2>>"$lg") || true
+    printf '%s\n' "$out" >>"$lg"
+    h=$(jq -rR 'fromjson? | .content | select(.type? == "contract") | .contract // "null"' <<<"$out" 2>/dev/null | head -n 1)
+    why=$(jq -rR 'fromjson? | .content | select(.type? == "refused" or .type? == "error") | "\(.reason // "error"): \(.message // "")"' <<<"$out" 2>/dev/null | head -n 1)
+    CONTRACTS[i++]=$h
+    [[ -n $why ]] && { contract_stop; red_run; die "$what: ui.contract refused ${why} — $lg"; }
+    [[ -n $h ]] || { contract_stop; red_run; die "$what: ui.contract answered no contract on :$port for $uses — $lg"; }
+    [[ $h != null ]] || { contract_stop; red_run; die "$what: ui.contract answered null — the bundle names no service (uses: ${uses:-none})"; }
+    [[ $h =~ ^[A-Za-z0-9._:-]+$ ]] || { contract_stop; red_run; die "$what: ui.contract's hash is not one: '$h'"; }
+  done
   contract_stop
-  [[ -n $h ]] || { red_run; die "contract: tickets.schema answered no hash on :$port — $lg"; }
-  [[ $h =~ ^[A-Za-z0-9._:-]+$ ]] || { red_run; die "contract: tickets.schema's hash is not one: '$h'"; }
-  CONTRACT=$h
+  CONTRACT=${CONTRACTS[0]:-}
 }
 # FRAME-8: the plexus-ui tool a v2 build makes its bundle with — ../plexus-ui's cli/
 # (plexus-ui-cli), beside the build checkout as the framework's crates are, built with cargo into
@@ -487,6 +511,14 @@ ui_tool_build() { # LOG → UI_TOOL
   (cd "$BUILD" && cargo build --release --manifest-path "$BUILD/../plexus-ui/Cargo.toml" -p plexus-ui-cli >>"$lg" 2>&1) || { red_run; die "plexus-ui: the tool's build failed — $lg"; }
   UI_TOOL=$CARGO_TARGET_DIR/release/plexus-ui
   [[ -x $UI_TOOL ]] || die "plexus-ui: no $UI_TOOL after its build — $lg"
+}
+# The app's bundle and the studio's, built by the tool — CONTRACT empty: unstamped (manifest.contract
+# unknown), the build that says the bundle's uses (SURFACE-11); else stamped --contract CONTRACT.
+ui_bundle() { # LOG CONTRACT → dist/ui.tar
+  (cd "$BUILD" && "$UI_TOOL" build "$BUILD/ui" --engine "$BUILD/dist/engine" ${2:+--contract "$2"} --commit "menger@$short" -o "$BUILD/dist/ui.tar" --node-modules "$BUILD/../plexus-ui/node_modules") >>"$1" 2>&1
+}
+studio_bundle() { # LOG CONTRACT PLEXUS_UI_SHORT → dist/studio.tar
+  (cd "$BUILD" && "$UI_TOOL" build "$BUILD/../plexus-ui/studio" --engine "$BUILD/dist/engine" --name studio ${2:+--contract "$2"} --commit "plexus-ui@$3" -o "$BUILD/dist/studio.tar" --node-modules "$BUILD/../plexus-ui/node_modules") >>"$1" 2>&1
 }
 V2_STEPS=""
 build_v2() { # V2-7, FRAME-8: every step on this machine — the release, the tool, the engine, the contract, the bundle, the compiler module
@@ -505,31 +537,45 @@ build_v2() { # V2-7, FRAME-8: every step on this machine — the release, the to
   lr=$(log_path build-ui-prebuild); say "log: $lr"
   (cd "$BUILD" && "$UI_TOOL" build --prebuild --engine "$BUILD/dist/engine") >"$lr" 2>&1 || { red_run; die "ui-prebuild failed — $lr"; }
   V2_STEPS+=", ui-prebuild"
-  step "contract (tickets.schema's hash of the menger just built)"
-  lr=$(log_path build-contract); say "log: $lr"
-  contract_read "$lr" "$CARGO_TARGET_DIR/release/menger"
-  say "contract: $CONTRACT (the tickets service's hash, tickets.schema)"
   # the bundle: the components compiled in-process, the manifest, the tar — no cargo, no container.
   # FRAME-13: a svelte/1 component (ui/src/<name>.svelte, real Svelte) is compiled by the tool in Node 22+
   # with svelte and esbuild from ../plexus-ui's node_modules — its package.json pins them, `npm ci` in
   # ../plexus-ui installs them; an rhx-only UI needs neither (FRAME-14: the board's real-Svelte twins, ui/src/*-sv.svelte)
-  step "ui-build (plexus-ui build --contract $CONTRACT)"
-  lr=$(log_path build-ui); say "log: $lr"
   if compgen -G "$BUILD/ui/src/*.svelte" >/dev/null; then command -v node >/dev/null || die "ui-build: ui/src holds svelte/1 components (.svelte), built in Node, and there is no node on PATH — install Node 22 or newer"; say "svelte/1: node $(node --version)"; fi
   if compgen -G "$BUILD/ui/src/*.svelte" >/dev/null; then [[ -f $BUILD/../plexus-ui/node_modules/svelte/package.json && -f $BUILD/../plexus-ui/node_modules/esbuild/package.json ]] || die "ui-build: ui/src holds svelte/1 components (.svelte) and ../plexus-ui has no node_modules/svelte and node_modules/esbuild — run npm ci in ../plexus-ui"; fi
-  (cd "$BUILD" && "$UI_TOOL" build "$BUILD/ui" --engine "$BUILD/dist/engine" --contract "$CONTRACT" --commit "menger@$short" -o "$BUILD/dist/ui.tar" --node-modules "$BUILD/../plexus-ui/node_modules") >"$lr" 2>&1 \
-    || { red_run; die "ui-build failed — $lr"; }
+  # SURFACE-11: each bundle built once unstamped — its manifest says the methods its components use —
+  # then stamped with ui.contract's hash over the services they name, and built again
+  local app_uses studio_uses="" studio=0 pu=""
+  [[ -d $BUILD/../plexus-ui/studio ]] && { studio=1; pu=$(git -C "$BUILD/../plexus-ui" rev-parse --short HEAD 2>/dev/null || echo unknown); }
+  step "ui-uses (plexus-ui build, unstamped: the methods the bundle's components use)"
+  lr=$(log_path build-ui-uses); say "log: $lr"
+  ui_bundle "$lr" "" || { red_run; die "ui-build failed — $lr"; }
+  app_uses=$(bundle_uses "$BUILD/dist/ui.tar") || { red_run; die "ui-uses: $BUILD/dist/ui.tar holds no readable manifest.json — $lr"; }
+  if [[ $studio == 1 ]]; then
+    studio_bundle "$lr" "" "$pu" || { red_run; die "studio-build failed — $lr"; }
+    studio_uses=$(bundle_uses "$BUILD/dist/studio.tar") || { red_run; die "ui-uses: $BUILD/dist/studio.tar (the studio) holds no readable manifest.json — $lr"; }
+  fi
+  step "contract (ui.contract over the services the bundle names, of the menger just built)"
+  lr=$(log_path build-contract); say "log: $lr"
+  local asks=(contract "$app_uses")
+  [[ -n $studio_uses ]] && asks+=("studio contract" "$studio_uses")
+  contract_read "$lr" "$CARGO_TARGET_DIR/release/menger" "${asks[@]}"
+  local studio_contract=${CONTRACTS[1]:-}
+  say "contract: $CONTRACT over $(uses_services "$app_uses") (ui.contract for the bundle's uses: $app_uses)"
+  if [[ $studio == 1 && -n $studio_contract ]]; then say "studio contract: $studio_contract over $(uses_services "$studio_uses") (ui.contract for the studio's uses: $studio_uses)"
+  elif [[ $studio == 1 ]]; then say "studio contract: none — the studio's components name no service, so it is built unstamped"; fi
+  step "ui-build (plexus-ui build --contract $CONTRACT)"
+  lr=$(log_path build-ui); say "log: $lr"
+  ui_bundle "$lr" "$CONTRACT" || { red_run; die "ui-build failed — $lr"; }
   # DEPLOY-6: no -q under pipefail (b82f5bd's rule) — grep reads the whole listing, or tar dies of SIGPIPE
   tar -tf "$BUILD/dist/ui.tar" 2>/dev/null | grep -x 'index.html' >/dev/null || die "ui-build: $BUILD/dist/ui.tar is no tar holding index.html"
   V2_STEPS+=", ui-build"
   # STUDIO-2: the studio — the framework's own bundle (../plexus-ui/studio), built by the same tool
   # with --name studio; a deploy pushes it --no-live, kept as bundle:studio and served at /studio/.
-  if [[ -d $BUILD/../plexus-ui/studio ]]; then
-    step "studio-build (plexus-ui build ../plexus-ui/studio --name studio)"
+  if [[ $studio == 1 ]]; then
+    step "studio-build (plexus-ui build ../plexus-ui/studio --name studio${studio_contract:+ --contract $studio_contract})"
     lr=$(log_path build-studio); say "log: $lr"
-    local pu; pu=$(git -C "$BUILD/../plexus-ui" rev-parse --short HEAD 2>/dev/null || echo unknown)
-    (cd "$BUILD" && "$UI_TOOL" build "$BUILD/../plexus-ui/studio" --engine "$BUILD/dist/engine" --name studio --commit "plexus-ui@$pu" -o "$BUILD/dist/studio.tar" --node-modules "$BUILD/../plexus-ui/node_modules") >"$lr" 2>&1 \
-      || { red_run; die "studio-build failed — $lr"; }
+    studio_bundle "$lr" "$studio_contract" "$pu" || { red_run; die "studio-build failed — $lr"; }
     V2_STEPS+=", studio-build"
   fi
   # FRAME-7: the compiler module is the framework's script's — ../plexus-ui/scripts/ui-compiler-wasm.sh

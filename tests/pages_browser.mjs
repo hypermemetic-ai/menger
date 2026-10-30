@@ -62,7 +62,7 @@ const SEED = Number(opt("--seed", "100000"));
 const PROFILE = flag("--debug") ? "debug" : "release";
 const ONLY = opt("--only", null)?.split(",");
 // SURFACE-1: a feature group's cases live in tests/pages/<group>.mjs and run after the board's;
-// `--group NAME` runs that file's cases alone (the board's own are skipped), `--group all` every file.
+// `--group NAME` runs that file's cases alone (the board's own are skipped), `--group all` the board's and every file.
 const GROUP = opt("--group", null);
 let inGroup = false;
 const PAGE = 200; // the board's page
@@ -183,7 +183,7 @@ async function typeBursts(page, sel, bursts, gap) {
 
 async function test(name, body) {
   if (ONLY && !ONLY.includes(name)) return;
-  if (GROUP && !inGroup) return;
+  if (GROUP && GROUP !== "all" && !inGroup) return;
   const t0 = Date.now();
   try {
     await body();
@@ -622,7 +622,8 @@ async function main() {
         await sleep(500);
         assert(trimmed(await tp.locator("[data-ticket-status]").textContent({ timeout: 1000 })) === t.status, `the status is ${t.status}`);
         assert(trimmed(await tp.locator("[data-ticket-kind]").textContent({ timeout: 1000 })) === t.kind, `the kind is ${t.kind}`);
-        const kids = (await sentCalls(page)).filter((c) => c.method === "tickets.list");
+        // SURFACE-3: the head asks the parent's children too (the siblings, `fields: ["id"]`).
+        const kids = (await sentCalls(page)).filter((c) => c.method === "tickets.list" && c.params.parent === t.id);
         assert(kids.length === 1 && kids[0].params.parent === t.id, `one list { parent: ${t.id} } (${JSON.stringify(kids.map((k) => k.params))})`);
         const bodyEl = tp.locator("[data-ticket-body]");
         const text = await bodyEl.textContent({ timeout: 1000 });
