@@ -785,11 +785,12 @@ has "pipelines.toml: deploy-prod needs deploy-test" "$(grep -A4 'name = "deploy-
 # ── CI-6: every log of a run is a file of its own, never overwritten ──────
 # The pipeline runs from a scratch repository (its build checkout is a sibling,
 # also scratch), with cargo a stand-in: `test` fails in two test binaries when
-# STUB_CARGO_RED=1, `build --release` always fails — the gate is what is under test.
+# STUB_CARGO_RED=1, the release's `build` always fails — the gate is what is under test
+# (RUN-39: the build's own arguments are kept apart, in cargo-build-args).
 CR=$SCRATCH/ci6/menger; mkdir -p "$CR/deploy" "$CR/scripts" "$CR/frontend" "$SCRATCH/ci6/bin"; : >"$CR/frontend/.keep"
 cp "$DEPLOY/pipeline" "$CR/deploy/pipeline"; cp "$REPO/scripts/disk-check.sh" "$CR/scripts/"
 git -C "$CR" init -q -b main && git -C "$CR" -c user.name=t -c user.email=t@t add -A && git -C "$CR" -c user.name=t -c user.email=t@t commit -qm ci6
-printf '#!/usr/bin/env bash\nif [[ $1 == test ]]; then\n  echo "$*" >>"%s"\n  if [[ ${STUB_CARGO_RED:-} == 1 ]]; then\n    printf "test a::one ... FAILED\\ntest result: FAILED. 0 passed; 1 failed\\ntest b::two ... FAILED\\ntest result: FAILED. 0 passed; 1 failed\\n"; exit 101\n  fi\n  echo "test result: ok. 3 passed; 0 failed"; exit 0\nfi\nexit 1\n' "$SCRATCH/ci6/cargo-args" >"$SCRATCH/ci6/bin/cargo"
+printf '#!/usr/bin/env bash\nif [[ $1 == test ]]; then\n  echo "$*" >>"%s"\n  if [[ ${STUB_CARGO_RED:-} == 1 ]]; then\n    printf "test a::one ... FAILED\\ntest result: FAILED. 0 passed; 1 failed\\ntest b::two ... FAILED\\ntest result: FAILED. 0 passed; 1 failed\\n"; exit 101\n  fi\n  echo "test result: ok. 3 passed; 0 failed"; exit 0\nfi\n[[ $1 == build ]] && echo "$*" >>"%s"\nexit 1\n' "$SCRATCH/ci6/cargo-args" "$SCRATCH/ci6/cargo-build-args" >"$SCRATCH/ci6/bin/cargo"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$SCRATCH/ci6/bin/trunk"; chmod +x "$SCRATCH/ci6/bin/"*
 LOGD=$HOME/.local/state/menger-deploy/logs
 ci6() { PATH=$SCRATCH/ci6/bin:$PATH DISK_CHECK_USED_PCT=10 DISK_CHECK_AVAIL_GB=900 "$CR/deploy/pipeline" "$@" >"$SCRATCH/out" 2>"$SCRATCH/err"; code=$?; err=$(<"$SCRATCH/err"); }
@@ -797,6 +798,8 @@ ci6 build
 same "ci6: a green gate, then the release build fails" "$code" 1
 has "ci6: the gate ran with --no-fail-fast" "$(<"$SCRATCH/ci6/cargo-args")" "test --workspace --no-fail-fast"
 has "ci6: the release failure names its own log" "$err" "release build failed — $LOGD/"
+# RUN-39: the release is the perf build — the binary prod runs is the one the bench holds to its goldens
+has "ci6: the release is built with the perf profile (RUN-39)" "$(<"$SCRATCH/ci6/cargo-build-args")" "build --profile perf -p menger -p menger-diagrams"
 g1=$(ls "$LOGD"/*-gate-workspace.log); same "ci6: one gate log" "$(wc -w <<<"$g1")" 1
 has "ci6: the gate log holds the output" "$(<"$g1")" "test result: ok. 3 passed"
 ls "$LOGD"/*-gate-frontend.log "$LOGD"/*-build-release.log >/dev/null 2>&1 && ok || bad "ci6: the frontend and release logs are separate files"
