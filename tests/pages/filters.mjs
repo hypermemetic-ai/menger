@@ -13,7 +13,8 @@
 //       with `[data-held]`, `[data-selected]` when the filter holds the chip's `data-rule`
 //   nav-counts (#/counts/:filter)  `[data-surface=nav-counts] [data-field=count]`, `[data-refused]`
 //   filters-saved, nav-facets, nav-counts are svelte/1 (owner, 2026-10-30); the marks are the profile's own business
-//   filter-line (the top bar; filter-line.rhx on the rhx board at #/, filter-line-sv on the Svelte one at #/sv/)
+//   filter-line (the top bar; filter-line.rhx on the rhx board, filter-line-sv on the Svelte one — `#/rhx/` and
+//       `#/` once SURFACE-2 makes the Svelte board the default, `#/` and `#/sv/` before)
 //       `input[data-filter-input]`, `[data-filter-check=ok|refused]`
 //       (`[data-refused]`), saved names offered as `[data-complete=<name>]`
 export default async (ctx) => {
@@ -24,6 +25,11 @@ export default async (ctx) => {
   const hash = (page) => page.evaluate(() => decodeURIComponent(location.hash));
   const saved = (page) => page.locator("[data-surface=filters-saved]");
   const facets = (page) => page.locator("[data-surface=nav-facets]");
+  // SURFACE-2 makes the Svelte board the default (`#/`, `#/f/:filter` → board-frame; the rhx
+  // board at `#/rhx/…`); before it, the rhx board is at `#/` and the Svelte one at `#/sv/`.
+  const routes = JSON.parse(ctx.fs.readFileSync(new URL("../../ui/routes.json", import.meta.url), "utf8"));
+  const svelteFirst = routes["#/f/:filter"] === "board-frame";
+  const boardLayout = svelteFirst ? "board-frame" : "board-layout";
   const held = (filter) => sy("tickets", "nav", "counts", "--filter", filter).filter((e) => e.type === "count").reduce((a, c) => a + c.held, 0);
 
   await test("a_filter_is_saved_and_listed", async () => {
@@ -62,7 +68,9 @@ export default async (ctx) => {
       await eventually("the saved filter is listed", async () => (await row.count()) === 1);
       await row.locator("[data-action=open]").click();
       await eventually('the route is #/f/saved "S6 builds"', async () => (await hash(page)) === '#/f/saved "S6 builds"', 3000);
-      await eventually("the board is drawn on the saved filter", async () => (await page.locator("[data-board-layout]").getAttribute("data-filter", { timeout: 500 })) === 'saved "S6 builds"', 5000);
+      await eventually(`the board (${boardLayout}) is drawn on the saved filter`, async () =>
+        (await page.locator(`[data-layout=${boardLayout}]`).count()) > 0 &&
+        (await page.locator("[data-board-layout]").getAttribute("data-filter", { timeout: 500 })) === 'saved "S6 builds"', 5000);
       const count = one(got("S6 builds"), "filter_saved").filter.count;
       const expected = summaries("--filter", text, "--limit", "200").map((t) => t.id);
       await eventually(`the board counts ${count} and shows the filter's rows`, async () => {
@@ -156,13 +164,25 @@ export default async (ctx) => {
     sy("tickets", "filters", "save", "--name", "S6 spikes", "--filter", "kind spike");
     // On both boards: the rhx line (filter-line.rhx) and the Svelte one (filter-line-sv, board-layout-sv's).
     for (const L of [
-      { name: "rhx", route: "", f: "#/f/", home: ["", "#/"], focuses: false },
-      { name: "sv", route: "#/sv/", f: "#/sv/f/", home: ["#/sv/", "#/sv/"], focuses: true },
+      // the rhx line's Escape goes to `#/` (it cannot know its board's route), the Svelte line's to its board's root
+      svelteFirst
+        ? { name: "rhx", route: "#/rhx/", f: "#/rhx/f/", home: ["#/rhx/", "#/"], focuses: false }
+        : { name: "rhx", route: "", f: "#/f/", home: ["", "#/"], focuses: false },
+      svelteFirst
+        ? { name: "sv", route: "", f: "#/f/", home: ["", "#/"], focuses: true, slash: true }
+        : { name: "sv", route: "#/sv/", f: "#/sv/f/", home: ["#/sv/", "#/sv/"], focuses: true },
     ]) {
       {
         const { page, context } = await openPage(L.route);
         try {
           const input = () => page.locator("input[data-filter-input]");
+          if (L.slash) {
+            // SURFACE-2's board-rows-sv says `filter.focus` on `/`; the Svelte line takes the focus.
+            await eventually("the board is up", async () => (await page.locator(".board-row[data-id]").count()) > 0, 10000);
+            await page.evaluate(() => document.activeElement?.blur?.());
+            await page.keyboard.press("/");
+            await eventually("`/` focuses the filter line (filter.focus)", async () => page.evaluate(() => document.activeElement?.matches("input[data-filter-input]") ?? false), 3000);
+          }
           const check = page.locator("[data-surface=filter-line] [data-filter-check]");
           await input().fill("k");
           await page.waitForTimeout(120);

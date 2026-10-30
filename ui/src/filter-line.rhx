@@ -13,11 +13,11 @@
   // "checking…" while an ask is out (the previous answer stays drawn during
   // the pause itself: the engine says nothing until it asks). An open
   // `saved "…` completes from the saved filters (`filters.list`, asked
-  // only then); Escape (FRAME-36's keys, heard in the field) clears the
-  // line and the route's filter. The field is drawn again (keyed by `gen`)
+  // only then); Escape in the field (its own keydown — not keys(), which
+  // would take Escape from the whole page and the rhx palette's close with
+  // it) clears the line and the route's filter. The field is drawn again (keyed by `gen`)
   // when a fold sets its text: the engine sets `value` as an attribute,
   // which a field already typed in does not show.
-  keys(#{ "escape": #{ to: "clear", in_inputs: true, label: "clear the filter line" } });
   prop("filter");
   state(#{ q: "", typed: false, gen: 0, naming: false, partial: "" });
   let counts = live(#{ snapshot: "tickets.nav.counts", params: #{ filter: filter }, key: "shortcode", on: #{ count: "upsert:." } });
@@ -64,12 +64,7 @@
   }
   fn keyed(state, ev) {
     if ev.key == "Enter" { return apply(state, ev); }
-    state
-  }
-  // Escape is the page's while the line is mounted (FRAME-36): it clears
-  // only when pressed in the line's own field.
-  fn clear(state, ev) {
-    if ev.target == () || ev.target.data == () || !("filter-input" in ev.target.data) { return state; }
+    if ev.key != "Escape" { return state; }
     state.q = "";
     state.partial = "";
     state.typed = true;

@@ -10,7 +10,8 @@
      when the ask the store said it sent was for that text); an open
      `saved "…` completes from the saved filters (`filters.list`, asked only
      then), the field keeping the focus; Escape (FRAME-36's keys, heard in
-     the field) clears the line and the route's filter. -->
+     the field) clears the line and the route's filter; `filter.focus` on the
+     bus (the board's `/`) focuses it. -->
 <script module>
   export const uses = ["tickets.nav.counts", "tickets.filters.check", "tickets.filters.list"];
   const OPEN = 'saved "';
@@ -71,6 +72,8 @@
   const offers = $derived(partial === null ? [] : saved.rows.filter((s) => s.name.toLowerCase().startsWith(partial.toLowerCase())));
 
   b.keys({ escape: { to: clear, in_inputs: true, label: "clear the filter line" } });
+  // SURFACE-2's board-rows-sv says `filter.focus` on `/`: the line takes the focus.
+  b.on("filter.focus", () => field?.focus());
 
   function clear(ev) {
     if (ev?.target?.data?.["filter-input"] === undefined) return;
