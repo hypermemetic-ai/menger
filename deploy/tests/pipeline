@@ -972,7 +972,7 @@ case $cmd in
   build)
     ui="" engine="" contract=unknown commit=unknown out="" prebuild=0 name=""
     while [[ $# -gt 0 ]]; do case $1 in
-      --prebuild) prebuild=1; shift ;; --engine) engine=$2; shift 2 ;; --contract) contract=$2; shift 2 ;; --name) name=$2; shift 2 ;;
+      --prebuild) prebuild=1; shift ;; --strict-colours) shift ;; --engine) engine=$2; shift 2 ;; --contract) contract=$2; shift 2 ;; --name) name=$2; shift 2 ;;
       --commit) commit=$2; shift 2 ;; -o|--out) out=$2; shift 2 ;; --*) shift 2 ;; *) ui=$1; shift ;; esac; done
     if [[ $prebuild == 1 ]]; then mkdir -p "$engine" && echo 'export default 1;' >"$engine/engine.js" && printf '\0asm\1\0\0\0' >"$engine/engine.wasm"; exit; fi
     [[ -f $engine/engine.js && -f $engine/engine.wasm ]] || { echo "plexus-ui (stand-in): no engine in $engine" >&2; exit 1; }
@@ -1226,13 +1226,13 @@ same "$T1: a release of v2's tip" "$(field commit "$RF")" "$VSHA"
 same "$T1: the release names its branch" "$(field branch "$RF")" "v2"
 same "$T1: the release's steps" "$(field steps "$RF")" "cargo build, plexus-ui, ui-prebuild, ui-build, studio-build, ui-compiler-wasm"
 # STUDIO-6: the studio built by the same tool from ../plexus-ui/studio, named, carried by the release
-has "$T1: the studio built by the tool, named studio" "$(<"$STUB_UI_TOOL_LOG")" "plexus-ui build $B/menger-build/../plexus-ui/studio --engine $B/menger-build/dist/engine --name studio"
+has "$T1: the studio built by the tool, named studio" "$(<"$STUB_UI_TOOL_LOG")" "plexus-ui build $B/menger-build/../plexus-ui/studio --strict-colours --engine $B/menger-build/dist/engine --name studio"
 same "$T1: the release's dist/studio.tar is the studio's, named" "$(tar -xOf "$D5/releases/$VR/dist/studio.tar" manifest.json 2>/dev/null | jq -r .name 2>/dev/null)" "studio"
 same "$T1: no trunk, no npm ran" "$(<"$B/browser.log")" ""
 same "$T1: cargo build --release of the workspace's packages: menger alone" "$(grep -o 'cargo build --release -p .*' "$STUB_CARGO_LOG")" "cargo build --release -p menger"
 has "$T1: the tool built from ../plexus-ui beside the build checkout" "$(<"$STUB_CARGO_LOG")" "cargo build --release --manifest-path $B/menger-build/../plexus-ui/Cargo.toml -p plexus-ui-cli"
 has "$T1: the engine built by the tool, into dist/engine" "$(<"$STUB_UI_TOOL_LOG")" "plexus-ui build --prebuild --engine $B/menger-build/dist/engine"
-has "$T1: the bundle built by the tool on this machine" "$(<"$STUB_UI_TOOL_LOG")" "plexus-ui build $B/menger-build/ui --engine $B/menger-build/dist/engine --contract $CONTRACT_HASH --commit menger@${VSHA:0:7} -o $B/menger-build/dist/ui.tar"
+has "$T1: the bundle built by the tool on this machine" "$(<"$STUB_UI_TOOL_LOG")" "plexus-ui build $B/menger-build/ui --strict-colours --engine $B/menger-build/dist/engine --contract $CONTRACT_HASH --commit menger@${VSHA:0:7} -o $B/menger-build/dist/ui.tar"
 same "$T1: no container asked" "$(<"$STUB_BUILD_DOCKER")" ""
 [[ -x $D5/releases/$VR/bin/plexus-ui ]] && ok || bad "$T1: the release carries no bin/plexus-ui"
 # the compiler module is cargo's (wasm32): built on this machine
@@ -1325,7 +1325,7 @@ has "$T6: signed in with the binary's own key, on its port" "$(grep -- "-P $mpor
 has "$T6: the contract asked of the port it started, for the bundle's uses" "$(grep -- "-P $mport" <<<"$syn")" "menger ui contract --uses tickets.list"
 same "$T6: tickets.schema no longer asked" "$(grep -c 'tickets schema' <<<"$syn")" 0
 has "$T6: the build says the services the contract covers" "$err" "over tickets"
-has "$T6: the first build is unstamped, its uses read" "$(<"$STUB_UI_TOOL_LOG")" "plexus-ui build $B/menger-build/ui --engine $B/menger-build/dist/engine --commit menger@${VSHA:0:7} -o"
+has "$T6: the first build is unstamped, its uses read" "$(<"$STUB_UI_TOOL_LOG")" "plexus-ui build $B/menger-build/ui --strict-colours --engine $B/menger-build/dist/engine --commit menger@${VSHA:0:7} -o"
 has "$T6: the bundle built with --contract HASH" "$(<"$STUB_UI_TOOL_LOG")" "--contract $CONTRACT_HASH --commit"
 [[ $(grep -c -- '--contract-from' "$STUB_UI_TOOL_LOG") == 0 ]] && ok || bad "$T6: the tool asks a server (--contract-from): $(<"$STUB_UI_TOOL_LOG")"
 has "$T6: the build says the hash" "$err" "$CONTRACT_HASH"
@@ -1378,12 +1378,12 @@ same "$T10: the release's manifest names the contract over epics and tickets" "$
 syn=$(<"$STUB_BUILD_SYNAPSE")
 has "$T10: ui contract asked for the bundle's uses, every one, once each" "$syn" "menger ui contract --uses epics.current,tickets.list"
 same "$T10: tickets.schema not asked" "$(grep -c 'tickets schema' <<<"$syn")" 0
-has "$T10: the second build stamped with that answer" "$(<"$STUB_UI_TOOL_LOG")" "plexus-ui build $B/menger-build/ui --engine $B/menger-build/dist/engine --contract $BOTH --commit menger@${SSHA:0:7} -o $B/menger-build/dist/ui.tar"
-same "$T10: the app built twice: once to read its uses, once stamped" "$(grep -c "plexus-ui build $B/menger-build/ui " "$STUB_UI_TOOL_LOG")" 2
+has "$T10: the second build stamped with that answer" "$(<"$STUB_UI_TOOL_LOG")" "plexus-ui build $B/menger-build/ui --strict-colours --engine $B/menger-build/dist/engine --contract $BOTH --commit menger@${SSHA:0:7} -o $B/menger-build/dist/ui.tar"
+same "$T10: the app built twice: once to read its uses, once stamped" "$(grep -c "plexus-ui build $B/menger-build/ui --strict-colours " "$STUB_UI_TOOL_LOG")" 2
 has "$T10: the log names the services the contract covers" "$err" "contract: $BOTH over epics, tickets"
 # the studio: its own uses (ui.versions), its own contract
 has "$T10: ui contract asked for the studio's uses" "$syn" "menger ui contract --uses ui.versions"
-has "$T10: the studio stamped with its own contract" "$(<"$STUB_UI_TOOL_LOG")" "plexus-ui build $B/menger-build/../plexus-ui/studio --engine $B/menger-build/dist/engine --name studio --contract $STUDIO_C --commit"
+has "$T10: the studio stamped with its own contract" "$(<"$STUB_UI_TOOL_LOG")" "plexus-ui build $B/menger-build/../plexus-ui/studio --strict-colours --engine $B/menger-build/dist/engine --name studio --contract $STUDIO_C --commit"
 same "$T10: the release's studio names its contract" "$(tar -xOf "$D5/releases/$SR/dist/studio.tar" manifest.json 2>/dev/null | jq -r .contract 2>/dev/null)" "$STUDIO_C"
 has "$T10: the log names the studio's services" "$err" "studio contract: $STUDIO_C over ui"
 same "$T10: the menger started once for both" "$(grep -c . "$STUB_MENGER_RAN")" 1

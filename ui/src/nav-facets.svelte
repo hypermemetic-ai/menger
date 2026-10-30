@@ -105,6 +105,10 @@
   .nf-field[data-field=status] .nf-chip[data-value="In Review"] .nf-v { color: var(--st-in-review-fg); }
   .nf-field[data-field=status] .nf-chip[data-value=Complete] .nf-v { color: var(--st-complete-fg); }
   .nf-field[data-field=status] .nf-chip[data-value=Blocked] .nf-v { color: var(--st-blocked-fg); }
+  .nf-field[data-field=status] .nf-chip[data-value=Superseded] .nf-v { color: var(--st-superseded-fg); }
+  .nf-field[data-field=status] .nf-chip[data-value=Canceled] .nf-v { color: var(--st-canceled-fg); }
+  .nf-field[data-field=status] .nf-chip[data-value=Epic] .nf-v { color: var(--st-epic-fg); }
+  .nf-field[data-field=status] .nf-chip[data-value=Doc] .nf-v { color: var(--st-doc-fg); }
   .nf-note { margin: 4px 0; font-size: 11px; color: var(--muted); }
   .nf-note[data-refused] { color: var(--warn); }
   .nf-skel-wrap { display: flex; flex-direction: column; gap: 6px; }

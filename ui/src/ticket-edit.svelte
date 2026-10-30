@@ -68,8 +68,12 @@
     if (data.name === "parent") draft.parent = data.id;
     else if (data.name === "blocker" && data.id !== id && !draft.blockers.includes(data.id)) draft.blockers.push(data.id);
   });
+  // SURFACE-10: the sheet draws it open (`sheet="open"`), its keys left to the page.
   $effect(() => {
-    if (!open) return;
+    if (sheet === "open" && t && !open) edit();
+  });
+  $effect(() => {
+    if (!open || sheet != null) return;
     return b.keys({
       "ctrl+enter": { to: () => { if (!pending) save(); }, label: "save the edit", in_inputs: true },
       escape: { to: () => { if (!pending) cancel(); }, label: "cancel the edit", in_inputs: true },

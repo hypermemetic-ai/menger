@@ -8,7 +8,9 @@
        plain     — as it is;
        hover, focus, selected, checked, disabled — held without the pointer:
                    the sheet marks the tile's first row and first control
-                   `data-sheet="<state>"`, and each component's sheet draws
+                   (never a bound mark, `[data-slot]`; a component that holds
+                   another element names it, HOLDS) `data-sheet="<state>"`,
+                   and each component's sheet draws
                    `[data-sheet~=<state>]` as its `:hover`, `:focus-visible`,
                    selected, pressed or `:disabled` (APP-114's aliases);
        loading   — the mark's `data-sheet="loading"` (the prop `sheet`),
@@ -16,7 +18,7 @@
        empty, refused — real answers: a filter no ticket matches, a filter
                    the language refuses, a ticket that is not there.
      A component with no state shows as it is. The layouts and the pages
-     are drawn small. -->
+     are drawn small. A store with no ticket the reader can see says so. -->
 <script module>
   export const uses = ["tickets.list"];
 </script>
@@ -99,6 +101,9 @@
   const ID = (t) => ({ id: t });
   const fil = { empty: { filter: EMPTY }, refused: { filter: REFUSED } };
   const gone = { empty: { id: NONE } };
+  // The palettes' held rows: the second hit, hovered or selected — never
+  // the first, which the palette selects itself.
+  const HITS = { hover: ["li:nth-child(2) > .palette-hit"], focus: [".palette-input"], selected: ["li:nth-child(2) > .palette-hit"] };
   const SHEET = [
     ["the board", [
       ["board-rows-sv", BoardRowsSv, F, ["hover", "focus", "selected", "checked"], fil],
@@ -107,14 +112,14 @@
       ["board-layout-sv", BoardLayoutSv, F, ["hover", "focus"], { refused: { filter: REFUSED } }],
       ["filter-line-sv", FilterLineSv, (t) => ({ filter: "status Ready" }), ["hover", "focus"], { refused: { filter: REFUSED } }],
       ["filter-line", FilterLine, (t) => ({ filter: "status Ready" }), ["hover", "focus"], { refused: { filter: REFUSED } }],
-      ["bulk-bar", BulkBar, (t) => ({ ids: t }), ["hover", "focus", "disabled"], { loading: { sheet: "loading" } }],
+      ["bulk-bar", BulkBar, (t) => ({ ids: t }), ["hover", "focus", "disabled"], { loading: { sheet: "loading" } }, false, { disabled: ["[data-action=dry-run]"] }],
       ["keys-help", KeysHelp, F, [], {}],
       ["ticket-chip-sv", TicketChipSv, ID, ["hover", "focus"], gone],
       ["ticket-chip", TicketChip, ID, ["hover", "focus"], gone],
     ]],
     ["the nav", [
-      ["nav-tree-sv", NavTreeSv, F, ["hover", "focus", "checked"], fil],
-      ["nav-tree", NavTree, F, ["hover", "focus", "checked"], fil],
+      ["nav-tree-sv", NavTreeSv, F, ["hover", "focus", "checked"], fil, false, { checked: ["[data-nav-mode=flat]"] }],
+      ["nav-tree", NavTree, F, ["hover", "focus", "checked"], fil, false, { checked: ["[data-nav-mode=flat]"] }],
       ["nav-flat-sv", NavFlatSv, F, ["hover", "focus"], fil],
       ["nav-flat", NavFlat, F, ["hover", "focus"], {}],
       ["nav-children-sv", NavChildrenSv, (t) => ({ parent: t }), ["hover", "focus"], { empty: { parent: NONE } }],
@@ -124,8 +129,8 @@
       ["filters-saved", FiltersSaved, F, ["hover", "focus"], {}],
     ]],
     ["the palette and the search", [
-      ["jump-palette-sv", JumpPaletteSv, (t) => ({ sheet: t }), ["hover", "focus", "selected"], { empty: { sheet: "zzqqxxjj" } }],
-      ["jump-palette", JumpPalette, F, [], {}],
+      ["jump-palette-sv", JumpPaletteSv, (t) => ({ sheet: code(t) }), ["hover", "focus", "selected"], { empty: { sheet: "zzqqxxjj" } }, false, HITS],
+      ["jump-palette", JumpPalette, (t) => ({ sheet: code(t) }), ["hover", "focus"], { empty: { sheet: "zzqqxxjj" } }, false, HITS],
       ["search-page", SearchPage, (t) => ({ q: t }), ["hover", "focus", "disabled", "selected"], { loading: { q: t0(), sheet: "loading" }, empty: { q: "zzqqxxjj" }, refused: { q: "ready", filter: REFUSED } }, true],
     ]],
     ["the ticket", [
@@ -138,13 +143,13 @@
       ["ticket-commits", TicketCommits, ID, ["hover", "focus"], {}],
       ["ticket-history", TicketHistory, ID, ["hover"], { loading: { sheet: "loading" }, ...gone }],
       ["ticket-revisions", TicketRevisions, ID, ["hover", "focus", "selected"], { loading: { sheet: "loading" }, ...gone }],
-      ["ticket-edit", TicketEdit, ID, ["hover", "focus", "disabled", "checked"], { loading: { sheet: "loading" } }],
+      ["ticket-edit", TicketEdit, ID, ["hover", "focus", "disabled", "checked"], { checked: { sheet: "open" }, loading: { sheet: "loading" } }, false, { checked: ["[role=radio][aria-checked=false]"] }],
       ["ticket-actions", TicketActions, ID, ["hover", "focus", "disabled", "checked"], { loading: { sheet: "loading" } }],
       ["work-blockers", WorkBlockers, ID, [], { loading: { sheet: "loading" } }],
       ["work-blocker", WorkBlocker, (t) => ({ id: t, side: "blocker" }), ["hover", "focus"], { loading: { sheet: "loading" } }],
     ]],
     ["the writes", [
-      ["ticket-create", TicketCreate, (t) => ({ parent: t }), ["hover", "focus", "disabled", "checked"], { loading: { sheet: "loading" } }],
+      ["ticket-create", TicketCreate, (t) => ({ parent: t }), ["hover", "focus", "disabled", "checked"], { loading: { sheet: "loading" } }, true, { checked: [".tab"], disabled: [".go"] }],
       ["ticket-picker", TicketPicker, (t) => ({ name: "sheet", label: "a ticket" }), ["hover", "focus"], {}],
     ]],
     ["the order of work", [
@@ -165,6 +170,10 @@
       ["hello-list", HelloList, F, [], {}],
     ]],
   ];
+  // A ticket's shortcode: a query the palettes answer with many hits.
+  function code(t) { return t.replace(/-[0-9.]+$/, ""); }
+  // What a component holds for a state, where HOLD's first-of-each is not it.
+  const HOLDS = Object.fromEntries(SHEET.flatMap(([, entries]) => entries.filter((e) => e[6]).map((e) => [e[0], e[6]])));
   // A placeholder the ticket fills in, read when the tiles are drawn.
   function t0() { return "@ticket"; }
   const fill = (p, t) => Object.fromEntries(Object.entries(p).map(([k, v]) => [k, v === "@ticket" ? t : v]));
@@ -174,7 +183,7 @@
     const [name, , base, held, given] = entry;
     const props = base(t);
     const out = [{ state: "plain", props, hold: null }];
-    for (const s of held) out.push({ state: s, props, hold: s });
+    for (const s of held) out.push({ state: s, props: given[s] ? { ...props, ...fill(given[s], t) } : props, hold: s });
     for (const s of ["loading", "empty", "refused"]) if (given[s]) out.push({ state: s, props: { ...props, ...fill(given[s], t) }, hold: null });
     return out;
   }
@@ -185,9 +194,11 @@
   function hold() {
     for (const frame of root.querySelectorAll("[data-sheet-hold]")) {
       const state = frame.dataset.sheetHold;
-      for (const sel of HOLD[state]) {
-        if (frame.querySelector(`:is(${sel})[data-sheet~="${state}"]`)) continue;
-        const el = frame.querySelector(sel);
+      const name = frame.closest("[data-sheet-component]")?.dataset.sheetComponent;
+      // Never a bound mark ([data-slot]): the alias belongs on a row or a control inside.
+      for (const sel of HOLDS[name]?.[state] ?? HOLD[state]) {
+        if (frame.querySelector(`:is(${sel}):not([data-slot])[data-sheet~="${state}"]`)) continue;
+        const el = frame.querySelector(`:is(${sel}):not([data-slot])`);
         if (el) el.setAttribute("data-sheet", state);
       }
     }
@@ -233,6 +244,8 @@
         </div>
       {/each}
     </div>
+  {:else if first.status === "live"}
+    <p class="waiting" data-empty>No ticket to draw the sheet for: the store holds none you can read. Create one, or open #/sheet/ID.</p>
   {:else}
     <p class="waiting" data-loading>asking the store for a ticket…</p>
   {/if}

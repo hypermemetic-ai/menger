@@ -235,10 +235,10 @@
   .meta { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
   .meta span { color: var(--ink); }
   .changed { font-style: italic; }
-  .tags { display: flex; gap: 6px; }
+  .tags { display: flex; gap: 6px; min-width: 0; overflow: hidden; }
   .tag { padding: 0 7px; font-size: 11px; line-height: 18px; color: var(--chip-fg); background: var(--chip-bg); border: var(--border) solid var(--chip-line); border-radius: var(--radius-pill); }
   .tag.archived { color: var(--muted); }
-  .here { font-size: 11px; color: var(--accent); }
+  .here { font-size: 11px; color: var(--accent); white-space: nowrap; }
   .here.gone { color: var(--muted); }
   .btn { padding: 3px 10px; font-size: 12px; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; transition: border-color var(--motion-fast) var(--ease), background-color var(--motion-fast) var(--ease); }
   .btn:hover:not(:disabled), .btn:global([data-sheet~=hover]):not(:disabled) { border-color: var(--muted); background: var(--hover); }

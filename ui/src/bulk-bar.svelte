@@ -136,6 +136,7 @@
       {#if sheet === "loading" || counts.status === "pending" || counts.status === "resyncing"}<span class="skeleton" data-loading aria-hidden="true"></span>{/if}
     {:else}
       <span class="n" data-bulk-count>{selIds.length}</span><span class="l">selected</span>
+      {#if sheet === "loading"}<span class="skeleton" data-loading aria-hidden="true"></span>{/if}
     {/if}
     <input class="filter" data-field="filter" type="search" spellcheck="false" autocomplete="off" aria-label="or a filter"
            placeholder="or a filter — status Draft and in KILN" bind:value={() => filter, (v) => { filter = v; reset(); }}/>

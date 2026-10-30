@@ -39,7 +39,7 @@ export function literals(css) {
 }
 
 export default async (ctx) => {
-  const { test, assert, eventually, openPage, v2, fs, path, session } = ctx;
+  const { test, assert, eventually, openPage, v1, v2, sy, groupsNow, fs, path, session } = ctx;
   const work = path.dirname(session);
   const repo = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", "..");
   const names = fs.readdirSync(path.join(repo, "ui", "src"))
@@ -49,18 +49,43 @@ export default async (ctx) => {
   const tar = (...a) => execFileSync("tar", a, { encoding: "utf8", maxBuffer: 64 << 20 });
   const sheets = () => tar("-tf", v2.tar).split("\n").filter((f) => /^components\/[^/]+\.css$/.test(f)).map((f) => [f, tar("-xOf", v2.tar, f)]);
   const scheme = (page, s) => page.locator(`[data-surface=sheet-page] [data-sheet-scheme=${s}]`);
+  const live = () => sy("ui", "versions").find((e) => e.type === "version" && e.live)?.hash;
+  /** Every section on the sheet filled — the layouts' and the pages' own, inside their tiles, not only the tiles' marks. */
+  const sectionsFilled = (page) => eventually("every section inside the sheet's tiles is filled", async () => {
+    const bare = await page.locator("[data-surface=sheet-page] [data-sheet-state] [data-slot]").evaluateAll((els) =>
+      els.filter((e) => e.childElementCount === 0).map((e) => `${e.closest("[data-sheet-scheme]").dataset.sheetScheme}/${e.closest("[data-sheet-component]").dataset.sheetComponent}/${e.closest("[data-sheet-state]").dataset.sheetState}: ${e.dataset.layout ?? "?"}.${e.dataset.slot}`));
+    if (bare.length) throw new Error(`unfilled: ${bare.slice(0, 20).join(", ")}${bare.length > 20 ? ` (+${bare.length - 20})` : ""}`);
+    return true;
+  }, 60_000);
 
   // The checks read what they are given.
   assert(JSON.stringify(literals(".a { color: #fff; background: var(--bg, white); border: 1px solid rgb(0 0 0); } .b:hover { color: var(--ink) }")) === JSON.stringify(["color: #fff", "background: white", "border: rgb(…)"]), `literals: ${JSON.stringify(literals(".a { color: #fff; background: var(--bg, white); border: 1px solid rgb(0 0 0); }"))}`);
   assert(literals(".a { color: var(--ink); grid-template-areas: \"white\"; transition: color var(--motion-fast) } .b[data-x=red] { margin: 0 }").length === 0, "a token, a string, a selector: no literal");
 
-  async function sheetPage() {
-    const o = await openPage("#/sheet");
+  // The sheet's ticket: one with something in every part — a body, a child,
+  // a revision, two moves — under the last shortcode's root, drawn at #/sheet/:id.
+  const g = groupsNow().filter((x) => x.root && !x.shortcode.startsWith("AAA")).at(-1);
+  const bodyFile = path.join(work, "sheet-body.md");
+  fs.writeFileSync(bodyFile, "## Problem\n\nThe sheet draws every part of this ticket.\n\n- a list\n- of two\n");
+  const [made] = sy("tickets", "create", "--epic", g.epic, "--parent", g.root, "--title", "the sheet's ticket", "--body", `@${bodyFile}`);
+  const sheetId = made?.ticket?.id;
+  assert(sheetId, `the sheet's ticket made: ${JSON.stringify(made)}`);
+  sy("tickets", "create", "--epic", g.epic, "--parent", sheetId, "--title", "a child on the sheet");
+  sy("tickets", "amend", "--id", sheetId, "--title", "the sheet's ticket, amended");
+  sy("tickets", "set_status", "--id", sheetId, "--status", "Ready");
+  sy("tickets", "set_status", "--id", sheetId, "--status", "Coding");
+
+  async function sheetPage(route = `#/sheet/${sheetId}`) {
+    const o = await openPage(route);
     await eventually("the sheet draws its two schemes", async () => (await o.page.locator("[data-surface=sheet-page] [data-sheet-scheme]").count()) === 2, 30_000);
     return o;
   }
 
   await test("the_sheet_shows_every_component", async () => {
+    // Drawn on v1, ui/ as it is (the runner's v2 carries its test edits to the boards); v2 put back after.
+    const was = live();
+    sy("ui", "rollback", "--to", v1.version);
+    await eventually("v1 is live", async () => live() === v1.version);
     const { page, context, seen } = await sheetPage();
     try {
       for (const s of ["light", "dark"]) {
@@ -80,13 +105,17 @@ export default async (ctx) => {
         return true;
       }, 60_000);
       const id = await page.locator("[data-surface=sheet-page]").getAttribute("data-sheet-id");
-      assert(/^[A-Z][A-Z0-9]*-\d+/.test(id ?? ""), `the sheet draws a seeded ticket: ${id}`);
+      assert(id === sheetId, `the sheet draws the route's ticket: ${id}`);
       const failed = seen.console.filter((l) => /pageerror|cycle:/.test(l));
       assert(failed.length === 0, `the sheet draws without a page error or a cycle:\n${failed.slice(0, 10).join("\n")}`);
 
-      // The screenshots: each scheme whole.
+      assert((await page.locator(".board-newer").count()) === 0, "the sheet is drawn from v1, not the runner's v2");
+      await sectionsFilled(page);
+
+      // The screenshots: each scheme whole, every section filled.
       await page.setViewportSize({ width: 2400, height: 1200 });
-      await page.waitForTimeout(500);
+      await sectionsFilled(page);
+      await page.waitForTimeout(1000);
       for (const s of ["light", "dark"]) {
         const file = path.join(work, `sheet-${s}.png`);
         await scheme(page, s).screenshot({ path: file, animations: "disabled" });
@@ -95,6 +124,8 @@ export default async (ctx) => {
       }
     } finally {
       await context.close();
+      sy("ui", "rollback", "--to", was);
+      await eventually("the version the runner left is live again", async () => live() === was);
     }
   });
 
@@ -124,12 +155,23 @@ export default async (ctx) => {
         }
       }
       assert(seenBg["light/selected"] !== seenBg["dark/selected"], `the selected row is the scheme's own: ${JSON.stringify(seenBg)}`);
-      // A disabled control is drawn in the disabled ink.
-      const ink = await page.evaluate(() => {
-        const s = document.querySelector("[data-sheet-scheme=light]");
-        return getComputedStyle(s).getPropertyValue("--disabled").trim();
-      });
-      assert(/^#[0-9a-f]{6}$/i.test(ink), `--disabled resolves in the light scheme: ${ink}`);
+      for (const s of ["light", "dark"]) assert(seenBg[`${s}/hover`] !== seenBg[`${s}/selected`], `${s}: a hovered row and a selected one differ: ${JSON.stringify(seenBg)}`);
+      // A disabled control is dimmed: bulk-bar's held button in the disabled ink, its plain twin not.
+      for (const s of ["light", "dark"]) {
+        const col = scheme(page, s);
+        const held = col.locator("[data-sheet-component=bulk-bar] [data-sheet-state=disabled] [data-action=dry-run][data-sheet~=disabled]").first();
+        const plain = col.locator("[data-sheet-component=bulk-bar] [data-sheet-state=plain] [data-action=dry-run]:not([disabled])").first();
+        await eventually(`${s}: bulk-bar's disabled tile holds a button`, async () => (await held.count()) === 1 && (await plain.count()) === 1);
+        const [ink, a, b] = await held.evaluate((e, p) => {
+          const probe = document.createElement("i");
+          probe.style.color = "var(--disabled)";
+          e.closest("[data-sheet-scheme]").append(probe);
+          const ink = getComputedStyle(probe).color;
+          probe.remove();
+          return [ink, getComputedStyle(e).color, p];
+        }, await plain.evaluate((e) => getComputedStyle(e).color));
+        assert(a === ink && a !== b, `${s}: the disabled button is in --disabled (${ink}): ${a}, the plain one ${b}`);
+      }
     } finally {
       await context.close();
     }
@@ -156,8 +198,9 @@ export default async (ctx) => {
       }
     }
     assert(missing.length === 0, `a token the theme lacks:\n  ${[...new Set(missing)].join("\n  ")}`);
-    // In the page, each scheme gives every token a value.
-    const { page, context } = await sheetPage();
+    // In the page, each scheme gives every token a value — on #/sheet alone, drawn for the first ticket the store lists.
+    const { page, context } = await sheetPage("#/sheet");
+    assert(/^[A-Z][A-Z0-9]*-\d+/.test((await page.locator("[data-surface=sheet-page]").getAttribute("data-sheet-id")) ?? ""), "#/sheet draws the first ticket listed");
     try {
       const empty = await page.evaluate((tokens) => {
         const out = [];

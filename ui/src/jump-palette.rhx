@@ -2,9 +2,13 @@
   // UI-8: the jump palette — `/` opens it; `find` after 80 ms of quiet, the
   // newest query only, its hits first and `search`'s best below; Enter
   // jumps to the first, Escape closes. FRAME-16: neither asks anything
-  // until there is a query (`when: state.q`).
+  // until there is a query (`when: state.q`). SURFACE-10: `sheet`, a
+  // query, draws it open on that query for the sheet (#/sheet): its own
+  // `find` (`held`, asked only then), no search below.
+  prop("sheet");
   state(#{ open: false, q: "" });
   let found = live(#{ snapshot: "tickets.find", params: #{ query: state.q, limit: 12, fields: ["id", "title", "kind", "status"] }, key: "id", debounce_ms: 80, when: state.q });
+  let held = live(#{ snapshot: "tickets.find", params: #{ query: sheet, limit: 12, fields: ["id", "title", "kind", "status"] }, key: "id", when: sheet });
   let searched = live(#{ snapshot: "tickets.search", params: #{ query: state.q, limit: 8 }, key: "id", debounce_ms: 80, when: state.q });
   fn keyed(state, ev) {
     if ev.key == "/" && !state.open && ev.target.tag != "input" && ev.target.tag != "textarea" && ev.target.tag != "select" { state.open = true; }
@@ -22,14 +26,17 @@
   fn picked(state, ev) { state.open = false; state.q = ""; state }
 </script>
 
-<div class="jump-palette" data-palette on:window-keydown={keyed}>
-  {#if state.open}
+<div class="jump-palette" data-palette data-sheet-open={type_of(sheet) == "string"} on:window-keydown={keyed}>
+  {#if state.open || type_of(sheet) == "string"}
     <div class="palette-sheet" role="dialog" aria-label="jump to a ticket">
       <input class="palette-input" data-palette-input autofocus="" spellcheck="false" autocomplete="off"
              placeholder="jump to a ticket — an id or words" value={state.q} on:input={typed} on:keydown={entered}/>
-      {#if state.q != ""}
+      {#if state.q != "" || type_of(sheet) == "string"}
         <ul class="palette-hits" data-palette-hits>
           {#each found as f (f.id)}
+            <li><a class="palette-hit" data-palette-hit={f.id} href={"#/ticket/" + f.id} on:click={picked}><span class="row-id">{f.id}</span> <span class="row-title">{f.title}</span></a></li>
+          {/each}
+          {#each held as f (f.id)}
             <li><a class="palette-hit" data-palette-hit={f.id} href={"#/ticket/" + f.id} on:click={picked}><span class="row-id">{f.id}</span> <span class="row-title">{f.title}</span></a></li>
           {/each}
         </ul>
@@ -47,6 +54,7 @@
 <style>
   :scope { display: block; }
   .palette-sheet { position: fixed; z-index: 10; top: 12vh; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; width: min(640px, calc(100vw - 32px)); max-height: 70vh; overflow: hidden; background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-xl); box-shadow: 0 10px 30px var(--shadow); }
+  .jump-palette[data-sheet-open=true] .palette-sheet { top: 8px; left: 8px; right: 8px; width: auto; max-height: calc(100% - 16px); transform: none; }
   .palette-input { padding: 12px 14px; font-size: 14px; color: var(--ink); background: none; border: 0; border-bottom: var(--border) solid var(--line); outline: none; }
   .palette-input:focus-visible, .palette-input[data-sheet~=focus] { box-shadow: inset 0 -2px 0 var(--focus); }
   .palette-hits { list-style: none; margin: 0; padding: 4px; overflow: auto; }

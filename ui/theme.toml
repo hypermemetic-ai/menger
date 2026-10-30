@@ -38,9 +38,10 @@
 "--live" = ['#2f7a2a', '#6cc66a', 'done in a roll-up, a write that landed']
 
 [colour.chip]
-"--chip-bg"   = ['#eef0f4', '#23252b', 'a ticket chip, a count']
-"--chip-fg"   = ['#55606e', '#aab4c2', "the chip's text"]
-"--chip-line" = ['#dde1e8', '#30333b', "the chip's edge"]
+"--chip-bg"    = ['#eef0f4', '#23252b', 'a ticket chip, a count']
+"--chip-fg"    = ['#55606e', '#aab4c2', "the chip's text"]
+"--chip-line"  = ['#dde1e8', '#30333b', "the chip's edge"]
+"--chip-hover" = ['#dfe3ea', '#2d3038', 'a chip under the pointer: a step from --chip-bg']
 
 [colour.status]   # one pair per status, each over 4.5:1 in both modes
 "--st-draft-bg"      = ['#efe9e0', '#2b2721', 'Draft']
