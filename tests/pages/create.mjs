@@ -5,16 +5,21 @@
 // `[data-field-value=parent|blocked_by] [data-chip-id]`, `[data-unblock=<id>]`, `[data-preview-toggle]`,
 // `[data-preview]`, the write `[data-action="tickets.create"]`, its refusal `[data-refused]`;
 // ticket-picker `[data-surface=ticket-picker][data-picker=<name>]`, its field `input[data-field=<name>]`,
-// its hits `[data-picker-hits]`, each `[data-pick=<id>]`; bulk-bar `[data-surface=bulk-bar]`, its count
+// its hits `[data-picker-hits]`, each `[data-pick=<id>]` with its matched word `mark[data-match]`, the hit ↑↓
+// chose `li[aria-selected=true]`; bulk-bar `[data-surface=bulk-bar]`, its count
 // `[data-bulk-count]`, `[data-field=filter|action|value|max]`, `[data-action=dry-run]`, the dry run's
 // `[data-dry-count=<n>]`, the writes `[data-action="tickets.update_many"]` and `[data-action="tickets.archive"]`,
-// the answer's `[data-changed=<n>]`, refusals `[data-refused]`.
+// the answer's `[data-changed=<n>]` and its rows `[data-id]` (past 24, `[data-more]`), refusals `[data-refused]`.
 //
 // The board's rows do not emit `board.selected` yet (SURFACE-2), so `bulk_moves_the_selection`
 // pushes a fixture bundle — ui/ plus `bulk-stub` at `#/bulk-stub/:ids`, a button that emits
 // `board.selected { ids }` on the bus, the bulk bar and a `<board-rows filter="in CRTB"/>` — and
 // rolls back to the runner's v2 after.
-import { bundle, push } from "../../scripts/ui-throwaway.mjs";
+//
+// The epic: these cases expect the owner's current epic to be `genesis` (the first one, the
+// throwaway's default) — a group that switches epics (admin.mjs) restores it in a finally.
+// `create_in_another_epic` makes an epic of its own, `kilnfresh`, and archives it after.
+import { bundle, push, sentCalls } from "../../scripts/ui-throwaway.mjs";
 
 const STUB = `<script>
   // SURFACE-5's fixture: the rows' selection, until board-rows emits it (SURFACE-2).
@@ -76,15 +81,26 @@ export default async (ctx) => {
       await eventually("the preview draws the body's markdown", async () => (await f.locator("[data-preview] strong").textContent({ timeout: 500 })) === "kiln");
       await f.locator("[data-preview-toggle]").click();
       assert((await f.locator("[data-field=body]").inputValue()) === "the **kiln** log", "back to writing, the body kept");
-      // Both schemes: the tokens on a dark wrapper.
-      const bg = await page.evaluate(() => {
+      // Both schemes: the tokens on a dark wrapper — a field paints the dark `--bg` the bundle's theme.css declares.
+      const seen = await page.evaluate(async () => {
+        const at = performance.getEntriesByType("resource").map((e) => new URL(e.name).pathname).find((p) => p.endsWith("/theme.css"));
+        const css = at ? await (await fetch(at)).text() : "";
+        const block = css.slice(css.indexOf('[data-plexus-theme="dark"]'));
+        const want = (block.match(/--bg:\s*([^;]+);/) || [])[1]?.trim();
+        const probe = document.createElement("i");
+        probe.style.color = want ?? "";
+        document.body.append(probe);
+        const wanted = getComputedStyle(probe).color;
+        probe.remove();
         const el = document.querySelector("ticket-create");
+        const field = el.querySelector("[data-field=title]");
+        const light = getComputedStyle(field).backgroundColor;
         el.setAttribute("data-plexus-theme", "dark");
-        const dark = getComputedStyle(el.querySelector("[data-field=title]")).backgroundColor;
+        const dark = getComputedStyle(field).backgroundColor;
         el.removeAttribute("data-plexus-theme");
-        return dark;
+        return { want, wanted, light, dark };
       });
-      assert(bg === "rgb(20, 20, 18)", `a field on the dark wrapper paints --bg's dark value: ${bg}`);
+      assert(seen.want && seen.dark === seen.wanted && seen.dark !== seen.light, `a field on the dark wrapper paints the dark --bg (${seen.want}): ${JSON.stringify(seen)}`);
       await f.locator('[data-action="tickets.create"]').click();
       const at = await eventually("create moves the page to the ticket made", async () => {
         const h = await hash(page);
@@ -119,6 +135,18 @@ export default async (ctx) => {
       // A click takes the one clicked.
       await blockers.locator("input[data-field=blocked_by]").fill("kiln");
       await eventually("find's hits for kiln", async () => (await blockers.locator(`[data-pick="${quartz.id}"]`).count()) === 1);
+      const marks = await blockers.locator("[data-pick] mark[data-match]").allTextContents();
+      assert(marks.length >= 2 && marks.every((m) => m === "kiln"), `the matched word is marked in each hit: ${JSON.stringify(marks)}`);
+      // ↑↓ choose the hit Enter takes: down twice is the second, up once the first, down again the second.
+      const hits = await blockers.locator("[data-pick]").evaluateAll((els) => els.map((e) => e.getAttribute("data-pick")));
+      const input = blockers.locator("input[data-field=blocked_by]");
+      for (const k of ["ArrowDown", "ArrowDown", "ArrowUp", "ArrowDown"]) await input.press(k);
+      await eventually("↑↓ mark the chosen hit", async () => (await blockers.locator(`li[aria-selected=true] [data-pick="${hits[1]}"]`).count()) === 1);
+      await input.press("Enter");
+      await eventually("Enter takes the chosen hit", async () => (await f.locator(`[data-field-value=blocked_by] [data-chip-id="${hits[1]}"]`).count()) === 1);
+      if (hits[1] !== quartz.id) await f.locator(`[data-unblock="${hits[1]}"]`).click();
+      await blockers.locator("input[data-field=blocked_by]").fill("kiln");
+      await eventually("find's hits for kiln again", async () => (await blockers.locator(`[data-pick="${quartz.id}"]`).count()) === 1);
       await blockers.locator(`[data-pick="${quartz.id}"]`).click();
       await eventually("a click picks", async () => (await f.locator(`[data-field-value=blocked_by] [data-chip-id="${quartz.id}"]`).count()) === 1);
       assert((await hash(page)) === "#/new", "a pick never navigates");
@@ -145,6 +173,42 @@ export default async (ctx) => {
     }
   });
 
+  await test("the_picker_takes_the_exact_match_at_once", async () => {
+    const { page, context } = await openPage("#/new");
+    try {
+      await formUp(page);
+      const f = form(page);
+      const blockers = f.locator("[data-surface=ticket-picker][data-picker=blocked_by]");
+      const input = () => blockers.locator("input[data-field=blocked_by]");
+      // The last query's rows held: CRTA-'s, the root first.
+      await input().fill("CRTA-");
+      await eventually("find's hits for CRTA-", async () => (await blockers.locator(`[data-pick="${crta.id}"]`).count()) === 1 && (await blockers.locator(`[data-pick="${quartz.id}"]`).count()) === 1);
+      // Typed and entered inside the debounce: the exact id, never the held first row.
+      await input().fill(quartz.id);
+      await input().press("Enter");
+      await eventually("Enter at once takes the exact match", async () => (await f.locator(`[data-field-value=blocked_by] [data-chip-id]`).count()) === 1);
+      const chips = await f.locator("[data-field-value=blocked_by] [data-chip-id]").evaluateAll((els) => els.map((e) => e.getAttribute("data-chip-id")));
+      assert(JSON.stringify(chips) === JSON.stringify([quartz.id]), `the chip is the exact match: ${JSON.stringify(chips)}`);
+      // Words no held row holds: Enter at once never takes a held row — it takes quartz once find has
+      // answered it, or nothing until then.
+      await f.locator(`[data-unblock="${quartz.id}"]`).click();
+      await input().fill("zephyr");
+      await eventually("find's hit for zephyr", async () => (await blockers.locator(`[data-pick="${zephyr.id}"]`).count()) === 1);
+      await input().fill("quartz");
+      await input().press("Enter");
+      await page.waitForTimeout(400);
+      assert((await f.locator(`[data-field-value=blocked_by] [data-chip-id="${zephyr.id}"]`).count()) === 0, "a held row that does not hold the query is never taken");
+      if ((await f.locator(`[data-field-value=blocked_by] [data-chip-id="${quartz.id}"]`).count()) === 0) {
+        await eventually("find answers quartz", async () => (await blockers.locator(`[data-pick="${quartz.id}"]`).count()) === 1);
+        assert((await blockers.locator(`[data-pick="${zephyr.id}"]`).count()) === 0, "a held row that does not hold the query is not drawn");
+        await input().press("Enter");
+      }
+      await eventually("quartz taken", async () => (await f.locator(`[data-field-value=blocked_by] [data-chip-id="${quartz.id}"]`).count()) === 1);
+    } finally {
+      await context.close();
+    }
+  });
+
   await test("create_with_a_parent_route_prefills", async () => {
     const { page, context } = await openPage(`#/new/${zephyr.id}`);
     try {
@@ -153,12 +217,45 @@ export default async (ctx) => {
       await eventually("the parent's chip", async () => (await f.locator(`[data-field-value=parent] [data-chip-id="${zephyr.id}"]`).count()) === 1);
       await eventually("the shortcode is the parent's", async () => (await f.locator("[data-field=shortcode]").inputValue()) === "CRTA");
       await f.locator("[data-field=title]").fill("a child of zephyr");
-      await f.locator('[data-action="tickets.create"]').click();
+      // FRAME-36: ctrl+enter, declared with keys(), creates from the field — the host takes the press.
+      await f.locator("[data-field=title]").evaluate((el) => {
+        window.__s5_reached = false;
+        el.addEventListener("keydown", (e) => { if (e.key === "Enter") window.__s5_reached = true; });
+      });
+      await f.locator("[data-field=title]").press("Control+Enter");
       const at = await eventually("created", async () => { const h = await hash(page); return /^#\/ticket\/CRTA-\d+$/.test(h) && h; });
+      assert((await page.evaluate(() => window.__s5_reached)) === false, "ctrl+enter never reached the field: the host took it");
       const t = ticket(at.replace("#/ticket/", ""));
       assert(t.parent === zephyr.id && t.title === "a child of zephyr", `filed under the route's parent: ${t.parent}`);
     } finally {
       await context.close();
+    }
+  });
+
+  await test("create_in_another_epic", async () => {
+    const made = one(sy("epics", "create", "--name", "kilnfresh"), "created");
+    assert(made, "the epic kilnfresh made");
+    const org = made.epic.org;
+    const { page, context } = await openPage("#/new");
+    try {
+      await formUp(page);
+      const f = form(page);
+      await eventually("the epic menu offers kilnfresh", async () => (await f.locator(`[data-field=epic] option[value="${org}:kilnfresh"]`).count()) === 1);
+      const chosen = await f.locator("[data-field=epic]").inputValue();
+      assert(chosen === `${org}:genesis`, `the current epic is selected first, by org:name: ${chosen}`);
+      await f.locator("[data-field=epic]").selectOption(`${org}:kilnfresh`);
+      await f.locator("[data-field=shortcode]").fill("KFRESH");
+      await f.locator("[data-field=kind]").selectOption("scope");
+      await f.locator("[data-field=title]").fill("a scope in another epic");
+      await f.locator('[data-action="tickets.create"]').click();
+      const at = await eventually("created, the page at its address", async () => { const h = await hash(page); return h.startsWith("#/ticket/") && h; });
+      assert(at === `#/ticket/${org}:kilnfresh:KFRESH-1`, `the ticket's address, its epic named: ${at}`);
+      await eventually("the ticket page draws it", async () => (await page.locator("[data-ticket-title]").textContent({ timeout: 500 })) === "a scope in another epic");
+      const t = ticket(`${org}:kilnfresh:KFRESH-1`);
+      assert(t?.address === `${org}:kilnfresh:KFRESH-1`, `made in kilnfresh: ${t?.address}`);
+    } finally {
+      await context.close();
+      sy("epics", "archive", "--name", "kilnfresh");
     }
   });
 
@@ -212,6 +309,20 @@ export default async (ctx) => {
         assert(ticket(id).status === "Ready", `${id} is Ready`);
       }
       assert((await row(bulk[2].id).getAttribute("data-status")) === "Draft" && ticket(bulk[2].id).status === "Draft", "a row not selected stays");
+      // Past max, the bar refuses before anything is sent.
+      const sentBefore = (await sentCalls(page)).filter((c) => c.method === "tickets.update_many").length;
+      await page.locator("[data-stub-select]").click();
+      await bar.locator("[data-field=value]").selectOption("Pending");
+      await bar.locator("[data-field=max]").fill("1");
+      await bar.locator("[data-field=max]").dispatchEvent("change");
+      await bar.locator("[data-action=dry-run]").click();
+      const over = await eventually("more than max is refused", async () => (await bar.locator("[data-dry-run] [data-refused]").textContent({ timeout: 500 })) || false);
+      assert(/more than max 1/.test(over) && (await bar.locator('[data-action="tickets.update_many"]').count()) === 0, `refused, no write offered: ${over}`);
+      await page.waitForTimeout(200);
+      assert((await sentCalls(page)).filter((c) => c.method === "tickets.update_many").length === sentBefore, "nothing sent");
+      assert(ticket(bulk[0].id).status === "Ready", "nothing written");
+      await bar.locator("[data-field=max]").fill("500");
+      await bar.locator("[data-field=max]").dispatchEvent("change");
       // A refusal said: a doc never waits nor is waited on, so a kind of doc for two that block each other is refused.
       await page.locator("[data-stub-select]").click();
       await bar.locator("[data-field=action]").selectOption("kind");

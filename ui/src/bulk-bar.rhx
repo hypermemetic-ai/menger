@@ -15,7 +15,7 @@
   // step as it was asked, and nothing else moves their params. A selection,
   // a filter or an action that moves lets both go.
   prop("ids");
-  state(#{ sel: [], filter: "", action: "status", value: "Ready", max: 500,
+  state(#{ answer: (), refused: (), dry_answer: (), dry_refused: (), sel: [], filter: "", action: "status", value: "Ready", max: 500,
            d_on: false, d_archive: false, d_ids: (), d_filter: (), d_max: 500, d_n: 0, d_action: "", d_value: "",
            s_on: false, s_update: false, s_archive: false, s_ids: (), s_filter: (), s_max: 500,
            s_status: (), s_kind: (), s_severity: (), s_label: (), s_unlabel: () });
@@ -86,6 +86,28 @@
     state.s_label = if a == "label" { [v] } else { () };
     state.s_unlabel = if a == "unlabel" { [v] } else { () };
     state.s_on = true; state.s_archive = a == "archive"; state.s_update = a != "archive";
+    // FRAME-37: `call("tickets.update_many", #{ … }, "answered")` or `call("tickets.archive", #{ …, dry_run: false }, "answered")`
+    // here (and `dry`'s archive `call(…, #{ …, dry_run: true }, "dry_answered")`), and the three write lives go.
+    state
+  }
+  // FRAME-37's answer folds, written for the switch: `ev = #{ method, params, ok, events, message }`.
+  // The answer (`updated_many` or `archived`, less `type`) is kept as `answer`; a refusal as `refused`.
+  fn answered(state, ev) {
+    state.answer = (); state.refused = ();
+    if !ev.ok { state.refused = ev.message; return state; }
+    for e in ev.events {
+      if e.type == "updated_many" || e.type == "archived" { state.answer = e; }
+      if e.type == "error" { state.refused = e.message; }
+    }
+    state
+  }
+  fn dry_answered(state, ev) {
+    state.dry_answer = (); state.dry_refused = ();
+    if !ev.ok { state.dry_refused = ev.message; return state; }
+    for e in ev.events {
+      if e.type == "archived" { state.dry_answer = e; }
+      if e.type == "error" { state.dry_refused = e.message; }
+    }
     state
   }
   fn cancel(state, ev) {
@@ -134,10 +156,10 @@
       <input data-field="value" type="text" spellcheck="false" autocomplete="off" aria-label="label" placeholder="a label" value={state.value} on:input={set_value}/>
     {/if}
     <label class="max">max <input data-field="max" type="number" min="1" value={state.max} on:change={set_max}/></label>
-    {#if state.filter != "" || state.sel.len() > 0 || (ids != () && ids != "")}
+    {#if (state.filter != "" && counts.status == "live") || (state.filter == "" && (state.sel.len() > 0 || (ids != () && ids != "")))}
       <button type="button" class="b" data-action="dry-run" on:click={dry}>Dry run</button>
     {:else}
-      <button type="button" class="b" data-action="dry-run" disabled="" title="select rows, or type a filter">Dry run</button>
+      <button type="button" class="b" data-action="dry-run" disabled="" title="select rows, or type a filter and wait for its count">Dry run</button>
     {/if}
   </div>
   {#if state.d_on}
@@ -170,13 +192,21 @@
         {#each updated as u (u.ids.len())}
           <span class="landed" data-changed={u.ids.len()}>changed {u.ids.len()} — {if u.changed.len() == 0 { "nothing moved" } else { u.changed.reduce(|a, c| if a == () { c } else { a + ", " + c }) }}</span>
           {#if u.unchanged.len() > 0}<span class="l" data-unchanged={u.unchanged.len()}>{u.unchanged.len()} already so</span>{/if}
-          <ul class="rows">{#each u.ids as id (id)}<li><ticket-chip id={id} kind="changed"/></li>{/each}</ul>
+          <ul class="rows">
+            {#each u.tickets.extract(0, 24) as t (t.id)}
+              <li><a class="row" data-id={t.id} data-status={t.status} href={"#/ticket/" + t.id}><span class="row-id">{t.id}</span> <span class="row-status">{t.status}</span></a></li>
+            {/each}
+            {#if u.tickets.len() > 24}<li class="more" data-more={u.tickets.len() - 24}>+{u.tickets.len() - 24}</li>{/if}
+          </ul>
         {/each}
         {#if updated.status == "error" || updated.status == "refused"}<span class="refused" data-refused role="alert">{updated.message}</span>{/if}
       {:else}
         {#each archived as a (a.ids.len())}
           <span class="landed" data-changed={a.ids.len()}>archived {a.ids.len()}</span>
-          <ul class="rows">{#each a.ids as id (id)}<li><ticket-chip id={id} kind="archived"/></li>{/each}</ul>
+          <ul class="rows">
+            {#each a.ids.extract(0, 24) as id (id)}<li><a class="row" data-id={id} href={"#/ticket/" + id}><span class="row-id">{id}</span></a></li>{/each}
+            {#if a.ids.len() > 24}<li class="more" data-more={a.ids.len() - 24}>+{a.ids.len() - 24}</li>{/if}
+          </ul>
         {/each}
         {#if archived.status == "error" || archived.status == "refused"}<span class="refused" data-refused role="alert">{archived.message}</span>{/if}
       {/if}
@@ -206,6 +236,12 @@
   .warn, .refused { color: var(--warn); }
   .refused { font-size: 12px; }
   .landed { color: var(--live); }
+  .row { display: inline-flex; gap: 6px; align-items: center; padding: 1px 8px; font-size: 12px; color: var(--chip-fg); text-decoration: none; background: var(--chip-bg); border: var(--border) solid var(--chip-line); border-radius: var(--radius-pill); }
+  .row:hover { background: var(--hover); }
+  .row:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .row-id { color: var(--accent); }
+  .row-status { font-size: 11px; color: var(--muted); }
+  .more { align-self: center; color: var(--muted); font-size: 12px; }
   .rows { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; margin: 0; padding: 0; }
   .skeleton { display: inline-block; width: 80px; height: 12px; background: var(--skeleton); border-radius: var(--radius-sm); animation: breathe var(--motion-pulse) var(--ease) infinite alternate; }
   @keyframes breathe { from { opacity: 1; } to { opacity: .45; } }
