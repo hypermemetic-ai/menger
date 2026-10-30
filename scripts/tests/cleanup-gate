@@ -63,7 +63,7 @@ mkdir -p "$WS/.gate-a/target/debug"; echo build >"$WS/.gate-a/target/debug/x"   
 for f in fe.log mg.log; do echo log >"$WS/.logs-only/$f"; done
 echo 1 >"$CT/gate-a/debug/obj"; echo log >"$CT/a12-gate.log"; echo 1 >"$CT/menger/debug/obj"
 echo db >"$H/.local/share/menger/tickets.db"
-for s in .db .db-shm .db-wal .log; do echo x >"$TM/menger-gate-a$s"; done
+for s in .db .db-shm .db-wal .sessions.jsonl .sessions.jsonl.lock .log; do echo x >"$TM/menger-gate-a$s"; done
 echo x >"$TM/menger-look4-sweep.db"; echo x >"$TM/other.db"
 echo s >"$SCR/sess1/shot.png"; echo s >"$SCR/sess2/held"; echo s >"$SCR/sess3/f"; echo s >"$TM/theme-sweep/a.png"
 ln -s "$M" "$SCR/to-main"; ln -s "$H" "$SCR/to-home"; ln -s "$T/elsewhere" "$SCR/to-elsewhere"
@@ -106,7 +106,7 @@ cg "remove gate-a" 0 --yes gate-a
 has "removed: the worktree" "$out" "removed  worktree   $WS/.gate-a"
 has "removed: the branch" "$out" "branch gate-a deleted"
 has "removed: freed" "$out" "freed"
-for p in "$WS/.gate-a" "$CT/gate-a" "$TM/menger-gate-a.db" "$TM/menger-gate-a.db-shm" "$TM/menger-gate-a.db-wal" "$TM/menger-gate-a.log"; do gone "gate-a" "$p"; done
+for p in "$WS/.gate-a" "$CT/gate-a" "$TM/menger-gate-a.db" "$TM/menger-gate-a.db-shm" "$TM/menger-gate-a.db-wal" "$TM/menger-gate-a.sessions.jsonl" "$TM/menger-gate-a.sessions.jsonl.lock" "$TM/menger-gate-a.log"; do gone "gate-a" "$p"; done
 git -C "$M" rev-parse -q --verify gate-a >/dev/null && bad "branch gate-a still there" || ok
 [[ -z $(git -C "$M" worktree list --porcelain | grep "gate-a") ]] && ok || bad "git still knows .gate-a"
 has "the log" "$(<"$LOG")" "removed worktree $WS/.gate-a"

@@ -38,6 +38,21 @@ pub fn default_ui_db_path(db_path: &Path) -> PathBuf {
     }
 }
 
+/// FRAME-21: the login's session journal's suffix — `<stem>.sessions.jsonl`
+/// beside the tickets file (`tickets.db` → `tickets.sessions.jsonl`), so a
+/// restart (a deploy) signs no one out.
+pub const SESSIONS_FILE: &str = "sessions.jsonl";
+
+/// FRAME-21: where the sessions of the service on `db_path` are kept: beside
+/// it, named for it — two servers whose databases share a directory
+/// (`/tmp/menger-<gate>.db`) never share, or lock each other out of, one
+/// table.
+pub fn sessions_file(db_path: &Path) -> PathBuf {
+    let stem = db_path.file_stem().map_or_else(|| "menger".into(), |s| s.to_string_lossy().into_owned());
+    let name = format!("{stem}.{SESSIONS_FILE}");
+    db_path.parent().map_or_else(|| PathBuf::from(&name), |d| d.join(&name))
+}
+
 /// UI-3: what the `ui` activation and the shell's `/app/*` are built over —
 /// the store on its own file and the signers a push may be signed by.
 #[derive(Clone)]

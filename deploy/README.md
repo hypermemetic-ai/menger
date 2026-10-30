@@ -232,6 +232,15 @@ anonymous socket reaches nothing. On test, for a v2 release, the bundle's
 checks above; for a v1 release, its app's script served. It writes nothing.
 `DEPLOY_SMOKE_FAIL=test|prod` fails it on purpose (a drill).
 
+**A deploy keeps every session** (FRAME-21). `remote test` signs in on the
+release test runs just before infra deploys (`auth.login {session}` as the
+pipeline key, 15 minutes), keeps the token as a cookie in a 0600 header file
+(never argv), and after the smoke wants `/login/me` to answer 200 with it,
+then signs it out (`POST /logout`). A release that does not descend from
+the commit that keeps sessions (`MENGER_SESSIONS_KEPT_SINCE`; by default
+FRAME-21's) kept them in memory: the check is skipped, and said. A session
+gone after the deploy fails it, recorded `sessions lost`.
+
 ### Logs (CI-6)
 
 Every log a run writes is a file of its own, never overwritten:

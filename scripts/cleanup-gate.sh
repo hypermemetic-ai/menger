@@ -34,8 +34,8 @@
 #               (~/.cargo/config.toml's `build-dir = …/{workspace-path-hash}`);
 #               a worktree removed takes its own with it (`cargo metadata`'s
 #               build_directory, read from each workspace in it before it goes)
-#   scratch-db  /tmp/menger-*.db, .db-shm, .db-wal, .log — a throwaway
-#               server's database and log
+#   scratch-db  /tmp/menger-*.db, .db-shm, .db-wal, .sessions.jsonl(.lock),
+#               .log — a throwaway server's database, sessions and log
 #   session     anything below /tmp/claude-UID/ (a session's scratch)
 #   sweep       /tmp/theme-sweep (scripts/theme-sweep.mjs's default out)
 #   pipeline-log ~/.local/state/menger-deploy/logs/<stamp>-….log (CI-6): one
@@ -204,7 +204,7 @@ remove_path() {
   elif [[ $(dirname "$r") == "$CT" ]]; then
     if shared_target "$(basename "$r")"; then refuse "$shown" 'a shared cargo target'; return; fi
     shape=target
-  elif [[ -f $r && $(dirname "$r") == "$TMPR" && $(basename "$r") =~ ^menger-.+\.(db|db-shm|db-wal|log)$ ]]; then
+  elif [[ -f $r && $(dirname "$r") == "$TMPR" && $(basename "$r") =~ ^menger-.+\.(db|db-shm|db-wal|sessions\.jsonl|sessions\.jsonl\.lock|log)$ ]]; then
     shape=scratch-db
   elif under "$r" "$SCR"; then
     shape=session
@@ -284,7 +284,7 @@ paths_for_name() {
     refuse "$n" 'not a gate name (letters, digits, . _ -; no ..)'; return
   fi
   for f in "$WS/.$n" "$WS/$n" "$CT/$n" "$SCR/$n" \
-           "$TMPR/menger-$n.db" "$TMPR/menger-$n.db-shm" "$TMPR/menger-$n.db-wal" "$TMPR/menger-$n.log"; do
+           "$TMPR/menger-$n.db" "$TMPR/menger-$n.db-shm" "$TMPR/menger-$n.db-wal" "$TMPR/menger-$n.sessions.jsonl" "$TMPR/menger-$n.sessions.jsonl.lock" "$TMPR/menger-$n.log"; do
     [[ -e $f || -L $f ]] && printf '%s\n' "$f"
   done
   for repo in "$WS"/*/; do
@@ -303,7 +303,7 @@ candidates() {
       printf '%s\n' "$(real "${wt#worktree }")"
     done < <(git_q "${repo%/}" worktree list --porcelain | grep '^worktree ' | tail -n +2)
   done
-  for f in "$WS"/.[!.]* "$CT"/* "$CB"/*/* "$TMPR"/menger-*.db "$TMPR"/menger-*.db-shm "$TMPR"/menger-*.db-wal \
+  for f in "$WS"/.[!.]* "$CT"/* "$CB"/*/* "$TMPR"/menger-*.db "$TMPR"/menger-*.db-shm "$TMPR"/menger-*.db-wal "$TMPR"/menger-*.sessions.jsonl "$TMPR"/menger-*.sessions.jsonl.lock \
            "$TMPR"/menger-*.log "$SCR"/* "$TMPR/theme-sweep"; do
     [[ -e $f || -L $f ]] && printf '%s\n' "$f"
   done
