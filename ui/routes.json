@@ -5,5 +5,9 @@
   "#/hello": "page-shell",
   "#/sv/": "board-frame",
   "#/sv/f/:filter": "board-frame",
-  "#/sv/ticket/:id": "ticket-page-sv"
+  "#/sv/ticket/:id": "ticket-page-sv",
+  "#/new": "ticket-create",
+  "#/new/:parent": "ticket-create",
+  "#/bulk": "bulk-bar",
+  "#/bulk/:ids": "bulk-bar"
 }
