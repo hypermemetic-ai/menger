@@ -102,7 +102,8 @@ deploy/pipeline remote test --image ghcr.io/hypermemetic-ai/menger:R
                                  # app-test.menger.sh through infra (deploy/app.yml), then the smoke from
                                  # outside; recorded as `test`; Complete for the work it carries (DEPLOY-22)
 deploy/pipeline suite R          # DEPLOY-52: the full suite (workspace + frontend) at R's commit, on this
-                                 # machine, never against a deployment; marks R passed / failed
+                                 # machine, never against a deployment, then plexus-bench's check beside it
+                                 # (PERF-6: ../plexus-bench, every PERF scenario against its golden); marks R passed / failed
 deploy/pipeline remote prod      # what test runs → app.menger.sh (infra's promote.yml) — refused unless
                                  # its suite passed; the owner's
 deploy/pipeline status           # what test and prod run, their suites, health, last records; the runner

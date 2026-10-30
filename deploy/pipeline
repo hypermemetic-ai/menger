@@ -727,7 +727,7 @@ cmd_smoke() {
 
 # ── the suite, after the deploy (DEPLOY-52) ─────────────────────────────────
 # `suite RELEASE`: cargo test --workspace and the frontend's tests at the
-# release's commit — its own tree, in ../menger-suite (MENGER_SUITE_CHECKOUT),
+# release's commit, then plexus-bench's check (PERF-6, run_bench) — its own tree, in ../menger-suite (MENGER_SUITE_CHECKOUT),
 # never against a deployment — one suite at a time (a lock). The release's
 # SUITE says `running`, then `passed` or `failed` with the counts and the log;
 # a line in deployments.log (`suite test RELEASE passed|failed`, no deployment).
@@ -749,6 +749,30 @@ suite_of() { # REL → passed | failed | running | none
 suite_line() { # REL → what its SUITE says, one line
   local r=$RELEASES/$1
   if [[ -f $r/SUITE ]]; then head -n 1 "$r/SUITE"; else sed -n 's/^gate: */gate at build: /p' "$r/RELEASE" 2>/dev/null | head -n 1; fi
+}
+# PERF-6: plexus-bench beside the suite — every PERF scenario under the perf
+# profile, held to its golden (plexus-bench's scripts/gate.sh: the scenarios,
+# `plexus-bench check`, a red scenario run once more before it counts). A red
+# marks the release `suite failed` as a red test does (DEPLOY-52). schema.*
+# measure the release's own bin/menger. MENGER_BENCH_DIR names the
+# plexus-bench checkout (default: beside the repository; `none` skips it, and
+# the SUITE line says so); MENGER_BENCH_TARGET its cargo target.
+BENCH_DIR=${MENGER_BENCH_DIR:-$(dirname "$REPO")/plexus-bench}
+GATE_BENCH=""
+run_bench() { # REL SHORT
+  local rel=$1 short=$2 lb
+  if [[ $BENCH_DIR == none ]]; then GATE_BENCH="not run (MENGER_BENCH_DIR=none)"; say "bench: $GATE_BENCH"; return 0; fi
+  if [[ ! -x $BENCH_DIR/scripts/gate.sh ]]; then GATE_BENCH="not run (no plexus-bench at $BENCH_DIR)"; say "bench: $GATE_BENCH"; return 0; fi
+  step "bench: plexus-bench — every PERF scenario, perf profile, against its golden"
+  lb=$(log_path bench); say "log: $lb"
+  if (cd "$BENCH_DIR" && PLEXUS_BENCH_MENGER=$RELEASES/$rel/bin/menger CARGO_TARGET_DIR=${MENGER_BENCH_TARGET:-$HOME/.cache/cargo-target/plexus-bench} \
+      scripts/gate.sh "${lb%.log}" >"$lb" 2>&1); then
+    GATE_BENCH=$(sed -n 's/^check: //p' "$lb" | tail -n 1)
+    say "bench: $GATE_BENCH"
+  else
+    grep -E '^(RED|MISS) ' "$lb" >&2 || true
+    gate_red bench "$lb" "$short"
+  fi
 }
 SUITE_REL=""
 suite_red() { # LABEL LOGFILE — gate_red's hook: the release marked failed, the log line written
@@ -780,9 +804,10 @@ cmd_suite() {
   git -C "$REPO" cat-file -e "$sha^{commit}" 2>/dev/null || die "$rel's commit $short is not in $REPO"
   checkout "$SUITE_CHECKOUT" "$sha"
   run_gate "$SUITE_CHECKOUT" "$short"
-  mark_release "$rel" SUITE "passed $(date -u +%FT%TZ) — workspace $GATE_WS; frontend $GATE_FE"
+  run_bench "$rel" "$short"
+  mark_release "$rel" SUITE "passed $(date -u +%FT%TZ) — workspace $GATE_WS; frontend $GATE_FE; bench $GATE_BENCH"
   record suite test "$rel" "passed"
-  say "suite $rel: passed — workspace $GATE_WS; frontend $GATE_FE"
+  say "suite $rel: passed — workspace $GATE_WS; frontend $GATE_FE; bench $GATE_BENCH"
 }
 
 # `remote-secret test|prod` (IDENTITY-45) — the WorkOS environment's API key

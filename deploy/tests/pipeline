@@ -804,5 +804,29 @@ ci6 suite --status "$SR"; same "suite --status: failed" "$(<"$SCRATCH/out")" "su
 ci6 suite nonesuch
 same "suite: no such release" "$code" 1
 
+# ── PERF-6: plexus-bench beside the suite; a red bench marks the release failed ──
+# A stand-in plexus-bench beside the scratch repository: its scripts/gate.sh keeps
+# what it was run with, and is red when STUB_BENCH_RED=1.
+mkdir -p "$SCRATCH/ci6/plexus-bench/scripts"
+printf '#!/usr/bin/env bash\necho "$*|${PLEXUS_BENCH_MENGER:-}|${CARGO_TARGET_DIR:-}" >>"%s"\nif [[ ${STUB_BENCH_RED:-} == 1 ]]; then echo "RED  call.one_item p50_us 63.3 against golden 55.0 (+15.0 %% worse)"; echo "check: red: call.one_item (20 held, 1 red, 2 skipped)"; exit 1; fi\necho "check: every golden holds (21 held, 0 red, 2 skipped)"\n' "$SCRATCH/ci6/bench-args" >"$SCRATCH/ci6/plexus-bench/scripts/gate.sh"
+chmod +x "$SCRATCH/ci6/plexus-bench/scripts/gate.sh"
+: >"$SCRATCH/ci6/bench-args"
+ci6 suite "$SR"
+same "bench: a green bench, the suite exits 0" "$code" 0
+has "bench: plexus-bench's gate ran beside the suite" "$(<"$SCRATCH/ci6/bench-args")" "-bench|"
+has "bench: schema.* measure the release's own menger" "$(<"$SCRATCH/ci6/bench-args")" "|$D/releases/$SR/bin/menger|"
+has "bench: its verdict on the SUITE line" "$(<"$D/releases/$SR/SUITE")" "; bench every golden holds (21 held, 0 red, 2 skipped)"
+same "bench: green, the suite's line" "$(tail -n 1 "$D/deployments.log" | cut -f2,3,5)" $'suite\ttest\tpassed'
+STUB_BENCH_RED=1 ci6 suite "$SR"
+same "bench: red, the suite exits 1" "$code" 1
+has "bench: red marks the release failed" "$(<"$D/releases/$SR/SUITE")" "failed "
+has "bench: …and names the bench" "$(<"$D/releases/$SR/SUITE")" "bench red; log "
+same "bench: red, the suite's line" "$(tail -n 1 "$D/deployments.log" | cut -f2,3,5)" $'suite\ttest\tfailed bench'
+has "bench: red names the scenario" "$err" "RED  call.one_item"
+ci6 suite --status "$SR"; same "bench: red, suite --status" "$(<"$SCRATCH/out")" "suite: failed"
+MENGER_BENCH_DIR=none ci6 suite "$SR"
+same "bench: MENGER_BENCH_DIR=none, the suite exits 0" "$code" 0
+has "bench: none, said on the SUITE line" "$(<"$D/releases/$SR/SUITE")" "bench not run (MENGER_BENCH_DIR=none)"
+
 printf 'deploy/pipeline records: %d passed, %d failed\n' "$pass" "$fail"
 [[ $fail == 0 ]]
