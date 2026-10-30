@@ -522,6 +522,16 @@ build_v2() { # V2-7, FRAME-8: every step on this machine — the release, the to
   # DEPLOY-6: no -q under pipefail (b82f5bd's rule) — grep reads the whole listing, or tar dies of SIGPIPE
   tar -tf "$BUILD/dist/ui.tar" 2>/dev/null | grep -x 'index.html' >/dev/null || die "ui-build: $BUILD/dist/ui.tar is no tar holding index.html"
   V2_STEPS+=", ui-build"
+  # STUDIO-2: the studio — the framework's own bundle (../plexus-ui/studio), built by the same tool
+  # with --name studio; a deploy pushes it --no-live, kept as bundle:studio and served at /studio/.
+  if [[ -d $BUILD/../plexus-ui/studio ]]; then
+    step "studio-build (plexus-ui build ../plexus-ui/studio --name studio)"
+    lr=$(log_path build-studio); say "log: $lr"
+    local pu; pu=$(git -C "$BUILD/../plexus-ui" rev-parse --short HEAD 2>/dev/null || echo unknown)
+    (cd "$BUILD" && "$UI_TOOL" build "$BUILD/../plexus-ui/studio" --engine "$BUILD/dist/engine" --name studio --commit "plexus-ui@$pu" -o "$BUILD/dist/studio.tar" --node-modules "$BUILD/../plexus-ui/node_modules") >"$lr" 2>&1 \
+      || { red_run; die "studio-build failed — $lr"; }
+    V2_STEPS+=", studio-build"
+  fi
   # FRAME-7: the compiler module is the framework's script's — ../plexus-ui/scripts/ui-compiler-wasm.sh
   # OUT, cargo's (wasm32-unknown-unknown), on this machine into the build's target. A release of v2
   # always carries it: no script, a failed one, or no module after it fails the build, named.
@@ -540,6 +550,7 @@ build_v2() { # V2-7, FRAME-8: every step on this machine — the release, the to
   cp "$REPO/deploy/launch/run-menger" "$stage/bin/"
   chmod 0755 "$stage/bin/"*
   cp "$BUILD/dist/ui.tar" "$stage/dist/"
+  [[ -f $BUILD/dist/studio.tar ]] && cp "$BUILD/dist/studio.tar" "$stage/dist/"
   cp "$BUILD/dist/ui-compiler.wasm" "$stage/dist/"
   return 0
 }
@@ -762,6 +773,19 @@ ui_push() { # WS REL → 0 and UI_PUSHED (the version) and UI_MATCHES (contract_
   UI_WHY=$(tr '\t\n' '  ' <<<"${UI_WHY:-no answer}"); UI_WHY=${UI_WHY% }
   return 1
 }
+studio_push() { # WS REL — STUDIO-2: REL's studio bundle (dist/studio.tar) pushed --no-live as the pipeline key, kept as
+  # bundle:studio and served at /studio/; never the app. A release without one pushes nothing; a refusal is said and
+  # recorded, never fatal: the app's push already went live, and the studio stays on the version it had.
+  local ws=$1 r=$RELEASES/$2 tool out v
+  [[ -f $r/dist/studio.tar ]] || return 0
+  tool=$(ui_tool "$2"); [[ -n $tool && -n $DEPLOY_KEY_FILE ]] || { say "FAIL the studio: no plexus-ui or no pipeline key to push it"; return 1; }
+  out=$(env -u MENGER_DEPLOY_KEY timeout 70 "$tool" push --url "$ws" --service menger --key-file "$DEPLOY_KEY_FILE" --as pipeline \
+          --timeout 50 --json --no-live "$r/dist/studio.tar" 2>&1) || true
+  v=$(jq -rR 'fromjson? | select(.type == "pushed") | .version' <<<"$out" 2>/dev/null | head -n 1)
+  if [[ -n $v ]]; then say "ok   the studio kept on $ws: ${v:0:12} (bundle:studio, /studio/)"; return 0; fi
+  say "FAIL the studio's push to $ws: $(head -c 200 <<<"$out" | tr '\t\n' '  ')"
+  return 1
+}
 page_is() { # BUNDLE-PAGE SERVED — SERVED is the bundle's page, its {{STAMPS}} filled: each piece between them, in order
   local piece rest=$2
   [[ -n $2 ]] || return 1
@@ -896,6 +920,7 @@ cmd_local() {
       die "the push to $LOCAL_CONTAINER answered contract_matches: ${UI_MATCHES:-null} — $rel's bundle was not built against the service it runs (UI-12)"
     fi
     say "ok   pushed $rel's bundle: ${UI_PUSHED:0:12} live, contract_matches: true"
+    studio_push "ws://127.0.0.1:$LOCAL_WS_PORT" "$rel" || record app-local run "$rel" "studio push failed"
     if ! ui_smoke "ws://127.0.0.1:$LOCAL_WS_PORT" "http://127.0.0.1:$LOCAL_SHELL_PORT" "$rel"; then
       record app-local run "$rel" "smoke failed"; die "$LOCAL_CONTAINER runs $rel and its /app/ smoke FAILED"
     fi
@@ -962,6 +987,7 @@ cmd_remote() {
         die "the push to $host answered contract_matches: ${UI_MATCHES:-null} — $rel's bundle was not built against the service it runs (UI-12)"
       fi
       say "ok   pushed $rel's bundle to $host: ${UI_PUSHED:0:12} live, contract_matches: true"
+      studio_push "wss://$host/ws" "$rel" || record test run "$rel" "studio push failed"
     fi
     if ! smoke_remote test "$rel"; then
       record test run "$rel" "smoke failed"; tell test failed "$rel" "$good"

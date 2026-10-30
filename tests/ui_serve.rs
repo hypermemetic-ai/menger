@@ -279,3 +279,45 @@ async fn the_entrypoint_preloads_the_boot() {
     assert!(!code.contains(".boot("), "not through engine.js's boot: {code}");
     assert!(!body.contains("{{"), "every stamp filled: {body}");
 }
+
+/// STUDIO-2: the studio — the framework's own bundle, kept as `bundle:studio`
+/// (pushed `live: false` under that name) — is served at `/studio/` beside
+/// `/app/`, inside the session check, to a session holding `ui.author` on `*`
+/// (admin, `editor` on `*`) alone — the gate's answer.
+#[tokio::test]
+async fn the_studio_is_mounted_for_the_admin_and_editors() {
+    let m = start().await;
+    let admin = connect(m.ws).await;
+    let live = call(&admin, "ui.push", push_params(1, &UI_SIGNER)).await;
+    assert_eq!(live[0]["type"], "pushed", "{live:?}");
+    let mut studio = support::signed_params(&support::bundle(2), &json!({ "abi": "engine/1", "name": "studio", "contract": "unknown", "routes": {}, "components": {}, "slots": {} }).to_string(), 2);
+    studio["live"] = json!(false);
+    let kept = call(&admin, "ui.push", studio).await;
+    assert_eq!((kept[0]["type"].as_str(), kept[0]["live"].as_bool()), (Some("pushed"), Some(false)), "{kept:?}");
+    let two = sha_hex(&support::bundle(2));
+
+    let mine = support::mint_session(m.ws).await;
+    let page = m.get("/studio/", Some(&mine)).await;
+    assert_eq!(page.status(), 200);
+    let body = page.text().await.unwrap();
+    assert!(body.contains("version 2 on") && body.contains(&format!("at {two}")), "the studio's own version, stamped: {body}");
+    assert!(m.get("/app/", Some(&mine)).await.text().await.unwrap().contains("version 1 on"), "/app/ is still live");
+
+    // A viewer is refused; an editor opens it; no session is the login page.
+    call(&admin, "auth.grant", json!({ "principal": support::principal_of(&SOMEONE), "role": "viewer", "scope": "*" })).await;
+    let viewer = support::mint_session_for(&SOMEONE, m.ws).await;
+    assert_eq!(m.get("/studio/", Some(&viewer)).await.status(), 403, "a viewer");
+    const EDITOR: [u8; 32] = [0x51; 32];
+    call(&admin, "auth.grant", json!({ "principal": support::principal_of(&EDITOR), "role": "editor", "scope": "*" })).await;
+    let editor = support::mint_session_for(&EDITOR, m.ws).await;
+    assert_eq!(m.get("/studio/", Some(&editor)).await.status(), 200, "an editor");
+    let anonymous = m.get("/studio/", None).await;
+    assert_eq!(anonymous.status(), 303, "no session: the login page");
+    // An editor under one ticket holds ui.author nowhere the studio writes.
+    const NARROW: [u8; 32] = [0x52; 32];
+    call(&admin, "tickets.create", json!({ "epic": "KILN", "kind": "scope", "title": "the kiln" })).await;
+    let g = call(&admin, "auth.grant", json!({ "principal": support::principal_of(&NARROW), "role": "editor", "scope": "KILN" })).await;
+    assert!(g.first().is_some_and(|e| e.get("error_kind").is_none()), "editor on KILN: {g:?}");
+    let narrow = support::mint_session_for(&NARROW, m.ws).await;
+    assert_eq!(m.get("/studio/", Some(&narrow)).await.status(), 403, "an editor on KILN alone");
+}
