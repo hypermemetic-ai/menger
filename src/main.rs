@@ -82,6 +82,15 @@ struct Args {
     #[arg(long = "ui-compiler", env = "MENGER_UI_COMPILER", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
     ui_compiler: Option<PathBuf>,
 
+    // STUDIO-3: the key the ui service signs an editor's authored version with.
+    /// The ui service's author key: a file holding an Ed25519 seed `ui.author` signs an editor's version with
+    ///
+    /// Made at first start (64 hex digits, 0600) when the file is missing.
+    /// Never a --ui-signer: it signs only what the service compiled itself.
+    /// Without it, every `ui.author` is refused (`no_signer`).
+    #[arg(long = "ui-author-key", env = "MENGER_UI_AUTHOR_KEY", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
+    ui_author_key: Option<PathBuf>,
+
     // RUN-8: names stay ACCESS-25's: a specific address adds its own literal
     // (and the shell's origin at it may open the socket); any other name is
     // an --allowed-host (and an --allowed-origin).
@@ -530,6 +539,16 @@ async fn run(args: Args) -> anyhow::Result<()> {
         None => None,
     };
     let ui = ui.compiling(compiler);
+    // STUDIO-3: the author key, made at first start when its file is missing.
+    let author = match &args.ui_author_key {
+        Some(path) => {
+            let key = plexus_ui_service::AuthorKey::open_or_create(path).map_err(|e| anyhow::anyhow!("--ui-author-key {e}"))?;
+            tracing::info!("ui author: {} ({})", key.public_hex(), path.display());
+            Some(key)
+        }
+        None => None,
+    };
+    let ui = ui.authoring(author);
     let ui_store = ui.store.clone();
     let hub = build_rpc_ui(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, ui).await?;
 

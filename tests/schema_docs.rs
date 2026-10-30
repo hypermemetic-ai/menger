@@ -70,7 +70,7 @@ const QUEUE_FIELDS: &[&str] = &["unqueued", "queued", "queue"];
 /// Every service a v2 server registers, and their children, by path.
 const PATHS: &[&str] = &[
     "auth", "epics", "members", "members.teams", "orgs", "session", "tickets", "tickets.commits", "tickets.filters",
-    "tickets.nav", "tickets.revisions", "tickets.subtasks", "tickets.work", "ui", "ui.slots",
+    "tickets.nav", "tickets.revisions", "tickets.subtasks", "tickets.work", "ui", "ui.routes", "ui.slots",
 ];
 
 /// Whether `word` occurs in `text` as an identifier of its own, ignoring
@@ -388,7 +388,8 @@ async fn no_answer_carries_a_field_of_the_queue() {
 /// `Admin only.` — and no other; a viewer's read names no role, as the
 /// tickets service's reads name none. Both ways: each role here is checked
 /// against the roles the server declares (viewer if a viewer holds the
-/// grant, else deployer if a deployer does, else admin), so the table
+/// grant, else editor if an editor does — STUDIO-3 — else deployer if a
+/// deployer does, else admin), so the table
 /// cannot drift from the framework's (`../plexus-ui/service/src/activation.rs`).
 const UI_ROLES: &[(&str, &str, &str)] = &[
     ("ui", "push", "deployer"),
@@ -400,6 +401,11 @@ const UI_ROLES: &[(&str, &str, &str)] = &[
     ("ui", "watch", "viewer"),
     ("ui", "contract", "viewer"),
     ("ui.slots", "list", "viewer"),
+    // STUDIO-3: routes as data, and a push the service signs for an editor.
+    ("ui.routes", "list", "viewer"),
+    ("ui.routes", "set", "editor"),
+    ("ui.routes", "clear", "editor"),
+    ("ui", "author", "editor"),
 ];
 
 /// V2-11, acceptance (the table's second row): `ui push --help` says the
@@ -421,6 +427,8 @@ async fn the_ui_docs_say_who_may() {
         let grant = m["grant"].as_str().unwrap_or_else(|| panic!("{path}.{name}: no grant in {m}"));
         let declared = if holds("viewer", path, grant) {
             "viewer"
+        } else if holds("editor", path, grant) {
+            "editor"
         } else if holds("deployer", path, grant) {
             "deployer"
         } else {
@@ -428,7 +436,7 @@ async fn the_ui_docs_say_who_may() {
         };
         assert_eq!(declared, *role, "{path}.{name} (grant {grant}): the server declares it the {declared}'s; this table says {role}'s");
         let text = description(&m, &format!("{path}.{name}"));
-        let named: Vec<&str> = ["admin", "deployer", "viewer"].into_iter().filter(|r| says(&text, r)).collect();
+        let named: Vec<&str> = ["admin", "deployer", "editor", "viewer"].into_iter().filter(|r| says(&text, r)).collect();
         let want: Vec<&str> = if *role == "viewer" { vec![] } else { vec![*role] };
         if named != want {
             wrong.push(format!("{path}.{name}: the {role}'s, but names {named:?}: {}", text.replace('\n', " ")));
