@@ -18,8 +18,9 @@
 //       `input[data-filter-input]`, `[data-filter-check=ok|refused]`
 //       (`[data-refused]`), saved names offered as `[data-complete=<name>]`
 //   PERF-22: the board's `[data-board][data-surface=board-rows]` gains `[data-drawn]` once its first
-//       answer is drawn (and says `board.drawn` on the bus); the nav's facets and saved filters ask then
-import { sentCalls } from "../../scripts/ui-throwaway.mjs";
+//       answer is drawn (and says `board.drawn` on the bus); the nav's facets and saved filters ask then —
+//       FRAME-50: because the frame places them with `after="board.drawn"`, never from a look at the page
+import { bundle, push, sentCalls } from "../../scripts/ui-throwaway.mjs";
 
 export default async (ctx) => {
   const { test, assert, eventually, openPage, marked, sameDocument, sy, summaries } = ctx;
@@ -39,7 +40,9 @@ export default async (ctx) => {
   // PERF-22: the rows are what the person waits for. On the board the nav's
   // facets (nav.facets) and saved filters (filters.list) ask once the board's
   // first rows are drawn — after the first tickets.list answer, never beside
-  // it; on a page of their own, at once.
+  // it; on a page of their own, at once. FRAME-50: the frame says so
+  // (`after="board.drawn"` on their slots); a page of their own passes no
+  // `after` — so it holds whether the sections mount in one task or in turns.
   await test("the_navs_sections_ask_after_the_first_rows", async () => {
     const mark = (page, name) => page.evaluate((name) => performance.getEntriesByType("mark").find((e) => e.name === name)?.startTime ?? null, name);
     {
@@ -64,7 +67,8 @@ export default async (ctx) => {
       }
     }
     for (const [route, method, drawn] of [["#/filters", "tickets.filters.list", '[data-surface=filters-saved] [data-id="Needs you"]'],
-                                         ["#/facets/kind%20build", "tickets.nav.facets", "[data-surface=nav-facets] [data-facet]"]]) {
+                                         ["#/facets/kind%20build", "tickets.nav.facets", "[data-surface=nav-facets] [data-facet]"],
+                                         ["#/counts/kind%20build", "tickets.nav.counts", "[data-surface=nav-counts] [data-field=count]"]]) {
       const { page, context } = await openPage(route);
       try {
         await eventually(`${route} drawn`, async () => (await page.locator(drawn).count()) > 0, 5000);
@@ -75,6 +79,49 @@ export default async (ctx) => {
       } finally {
         await context.close();
       }
+    }
+  });
+
+  // FRAME-50 (review): nav-facets swapped alone after the board drew — the
+  // board stays, says no second `board.drawn`, and the remounted facets
+  // (given `after="board.drawn"`) find the board's `[data-drawn]` and draw
+  // their chips (a facets that waited for the topic alone would draw none).
+  await test("a_facets_swapped_in_after_the_board_drew_asks", async () => {
+    const { v2, server, session, sy, fs, path } = ctx;
+    const work = path.dirname(session);
+    const v3 = bundle(work, "f50-facets", {
+      engine: v2.engine,
+      edit: (ui) => {
+        // v2's own edit to the board, so the board's hash stays v2's…
+        for (const f of ["board-rows.rhx", "board-rows-sv.svelte"]) {
+          const at = path.join(ui, "src", f);
+          if (!fs.existsSync(at)) continue;
+          fs.writeFileSync(at, fs.readFileSync(at, "utf8").replace(".board-count { color: var(--ink);", ".board-count { color: var(--accent);"));
+          fs.appendFileSync(at, '<p class="board-newer">the newer board</p>\n');
+        }
+        // …and the facets' changed.
+        fs.appendFileSync(path.join(ui, "src", "nav-facets.svelte"), '<p class="facets-f50">swapped</p>\n');
+      },
+    });
+    const { page, context } = await openPage("");
+    try {
+      await eventually("the board drawn and the facets' chips", async () =>
+        (await page.locator("[data-board][data-surface=board-rows][data-drawn]").count()) === 1 && (await facets(page).locator("[data-facet]").count()) > 0, 10000);
+      const board = await page.evaluate(() => (window.__f50board = document.querySelector("[data-board][data-surface=board-rows]")) !== null);
+      assert(board, "the board's element");
+      await page.evaluate(() => (window.__f50chip = document.querySelector("[data-surface=nav-facets] [data-facet]")));
+      const pushed = push(server, session, path.join(work, "signer.key"), v3);
+      assert(pushed?.type === "pushed" && pushed.version === v3.version, `the facets' version pushed: ${JSON.stringify(pushed)}`);
+      await eventually("the swapped facets mounted", async () => (await page.locator("p.facets-f50").count()) === 1, 10000);
+      assert(await page.evaluate(() => document.querySelector("[data-board][data-surface=board-rows]") === window.__f50board), "the board was not remounted (no second board.drawn)");
+      // Its `live` held by `when` until it hears or finds the board drawn; its chips (new elements: the
+      // old went with the old instance) are drawn only once it asks — the shared answer, kept a few
+      // seconds, may serve it without a second call.
+      assert(await page.evaluate(() => !window.__f50chip.isConnected), "the old facets' chips went with it");
+      await eventually("the swapped facets asked and drew their chips", async () => (await facets(page).locator("[data-facet]").count()) > 0, 5000);
+    } finally {
+      await context.close();
+      sy("ui", "rollback", "--to", v2.version);
     }
   });
 

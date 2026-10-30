@@ -9,8 +9,9 @@
      cut: a chip puts it whole beside its rule, `(<filter>) and <rule>`, and
      no chip is drawn selected on it. Asked again when the route's filter
      moves (the prop `filter`). Placed by a mark, `<nav-facets
-     filter={filter}/>`, or on its own at `#/facets/:filter`. PERF-22: beside
-     the board it asks once the board's first rows are drawn. -->
+     filter={filter}/>`, or on its own at `#/facets/:filter`. PERF-22, FRAME-50: given
+     `after` (a bus topic: the board's frame passes "board.drawn") it asks once
+     it is heard; without it, at once. -->
 <script module>
   export const uses = ["tickets.nav.facets"];
   const FIELDS = ["status", "category", "kind", "severity", "in", "ready", "blocked", "has commits", "menger doc"];
@@ -46,20 +47,29 @@
 </script>
 
 <script>
-  import { tick } from "svelte";
+  import { tick, untrack } from "svelte";
   import { bus, live } from "plexus-ui/host";
 
-  let { filter = null } = $props();
+  let { filter = null, after = null } = $props();
   const b = bus();
-  // PERF-22: on the board, asked once its first rows are drawn (`board.drawn`;
-  // `[data-drawn]` when it drew before this mounted) — the rows are what the
-  // person waits for; with no board on the page, at once (a tick after the
-  // mount, the layout's sections all in place by then).
-  let drawn = $state(false);
-  b.on("board.drawn", () => (drawn = true));
-  tick().then(() => {
-    if (!document.querySelector("[data-board][data-surface=board-rows]:not([data-drawn])")) drawn = true;
-  });
+  // PERF-22, FRAME-50: `after` names a bus topic to hear before the first
+  // call — the board's frame passes "board.drawn", the rows being what the
+  // person waits for; none (a page of its own, the sheet's tiles): at once.
+  // A section cannot assume its siblings are mounted, so it never guesses
+  // there is no board. One look is left: waiting for "board.drawn", a
+  // remount after the board drew (a hot-swap) finds the board's mark
+  // (`[data-drawn]`) and asks — a stopgap until a late `on` can hear a topic
+  // said before it (FRAME-53).
+  const wait = untrack(() => after);
+  let drawn = $state(!wait);
+  if (wait) {
+    b.on(wait, () => (drawn = true));
+    if (wait === "board.drawn") {
+      tick().then(() => {
+        if (document.querySelector("[data-board][data-drawn]")) drawn = true;
+      });
+    }
+  }
   const facets = live({ snapshot: "tickets.nav.facets", params: () => ({ filter: filter ?? null, base: "not category done" }), key: "field", when: () => drawn });
   const byField = $derived(FIELDS.map((f) => [f, facets.rows.filter((r) => r.field === f)]).filter(([, rows]) => rows.length > 0));
 

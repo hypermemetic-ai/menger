@@ -12,29 +12,39 @@
 
      With `ids` (an array, from a mark: `<nav-counts filter="status Ready"
      ids={selected}/>`) it is how many of those tickets the filter admits:
-     `nav member { ids, filter }`, folded by the same stream. PERF-22: beside
-     the board it asks once the board's first rows are drawn. -->
+     `nav member { ids, filter }`, folded by the same stream. PERF-22, FRAME-50: given
+     `after` (a bus topic: the board's frame passes "board.drawn") it asks once
+     it is heard; without it, at once. -->
 <script module>
   export const uses = ["tickets.nav.counts", "tickets.list", "tickets.watch", "tickets.nav.member"];
   const PAGE = 1000;
 </script>
 
 <script>
-  import { tick } from "svelte";
+  import { tick, untrack } from "svelte";
   import { bus, live } from "plexus-ui/host";
 
-  let { filter = null, label = null, ids = null } = $props();
+  let { filter = null, label = null, ids = null, after = null } = $props();
   const b = bus();
   const many = () => Array.isArray(ids) && ids.length > 0;
-  // PERF-22: on the board, asked once its first rows are drawn (`board.drawn`;
-  // `[data-drawn]` when it drew before this mounted) — the rows are what the
-  // person waits for; with no board on the page, at once (a tick after the
-  // mount, the layout's sections all in place by then).
-  let drawn = $state(false);
-  b.on("board.drawn", () => (drawn = true));
-  tick().then(() => {
-    if (!document.querySelector("[data-board][data-surface=board-rows]:not([data-drawn])")) drawn = true;
-  });
+  // PERF-22, FRAME-50: `after` names a bus topic to hear before the first
+  // call — the board's frame passes "board.drawn", the rows being what the
+  // person waits for; none (a page of its own, the sheet's tiles): at once.
+  // A section cannot assume its siblings are mounted, so it never guesses
+  // there is no board. One look is left: waiting for "board.drawn", a
+  // remount after the board drew (a hot-swap) finds the board's mark
+  // (`[data-drawn]`) and asks — a stopgap until a late `on` can hear a topic
+  // said before it (FRAME-53).
+  const wait = untrack(() => after);
+  let drawn = $state(!wait);
+  if (wait) {
+    b.on(wait, () => (drawn = true));
+    if (wait === "board.drawn") {
+      tick().then(() => {
+        if (document.querySelector("[data-board][data-drawn]")) drawn = true;
+      });
+    }
+  }
   const membership = () => ({ filter: filter ?? null, membership: true });
   const total = live({ snapshot: "tickets.nav.counts", params: () => ({ filter: filter ?? null }), changes: "tickets.watch", changes_params: membership,
                        key: "shortcode", on: { recount: "upsert:." }, when: () => drawn && !many() });
