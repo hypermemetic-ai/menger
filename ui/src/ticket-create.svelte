@@ -32,7 +32,7 @@
   import Picker from "./ticket-picker.svelte";
   import Chip from "./ticket-chip-sv.svelte";
 
-  let { parent = null } = $props();
+  let { parent = null, sheet = null } = $props();
   const b = bus();
 
   let epic = $state("");
@@ -100,7 +100,7 @@
           <option value={keyOf(e)} selected={keyOf(e) === chosen}>{e.name + (e.current ? " · current" : "")}</option>
         {/each}
       </select>
-      {#if epics.status === "pending"}<span class="skeleton" data-loading aria-hidden="true"></span>{/if}
+      {#if sheet === "loading" || epics.status === "pending"}<span class="skeleton" data-loading aria-hidden="true"></span>{/if}
       {#each current.rows as c (keyOf(c))}<span class="hint" data-current-epic={c.name}>you are in {c.name}</span>{/each}
     </label>
     <label class="f"><span class="l">shortcode</span>
@@ -159,8 +159,8 @@
   .create { display: block; max-width: 760px; margin: 0 auto; padding: 16px 20px 40px; color: var(--ink); font-family: var(--font-text); font-size: var(--text-size); }
   .crumbs { margin-bottom: 12px; font-size: 12px; }
   .crumbs a { color: var(--muted); text-decoration: none; border-radius: var(--radius-sm); }
-  .crumbs a:hover { color: var(--accent); }
-  .crumbs a:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .crumbs a:hover, .crumbs a:global([data-sheet~=hover]) { color: var(--accent); }
+  .crumbs a:focus-visible, .crumbs a:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
   .create-head { margin: 0 0 14px; font-family: var(--font-display); font-size: 22px; font-weight: var(--weight-strong); }
   .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
   @media (max-width: 720px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
@@ -168,17 +168,17 @@
   .l { display: flex; gap: 8px; align-items: center; font-size: 11px; font-weight: var(--weight-medium); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
   input, select, textarea { width: 100%; padding: 5px 10px; font: inherit; color: var(--ink); background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius); transition: border-color var(--motion-fast) var(--ease); }
   textarea { resize: vertical; font-family: var(--font-text); line-height: 1.5; }
-  input:hover, select:hover, textarea:hover { border-color: var(--muted); }
-  input:focus-visible, select:focus-visible, textarea:focus-visible { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px var(--sel); }
+  input:hover, select:hover, textarea:hover, input:global([data-sheet~=hover]), select:global([data-sheet~=hover]), textarea:global([data-sheet~=hover]) { border-color: var(--muted); }
+  input:focus-visible, select:focus-visible, textarea:focus-visible, input:global([data-sheet~=focus]), select:global([data-sheet~=focus]), textarea:global([data-sheet~=focus]) { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px var(--sel); }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-height: 4px; }
   .chipped { display: inline-flex; gap: 2px; align-items: center; }
   .x { padding: 0 6px; font: inherit; line-height: 18px; color: var(--muted); background: none; border: 0; border-radius: var(--radius-pill); cursor: pointer; }
-  .x:hover { color: var(--warn); background: var(--hover); }
-  .x:focus-visible { outline: 2px solid var(--focus); }
+  .x:hover, .x:global([data-sheet~=hover]) { color: var(--warn); background: var(--hover); }
+  .x:focus-visible, .x:global([data-sheet~=focus]) { outline: 2px solid var(--focus); }
   .tab { padding: 0 8px; font: inherit; font-size: 11px; text-transform: none; letter-spacing: 0; color: var(--muted); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; }
-  .tab:hover { color: var(--ink); }
-  .tab[aria-pressed=true] { color: var(--accent); border-color: var(--accent); background: var(--sel); }
-  .tab:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .tab:hover, .tab:global([data-sheet~=hover]) { color: var(--ink); }
+  .tab[aria-pressed=true], .tab:global([data-sheet~=checked]) { color: var(--accent); border-color: var(--accent); background: var(--sel); }
+  .tab:focus-visible, .tab:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
   .preview { min-height: 120px; padding: 8px 10px; font-family: var(--sans); line-height: 1.55; overflow-wrap: anywhere; background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius); }
   .preview :global(a) { color: var(--accent); }
   .preview :global(pre) { overflow: auto; padding: 8px 10px; font-family: var(--font-text); background: var(--bg); border-radius: var(--radius); }
@@ -186,9 +186,9 @@
   .skeleton { display: block; height: 12px; background: var(--skeleton); border-radius: var(--radius-sm); animation: breathe var(--motion-pulse) var(--ease) infinite alternate; }
   .actions { display: flex; gap: 10px; align-items: center; margin-top: 6px; }
   .go { padding: 5px 16px; font: inherit; font-weight: var(--weight-medium); color: var(--accent); background: var(--sel); border: var(--border) solid var(--accent); border-radius: var(--radius); cursor: pointer; transition: background-color var(--motion-fast) var(--ease); }
-  .go:hover { background: var(--row-sel); }
-  .go:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-  .go[disabled] { color: var(--disabled); background: var(--card); border-color: var(--line); cursor: default; }
+  .go:hover, .go:global([data-sheet~=hover]) { background: var(--row-sel); }
+  .go:focus-visible, .go:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .go[disabled], .go:global([data-sheet~=disabled]) { color: var(--disabled); background: var(--card); border-color: var(--line); cursor: default; }
   .refused { margin: 10px 0 0; padding: 6px 10px; color: var(--warn); font-size: 12px; border-left: 2px solid var(--warn); background: var(--panel); }
   @keyframes breathe { from { opacity: 1; } to { opacity: .45; } }
   @media (prefers-reduced-motion: reduce) {

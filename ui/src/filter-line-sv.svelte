@@ -121,8 +121,8 @@
 <style>
   .filter-line { display: block; flex: 1; min-width: 0; position: relative; }
   .filter-input { width: 100%; max-width: 640px; padding: 5px 10px; color: var(--ink); background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius); transition: border-color var(--motion-fast) var(--ease); }
-  .filter-input:hover { border-color: var(--muted); }
-  .filter-input:focus-visible { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px var(--sel); }
+  .filter-input:hover, .filter-input:global([data-sheet~=hover]) { border-color: var(--muted); }
+  .filter-input:focus-visible, .filter-input:global([data-sheet~=focus]) { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px var(--sel); }
   .filter-refused { margin: 4px 0 0; color: var(--warn); font-size: 11px; }
   .filter-check { margin: 4px 0 0; font-size: 11px; color: var(--muted); }
   .filter-check[data-refused] { color: var(--warn); }
@@ -131,8 +131,8 @@
   .filter-check [data-field=count] { color: var(--ink); font-variant-numeric: tabular-nums; }
   .filter-complete { position: absolute; z-index: 5; top: 34px; left: 0; width: min(420px, 100%); max-height: 240px; overflow: auto; list-style: none; margin: 0; padding: 4px; background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-lg); box-shadow: 0 6px 18px var(--shadow); }
   .filter-complete-row { display: flex; gap: 6px; align-items: center; width: 100%; height: var(--pitch); padding: 0 8px; color: var(--ink); text-align: left; background: none; border: 0; border-radius: var(--radius); cursor: pointer; transition: background-color var(--motion-fast) var(--ease); }
-  .filter-complete-row:hover { background: var(--hover); }
-  .filter-complete-row:focus-visible { outline: none; background: var(--row-sel); box-shadow: inset 0 0 0 2px var(--focus); }
+  .filter-complete-row:hover, .filter-complete-row:global([data-sheet~=hover]) { background: var(--hover); }
+  .filter-complete-row:focus-visible, .filter-complete-row:global([data-sheet~=focus]) { outline: none; background: var(--row-sel); box-shadow: inset 0 0 0 2px var(--focus); }
   .filter-complete-row .kw { color: var(--accent); }
   .filter-complete-count { margin-left: auto; padding: 0 7px; font-size: 11px; line-height: 18px; color: var(--chip-fg); background: var(--chip-bg); border: var(--border) solid var(--chip-line); border-radius: var(--radius-pill); font-variant-numeric: tabular-nums; }
   .filter-complete-count:empty { display: none; }

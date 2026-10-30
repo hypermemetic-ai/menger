@@ -855,6 +855,30 @@ layouts' default sections), `src/*.rhx` (`board-layout`, `board-rows`,
 `filter-line`, `jump-palette`, `nav-tree`, `nav-flat`, `nav-children`,
 `ticket-page`, `ticket-chip`, `page-shell`, `hello-list`).
 
+SURFACE-10: the tokens are whole — APP-114's sheet (the designer's), every
+builder's addition folded in, each token once: the paper (`--bg`, `--panel`,
+`--card`, `--hover`, `--sel`, `--row-sel`, `--skeleton`, `--shadow`), the ink
+(`--ink`, `--muted`, `--disabled`), the lines, `--accent` and the `--focus`
+ring, the signals (`--warn`, `--live`), the chip, a `--st-<status>-bg|fg`
+pair for every status (Draft, Pending, Ready, Coding, In Review, Complete,
+Blocked, Superseded, Canceled, Epic, Doc), a `--kind-<kind>` mark for every
+kind and a `--sev-<severity>` for every severity, the diff pair
+(`--diff-add-*`, `--diff-del-*`), the type, the space, the shapes and the
+motion. A colour is `#rrggbb` or `#rrggbbaa`. `scripts/plexus-ui build`
+passes `--strict-colours`: a literal colour in a component's `<style>` (a
+`#hex`, `rgb(…)`, `hsl(…)`, a named colour) refuses the build, naming its
+file and line. **The sheet** at `#/sheet` (`sheet-page`, `#/sheet/:id` for a
+given ticket, else the first `tickets.list --limit 1` answers) places every
+component of `ui/src` by its bound mark, in every state it draws, under
+`data-plexus-theme="light"` and `"dark"` side by side; a state is held
+without the pointer by its alias (APP-114) — a component's `:hover`,
+`:focus-visible`, `:disabled`, selected and checked rules each also match
+`[data-sheet~=hover|focus|disabled|selected|checked]`, and a component with a
+skeleton draws it on its `sheet="loading"` prop. `tests/apart.rs` holds every
+component to the sheet, every `var(--…)` to a token, every state to its
+alias; `tests/pages/sheet.mjs` draws it and writes `sheet-light.png` and
+`sheet-dark.png`.
+
 FRAME-14: the board is in two profiles. Beside each of the five board
 components above (`board-layout`, `board-rows`, `nav-tree`, `ticket-page`,
 `jump-palette`) is its real Svelte twin, `src/<name>-sv.svelte` (`svelte/1`:

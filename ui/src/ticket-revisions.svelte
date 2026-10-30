@@ -15,7 +15,7 @@
 <script>
   import { bus, live, markdown } from "plexus-ui/host";
 
-  let { id } = $props();
+  let { id, sheet = null } = $props();
   const b = bus();
   let open = $state(false);
   let a = $state(0);
@@ -72,7 +72,7 @@
       </span>
     {/if}
   </header>
-  {#if revs.status === "pending"}<div data-loading aria-busy="true"><i class="bone"></i><i class="bone"></i></div>{/if}
+  {#if sheet === "loading" || revs.status === "pending"}<div data-loading aria-busy="true"><i class="bone"></i><i class="bone"></i></div>{/if}
   {#if revs.status === "error" || revs.status === "refused"}<p class="refused" data-refused>{revs.message}</p>{/if}
   <div class="grid">
     <ul class="revs" data-field="revisions">
@@ -150,35 +150,35 @@
   .ticket-revisions .seg { display: inline-flex; overflow: hidden; background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); }
   .ticket-revisions .seg button { padding: 2px 9px; font: inherit; font-size: 12px; line-height: 20px; color: var(--muted); background: none; border: 0; border-right: var(--border) solid var(--line); cursor: pointer; transition: background-color var(--motion-fast) var(--ease); }
   .ticket-revisions .seg button:last-child { border-right: 0; }
-  .ticket-revisions .seg button:hover { color: var(--ink); background: var(--hover); }
-  .ticket-revisions .seg button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
-  .ticket-revisions .seg button[aria-checked=true] { color: var(--accent); background: var(--sel); }
+  .ticket-revisions .seg button:hover, .ticket-revisions .seg button:global([data-sheet~=hover]) { color: var(--ink); background: var(--hover); }
+  .ticket-revisions .seg button:focus-visible, .ticket-revisions .seg button:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: -2px; }
+  .ticket-revisions .seg button[aria-checked=true], .ticket-revisions .seg button:global([data-sheet~=checked]) { color: var(--accent); background: var(--sel); }
   .ticket-revisions .btn { display: inline-flex; gap: 5px; align-items: center; padding: 1px 10px; font: inherit; font-size: 12px; line-height: 20px; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; transition: background-color var(--motion-fast) var(--ease), border-color var(--motion-fast) var(--ease); }
-  .ticket-revisions .btn:hover { background: var(--hover); border-color: var(--muted); }
-  .ticket-revisions .btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-  .ticket-revisions .btn[aria-pressed=true] { color: var(--accent); background: var(--sel); border-color: var(--accent); }
+  .ticket-revisions .btn:hover, .ticket-revisions .btn:global([data-sheet~=hover]) { background: var(--hover); border-color: var(--muted); }
+  .ticket-revisions .btn:focus-visible, .ticket-revisions .btn:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .ticket-revisions .btn[aria-pressed=true], .ticket-revisions .btn:global([data-sheet~=checked]) { color: var(--accent); background: var(--sel); border-color: var(--accent); }
   .ticket-revisions .btn.ghost { color: var(--muted); background: none; border-color: transparent; }
-  .ticket-revisions .btn.ghost:hover { color: var(--ink); background: var(--hover); }
+  .ticket-revisions .btn.ghost:hover, .ticket-revisions .btn.ghost:global([data-sheet~=hover]) { color: var(--ink); background: var(--hover); }
   .ticket-revisions kbd { display: inline-block; min-width: 16px; padding: 0 4px; font-family: var(--font-text); font-size: 10px; line-height: 15px; text-align: center; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-bottom-width: 2px; border-radius: var(--radius-sm); }
   .ticket-revisions[data-open=true] .grid { display: grid; grid-template-columns: 330px minmax(0, 1fr); }
   .ticket-revisions .revs { list-style: none; margin: 0; padding: 0; border-top: var(--border) solid var(--line); }
   .ticket-revisions[data-open=true] .revs { border-top: 0; border-right: var(--border) solid var(--line); }
   .ticket-revisions .rev-row { position: relative; display: grid; grid-template-columns: 44px 82px 58px minmax(0, 1fr) auto; gap: 6px; align-items: center; height: var(--pitch); padding: 0 6px; font-size: 12px; border-bottom: var(--border) solid var(--line); cursor: pointer; transition: background-color var(--motion-fast) var(--ease); }
-  .ticket-revisions .rev-row:hover { background: var(--hover); }
-  .ticket-revisions .rev-row:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
-  .ticket-revisions .rev-row[data-selected=true] { background: var(--row-sel); }
-  .ticket-revisions .rev-row[data-selected=true]::before { content: ""; position: absolute; left: 0; top: 3px; bottom: 3px; width: 3px; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; background: var(--accent); }
+  .ticket-revisions .rev-row:hover, .ticket-revisions .rev-row:global([data-sheet~=hover]) { background: var(--hover); }
+  .ticket-revisions .rev-row:focus-visible, .ticket-revisions .rev-row:global([data-sheet~=focus]) { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
+  .ticket-revisions .rev-row[data-selected=true], .ticket-revisions .rev-row:global([data-sheet~=selected]) { background: var(--row-sel); }
+  .ticket-revisions .rev-row[data-selected=true]::before, .ticket-revisions .rev-row:global([data-sheet~=selected])::before { content: ""; position: absolute; left: 0; top: 3px; bottom: 3px; width: 3px; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; background: var(--accent); }
   .ticket-revisions .rev-n { color: var(--accent); font-weight: var(--weight-medium); }
   .ticket-revisions .rev-at { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .ticket-revisions .rev-by { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--weight-medium); }
   .ticket-revisions .rev-f { display: flex; gap: 4px; overflow: hidden; }
   .ticket-revisions .rev-f span { padding: 0 5px; font-size: 10px; line-height: 15px; color: var(--chip-fg); background: var(--chip-bg); border-radius: var(--radius-sm); }
   .ticket-revisions .rev-go { opacity: 0; font-size: 11px; color: var(--accent); }
-  .ticket-revisions .rev-row:hover .rev-go, .ticket-revisions .rev-row:focus-visible .rev-go { opacity: 1; }
+  .ticket-revisions .rev-row:hover .rev-go, .ticket-revisions .rev-row:focus-visible .rev-go, .ticket-revisions .rev-row:global([data-sheet~=hover]) .rev-go, .ticket-revisions .rev-row:global([data-sheet~=focus]) .rev-go { opacity: 1; }
   .ticket-revisions .ab { display: flex; gap: 3px; }
   .ticket-revisions .ab button { width: 19px; height: 17px; padding: 0; font: inherit; font-size: 10px; line-height: 15px; color: var(--muted); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-sm); cursor: pointer; }
-  .ticket-revisions .ab button:hover { color: var(--ink); border-color: var(--muted); }
-  .ticket-revisions .ab button[aria-pressed=true] { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+  .ticket-revisions .ab button:hover, .ticket-revisions .ab button:global([data-sheet~=hover]) { color: var(--ink); border-color: var(--muted); }
+  .ticket-revisions .ab button[aria-pressed=true], .ticket-revisions .ab button:global([data-sheet~=checked]) { color: var(--bg); background: var(--accent); border-color: var(--accent); }
   .ticket-revisions .diff { min-width: 0; padding: 10px 12px 0; }
   .ticket-revisions .field { display: grid; grid-template-columns: 52px minmax(0, 1fr) minmax(0, 1fr); gap: 0 10px; align-items: baseline; margin-bottom: 8px; font-size: 12px; }
   .ticket-revisions .k { font-size: 11px; color: var(--muted); }
@@ -189,13 +189,13 @@
   .ticket-revisions .dl { display: grid; grid-template-columns: 14px minmax(0, 1fr); min-height: 20px; padding: 0 6px; font-size: 12px; line-height: 20px; }
   .ticket-revisions .mk { color: var(--muted); }
   .ticket-revisions .t { white-space: pre-wrap; overflow-wrap: anywhere; }
-  .ticket-revisions .del { background: var(--st-blocked-bg); color: var(--st-blocked-fg); }
-  .ticket-revisions .add { background: var(--st-complete-bg); color: var(--st-complete-fg); }
+  .ticket-revisions .del { background: var(--diff-del-bg); color: var(--diff-del-fg); }
+  .ticket-revisions .add { background: var(--diff-add-bg); color: var(--diff-add-fg); }
   .ticket-revisions .same { color: var(--muted); }
   .ticket-revisions .text { padding: 8px 10px; font-size: 12px; line-height: 20px; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius); }
   .ticket-revisions .sum { display: flex; gap: 14px; margin: 8px 0 0; font-size: 11px; color: var(--muted); }
-  .ticket-revisions .sum .aa { color: var(--st-complete-fg); }
-  .ticket-revisions .sum .dd { color: var(--st-blocked-fg); }
+  .ticket-revisions .sum .aa { color: var(--diff-add-fg); }
+  .ticket-revisions .sum .dd { color: var(--diff-del-fg); }
   .ticket-revisions .was-head { margin: 0 0 6px; }
   .ticket-revisions .md { font-family: var(--sans); line-height: 1.55; overflow-wrap: anywhere; }
   .ticket-revisions .md :global(a) { color: var(--accent); }
@@ -207,6 +207,11 @@
   .ticket-revisions .st[data-status="In Review"] { background: var(--st-in-review-bg); color: var(--st-in-review-fg); }
   .ticket-revisions .st[data-status=Complete] { background: var(--st-complete-bg); color: var(--st-complete-fg); }
   .ticket-revisions .st[data-status=Canceled] { background: var(--st-canceled-bg); color: var(--st-canceled-fg); }
+  .ticket-revisions .st[data-status="Draft"] { background: var(--st-draft-bg); color: var(--st-draft-fg); }
+  .ticket-revisions .st[data-status="Blocked"] { background: var(--st-blocked-bg); color: var(--st-blocked-fg); }
+  .ticket-revisions .st[data-status="Superseded"] { background: var(--st-superseded-bg); color: var(--st-superseded-fg); }
+  .ticket-revisions .st[data-status="Epic"] { background: var(--st-epic-bg); color: var(--st-epic-fg); }
+  .ticket-revisions .st[data-status="Doc"] { background: var(--st-doc-bg); color: var(--st-doc-fg); }
   .ticket-revisions .empty { margin: 0; padding: 8px 6px; font-size: 12px; color: var(--muted); }
   .ticket-revisions .refused { margin: 4px 0; font-size: 11px; color: var(--warn); }
   .ticket-revisions .bone { display: block; height: 10px; margin: 6px 0; background: var(--skeleton); border-radius: var(--radius-sm); }

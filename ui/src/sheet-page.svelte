@@ -1,0 +1,279 @@
+<!-- SURFACE-10: the sheet — every component of ui/src, in every state it
+     has, in both schemes, at #/sheet (svelte/1). Each is placed by its bound
+     mark (FRAME-29: `plexus-ui:<name>`, whatever its profile), with props
+     from the seeded tickets: the ticket is `#/sheet/:id`'s, else the first
+     `tickets.list { limit: 1 }` answers. Two columns, the theme's wrappers
+     `data-plexus-theme="light"` and `"dark"`, side by side; in each, a
+     component under a heading naming it, its states as tiles:
+       plain     — as it is;
+       hover, focus, selected, checked, disabled — held without the pointer:
+                   the sheet marks the tile's first row and first control
+                   (never a bound mark, `[data-slot]`; a component that holds
+                   another element names it, HOLDS) `data-sheet="<state>"`,
+                   and each component's sheet draws
+                   `[data-sheet~=<state>]` as its `:hover`, `:focus-visible`,
+                   selected, pressed or `:disabled` (APP-114's aliases);
+       loading   — the mark's `data-sheet="loading"` (the prop `sheet`),
+                   which the component draws as its skeleton;
+       empty, refused — real answers: a filter no ticket matches, a filter
+                   the language refuses, a ticket that is not there.
+     A component with no state shows as it is. The layouts and the pages
+     are drawn small. A store with no ticket the reader can see says so. -->
+<script module>
+  export const uses = ["tickets.list"];
+</script>
+
+<script>
+  import { live } from "plexus-ui/host";
+  import AppTop from "plexus-ui:app-top";
+  import BoardFrame from "plexus-ui:board-frame";
+  import BoardLayout from "plexus-ui:board-layout";
+  import BoardLayoutSv from "plexus-ui:board-layout-sv";
+  import BoardRows from "plexus-ui:board-rows";
+  import BoardRowsSv from "plexus-ui:board-rows-sv";
+  import BulkBar from "plexus-ui:bulk-bar";
+  import EpicsPage from "plexus-ui:epics-page";
+  import FilterLine from "plexus-ui:filter-line";
+  import FilterLineSv from "plexus-ui:filter-line-sv";
+  import FiltersSaved from "plexus-ui:filters-saved";
+  import HelloList from "plexus-ui:hello-list";
+  import JumpPalette from "plexus-ui:jump-palette";
+  import JumpPaletteSv from "plexus-ui:jump-palette-sv";
+  import KeysHelp from "plexus-ui:keys-help";
+  import MePage from "plexus-ui:me-page";
+  import NavChildren from "plexus-ui:nav-children";
+  import NavChildrenSv from "plexus-ui:nav-children-sv";
+  import NavCounts from "plexus-ui:nav-counts";
+  import NavFacets from "plexus-ui:nav-facets";
+  import NavFlat from "plexus-ui:nav-flat";
+  import NavFlatSv from "plexus-ui:nav-flat-sv";
+  import NavTree from "plexus-ui:nav-tree";
+  import NavTreeSv from "plexus-ui:nav-tree-sv";
+  import OrgsList from "plexus-ui:orgs-list";
+  import PageShell from "plexus-ui:page-shell";
+  import SearchPage from "plexus-ui:search-page";
+  import TicketActions from "plexus-ui:ticket-actions";
+  import TicketBody from "plexus-ui:ticket-body";
+  import TicketChip from "plexus-ui:ticket-chip";
+  import TicketChipSv from "plexus-ui:ticket-chip-sv";
+  import TicketCommits from "plexus-ui:ticket-commits";
+  import TicketCreate from "plexus-ui:ticket-create";
+  import TicketEdit from "plexus-ui:ticket-edit";
+  import TicketHead from "plexus-ui:ticket-head";
+  import TicketHistory from "plexus-ui:ticket-history";
+  import TicketPage from "plexus-ui:ticket-page";
+  import TicketPageSv from "plexus-ui:ticket-page-sv";
+  import TicketPicker from "plexus-ui:ticket-picker";
+  import TicketRelations from "plexus-ui:ticket-relations";
+  import TicketRevisions from "plexus-ui:ticket-revisions";
+  import TicketSubtasks from "plexus-ui:ticket-subtasks";
+  import UiVersions from "plexus-ui:ui-versions";
+  import WorkBlocker from "plexus-ui:work-blocker";
+  import WorkBlockers from "plexus-ui:work-blockers";
+  import WorkReady from "plexus-ui:work-ready";
+  import WorkReadyRow from "plexus-ui:work-ready-row";
+  import WorkWaves from "plexus-ui:work-waves";
+
+  let { id = null } = $props();
+
+  // The ticket the parts are drawn for: the route's, else the first the store lists.
+  const first = live({ snapshot: "tickets.list", params: { limit: 1, summary: true, fields: ["id"] }, key: "id" });
+  const tid = $derived(id ?? first.rows.find((r) => r.id)?.id ?? null);
+
+  const EMPTY = "status Ready and status Draft"; // a filter no ticket answers
+  const REFUSED = "status Nope"; // a filter the language refuses
+  const NONE = "ZZZZ-999999"; // a ticket that is not there
+
+  // The held states, and what of a tile the sheet marks for each: the first
+  // of every kind of row and control in it.
+  const HOLD = {
+    hover: ["[data-id]", "a[href]", "button:not([disabled])", "input", "select", "[role=option]", "[role=button]", "li", "summary", "label"],
+    focus: ["[data-id]", "a[href]", "button:not([disabled])", "input", "select", "textarea", "[role=option]", "[tabindex]", "summary"],
+    selected: ["[data-id]", "[role=option]", "li", "a[href]", "[aria-pressed]"],
+    checked: ["[data-id]", "[aria-pressed]", "[aria-checked]", "input[type=checkbox]", "[role=radio]", "button"],
+    disabled: ["button", "input", "select", "textarea"],
+  };
+
+  // Each component: its group, its props for a ticket, the states it draws
+  // (its sheet's held ones — tests/apart.rs holds each to its alias — then
+  // what props or the loading mark give), and whether it is drawn small.
+  const F = (t) => ({});
+  const ID = (t) => ({ id: t });
+  const fil = { empty: { filter: EMPTY }, refused: { filter: REFUSED } };
+  const gone = { empty: { id: NONE } };
+  // The palettes' held rows: the second hit, hovered or selected — never
+  // the first, which the palette selects itself.
+  const HITS = { hover: ["li:nth-child(2) > .palette-hit"], focus: [".palette-input"], selected: ["li:nth-child(2) > .palette-hit"] };
+  const SHEET = [
+    ["the board", [
+      ["board-rows-sv", BoardRowsSv, F, ["hover", "focus", "selected", "checked"], fil],
+      ["board-rows", BoardRows, F, ["hover", "focus"], fil],
+      ["app-top", AppTop, (t) => ({ here: "board" }), ["hover", "focus"], {}],
+      ["board-layout-sv", BoardLayoutSv, F, ["hover", "focus"], { refused: { filter: REFUSED } }],
+      ["filter-line-sv", FilterLineSv, (t) => ({ filter: "status Ready" }), ["hover", "focus"], { refused: { filter: REFUSED } }],
+      ["filter-line", FilterLine, (t) => ({ filter: "status Ready" }), ["hover", "focus"], { refused: { filter: REFUSED } }],
+      ["bulk-bar", BulkBar, (t) => ({ ids: t }), ["hover", "focus", "disabled"], { loading: { sheet: "loading" } }, false, { disabled: ["[data-action=dry-run]"] }],
+      ["keys-help", KeysHelp, F, [], {}],
+      ["ticket-chip-sv", TicketChipSv, ID, ["hover", "focus"], gone],
+      ["ticket-chip", TicketChip, ID, ["hover", "focus"], gone],
+    ]],
+    ["the nav", [
+      ["nav-tree-sv", NavTreeSv, F, ["hover", "focus", "checked"], fil, false, { checked: ["[data-nav-mode=flat]"] }],
+      ["nav-tree", NavTree, F, ["hover", "focus", "checked"], fil, false, { checked: ["[data-nav-mode=flat]"] }],
+      ["nav-flat-sv", NavFlatSv, F, ["hover", "focus"], fil],
+      ["nav-flat", NavFlat, F, ["hover", "focus"], {}],
+      ["nav-children-sv", NavChildrenSv, (t) => ({ parent: t }), ["hover", "focus"], { empty: { parent: NONE } }],
+      ["nav-children", NavChildren, (t) => ({ parent: t }), ["hover", "focus"], { empty: { parent: NONE } }],
+      ["nav-facets", NavFacets, (t) => ({ filter: "status Ready" }), ["hover", "focus", "selected"], fil],
+      ["nav-counts", NavCounts, (t) => ({ filter: "status Ready", label: "ready" }), ["hover", "focus"], fil],
+      ["filters-saved", FiltersSaved, F, ["hover", "focus"], {}],
+    ]],
+    ["the palette and the search", [
+      ["jump-palette-sv", JumpPaletteSv, (t) => ({ sheet: code(t) }), ["hover", "focus", "selected"], { empty: { sheet: "zzqqxxjj" } }, false, HITS],
+      ["jump-palette", JumpPalette, (t) => ({ sheet: code(t) }), ["hover", "focus"], { empty: { sheet: "zzqqxxjj" } }, false, HITS],
+      ["search-page", SearchPage, (t) => ({ q: t }), ["hover", "focus", "disabled", "selected"], { loading: { q: t0(), sheet: "loading" }, empty: { q: "zzqqxxjj" }, refused: { q: "ready", filter: REFUSED } }, true],
+    ]],
+    ["the ticket", [
+      ["ticket-page-sv", TicketPageSv, ID, ["hover", "focus"], { loading: { sheet: "loading" }, ...gone }, true],
+      ["ticket-page", TicketPage, ID, ["hover", "focus"], gone, true],
+      ["ticket-head", TicketHead, ID, ["hover", "focus"], gone],
+      ["ticket-body", TicketBody, ID, [], gone],
+      ["ticket-relations", TicketRelations, ID, ["hover", "focus"], { loading: { sheet: "loading" } }],
+      ["ticket-subtasks", TicketSubtasks, ID, ["hover", "focus"], { loading: { sheet: "loading" } }],
+      ["ticket-commits", TicketCommits, ID, ["hover", "focus"], {}],
+      ["ticket-history", TicketHistory, ID, ["hover"], { loading: { sheet: "loading" }, ...gone }],
+      ["ticket-revisions", TicketRevisions, ID, ["hover", "focus", "selected"], { loading: { sheet: "loading" }, ...gone }],
+      ["ticket-edit", TicketEdit, ID, ["hover", "focus", "disabled", "checked"], { checked: { sheet: "open" }, loading: { sheet: "loading" } }, false, { checked: ["[role=radio][aria-checked=false]"] }],
+      ["ticket-actions", TicketActions, ID, ["hover", "focus", "disabled", "checked"], { loading: { sheet: "loading" } }],
+      ["work-blockers", WorkBlockers, ID, [], { loading: { sheet: "loading" } }],
+      ["work-blocker", WorkBlocker, (t) => ({ id: t, side: "blocker" }), ["hover", "focus"], { loading: { sheet: "loading" } }],
+    ]],
+    ["the writes", [
+      ["ticket-create", TicketCreate, (t) => ({ parent: t }), ["hover", "focus", "disabled", "checked"], { loading: { sheet: "loading" } }, true, { checked: [".tab"], disabled: [".go"] }],
+      ["ticket-picker", TicketPicker, (t) => ({ name: "sheet", label: "a ticket" }), ["hover", "focus"], {}],
+    ]],
+    ["the order of work", [
+      ["work-ready", WorkReady, F, ["hover", "focus"], { loading: { sheet: "loading" }, ...fil }],
+      ["work-ready-row", WorkReadyRow, ID, ["hover", "focus"], {}],
+      ["work-waves", WorkWaves, ID, ["hover", "focus", "checked"], { loading: { id: t0(), sheet: "loading" } }, true],
+    ]],
+    ["the admin pages", [
+      ["epics-page", EpicsPage, F, ["hover", "focus", "disabled"], { loading: { sheet: "loading" } }, true],
+      ["orgs-list", OrgsList, F, ["hover"], { loading: { sheet: "loading" } }],
+      ["me-page", MePage, F, ["hover", "focus", "disabled"], { loading: { sheet: "loading" } }, true],
+      ["ui-versions", UiVersions, F, ["hover", "focus", "disabled"], { loading: { sheet: "loading" } }, true],
+    ]],
+    ["the layouts", [
+      ["board-frame", BoardFrame, F, [], {}, true],
+      ["board-layout", BoardLayout, F, ["hover", "focus"], {}, true],
+      ["page-shell", PageShell, F, [], {}, true],
+      ["hello-list", HelloList, F, [], {}],
+    ]],
+  ];
+  // A ticket's shortcode: a query the palettes answer with many hits.
+  function code(t) { return t.replace(/-[0-9.]+$/, ""); }
+  // What a component holds for a state, where HOLD's first-of-each is not it.
+  const HOLDS = Object.fromEntries(SHEET.flatMap(([, entries]) => entries.filter((e) => e[6]).map((e) => [e[0], e[6]])));
+  // A placeholder the ticket fills in, read when the tiles are drawn.
+  function t0() { return "@ticket"; }
+  const fill = (p, t) => Object.fromEntries(Object.entries(p).map(([k, v]) => [k, v === "@ticket" ? t : v]));
+
+  /** The tiles of one component for ticket `t`. */
+  function tiles(entry, t) {
+    const [name, , base, held, given] = entry;
+    const props = base(t);
+    const out = [{ state: "plain", props, hold: null }];
+    for (const s of held) out.push({ state: s, props: given[s] ? { ...props, ...fill(given[s], t) } : props, hold: s });
+    for (const s of ["loading", "empty", "refused"]) if (given[s]) out.push({ state: s, props: { ...props, ...fill(given[s], t) }, hold: null });
+    return out;
+  }
+
+  // The held states: the first row and control of each held tile marked
+  // data-sheet="<state>", again whenever a component draws anew.
+  let root = $state(null);
+  function hold() {
+    for (const frame of root.querySelectorAll("[data-sheet-hold]")) {
+      const state = frame.dataset.sheetHold;
+      const name = frame.closest("[data-sheet-component]")?.dataset.sheetComponent;
+      // Never a bound mark ([data-slot]): the alias belongs on a row or a control inside.
+      for (const sel of HOLDS[name]?.[state] ?? HOLD[state]) {
+        if (frame.querySelector(`:is(${sel}):not([data-slot])[data-sheet~="${state}"]`)) continue;
+        const el = frame.querySelector(`:is(${sel}):not([data-slot])`);
+        if (el) el.setAttribute("data-sheet", state);
+      }
+    }
+  }
+  $effect(() => {
+    if (!root) return;
+    hold();
+    const seen = new MutationObserver(hold);
+    seen.observe(root, { childList: true, subtree: true });
+    return () => seen.disconnect();
+  });
+</script>
+
+<main class="sheet" data-surface="sheet-page" data-sheet-id={tid} bind:this={root}>
+  <header class="sheet-head">
+    <h1>the sheet</h1>
+    <p>Every component of the bundle, in every state it has, in both schemes{tid ? ` — drawn for ${tid}` : ""}.</p>
+  </header>
+  {#if tid}
+    <div class="schemes">
+      {#each ["light", "dark"] as scheme (scheme)}
+        <div class="scheme" data-plexus-theme={scheme} data-sheet-scheme={scheme}>
+          <h2 class="scheme-name">{scheme}</h2>
+          {#each SHEET as [group, entries] (group)}
+            <h3 class="group">{group}</h3>
+            {#each entries as entry (entry[0])}
+              {@const C = entry[1]}
+              <section class="comp" data-sheet-component={entry[0]} data-small={entry[5] ? "true" : "false"}>
+                <h4 class="comp-name">{entry[0]}</h4>
+                <div class="tiles">
+                  {#each tiles(entry, tid) as tile (tile.state)}
+                    <figure class="tile" data-sheet-state={tile.state}>
+                      <figcaption>{tile.state}</figcaption>
+                      <div class="frame" data-sheet-hold={tile.hold}>
+                        <C {...tile.props}/>
+                      </div>
+                    </figure>
+                  {/each}
+                </div>
+              </section>
+            {/each}
+          {/each}
+        </div>
+      {/each}
+    </div>
+  {:else if first.status === "live"}
+    <p class="waiting" data-empty>No ticket to draw the sheet for: the store holds none you can read. Create one, or open #/sheet/ID.</p>
+  {:else}
+    <p class="waiting" data-loading>asking the store for a ticket…</p>
+  {/if}
+</main>
+
+<style>
+  .sheet { min-height: 100vh; padding: 16px; background: var(--bg); color: var(--ink); font-family: var(--font-text); font-size: var(--text-size); }
+  .sheet-head h1 { margin: 0; font-family: var(--font-display); font-size: 20px; font-weight: var(--weight-strong); }
+  .sheet-head p { margin: 4px 0 12px; color: var(--muted); }
+  .schemes { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); border: var(--border) solid var(--line); border-radius: var(--radius-lg); overflow: hidden; }
+  .scheme { min-width: 0; padding: 12px 14px 20px; background: var(--bg); color: var(--ink); }
+  .scheme + .scheme { border-left: var(--border) solid var(--line); }
+  .scheme-name { margin: 0 0 8px; font-size: 15px; font-weight: var(--weight-bold); }
+  .group { margin: 18px 0 4px; font-size: 11px; font-weight: var(--weight-medium); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  .comp { padding: 8px 0 10px; border-top: var(--border) solid var(--line); }
+  .comp-name { margin: 0 0 6px; font-size: 12px; font-weight: var(--weight-strong); color: var(--accent); }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+  .tile { margin: 0; min-width: 0; overflow: hidden; background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius); }
+  .tile figcaption { padding: 2px 8px; font-size: 10px; color: var(--muted); background: var(--card); border-bottom: var(--border) solid var(--line); }
+  .tile[data-sheet-state=loading] figcaption, .tile[data-sheet-state=empty] figcaption { color: var(--ink); }
+  .tile[data-sheet-state=refused] figcaption { color: var(--warn); }
+  .frame { position: relative; height: 200px; overflow: hidden; contain: layout paint; background: var(--bg); }
+  .frame > :global([data-component]) { display: block; height: 100%; zoom: .85; }
+  .comp[data-small=true] .frame { height: 260px; }
+  .comp[data-small=true] .frame > :global([data-component]) { height: 200%; zoom: .5; }
+  .waiting { color: var(--muted); }
+  @media (max-width: 1100px) {
+    .schemes { grid-template-columns: minmax(0, 1fr); }
+    .scheme + .scheme { border-left: 0; border-top: var(--border) solid var(--line); }
+  }
+</style>

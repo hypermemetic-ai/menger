@@ -17,6 +17,8 @@
 
 <script>
   import { bus, live } from "plexus-ui/host";
+  // SURFACE-10: the sheet holds the loading state by its mark (data-sheet="loading").
+  let { sheet = null } = $props();
 
   const b = bus();
   const who = live({ snapshot: "session.whoami", params: {}, key: "principal", on: {} });
@@ -116,7 +118,7 @@
             <span class="muted" data-field="since">{since(g.at)}</span>
           </div>
         {/each}
-        {#if $mine.status === "pending"}<div class="tr"><span data-loading="">admin</span></div>{/if}
+        {#if sheet === "loading" || $mine.status === "pending"}<div class="tr"><span data-loading="">admin</span></div>{/if}
         {#if $mine.status === "live" && grants.length === 0}<p class="pad" data-empty="">No grant: you hold nothing yet.</p>{/if}
       </section>
       <section class="panel" data-method="auth.requires">
@@ -173,7 +175,7 @@
   .pill[data-current=true] { color: var(--accent); border-color: var(--accent); background: var(--sel); }
   .team { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: var(--border) solid var(--line); transition: background-color var(--motion-fast) var(--ease); }
   .team:last-child { border-bottom: 0; }
-  .team:hover { background: var(--hover); }
+  .team:hover, .team:global([data-sheet~=hover]) { background: var(--hover); }
   .team .muted { margin-left: auto; font-size: 12px; }
   .role { display: inline-block; padding: 0 7px; font-size: 11px; line-height: 18px; border-radius: var(--radius-md); color: var(--st-ready-fg); background: var(--st-ready-bg); }
   .role[data-role=admin] { color: var(--st-coding-fg); background: var(--st-coding-bg); }
@@ -183,25 +185,25 @@
   .th { padding-top: 6px; padding-bottom: 6px; font-size: 11px; font-weight: var(--weight-medium); color: var(--muted); border-bottom: var(--border) solid var(--line); }
   .tr { min-height: var(--pitch); border-bottom: var(--border) solid var(--line); transition: background-color var(--motion-fast) var(--ease); }
   .tr:last-child { border-bottom: 0; }
-  .tr:hover { background: var(--hover); }
+  .tr:hover, .tr:global([data-sheet~=hover]) { background: var(--hover); }
   .tr > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   code { font-family: var(--font-text); font-size: 12px; }
   .req { padding: 12px; }
   .ask { display: flex; gap: 8px; }
   .field { flex: 1; padding: 5px 10px; color: var(--ink); background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius); transition: border-color var(--motion-fast) var(--ease); }
-  .field:hover { border-color: var(--muted); }
-  .field:focus-visible { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px var(--sel); }
+  .field:hover, .field:global([data-sheet~=hover]) { border-color: var(--muted); }
+  .field:focus-visible, .field:global([data-sheet~=focus]) { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px var(--sel); }
   .field[aria-invalid=true] { border-color: var(--warn); }
   .btn { padding: 3px 10px; font-size: 12px; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; transition: border-color var(--motion-fast) var(--ease), background-color var(--motion-fast) var(--ease); }
-  .btn:hover:not(:disabled) { border-color: var(--muted); background: var(--hover); }
-  .btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-  .btn:disabled { color: var(--disabled); cursor: default; }
+  .btn:hover:not(:disabled), .btn:global([data-sheet~=hover]):not(:disabled) { border-color: var(--muted); background: var(--hover); }
+  .btn:focus-visible, .btn:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .btn:disabled, .btn:global([data-sheet~=disabled]) { color: var(--disabled); cursor: default; }
   .btn.primary { color: var(--bg); background: var(--accent); border-color: var(--accent); }
-  .btn.primary:hover:not(:disabled) { background: var(--accent); opacity: .9; }
+  .btn.primary:hover:not(:disabled), .btn.primary:global([data-sheet~=hover]):not(:disabled) { background: var(--accent); opacity: .9; }
   .btn.warn { color: var(--warn); }
   .sugg { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; font-size: 11px; color: var(--muted); }
   .sugg button { padding: 0 7px; font: 11px/18px var(--font-text); color: var(--chip-fg); background: var(--chip-bg); border: var(--border) solid var(--chip-line); border-radius: var(--radius-pill); cursor: pointer; }
-  .sugg button:hover { border-color: var(--muted); color: var(--ink); }
+  .sugg button:hover, .sugg button:global([data-sheet~=hover]) { border-color: var(--muted); color: var(--ink); }
   .answer { margin-top: 12px; padding: 10px 12px; background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius-lg); }
   .answer h3 { margin: 0 0 8px; font-size: 13px; font-weight: var(--weight-strong); }
   .answer h3 code { color: var(--accent); }

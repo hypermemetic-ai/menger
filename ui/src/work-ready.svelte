@@ -23,7 +23,7 @@
   import { bus, live } from "plexus-ui/host";
   import Row from "./work-ready-row.svelte";
 
-  let { filter = null } = $props();
+  let { filter = null, sheet = null } = $props();
   const b = bus();
   const ready = live({ snapshot: "tickets.work.ready",
     params: () => ({ filter: filter ?? null, summary: true, limit: LIMIT, fields: FIELDS }),
@@ -66,7 +66,7 @@
     <p class="wr-refused" data-refused role="alert">{ready.message ?? "this filter is not taken"}</p>
   {/if}
   <div class="wr-scroll">
-    {#if ready.status === "pending"}
+    {#if sheet === "loading" || ready.status === "pending"}
       <div class="wr-skel" data-loading aria-busy="true"><i></i><i></i><i></i><i></i><i></i></div>
     {/if}
     {#each rows as r (r.id)}
@@ -87,8 +87,8 @@
   .wr-approx { color: var(--muted); font-size: 11px; }
   .wr-filter { display: flex; gap: 6px; align-items: center; margin-left: 18px; font-size: 11px; color: var(--muted); }
   .wr-field { width: 340px; max-width: 60vw; padding: 3px 9px; font-size: 12px; color: var(--ink); background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius); transition: border-color var(--motion-fast) var(--ease); }
-  .wr-field:hover { border-color: var(--muted); }
-  .wr-field:focus-visible { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px var(--sel); }
+  .wr-field:hover, .wr-field:global([data-sheet~=hover]) { border-color: var(--muted); }
+  .wr-field:focus-visible, .wr-field:global([data-sheet~=focus]) { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px var(--sel); }
   .wr-live { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; font-size: 11px; color: var(--muted); }
   .wr-live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--live); }
   .wr-live[data-state=resyncing]::before, .wr-live[data-state=stale]::before { background: var(--warn); }

@@ -54,6 +54,16 @@
 //!   form controls, no token defined, no component's rule) and loads
 //!   `theme.css` before anything else; `ui/theme.toml` holds the tokens;
 //!   every board component, in both profiles, carries its own `<style>`.
+//! - SURFACE-10: the sheet and the tokens whole — `sheet-page.svelte` at
+//!   `#/sheet` places every component of `ui/src` by its bound mark
+//!   (`plexus-ui:<name>`); `ui/theme.toml` holds a pair for every status, a
+//!   mark for every kind and severity, the focus ring, the skeleton, the
+//!   disabled ink and the diff pair, each token once and on one spelling,
+//!   no builder's `# SURFACE-n` block left; every `var(--…)` a component
+//!   names is a token of the theme; every `:hover`, `:focus…`, `:disabled`,
+//!   selected and checked state a component draws has its `data-sheet~=`
+//!   alias; and `scripts/plexus-ui build` refuses a literal colour
+//!   (`--strict-colours`).
 //! - FRAME-9: `tether/` takes `plexus-login` from the sibling, as
 //!   plexus-substrate (which tether takes) does — one `plexus-login` in its
 //!   graph, never menger's tree's.
@@ -1776,4 +1786,223 @@ fn the_look_is_the_components_and_the_themes() {
         }
     }
     assert!(bare.is_empty(), "every board component carries its own <style>: {bare:?}");
+}
+
+/// SURFACE-10: what the sheet lacks — each component of `ui/src` (its name
+/// from `<name>.rhx` or `<name>.svelte`, the sheet aside) the sheet does not
+/// import as `plexus-ui:<name>`, and the route that is not `#/sheet`'s.
+fn sheet_breaks(names: &[String], sheet: &str, routes: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for n in names.iter().filter(|n| *n != "sheet-page") {
+        if !sheet.contains(&format!("\"plexus-ui:{n}\"")) {
+            out.push(format!("ui/src/sheet-page.svelte places no {n} (import … from \"plexus-ui:{n}\")"));
+        }
+    }
+    let routes: Value = serde_json::from_str(routes).unwrap_or_else(|e| panic!("routes.json: {e}"));
+    if routes.get("#/sheet").and_then(Value::as_str) != Some("sheet-page") {
+        out.push("ui/routes.json: #/sheet is not sheet-page".into());
+    }
+    out
+}
+
+/// The names of `ui/src`'s components, sorted.
+fn component_names(root: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(root.join("ui/src"))
+        .unwrap()
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter_map(|f| f.strip_suffix(".rhx").or_else(|| f.strip_suffix(".svelte")).map(str::to_string))
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn every_component_is_on_the_sheet() {
+    // The check reads what it is given.
+    let names = |n: &[&str]| n.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let sheet = "<script>\n  import Rows from \"plexus-ui:board-rows\";\n</script>\n";
+    assert_eq!(sheet_breaks(&names(&["board-rows", "sheet-page"]), sheet, r##"{"#/sheet":"sheet-page"}"##), Vec::<String>::new());
+    assert_eq!(
+        sheet_breaks(&names(&["board-rows", "nav-tree"]), sheet, "{}"),
+        ["ui/src/sheet-page.svelte places no nav-tree (import … from \"plexus-ui:nav-tree\")", "ui/routes.json: #/sheet is not sheet-page"]
+    );
+    // Then the real sheet: every component and every layout.
+    let root = root();
+    let sheet = std::fs::read_to_string(root.join("ui/src/sheet-page.svelte")).expect("ui/src/sheet-page.svelte: the sheet (SURFACE-10)");
+    let routes = std::fs::read_to_string(root.join("ui/routes.json")).unwrap();
+    let broken = sheet_breaks(&component_names(&root), &sheet, &routes);
+    assert!(broken.is_empty(), "SURFACE-10: a component missing from the sheet:\n  {}", broken.join("\n  "));
+}
+
+/// The statuses, kinds and severities the tokens paint (README "Surface").
+const STATUSES: [&str; 11] = ["draft", "pending", "ready", "coding", "in-review", "complete", "blocked", "superseded", "canceled", "epic", "doc"];
+const KINDS: [&str; 6] = ["scope", "build", "execution", "gap", "spike", "doc"];
+const SEVERITIES: [&str; 4] = ["critical", "high", "medium", "low"];
+
+/// The tokens `theme` (theme.toml's text) defines, with each line's number.
+fn theme_tokens(theme: &str) -> Vec<(usize, String, String)> {
+    theme
+        .lines()
+        .enumerate()
+        .filter_map(|(n, l)| {
+            let l = l.trim_start();
+            let rest = l.strip_prefix('"')?;
+            let (name, value) = rest.split_once('"')?;
+            name.starts_with("--").then(|| (n + 1, name.to_string(), value.trim_start().trim_start_matches('=').trim().to_string()))
+        })
+        .collect()
+}
+
+/// SURFACE-10: what keeps `theme` from being whole — a token APP-114's sheet
+/// wants that it lacks, a token twice, a builder's `# SURFACE-n` block not
+/// folded in, a colour not on `#rrggbb` / `#rrggbbaa`.
+fn theme_breaks(theme: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let tokens = theme_tokens(theme);
+    let mut want: Vec<String> = Vec::new();
+    for s in STATUSES {
+        want.push(format!("--st-{s}-bg"));
+        want.push(format!("--st-{s}-fg"));
+    }
+    want.extend(KINDS.iter().map(|k| format!("--kind-{k}")));
+    want.extend(SEVERITIES.iter().map(|k| format!("--sev-{k}")));
+    want.extend(["--focus", "--skeleton", "--disabled", "--row-sel", "--sel", "--hover", "--diff-add-bg", "--diff-add-fg", "--diff-del-bg", "--diff-del-fg"].map(String::from));
+    for w in &want {
+        if !tokens.iter().any(|(_, n, _)| n == w) {
+            out.push(format!("ui/theme.toml lacks {w}"));
+        }
+    }
+    for (i, (n, name, _)) in tokens.iter().enumerate() {
+        if tokens[..i].iter().any(|(_, m, _)| m == name) {
+            out.push(format!("ui/theme.toml:{n}: {name} twice"));
+        }
+    }
+    for (n, l) in theme.lines().enumerate() {
+        if l.contains("# SURFACE-") {
+            out.push(format!("ui/theme.toml:{}: a builder's block, not folded in: {}", n + 1, l.trim()));
+        }
+    }
+    for (n, name, value) in &tokens {
+        for (at, _) in value.match_indices('#') {
+            let hex = value[at + 1..].chars().take_while(char::is_ascii_hexdigit).count();
+            if hex != 6 && hex != 8 {
+                out.push(format!("ui/theme.toml:{n}: {name} spells a colour short ({}): #rrggbb or #rrggbbaa", &value[at..at + 1 + hex]));
+            }
+        }
+    }
+    out
+}
+
+/// The `<style>` of a component's source, comments aside.
+fn style_of(src: &str) -> String {
+    let Some(at) = src.find("<style>") else { return String::new() };
+    let body = &src[at + 7..];
+    let css = &body[..body.find("</style>").unwrap_or(body.len())];
+    let mut clean = String::new();
+    let mut c = css;
+    while let Some(o) = c.find("/*") {
+        clean.push_str(&c[..o]);
+        c = c[o..].find("*/").map_or("", |e| &c[o + e + 2..]);
+    }
+    clean.push_str(c);
+    clean
+}
+
+/// SURFACE-10: each `var(--name` of a component's sheet that the theme does
+/// not define (nor the sheet itself, as `--name:`).
+fn token_breaks(sources: &[(String, String)], theme: &str) -> Vec<String> {
+    let defined: Vec<String> = theme_tokens(theme).into_iter().map(|(_, n, _)| n).collect();
+    let mut out = Vec::new();
+    for (f, src) in sources {
+        let css = style_of(src);
+        let mut seen: Vec<&str> = Vec::new();
+        for (at, _) in css.match_indices("var(--") {
+            let name = &css[at + 4..];
+            let name = &name[..name.find(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).unwrap_or(name.len())];
+            if !defined.iter().any(|d| d == name) && !css.contains(&format!("{name}:")) && !seen.contains(&name) {
+                seen.push(name);
+                out.push(format!("ui/src/{f}: var({name}) — no such token in ui/theme.toml"));
+            }
+        }
+    }
+    out
+}
+
+/// SURFACE-10: each state a component's sheet draws on a pseudo-class or a
+/// mark — `:hover`, `:focus-visible` / `:focus`, `:disabled`, a selected or a
+/// checked row — whose sheet never names its alias `[data-sheet~=…]`
+/// (APP-114: the sheet shows a state held, without the pointer).
+fn alias_breaks(sources: &[(String, String)]) -> Vec<String> {
+    const STATES: [(&str, &[&str]); 5] = [
+        ("hover", &[":hover"]),
+        ("focus", &[":focus"]),
+        ("disabled", &[":disabled"]),
+        ("selected", &["[data-selected", "[aria-selected"]),
+        ("checked", &[":checked", "[aria-pressed", "[aria-checked", "[data-checked"]),
+    ];
+    let mut out = Vec::new();
+    for (f, src) in sources {
+        let css = style_of(src);
+        for (state, marks) in STATES {
+            if marks.iter().any(|m| css.contains(m)) && !css.contains(&format!("[data-sheet~={state}]")) {
+                out.push(format!("ui/src/{f}: draws {state} ({}) and no [data-sheet~={state}]", marks.iter().filter(|m| css.contains(*m)).copied().collect::<Vec<_>>().join(", ")));
+            }
+        }
+    }
+    out
+}
+
+/// Whether `script` (scripts/plexus-ui) hands `build` the strict lint.
+fn builds_strict(script: &str) -> bool {
+    script.lines().any(|l| !l.trim_start().starts_with('#') && l.contains("build") && l.contains("--strict-colours"))
+}
+
+#[test]
+fn the_tokens_are_whole() {
+    // The checks read what they are given.
+    let ok = {
+        let mut t = String::from("[colour.status]\n");
+        for s in STATUSES {
+            t += &format!("\"--st-{s}-bg\" = ['#ffffff', '#000000', '{s}']\n\"--st-{s}-fg\" = ['#000000', '#ffffff', '{s}']\n");
+        }
+        for k in KINDS {
+            t += &format!("\"--kind-{k}\" = ['#123456', '#654321', '{k}']\n");
+        }
+        for k in SEVERITIES {
+            t += &format!("\"--sev-{k}\" = ['#123456', '#654321', '{k}']\n");
+        }
+        for k in ["focus", "skeleton", "disabled", "row-sel", "sel", "hover", "diff-add-bg", "diff-add-fg", "diff-del-bg", "diff-del-fg"] {
+            t += &format!("\"--{k}\" = ['#123456', '#1d1c1a24', '{k}']\n");
+        }
+        t
+    };
+    assert_eq!(theme_breaks(&ok), Vec::<String>::new());
+    let bad = format!("{ok}# SURFACE-4\n\"--focus\" = ['#a23', '#ffffff', 'again']\n");
+    let got = theme_breaks(&bad);
+    assert!(got.iter().any(|b| b.contains("--focus twice")) && got.iter().any(|b| b.contains("# SURFACE-4")) && got.iter().any(|b| b.contains("#a23")), "{got:?}");
+    assert!(theme_breaks("").iter().any(|b| b.contains("--st-epic-bg")));
+    let given = |c: &[(&str, &str)]| c.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect::<Vec<_>>();
+    assert_eq!(token_breaks(&given(&[("a.svelte", "<style>.a { color: var(--ink); --w: 2px; width: var(--w); background: var(--nope, var(--bg)) }</style>")]), "\"--ink\" = ['#000000', 'x']\n\"--bg\" = ['#000000', 'x']\n"), ["ui/src/a.svelte: var(--nope) — no such token in ui/theme.toml"]);
+    assert_eq!(
+        alias_breaks(&given(&[("a.svelte", "<style>.r:hover, .r:global([data-sheet~=hover]) { } .r[data-selected] { }</style>"), ("b.rhx", "<p/>")])),
+        ["ui/src/a.svelte: draws selected ([data-selected) and no [data-sheet~=selected]"]
+    );
+    assert!(builds_strict("if [[ ${1:-} == build ]]; then set -- build --strict-colours \"${@:2}\"; fi") && !builds_strict("# build --strict-colours\nexec plexus-ui \"$@\""));
+
+    // Then the real ones.
+    let root = root();
+    let theme = std::fs::read_to_string(root.join("ui/theme.toml")).unwrap();
+    let broken = theme_breaks(&theme);
+    assert!(broken.is_empty(), "SURFACE-10: ui/theme.toml is not whole:\n  {}", broken.join("\n  "));
+    let sources: Vec<(String, String)> = component_names(&root)
+        .into_iter()
+        .flat_map(|n| [format!("{n}.rhx"), format!("{n}.svelte")])
+        .filter_map(|f| std::fs::read_to_string(root.join("ui/src").join(&f)).ok().map(|t| (f, t)))
+        .collect();
+    let broken = token_breaks(&sources, &theme);
+    assert!(broken.is_empty(), "SURFACE-10: a component paints with a token the theme lacks:\n  {}", broken.join("\n  "));
+    let broken = alias_breaks(&sources);
+    assert!(broken.is_empty(), "SURFACE-10: a state the sheet cannot hold:\n  {}", broken.join("\n  "));
+    let script = std::fs::read_to_string(root.join("scripts/plexus-ui")).unwrap();
+    assert!(builds_strict(&script), "SURFACE-10: scripts/plexus-ui builds with --strict-colours (a literal colour is refused, not warned)");
 }

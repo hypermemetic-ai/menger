@@ -514,11 +514,12 @@ ui_tool_build() { # LOG → UI_TOOL
 }
 # The app's bundle and the studio's, built by the tool — CONTRACT empty: unstamped (manifest.contract
 # unknown), the build that says the bundle's uses (SURFACE-11); else stamped --contract CONTRACT.
+# SURFACE-10: --strict-colours — a literal colour in a component's <style> refuses the build.
 ui_bundle() { # LOG CONTRACT → dist/ui.tar
-  (cd "$BUILD" && "$UI_TOOL" build "$BUILD/ui" --engine "$BUILD/dist/engine" ${2:+--contract "$2"} --commit "menger@$short" -o "$BUILD/dist/ui.tar" --node-modules "$BUILD/../plexus-ui/node_modules") >>"$1" 2>&1
+  (cd "$BUILD" && "$UI_TOOL" build "$BUILD/ui" --strict-colours --engine "$BUILD/dist/engine" ${2:+--contract "$2"} --commit "menger@$short" -o "$BUILD/dist/ui.tar" --node-modules "$BUILD/../plexus-ui/node_modules") >>"$1" 2>&1
 }
 studio_bundle() { # LOG CONTRACT PLEXUS_UI_SHORT → dist/studio.tar
-  (cd "$BUILD" && "$UI_TOOL" build "$BUILD/../plexus-ui/studio" --engine "$BUILD/dist/engine" --name studio ${2:+--contract "$2"} --commit "plexus-ui@$3" -o "$BUILD/dist/studio.tar" --node-modules "$BUILD/../plexus-ui/node_modules") >>"$1" 2>&1
+  (cd "$BUILD" && "$UI_TOOL" build "$BUILD/../plexus-ui/studio" --strict-colours --engine "$BUILD/dist/engine" --name studio ${2:+--contract "$2"} --commit "plexus-ui@$3" -o "$BUILD/dist/studio.tar" --node-modules "$BUILD/../plexus-ui/node_modules") >>"$1" 2>&1
 }
 V2_STEPS=""
 build_v2() { # V2-7, FRAME-8: every step on this machine — the release, the tool, the engine, the contract, the bundle, the compiler module

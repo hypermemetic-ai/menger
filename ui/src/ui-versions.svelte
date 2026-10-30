@@ -18,6 +18,8 @@
 <script>
   import { untrack } from "svelte";
   import { bus, live } from "plexus-ui/host";
+  // SURFACE-10: the sheet holds the loading state by its mark (data-sheet="loading").
+  let { sheet = null } = $props();
 
   const b = bus();
   const REACHED = ["tickets.list", "epics.list", "orgs.list", "members.mine", "session.whoami", "auth.whoami", "ui.versions"];
@@ -186,7 +188,7 @@
           {#if ans.refused}<div class="ans"><p data-refused="">refused: {ans.refused}</p></div>{/if}
         </div>
       {/each}
-      {#if list == null}<div class="tr"><span data-loading="">00000000</span></div>{/if}
+      {#if sheet === "loading" || list == null}<div class="tr"><span data-loading="">00000000</span></div>{/if}
       {#if list != null && versions.length === 0}<p class="empty" data-empty="">No version is kept: nothing was pushed.</p>{/if}
     </div>
     <div class="side">
@@ -230,7 +232,7 @@
   .th { padding-top: 6px; padding-bottom: 6px; font-size: 11px; font-weight: var(--weight-medium); color: var(--muted); border-bottom: var(--border) solid var(--line); }
   .tr { min-height: 34px; border-bottom: var(--border) solid var(--line); transition: background-color var(--motion-fast) var(--ease); }
   .tr:last-child { border-bottom: 0; }
-  .tr:hover { background: var(--hover); }
+  .tr:hover, .tr:global([data-sheet~=hover]) { background: var(--hover); }
   .tr[data-live=true] { background: var(--sel); box-shadow: inset 3px 0 0 var(--accent); }
   .tr > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .hash { color: var(--accent); font-variant-numeric: tabular-nums; }
@@ -242,11 +244,11 @@
   .who .pill { margin: 0 2px 0 0; }
   .pill.live { margin: 0; color: var(--live); border-color: var(--live); background: transparent; }
   .btn { padding: 3px 10px; font-size: 12px; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; transition: border-color var(--motion-fast) var(--ease), background-color var(--motion-fast) var(--ease); }
-  .btn:hover:not(:disabled) { border-color: var(--muted); background: var(--hover); }
-  .btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-  .btn:disabled { color: var(--disabled); cursor: default; }
+  .btn:hover:not(:disabled), .btn:global([data-sheet~=hover]):not(:disabled) { border-color: var(--muted); background: var(--hover); }
+  .btn:focus-visible, .btn:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .btn:disabled, .btn:global([data-sheet~=disabled]) { color: var(--disabled); cursor: default; }
   .btn.primary { color: var(--bg); background: var(--accent); border-color: var(--accent); }
-  .btn.primary:hover:not(:disabled) { background: var(--accent); opacity: .9; }
+  .btn.primary:hover:not(:disabled), .btn.primary:global([data-sheet~=hover]):not(:disabled) { background: var(--accent); opacity: .9; }
   .ans { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 -10px; padding: 6px 10px 10px; background: var(--panel); }
   .q { color: var(--ink); }
   .landed { display: inline-flex; gap: 6px; align-items: center; font-size: 11px; color: var(--live); }
@@ -261,7 +263,7 @@
   .st { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 8px; align-items: center; min-height: 26px; padding: 0 8px; font-size: 12px; border-bottom: var(--border) solid var(--line); transition: background-color var(--motion-fast) var(--ease); }
   .st.four { grid-template-columns: minmax(0, 1fr) 60px minmax(0, 1fr) auto; }
   .st:last-child { border-bottom: 0; }
-  .st:hover { background: var(--hover); }
+  .st:hover, .st:global([data-sheet~=hover]) { background: var(--hover); }
   .st > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .src { font-size: 11px; color: var(--muted); }
   .src[data-src=set] { color: var(--accent); }

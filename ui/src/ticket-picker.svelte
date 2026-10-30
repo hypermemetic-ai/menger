@@ -107,14 +107,14 @@
 <style>
   .picker { display: block; position: relative; min-width: 0; }
   .picker-input { width: 100%; padding: 5px 10px; color: var(--ink); font: inherit; background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius); transition: border-color var(--motion-fast) var(--ease); }
-  .picker-input:hover { border-color: var(--muted); }
-  .picker-input:focus-visible { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px var(--sel); }
+  .picker-input:hover, .picker-input:global([data-sheet~=hover]) { border-color: var(--muted); }
+  .picker-input:focus-visible, .picker-input:global([data-sheet~=focus]) { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px var(--sel); }
   .picker-hits { position: absolute; z-index: 5; left: 0; right: 0; top: calc(100% + 4px); list-style: none; margin: 0; padding: 4px; max-height: 260px; overflow: auto; background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-lg); box-shadow: 0 10px 30px var(--shadow); }
   .pick { display: grid; grid-template-columns: 10px auto minmax(0, 1fr) auto; gap: 8px; align-items: center; width: 100%; height: var(--pitch); padding: 0 8px; font: inherit; text-align: left; color: var(--ink); white-space: nowrap; background: none; border: 0; border-radius: var(--radius); cursor: pointer; transition: background-color var(--motion-fast) var(--ease); }
   .pick > * { pointer-events: none; }
-  .pick:hover { background: var(--hover); }
-  .pick:focus-visible { outline: none; background: var(--row-sel); box-shadow: inset 0 0 0 2px var(--focus); }
-  .hit[aria-selected="true"] .pick { background: var(--row-sel); box-shadow: inset 2px 0 0 var(--accent); }
+  .pick:hover, .pick:global([data-sheet~=hover]) { background: var(--hover); }
+  .pick:focus-visible, .pick:global([data-sheet~=focus]) { outline: none; background: var(--row-sel); box-shadow: inset 0 0 0 2px var(--focus); }
+  .hit[aria-selected="true"] .pick, .hit:global([data-sheet~=selected]) .pick { background: var(--row-sel); box-shadow: inset 3px 0 0 var(--accent); }
   .match { color: inherit; background: var(--sel); border-radius: var(--radius-xs); box-shadow: 0 1px 0 var(--accent); }
   .pick-id { color: var(--accent); font-variant-numeric: tabular-nums; }
   .pick-title { overflow: hidden; text-overflow: ellipsis; }
@@ -127,10 +127,14 @@
   .pick[data-status="Blocked"] .pick-status { background: var(--st-blocked-bg); color: var(--st-blocked-fg); }
   .pick[data-status="Superseded"] .pick-status { background: var(--st-superseded-bg); color: var(--st-superseded-fg); }
   .pick[data-status="Canceled"] .pick-status { background: var(--st-canceled-bg); color: var(--st-canceled-fg); }
+  .pick[data-status="Draft"] .pick-status { background: var(--st-draft-bg); color: var(--st-draft-fg); }
+  .pick[data-status="Epic"] .pick-status { background: var(--st-epic-bg); color: var(--st-epic-fg); }
+  .pick[data-status="Doc"] .pick-status { background: var(--st-doc-bg); color: var(--st-doc-fg); }
   .kmark { display: inline-block; width: 8px; height: 8px; background: var(--kind-build); border-radius: 50%; }
   .kmark[data-kind="scope"] { background: var(--kind-scope); border-radius: var(--radius-xs); transform: rotate(45deg) scale(.85); }
   .kmark[data-kind="gap"] { background: var(--kind-gap); border-radius: 0; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
   .kmark[data-kind="spike"] { background: none; border: 2px solid var(--kind-spike); }
+  .kmark[data-kind="doc"] { width: 7px; height: 9px; background: none; border: var(--border) solid var(--kind-doc); border-radius: var(--radius-xs); }
   .kmark[data-kind="execution"] { background: var(--kind-execution); border-radius: var(--radius-xs); }
   .picker-skeleton { height: 12px; margin: 8px; background: var(--skeleton); border-radius: var(--radius-sm); animation: breathe var(--motion-pulse) var(--ease) infinite alternate; }
   .picker-empty { padding: 6px 8px; color: var(--muted); }

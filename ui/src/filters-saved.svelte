@@ -197,11 +197,11 @@
   .fs-field { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--muted); }
   .fs-field.grow { flex: 1; min-width: 220px; }
   .fs-field input, .fs-to { padding: 5px 8px; color: var(--ink); background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius); transition: border-color var(--motion-fast) var(--ease); }
-  .fs-field input:hover, .fs-to:hover { border-color: var(--muted); }
-  .fs-field input:focus-visible, .fs-to:focus-visible { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px var(--sel); }
+  .fs-field input:hover, .fs-to:hover, .fs-field input:global([data-sheet~=hover]), .fs-to:global([data-sheet~=hover]) { border-color: var(--muted); }
+  .fs-field input:focus-visible, .fs-to:focus-visible, .fs-field input:global([data-sheet~=focus]), .fs-to:global([data-sheet~=focus]) { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px var(--sel); }
   .fs-btn { padding: 4px 10px; font-size: 12px; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; transition: background-color var(--motion-fast) var(--ease), border-color var(--motion-fast) var(--ease); }
-  .fs-btn:hover { background: var(--hover); }
-  .fs-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .fs-btn:hover, .fs-btn:global([data-sheet~=hover]) { background: var(--hover); }
+  .fs-btn:focus-visible, .fs-btn:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
   .fs-btn.primary { color: var(--accent); border-color: var(--accent); background: var(--sel); }
   .fs-btn.danger { color: var(--warn); }
   .fs-btn[disabled] { color: var(--disabled); border-color: var(--line); background: var(--card); cursor: not-allowed; }
@@ -212,12 +212,12 @@
   .fs-check code, .fs-text code { font-family: var(--font-text); color: var(--ink); }
   .fs-rows { list-style: none; margin: 0; padding: 0; }
   .fs-row { border-bottom: var(--border) solid var(--line); }
-  .fs-row[data-selected] { background: var(--row-sel); box-shadow: inset 2px 0 0 var(--accent); }
+  .fs-row[data-selected], .fs-row:global([data-sheet~=selected]) { background: var(--row-sel); box-shadow: inset 2px 0 0 var(--accent); }
   .fs-line { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: center; min-height: var(--pitch); padding: 0 8px; transition: background-color var(--motion-fast) var(--ease); }
-  .fs-row:not([data-selected]) .fs-line:hover { background: var(--hover); }
+  .fs-row:not([data-selected]) .fs-line:hover, .fs-row:not([data-selected]) .fs-line:global([data-sheet~=hover]) { background: var(--hover); }
   .fs-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0; color: var(--ink); text-align: left; font: inherit; font-weight: var(--weight-medium); background: none; border: 0; cursor: pointer; }
-  .fs-name:hover { color: var(--accent); }
-  .fs-name:focus-visible { outline: 2px solid var(--focus); border-radius: var(--radius-sm); }
+  .fs-name:hover, .fs-name:global([data-sheet~=hover]) { color: var(--accent); }
+  .fs-name:focus-visible, .fs-name:global([data-sheet~=focus]) { outline: 2px solid var(--focus); border-radius: var(--radius-sm); }
   .fs-n:empty { display: none; }
   .fs-n { padding: 0 7px; font-size: 11px; line-height: 18px; color: var(--chip-fg); background: var(--chip-bg); border: var(--border) solid var(--chip-line); border-radius: var(--radius-pill); font-variant-numeric: tabular-nums; }
   .fs-detail { padding: 2px 8px 10px; }
