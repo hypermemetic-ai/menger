@@ -1249,6 +1249,16 @@ fn board_breaks(sources: &[(String, String)], routes: &str, slots: &str) -> Vec<
     match text(&format!("{SV_FRAME}.rhx")) {
         None => out.push(format!("ui/src/{SV_FRAME}.rhx is missing (the rhx frame the Svelte board is drawn in)")),
         Some(t) => {
+            // The frame only places the sections: no state, no live, no call, no
+            // component of its own — so the Svelte board's numbers are Svelte's.
+            for word in ["live(", "call(", "state(", "fn "] {
+                if t.contains(word) {
+                    out.push(format!("ui/src/{SV_FRAME}.rhx holds `{word}`: the frame only places its sections"));
+                }
+            }
+            for tag in t.split('<').skip(1).filter_map(|r| r.split(|c: char| c.is_whitespace() || c == '/' || c == '>').next()).filter(|n| n.contains('-')) {
+                out.push(format!("ui/src/{SV_FRAME}.rhx draws <{tag}>: the frame only places its sections"));
+            }
             for (slot, _) in sv {
                 if !t.contains(&format!("<slot name=\"{slot}\"")) {
                     out.push(format!("ui/src/{SV_FRAME}.rhx marks no section {slot} (<slot name=\"{slot}\" …/>)"));
@@ -1291,6 +1301,16 @@ fn each_board_component_has_both_profiles() {
     );
     let frameless: Vec<(String, String)> = good.iter().filter(|(f, _)| f != "board-frame.rhx").cloned().chain([("board-frame.rhx".to_string(), r#"<slot name="nav"/>"#.to_string())]).collect();
     assert_eq!(board_breaks(&frameless, routes, slots).len(), 3, "a frame that marks one section of four");
+    let busy: Vec<(String, String)> = good
+        .iter()
+        .filter(|(f, _)| f != "board-frame.rhx")
+        .cloned()
+        .chain([("board-frame.rhx".to_string(), "<script>\n  prop(\"filter\");\n  let n = live(#{ snapshot: \"tickets.nav.counts\", key: \"shortcode\" });\n</script>\n<div class=\"board-layout\"><filter-line filter={filter}/><slot name=\"top\"/><slot name=\"nav\"/><slot name=\"main\"/><slot name=\"palette\"/></div>".to_string())])
+        .collect();
+    assert_eq!(
+        board_breaks(&busy, routes, slots),
+        ["ui/src/board-frame.rhx holds `live(`: the frame only places its sections", "ui/src/board-frame.rhx draws <filter-line>: the frame only places its sections"]
+    );
 
     // Then menger's.
     let root = root();

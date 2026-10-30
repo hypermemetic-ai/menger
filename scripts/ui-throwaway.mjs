@@ -64,7 +64,11 @@ export function run(cmd, argv, opts = {}) {
   return r.stdout;
 }
 
-/** A work directory under /tmp/claude-1000/ named `prefix-…`. */
+/** A work directory `prefix-…` (callers name it `ui8-…`) under $TMPDIR, else
+ *  /tmp/claude-1000/. The caller removes it: below /tmp/claude-UID/
+ *  `scripts/cleanup-gate.sh --path DIR` takes it (shape `session`); below
+ *  another $TMPDIR the gate has no shape for it, so the caller who set
+ *  $TMPDIR removes what it holds. */
 export function workDir(prefix) {
   // FRAME-14: $TMPDIR when it is set (a seeded million wants more than the
   // tmpfs holds), else /tmp/claude-1000 as before.
@@ -138,6 +142,10 @@ export class Throwaway {
     ];
     this.child = spawn(path.join(TARGET, this.profile, "menger"), argv, { env, stdio: ["ignore", "ignore", "pipe"] });
     this.child.stderr.on("data", (d) => (this.stderr += d.toString()));
+    // FRAME-14: whatever ends the caller, the server goes with it (unless kept).
+    process.once("exit", () => {
+      if (!this.keep) this.stop();
+    });
     const deadline = Date.now() + 1_800_000;
     while (Date.now() < deadline) {
       if (this.child.exitCode !== null) throw new Error(`menger exited at start:\n${this.stderr}`);
