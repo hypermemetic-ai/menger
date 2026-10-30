@@ -4,7 +4,9 @@
      live on `group_changed` — and a shortcode opens to one page of its
      root's children (nav-children.rhx's: one list, asked when it opens).
      Flat is one page of `list { filter, summary, limit: 200 }` in store order
-     (nav-flat.rhx's). Under a filter each row says how many match. -->
+     (nav-flat.rhx's). Under a filter each row says how many match. FRAME-20:
+     Tree iterates the handle's getter, `groups.rows` (only a changed group
+     renders). -->
 <script module>
   export const uses = ["tickets.nav.groups", "tickets.watch", "tickets.nav.counts", "tickets.list"];
 </script>
@@ -58,7 +60,7 @@
     </ul>
   {:else}
     <ul class="nav-groups">
-      {#each $groups.rows as g (g.shortcode)}
+      {#each groups.rows as g (g.shortcode)}
         <li class="nav-group" data-nav-group={g.shortcode}>
           <div class="nav-group-row">
             <button class="nav-toggle" data-nav-toggle={g.shortcode} aria-expanded={open.includes(g.shortcode) ? "true" : "false"} onclick={() => toggle(g)}>{open.includes(g.shortcode) ? "▾" : "▸"}</button>

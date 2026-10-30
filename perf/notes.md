@@ -577,3 +577,43 @@ nine calls leave within 2 ms; their acks come back in bursts — at ~20, ~60–8
 in the same millisecond — not in the order sent, and the list waited 58, 165 and 160 ms for its
 ack, then 54–244 ms more to its `done`. Not one call after another, but held and released together
 (PLEXUS-10); the 200 frames' share is PERF-15's.
+
+## A live change crosses as the change — `pages-probe.mjs --runs 15` (FRAME-20, 2026-10-30)
+
+Locally, release build, 15 cold loads after a warm-up, both boards; **before** is plexus-ui main
+(567945c + the README's 633f776) with v2's `ui/`, **after** is plexus-ui FRAME-20 (0dac48b) — built
+with `PLEXUS_UI_SRC` pointing at that worktree, the tool too (`scripts/plexus-ui` builds it from
+there: the svelte/1 face is compiled into the tool) — with the Svelte board's rows and nav groups
+iterated through the handle's getter (`rows.rows`, `groups.rows`; `$rows.rows` compiles to an each
+with mutable item sources, every row's effects re-run). Created row: its `created` frame to its
+`.board-row`, min / median / max and the interquartile range, ms.
+
+| N | board | | created row min / median / max (IQR) | first row | wasm | JS heap | load (1 min) |
+|---|---|---|---|---|---|---|---|
+| 10⁵ | rhx | before | 7.0 / 8.1 / 12.9 (4.0) | 0.166 s | 6.9 MiB | 1.3 MiB | 2.8 |
+| 10⁵ | Svelte | before | 6.1 / 9.9 / 11.4 (2.5) | 0.135 s | 4.3 MiB | 2.7 MiB | 2.3 |
+| 10⁶ | rhx | before | 6.6 / 7.5 / 14.3 (3.5) | 0.220 s | 9.4 MiB | 1.4 MiB | 1.7 |
+| 10⁶ | Svelte | before | 5.7 / 15.1 / 24.6 (8.0) | 0.218 s | 5.3 MiB | 3.2 MiB | 2.4 → 11.1 |
+| 10⁵ | rhx | after | 7.1 / 8.0 / 9.8 (1.1) | 0.169 s | 6.9 MiB | 1.3 MiB | 1.9 |
+| 10⁵ | Svelte | after | 4.4 / 6.8 / 8.0 (1.4) | 0.141 s | 4.3 MiB | 2.7 MiB | 2.6 |
+| 10⁶ | rhx | after | 6.7 / 10.3 / 16.3 (6.4) | 0.192 s | 9.4 MiB | 1.4 MiB | 2.1 |
+| 10⁶ | Svelte | after | 3.4 / 6.7 / 9.8 (2.8) | 0.187 s | 5.3 MiB | 3.3 MiB | 2.0 |
+
+(Before's Svelte 10⁶ ran while the machine's load climbed to 11; another builder's probe ran beside
+the after runs.) **The acceptance** (review of FRAME-20's phase 1): the Svelte board passes when its
+median is within rhx's median plus the larger IQR — at 10⁶ after, 6.7 ms against rhx's 10.3 ms
+(+6.4): within, and below rhx's median; at 10⁵ 6.8 against 8.0. The first row, wasm and JS heap
+are unchanged: the first page still crosses once, whole.
+
+**What crosses per change** (phase 0's instrument: busOf's `live` wrapped, every `JSON.parse` of a
+delivery counted; the Svelte board at 10⁵, one `created`, one `status_changed` of a row on screen):
+
+| change | before | after |
+|---|---|---|
+| `created` | 3 collections whole: `tickets.list` 201 rows 71,785 B, `nav.groups` 102 rows 21,584 B, `nav.extents` 102 rows 5,326 B — 98,695 B, every row object new | the three moves, one row each: 371 + 371 + 231 = 973 B; 200 of 201, 101 of 102, 101 of 102 row objects kept |
+| `status_changed` | `tickets.list` whole, 72,361 B, 0 of 201 kept | 984 B (the row), 200 of 201 kept |
+
+New row objects and row renders per change are 1 each (the framework's smoke,
+`a_created_row_is_one_new_object`: 87 bytes, A-201 alone rendered; a `status_changed` 84 bytes,
+A-7 alone). The JS heap over 100 changes after a GC: the first hundred +250–300 KiB on both
+before and after (warming, once), the second +45 KiB before, +23–60 KiB after; rhx +6–10 KiB.
