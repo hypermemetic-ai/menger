@@ -700,7 +700,9 @@ question.
 - **Tests per ticket are a selection; the suite runs per batch** (CI-3,
   owner 2026-10-18). A ticket's gate is the tests it adds and the nearest
   ones it touches (`cargo test -p <crate> <filter>`, the one wire test, the
-  one browser test) — never `cargo test --workspace` per ticket. Merges
+  one browser test; and `cargo test --workspace --doc` when a public signature or a crate's doc
+  example moves — a lone `-p <crate> --doc` is a false red, the examples resolve only under the
+  workspace's feature unification; PERF-20) — never `cargo test --workspace` per ticket. Merges
   gather on the branch, and the full suite runs once against the batch,
   right after its deploy to test (`deploy/pipeline suite`); a red one keeps
   the release from prod. A red there is the batch's: find the commit, file a
