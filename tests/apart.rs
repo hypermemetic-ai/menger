@@ -1020,7 +1020,7 @@ fn draws_tag(src: &str, name: &str) -> bool {
 fn svelte_imports(src: &str) -> Vec<String> {
     src.lines()
         .filter(|l| l.trim_start().starts_with("import "))
-        .filter_map(|l| l.split("from").nth(1))
+        .filter_map(|l| l.rsplit_once(" from ").map(|(_, r)| r))
         .filter_map(|r| r.trim().trim_end_matches(';').trim_matches(|c| c == '"' || c == '\'').strip_prefix("./")?.strip_suffix(".svelte").map(str::to_string))
         .collect()
 }
@@ -1355,14 +1355,21 @@ fn each_board_component_has_both_profiles() {
 
 /// A svelte/1 source's code: its text without comments — `<!-- … -->`,
 /// `/* … */`, and `//` to the line's end where it starts a line or follows a
-/// space (so `"https://…"` stays) — so a comment may say what went.
+/// space (so `"https://…"` stays) — so a comment may say what went. An
+/// unclosed `<!--` or `/*` hides nothing: the rest is kept as code.
 fn svelte_code(src: &str) -> String {
     let mut out = String::new();
     let mut rest = src;
     while let Some(at) = [rest.find("<!--"), rest.find("/*")].into_iter().flatten().min() {
         out.push_str(&rest[..at]);
         let close = if rest[at..].starts_with("<!--") { "-->" } else { "*/" };
-        rest = rest[at..].find(close).map_or("", |e| &rest[at + e + close.len()..]);
+        match rest[at..].find(close) {
+            Some(e) => rest = &rest[at + e + close.len()..],
+            None => {
+                out.push_str(&rest[at..]);
+                rest = "";
+            }
+        }
     }
     out.push_str(rest);
     out.lines()
@@ -1374,62 +1381,105 @@ fn svelte_code(src: &str) -> String {
         .join("\n")
 }
 
-/// The marks of a sanitizer or a markdown renderer of a component's own:
-/// the copied allow-list parsed the body inert (`DOMParser`), drew what it
-/// kept as data-named tags (`<svelte:element`), listed `"script"` among what
-/// it dropped, and rendered with a `markdown` of its own.
-const OWN_SANITIZER: [&str; 7] = ["DOMParser", "parseFromString", "svelte:element", "\"script\"", "sanitiz", "function markdown", "const markdown"];
+/// The marks of a sanitizer or a markdown renderer of a component's own, or
+/// of HTML set around the bus: the copied allow-list parsed the body inert
+/// (`DOMParser`), listed `"script"` among what it dropped, and rendered with
+/// a `markdown` of its own; HTML set by hand (`innerHTML`, its `bind:`,
+/// `outerHTML`, `insertAdjacentHTML`, `createContextualFragment`). A
+/// `<svelte:element this={…} {...attrs}>` (tags and attributes from data) is
+/// [`spreads_element`]'s; a dynamic tag alone is fine.
+const OWN_SANITIZER: [&str; 10] =
+    ["DOMParser", "parseFromString", "\"script\"", "sanitiz", "function markdown", "const markdown", "innerHTML", "outerHTML", "insertAdjacentHTML", "createContextualFragment"];
+
+/// What keeps time by hand (beside a `live(`, the registry's `debounce_ms`
+/// is the way; a focus or a scroll is Svelte's `tick()` or an action).
+const OWN_TIMERS: [&str; 6] = ["setTimeout(", "setInterval(", "requestAnimationFrame(", "queueMicrotask(", "Date.now(", "performance.now("];
+
+/// Whether `code` draws a `<svelte:element …>` that spreads attributes
+/// (`{...`) — elements and attributes taken from data, the copied
+/// allow-list's way of drawing a body.
+fn spreads_element(code: &str) -> bool {
+    code.match_indices("<svelte:element").any(|(at, _)| code[at..].split('>').next().is_some_and(|tag| tag.contains("{...")))
+}
+
+/// Whether an `{#each …}` header in `code` reads a store (`$name`): Svelte
+/// 5.57.2 compares the items by value there, so every row's effects re-run
+/// on each change — `const list = $derived($rows.rows)` first.
+fn each_over_store(code: &str) -> bool {
+    code.match_indices("{#each").any(|(at, _)| {
+        let head = &code[at + "{#each".len()..];
+        let head = &head[..head.find(" as ").or_else(|| head.find('}')).unwrap_or(head.len())];
+        head.match_indices('$').any(|(i, _)| head[i + 1..].starts_with(|c: char| c.is_ascii_alphabetic() || c == '_'))
+    })
+}
+
+/// Whether `code` imports `markdown` from `plexus-ui/host` (either quote,
+/// over as many lines as the import takes).
+fn imports_host_markdown(code: &str) -> bool {
+    let flat = code.split_whitespace().collect::<Vec<_>>().join(" ");
+    ["\"plexus-ui/host\"", "'plexus-ui/host'"].iter().any(|q| {
+        flat.match_indices(q).any(|(at, _)| flat[..at].rfind("import ").is_some_and(|i| flat[i..at].contains("markdown")))
+    })
+}
+
+/// What one of the board's svelte/1 sources must say (each mark at least so
+/// many times), must not say, and must import.
+type Wants = (&'static str, &'static [(&'static str, usize)], &'static [&'static str], &'static [&'static str]);
+
+/// FRAME-25's wants of the board's sources: the palette's two lives on
+/// `when` and `debounce_ms: 80`; the rows' window moved through the handle's
+/// `update` (`params: () =>`, `debounce_ms: 20`, never a collection remade
+/// in a `$derived`); the ticket page's body through `markdown`, its chips
+/// imported and none drawn inline, its collections followed, not remade (a
+/// route to it is an `update(props)`); the nav's Flat and children imported
+/// and none drawn inline.
+const BUS_WANTS: [Wants; 4] = [
+    ("jump-palette-sv.svelte", &[("debounce_ms: 80", 2), ("when:", 2)], &[], &[]),
+    ("board-rows-sv.svelte", &[("debounce_ms: 20", 1), ("params: () =>", 1)], &["$derived(b.live(", "$derived(live("], &[]),
+    ("ticket-page-sv.svelte", &[("{@html markdown(", 1)], &["data-chip-id", "{#snippet chip", "$derived(b.live(", "$derived(live("], &["ticket-chip-sv"]),
+    ("nav-tree-sv.svelte", &[], &["data-nav-flat-row", "data-nav-row", "\"tickets.list\""], &["nav-flat-sv", "nav-children-sv"]),
+];
 
 /// What FRAME-25 finds of the old road in menger's svelte/1 sources (file
-/// name → text, `ui/src`): a timer of its own (`setTimeout(`, `setInterval(`)
-/// in a source that calls `live(` — the registry's `debounce_ms` keeps the
-/// time; a sanitizer or markdown of its own ([`OWN_SANITIZER`]), an
+/// name → text, `ui/src`), comments aside: a timer of its own
+/// ([`OWN_TIMERS`]) in a source that calls `live(`; a sanitizer, markdown
+/// or HTML of its own ([`OWN_SANITIZER`], [`spreads_element`]), an
 /// `{@html …}` not of `markdown(…)`, or a `markdown(` not imported from
-/// `plexus-ui/host`; a keyed `{#each $…}` straight over a store (Svelte
-/// 5.57.2 compares its items by value there: every row's effects re-run on
-/// each change — `const list = $derived($rows.rows)` first); and, of the
-/// board's, the palette's two `live`s without `when` and `debounce_ms: 80`,
-/// the rows' without `debounce_ms: 20`, the ticket page without its body
-/// through `markdown` and its chips from `./ticket-chip-sv.svelte`, the nav
-/// without its Flat and children from `./nav-flat-sv.svelte` and
-/// `./nav-children-sv.svelte`.
+/// `plexus-ui/host`; a store subscribed by hand (`.subscribe(`, or a
+/// stand-in store's `subscribe:`) — the face's `live` is the store; an
+/// `{#each}` over a store ([`each_over_store`]); and [`BUS_WANTS`].
 fn bus_breaks(sources: &[(String, String)]) -> Vec<String> {
     let mut out = Vec::new();
     for (f, text) in sources.iter().filter(|(f, _)| f.ends_with(".svelte")) {
         let code = svelte_code(text);
         if code.contains("live(") {
-            for t in ["setTimeout(", "setInterval("] {
-                if code.contains(t) {
-                    out.push(format!("ui/src/{f}: a timer of its own (`{t}`) beside a live(: the bus's debounce_ms keeps the time"));
-                }
+            for t in OWN_TIMERS.iter().filter(|t| code.contains(*t)) {
+                out.push(format!("ui/src/{f}: keeps time by hand (`{t}`) beside a live(: the bus's debounce_ms keeps the time (a focus or a scroll is Svelte's tick() or an action)"));
             }
         }
-        for m in OWN_SANITIZER {
-            if code.contains(m) {
-                out.push(format!("ui/src/{f}: a sanitizer or markdown of its own (`{m}`): the body goes through markdown from plexus-ui/host"));
-            }
+        for m in OWN_SANITIZER.iter().filter(|m| code.contains(*m)) {
+            out.push(format!("ui/src/{f}: a sanitizer, markdown or HTML of its own (`{m}`): the body goes through markdown from plexus-ui/host"));
+        }
+        if spreads_element(&code) {
+            out.push(format!("ui/src/{f}: a sanitizer, markdown or HTML of its own (`<svelte:element this={{…}} {{...`): the body goes through markdown from plexus-ui/host"));
         }
         for (at, _) in code.match_indices("{@html") {
             if !code[at + "{@html".len()..].trim_start().starts_with("markdown(") {
                 out.push(format!("ui/src/{f}: an {{@html …}} not of markdown(…): HTML reaches the page only through the bus's sanitized render"));
             }
         }
-        let host_markdown = code.lines().any(|l| l.trim_start().starts_with("import ") && l.contains("markdown") && l.contains("\"plexus-ui/host\""));
-        if code.contains("markdown(") && !host_markdown {
+        if code.contains("markdown(") && !imports_host_markdown(&code) {
             out.push(format!("ui/src/{f}: markdown( not imported from plexus-ui/host"));
         }
-        if code.contains("{#each $") {
-            out.push(format!("ui/src/{f}: a keyed {{#each $…}} straight over a store (compared by value: every row re-runs on each change) — `const list = $derived($rows.rows)` first"));
+        for m in [".subscribe(", "subscribe:"].iter().filter(|m| code.contains(*m)) {
+            out.push(format!("ui/src/{f}: a store subscribed or stood in by hand (`{m}`): the face's live is the store"));
+        }
+        if each_over_store(&code) {
+            out.push(format!("ui/src/{f}: an {{#each …}} over a store ($…; compared by value: every row re-runs on each change) — `const list = $derived($rows.rows)` first"));
         }
     }
     let text = |f: &str| sources.iter().find(|(n, _)| n == f).map(|(_, t)| svelte_code(t));
-    let wants: [(&str, &[(&str, usize)], &[&str]); 4] = [
-        ("jump-palette-sv.svelte", &[("debounce_ms: 80", 2), ("when:", 2)], &[]),
-        ("board-rows-sv.svelte", &[("debounce_ms: 20", 1)], &[]),
-        ("ticket-page-sv.svelte", &[("{@html markdown(", 1)], &["ticket-chip-sv"]),
-        ("nav-tree-sv.svelte", &[], &["nav-flat-sv", "nav-children-sv"]),
-    ];
-    for (f, marks, imports) in wants {
+    for (f, marks, never, imports) in BUS_WANTS {
         let Some(code) = text(f) else {
             out.push(format!("ui/src/{f} is missing"));
             continue;
@@ -1438,6 +1488,9 @@ fn bus_breaks(sources: &[(String, String)]) -> Vec<String> {
             if code.matches(m).count() < *n {
                 out.push(format!("ui/src/{f}: says `{m}` {} time(s), not {n}", code.matches(m).count()));
             }
+        }
+        for m in never.iter().filter(|m| code.contains(*m)) {
+            out.push(format!("ui/src/{f}: says `{m}`, which the bus or a sibling now does"));
         }
         let have = svelte_imports(&code);
         for i in imports {
@@ -1451,51 +1504,68 @@ fn bus_breaks(sources: &[(String, String)]) -> Vec<String> {
 
 /// FRAME-25: the Svelte board on FRAME-19's bus — the palette held by `when`
 /// and coalesced by `debounce_ms` in the host's registry, the rows' window
-/// the same, the body through `markdown` from `plexus-ui/host` (the copied
-/// allow-list gone: no sanitizer of menger's own in `ui/src`), the nav's
-/// children and the chips imported siblings; no keyed `{#each $…}` over a
+/// the same through the handle's `update`, the body through `markdown` from
+/// `plexus-ui/host` (the copied allow-list gone: no sanitizer of menger's
+/// own in `ui/src`), the nav's children and the chips imported siblings
+/// and drawn nowhere else; no store subscribed by hand, no `{#each}` over a
 /// store.
 #[test]
 fn the_svelte_board_rides_the_bus() {
     // The checks, on what they are given first.
     let given = |c: &[(&str, &str)]| c.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect::<Vec<_>>();
     assert_eq!(svelte_code("<!-- DOMParser -->a // setTimeout(\nb /* x */ \"https://c\"\n"), "a \nb  \"https://c\"");
+    assert_eq!(svelte_code("a <!-- open\nDOMParser\n"), "a <!-- open\nDOMParser", "an unclosed comment hides nothing");
+    assert!(spreads_element("<svelte:element this={n.tag} {...n.attrs}/>") && !spreads_element("<svelte:element this={\"h\" + level}>x</svelte:element>"));
+    assert!(each_over_store("{#each ($rows).rows as r}") && each_over_store("{#each $rows.rows as r (r.id)}") && !each_over_store("{#each list as r (r.id)}{#each STATUSES as s}"));
+    assert!(imports_host_markdown("import {\n  live,\n  markdown,\n} from 'plexus-ui/host';") && !imports_host_markdown("import { markdown } from \"./mine.js\";\nimport { live } from \"plexus-ui/host\";"));
+    assert_eq!(svelte_imports("import fromage from \"./ticket-chip-sv.svelte\";"), ["ticket-chip-sv"]);
     let head = "<script module>\n  export const uses = [];\n</script>\n";
     let palette = format!("{head}<script>\n  // the hand-made setTimeout( went\n  import {{ live }} from \"plexus-ui/host\";\n  const found = live({{ snapshot: \"tickets.find\", params: () => ({{ query: q }}), key: \"id\", when: () => q.length > 0, debounce_ms: 80 }});\n  const searched = live({{ snapshot: \"tickets.search\", params: () => ({{ query: q }}), key: \"id\", when: () => q.length > 0, debounce_ms: 80 }});\n  const hits = $derived($found.rows);\n</script>\n{{#each hits as f (f.id)}}<a href=\"https://x\">{{f.id}}</a>{{/each}}\n");
     let rows = format!("{head}<script>\n  import {{ live }} from \"plexus-ui/host\";\n  const rows = live({{ snapshot: \"tickets.list\", params: () => ({{ at }}), key: \"id\", debounce_ms: 20 }});\n</script>\n");
-    let page = format!("{head}<script>\n  import {{ live, markdown }} from \"plexus-ui/host\";\n  import Chip from \"./ticket-chip-sv.svelte\";\n</script>\n<!-- no DOMParser, no allow-list -->\n<div>{{@html markdown(t.body)}}</div><Chip id={{p}}/>\n");
+    let page = format!("{head}<script>\n  import {{ live, markdown }} from \"plexus-ui/host\";\n  import Chip from \"./ticket-chip-sv.svelte\";\n</script>\n<!-- no DOMParser, no allow-list, no data-chip-id -->\n<div>{{@html markdown(t.body)}}</div><Chip id={{p}}/><svelte:element this={{\"h\" + n}}>x</svelte:element>\n");
     let nav = format!("{head}<script>\n  import NavFlat from \"./nav-flat-sv.svelte\";\n  import NavChildren from \"./nav-children-sv.svelte\";\n</script>\n");
     let good = given(&[("jump-palette-sv.svelte", &palette), ("board-rows-sv.svelte", &rows), ("ticket-page-sv.svelte", &page), ("nav-tree-sv.svelte", &nav), ("x.rhx", "{#each $x as y}DOMParser")]);
     assert_eq!(bus_breaks(&good), Vec::<String>::new());
-    let old_palette = format!("{head}<script>\n  import {{ bus }} from \"plexus-ui/host\";\n  const b = bus();\n  const found = $derived(asked ? b.live({{ snapshot: \"tickets.find\", params: {{ query: asked }}, key: \"id\" }}) : NONE);\n  function typed(ev) {{ clearTimeout(timer); timer = setTimeout(() => (asked = q), 80); }}\n</script>\n{{#each $found.rows as f (f.id)}}{{f.id}}{{/each}}\n");
-    let old_page = format!("{head}<script module>\n  const WHOLE = new Set([\"script\", \"style\"]);\n  function markdown(src) {{ return src; }}\n  export function bodyNodes(t) {{ return new DOMParser().parseFromString(markdown(t), \"text/html\"); }}\n</script>\n{{#snippet nodes(l)}}<svelte:element this={{l.tag}}/>{{/snippet}}\n<div>{{@html t.body}}</div>\n");
-    let bad = given(&[("jump-palette-sv.svelte", &old_palette), ("board-rows-sv.svelte", &rows), ("ticket-page-sv.svelte", &old_page), ("nav-tree-sv.svelte", &format!("{head}<p/>"))]);
-    assert_eq!(
-        bus_breaks(&bad),
-        [
-            "ui/src/jump-palette-sv.svelte: a timer of its own (`setTimeout(`) beside a live(: the bus's debounce_ms keeps the time",
-            "ui/src/jump-palette-sv.svelte: a keyed {#each $…} straight over a store (compared by value: every row re-runs on each change) — `const list = $derived($rows.rows)` first",
-            "ui/src/ticket-page-sv.svelte: a sanitizer or markdown of its own (`DOMParser`): the body goes through markdown from plexus-ui/host",
-            "ui/src/ticket-page-sv.svelte: a sanitizer or markdown of its own (`parseFromString`): the body goes through markdown from plexus-ui/host",
-            "ui/src/ticket-page-sv.svelte: a sanitizer or markdown of its own (`svelte:element`): the body goes through markdown from plexus-ui/host",
-            "ui/src/ticket-page-sv.svelte: a sanitizer or markdown of its own (`\"script\"`): the body goes through markdown from plexus-ui/host",
-            "ui/src/ticket-page-sv.svelte: a sanitizer or markdown of its own (`function markdown`): the body goes through markdown from plexus-ui/host",
-            "ui/src/ticket-page-sv.svelte: an {@html …} not of markdown(…): HTML reaches the page only through the bus's sanitized render",
-            "ui/src/ticket-page-sv.svelte: markdown( not imported from plexus-ui/host",
-            "ui/src/jump-palette-sv.svelte: says `debounce_ms: 80` 0 time(s), not 2",
-            "ui/src/jump-palette-sv.svelte: says `when:` 0 time(s), not 2",
-            "ui/src/ticket-page-sv.svelte: says `{@html markdown(` 0 time(s), not 1",
-            "ui/src/ticket-page-sv.svelte: imports no ./ticket-chip-sv.svelte",
-            "ui/src/nav-tree-sv.svelte: imports no ./nav-flat-sv.svelte",
-            "ui/src/nav-tree-sv.svelte: imports no ./nav-children-sv.svelte",
-        ]
-    );
+    let old_palette = format!("{head}<script>\n  import {{ bus }} from \"plexus-ui/host\";\n  const b = bus();\n  const NONE = {{ subscribe: (fn) => (fn({{ rows: [] }}), () => {{}}) }};\n  const found = $derived(asked ? b.live({{ snapshot: \"tickets.find\", params: {{ query: asked }}, key: \"id\" }}) : NONE);\n  function typed(ev) {{ clearTimeout(timer); timer = setTimeout(() => (asked = q), 80); }}\n</script>\n{{#each $found.rows as f (f.id)}}{{f.id}}{{/each}}\n");
+    let old_rows = format!("{head}<script>\n  import {{ bus }} from \"plexus-ui/host\";\n  const b = bus();\n  const rows = $derived(b.live({{ snapshot: \"tickets.list\", params: {{ at: win.at }}, key: \"id\", debounce_ms: 20 }}));\n</script>\n");
+    let old_page = format!("{head}<script module>\n  const WHOLE = new Set([\"script\", \"style\"]);\n  function markdown(src) {{ return src; }}\n  export function bodyNodes(t) {{ return new DOMParser().parseFromString(markdown(t), \"text/html\"); }}\n</script>\n<script>\n  import Chip from \"./ticket-chip-sv.svelte\";\n  held[c] = s.subscribe((v) => (titles[c] = v));\n</script>\n{{#snippet chip(c)}}<a data-chip-id={{c}}>{{c}}</a>{{/snippet}}\n{{#snippet nodes(l)}}<svelte:element this={{l.tag}} {{...l.attrs}}/>{{/snippet}}\n<div>{{@html t.body}}</div>\n");
+    let old_nav = format!("{head}<script>\n  import NavFlat from \"./nav-flat-sv.svelte\";\n  import NavChildren from \"./nav-children-sv.svelte\";\n  const kids = live({{ snapshot: \"tickets.list\", params: {{ parent }}, key: \"id\" }});\n</script>\n<a data-nav-row={{c.id}}></a><a data-nav-flat-row={{t.id}}></a>\n");
+    let bad = given(&[("jump-palette-sv.svelte", &old_palette), ("board-rows-sv.svelte", &old_rows), ("ticket-page-sv.svelte", &old_page), ("nav-tree-sv.svelte", &old_nav)]);
+    let found = bus_breaks(&bad);
+    let want = [
+        "ui/src/board-rows-sv.svelte: says `params: () =>` 0 time(s), not 1",
+        "ui/src/board-rows-sv.svelte: says `$derived(b.live(`, which the bus or a sibling now does",
+        "ui/src/jump-palette-sv.svelte: keeps time by hand (`setTimeout(`) beside a live(: the bus's debounce_ms keeps the time (a focus or a scroll is Svelte's tick() or an action)",
+        "ui/src/jump-palette-sv.svelte: a store subscribed or stood in by hand (`subscribe:`): the face's live is the store",
+        "ui/src/jump-palette-sv.svelte: an {#each …} over a store ($…; compared by value: every row re-runs on each change) — `const list = $derived($rows.rows)` first",
+        "ui/src/jump-palette-sv.svelte: says `debounce_ms: 80` 0 time(s), not 2",
+        "ui/src/jump-palette-sv.svelte: says `when:` 0 time(s), not 2",
+        "ui/src/nav-tree-sv.svelte: says `data-nav-flat-row`, which the bus or a sibling now does",
+        "ui/src/nav-tree-sv.svelte: says `data-nav-row`, which the bus or a sibling now does",
+        "ui/src/nav-tree-sv.svelte: says `\"tickets.list\"`, which the bus or a sibling now does",
+        "ui/src/ticket-page-sv.svelte: a sanitizer, markdown or HTML of its own (`DOMParser`): the body goes through markdown from plexus-ui/host",
+        "ui/src/ticket-page-sv.svelte: a sanitizer, markdown or HTML of its own (`parseFromString`): the body goes through markdown from plexus-ui/host",
+        "ui/src/ticket-page-sv.svelte: a sanitizer, markdown or HTML of its own (`\"script\"`): the body goes through markdown from plexus-ui/host",
+        "ui/src/ticket-page-sv.svelte: a sanitizer, markdown or HTML of its own (`function markdown`): the body goes through markdown from plexus-ui/host",
+        "ui/src/ticket-page-sv.svelte: a sanitizer, markdown or HTML of its own (`<svelte:element this={…} {...`): the body goes through markdown from plexus-ui/host",
+        "ui/src/ticket-page-sv.svelte: an {@html …} not of markdown(…): HTML reaches the page only through the bus's sanitized render",
+        "ui/src/ticket-page-sv.svelte: markdown( not imported from plexus-ui/host",
+        "ui/src/ticket-page-sv.svelte: a store subscribed or stood in by hand (`.subscribe(`): the face's live is the store",
+        "ui/src/ticket-page-sv.svelte: says `{@html markdown(` 0 time(s), not 1",
+        "ui/src/ticket-page-sv.svelte: says `data-chip-id`, which the bus or a sibling now does",
+        "ui/src/ticket-page-sv.svelte: says `{#snippet chip`, which the bus or a sibling now does",
+    ];
+    let mut sorted = found.clone();
+    sorted.sort();
+    let mut wanted: Vec<String> = want.iter().map(|s| s.to_string()).collect();
+    wanted.sort();
+    assert_eq!(sorted, wanted, "{found:#?}");
 
     // Then menger's.
     let src = root().join("ui/src");
     let sources: Vec<(String, String)> = names_in(&src).into_iter().filter(|f| f.ends_with(".svelte")).map(|f| (f.clone(), std::fs::read_to_string(src.join(&f)).unwrap())).collect();
     let broken = bus_breaks(&sources);
-    assert!(broken.is_empty(), "FRAME-25: the Svelte board rides the bus — no timer, sanitizer or markdown of its own, its children imported:\n  {}", broken.join("\n  "));
+    assert!(broken.is_empty(), "FRAME-25: the Svelte board rides the bus — no timer, sanitizer, markdown or store of its own, its children imported:\n  {}", broken.join("\n  "));
 }
 
 /// The lines of the shell function `name` in `script`, each with its number:

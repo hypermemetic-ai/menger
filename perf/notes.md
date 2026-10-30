@@ -549,6 +549,59 @@ collection, JSON (FRAME-20 would make it the change). Locally the five Svelte mo
 wire they are five more files (54–75 KB each, each with its own Svelte runtime; 20–28 KB gzipped,
 116 KB for the five) — the live probe on app-test is where that shows.
 
+## The Svelte board on FRAME-19's bus — `pages-probe.mjs --runs 15` (FRAME-25, 2026-10-30)
+
+The five `svelte/1` components rewritten on the bus (`when`/`debounce_ms` in the host's registry,
+`markdown` from `plexus-ui/host`, `nav-flat-sv`, `nav-children-sv` and `ticket-chip-sv` imported as
+siblings) with plexus-ui 633f776's engine. `node perf/pages-probe.mjs --seed N --runs 15 [--path
+'/app/#/sv/']`, release build, this machine, 1440×900, a warm-up then fifteen cold loads each; the
+medians; the load average (1 min) when each began, another builder's gates running beside it.
+Modules is the `components/<name>.js` files a load fetched (the probe's new line): the route's four
+sections on `#/sv/` (the siblings travel inside `nav-tree-sv` and `ticket-page-sv`), none on `/`.
+
+| N | board | load | first titled row (15 runs) | wasm | JS heap | rows held | created row | modules |
+|---|---|---|---|---|---|---|---|---|
+| 10⁴ | Svelte | 10.9 | 0.145 s | 4.0 MiB | 2.4 MiB | 200 | 8.8 ms | 4 |
+| 10⁴ | rhx | 10.2 | 0.145 s | 5.9 MiB | 1.3 MiB | 200 | 8.3 ms | 0 |
+| 10⁵ | Svelte | 7.3 | 0.138 s | 4.4 MiB | 2.6 MiB | 200 | 8.9 ms | 4 |
+| 10⁵ | rhx | 4.4 | 0.165 s | 6.9 MiB | 1.3 MiB | 200 | 8.6 ms | 0 |
+| 10⁶ | Svelte | 3.3 | 0.187 s | 5.6 MiB | 3.2 MiB | 200 | 8.9 ms | 4 |
+| 10⁶ | rhx | 2.3 | 0.223 s | 9.4 MiB | 1.4 MiB | 200 | 8.3 ms | 0 |
+
+Before and after in one hour, 10⁶, the Svelte board with v2's five (4c919be) and then these:
+
+| 10⁶ | load | first titled row | list sent → answered | created row |
+|---|---|---|---|---|
+| Svelte, before (v2's five) | 2.1 | 0.191 s | +75 → +185 ms | 13.8 ms |
+| Svelte, after | 3.8 | 0.188 s | +75 → +181 ms | 10.7 ms |
+| rhx, the same minute | 2.0 | 0.181 s | +49 → +161 ms | 7.6 ms |
+
+The rewrite is within noise of the board it replaces: the same first call (+68–69 ms: a module's
+specs are not sent early), the same four modules, the same memory; the list's answer, not the
+components, sets the first row. Both boards are ~40 ms slower at 10⁶ than FRAME-14's table on this
+machine today (rhx 0.181–0.223 s against 0.202, Svelte 0.187–0.191 against 0.149) — the list's answer
+comes later on both, so the machine's hour, not the change. Every created row lands in 8–11 ms on
+both boards.
+
+The bundle's Svelte modules (raw / gzip -9; app-test serves brotli, which this machine lacks):
+
+| module | before | after |
+|---|---|---|
+| board-layout-sv | 54,686 / 20,377 | 54,665 / 20,361 |
+| board-rows-sv | 62,637 / 23,283 | 61,901 / 23,000 |
+| jump-palette-sv | 61,251 / 22,661 | 61,140 / 22,589 |
+| nav-tree-sv (with nav-flat-sv, nav-children-sv inside) | 62,067 / 22,946 | 61,389 / 22,671 |
+| ticket-page-sv (with ticket-chip-sv inside) | 75,343 / 28,039 | 62,732 / 23,173 |
+| nav-flat-sv, nav-children-sv, ticket-chip-sv (their own modules) | — | 162,743 / 60,394 |
+| the five the board loads | 315,984 / 117,306 | 301,827 / 111,794 |
+| all of them | 315,984 / 117,306 | 464,570 / 172,188 |
+
+A load of `#/sv/` fetches about the same (the four sections' modules, 89.3 KB gzip → 88.6); a
+ticket page 4.9 KB gzip less (28.0 → 23.2: the copied renderer and allow-list gone, the chip
+inlined). The bundle grows by the three siblings' own modules — each a
+Svelte runtime of ~50 KB raw, fetched only when a right-click puts one in a section (FRAME-26: a
+shared runtime).
+
 ## The first row after the boot — `live-probe.mjs`'s table (FRAME-17, 2026-10-30)
 
 `node perf/live-probe.mjs --token-file FILE --runs 5`, app-test (976 tickets), cold loads, the
