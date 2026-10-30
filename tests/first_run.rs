@@ -298,3 +298,41 @@ fn deploy_names_its_database_and_ports() {
     let launch = std::fs::read_to_string(root.join("deploy/launch/run-menger")).unwrap();
     assert!(launch.contains("--port \"$MENGER_WS_PORT\"") && launch.contains("--shell-port \"$MENGER_SHELL_PORT\""), "{launch}");
 }
+
+/// STUDIO-3's review: the ui service's author key is never a --ui-signer —
+/// a start naming it as one is refused, naming both flags; a key file open
+/// to its group or others is refused, naming its mode; a missing one is made
+/// 0600 and the start goes on.
+#[test]
+fn the_author_key_is_never_a_signer() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let home = dir.path();
+    let key = home.join("ui-author.key");
+    let seed = [0x42u8; 32];
+    std::fs::write(&key, seed.iter().map(|b| format!("{b:02x}")).collect::<String>()).unwrap();
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let public: String = ed25519_dalek::SigningKey::from_bytes(&seed).verifying_key().as_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    let run = |extra: &[&str]| {
+        menger(home)
+            .args(["--port", &free_port().to_string(), "--shell-port", &free_port().to_string(), "--auth-provider", "key", "--admin", &format!("key:{}", "ab".repeat(32))])
+            .args(extra)
+            .output()
+            .unwrap()
+    };
+    let out = run(&["--ui-author-key", key.to_str().unwrap(), "--ui-signer", &public]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("--ui-author-key") && err.contains("--ui-signer"), "{err}");
+
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let out = run(&["--ui-author-key", key.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("644") && err.contains("0600"), "{err}");
+
+    let made = home.join("made.key");
+    let (_server, lines) = start(home, free_port(), free_port(), &["--auth-provider", "key", "--admin", &format!("key:{}", "ab".repeat(32)), "--ui-author-key", made.to_str().unwrap()]);
+    assert!(!lines.is_empty(), "it started");
+    assert_eq!(std::fs::metadata(&made).unwrap().permissions().mode() & 0o777, 0o600, "made 0600");
+}

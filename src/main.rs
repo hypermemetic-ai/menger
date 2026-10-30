@@ -548,6 +548,11 @@ async fn run(args: Args) -> anyhow::Result<()> {
     let author = match &args.ui_author_key {
         Some(path) => {
             let key = plexus_ui_service::AuthorKey::open_or_create(path).map_err(|e| anyhow::anyhow!("--ui-author-key {e}"))?;
+            // STUDIO-3's review: the author key signs only what the service
+            // compiled itself; as a --ui-signer it would sign any push.
+            if args.ui_signer.iter().any(|s| s.trim().eq_ignore_ascii_case(&key.public_hex())) {
+                anyhow::bail!("--ui-author-key {}: its public key {} is also a --ui-signer — the author key signs only what the ui service compiled itself; give the deploy a key of its own", path.display(), key.public_hex());
+            }
             tracing::info!("ui author: {} ({})", key.public_hex(), path.display());
             Some(key)
         }

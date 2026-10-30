@@ -189,6 +189,14 @@ where it has one (a list in it is `;`-separated).
 | maintenance and testing | `--dev-login`, `--dev-password`, `--dev-idp-ws`, `--dev-user` (all `--env test` only), `--verify-derived`, `--seed-synthetic`, `--seed-value`, `--seed-shape` (`flat`, `nested`), `--seed-into-existing` |
 | limits | `--max-body-bytes` (8 MiB), `--max-calls-per-connection` (256), `--idle-timeout-secs` (900), `--max-connections` (1,024), `--max-connections-per-ip` (256), `--max-connections-per-principal` (64), `--max-anonymous-connections` (128), `--max-anonymous-connections-per-ip` (32) |
 
+`--ui-author-key` names the file of the key the ui service signs an
+editor's authored version with (made at first start, 0600; one open to its
+group or others is refused, naming its mode); a start naming its public key
+as a `--ui-signer` too is refused. On a server whose `editor` role an admin
+ever changed with `auth role_set` (app-test included), the stored role wins:
+`ui.author` and `ui.routes.set|clear` are not in it until it is set again
+with them (`auth roles` says what it holds).
+
 `menger login [--agent]` prints a one-time link (or the agent's `_login`
 line) for the server running on `--data-dir`.
 
@@ -725,13 +733,18 @@ against a tenant that is not menger (`../plexus-ui/service/tests`); menger's
   the manifest's `routes` as `ui slots` is over its `slots`; said on `watch`
   as `route_changed`, stamped into the page as `<meta name="plexus-routes">`
   and merged by the engine's router.
-- **`author`** (STUDIO-3): an editor's rhx sources (`--components
+- **`author`** (STUDIO-3): an editor's rhx sources (`--sources
   '[{"name":…,"source":…}]'`) compiled here, added to the live bundle, signed
   by the ui service's author key — `--ui-author-key` (`MENGER_UI_AUTHOR_KEY`,
   a seed file made at first start, 0600; the image's
   `/data/ui-author.key`; none: `no_signer`) — and pushed through the push's
   own steps; it answers `authored { version, base, components, live, new,
-  contract_matches, signer, signature }`. rhx only: a `svelte/1` component comes through the tool's build (Node), which the service does not have.
+  contract_matches, signer, signature }`. An author may place only what it
+  may call: a component whose `uses` names a method the caller does not hold
+  on `*` is refused `forbidden_use` (a page runs its calls as whoever opens
+  it); `author` and `routes set|clear` are refused `forbidden` to a caller
+  held only on a scope; `stale_base` when the live version moved while it
+  was built; `live: false` moves no pointer; at most 16 sources a call. rhx only: a `svelte/1` component comes through the tool's build (Node), which the service does not have.
 - **`rollback --to <hash>`** moves the pointer to a kept version;
   **`preview`** serves one to the caller's own sessions; **`versions`**
   lists them; **`watch`** says `live` on each move, `slot_changed` on each
