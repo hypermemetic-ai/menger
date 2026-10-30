@@ -195,6 +195,10 @@ fn link_attrs(tag: &str) -> Vec<(String, String)> {
     out
 }
 
+/// FRAME-26: what a bundle's Svelte runtime stands for here (the server
+/// serves its bytes and never runs them).
+const RUNTIME_JS: &str = "export function mount() {}\n";
+
 /// FRAME-16: menger's entrypoint (`ui/index.html`, as a push carries it)
 /// names what the boot needs before its script runs, stamped with the
 /// version it is served for — `<link rel="modulepreload">` of engine.js and
@@ -203,7 +207,10 @@ fn link_attrs(tag: &str) -> Vec<(String, String)> {
 /// (`crossorigin`: a `fetch()` is a CORS request, and a preload without it
 /// is not the one the fetch takes) — each before the script, each a file of
 /// that version; and the script boots through host.js's `start(version)`,
-/// not engine.js's `boot`.
+/// not engine.js's `boot`. FRAME-26: and `<link rel="modulepreload">` of the
+/// bundle's one Svelte runtime, `components/svelte-runtime.js` — always:
+/// the route is a hash the server never sees, and menger's bundle always
+/// holds svelte/1 components (the bundle here names it in `runtimes`).
 #[tokio::test]
 async fn the_entrypoint_preloads_the_boot() {
     let m = start().await;
@@ -216,6 +223,7 @@ async fn the_entrypoint_preloads_the_boot() {
         ("host.js", "export function start() {}\n"),
         ("manifest.json", "{}\n"),
         ("components.json", "{}\n"),
+        ("components/svelte-runtime.js", RUNTIME_JS),
     ];
     let mut b = tar::Builder::new(Vec::new());
     for (name, body) in files {
@@ -226,7 +234,9 @@ async fn the_entrypoint_preloads_the_boot() {
         b.append_data(&mut h, name, body.as_bytes()).unwrap();
     }
     let bytes = b.into_inner().unwrap();
-    let pushed = call(&admin, "ui.push", support::signed_params(&bytes, &support::json_manifest("c1", "a1"), 1)).await;
+    let mut manifest: serde_json::Value = serde_json::from_str(&support::json_manifest("c1", "a1")).unwrap();
+    manifest["runtimes"] = json!({ "svelte/1": sha_hex(RUNTIME_JS.as_bytes()) });
+    let pushed = call(&admin, "ui.push", support::signed_params(&bytes, &manifest.to_string(), 1)).await;
     assert_eq!(pushed[0]["type"], "pushed", "{pushed:?}");
     let hash = sha_hex(&bytes);
     let token = support::mint_session(m.ws).await;
@@ -242,6 +252,8 @@ async fn the_entrypoint_preloads_the_boot() {
         ("preload", Some("fetch"), "engine.wasm"),
         ("preload", Some("fetch"), "manifest.json"),
         ("preload", Some("fetch"), "components.json"),
+        // FRAME-26: the bundle's one Svelte runtime, before the first module asks it.
+        ("modulepreload", None, "components/svelte-runtime.js"),
     ];
     for (rel, as_, file) in boot {
         let href = format!("/app/{hash}/{file}");
