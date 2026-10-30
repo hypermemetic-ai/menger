@@ -1,8 +1,8 @@
 <!-- SURFACE-4: a ticket's edit form (svelte/1), placed in the ticket page by
      <ticket-edit id={id}/> and opened by its button or `ticket.edit` on the
      bus (the page's `e`). Two saves, as the designer drew them: the fields —
-     title, kind, severity, hidden, parent (SURFACE-5's ticket-picker in a
-     bound mark, heard as `picked`, or an id typed) and blockers — as one
+     title, kind, severity, hidden, parent and blockers (each picked, or an
+     exact id typed, in SURFACE-5's ticket-picker, heard as `picked`) — as one
      `update`, all of it or none, set_kind's and set_parent's rules applied
      by the store; and the body through `amend`, its markdown previewed beside
      it by the host's render. Each write's answer is said under its form, a
@@ -16,6 +16,7 @@
 <script>
   import { bus, live, markdown } from "plexus-ui/host";
   import Chip from "./ticket-chip-sv.svelte";
+  import Picker from "plexus-ui:ticket-picker";
 
   let { id } = $props();
   const b = bus();
@@ -23,29 +24,15 @@
   const SEVERITIES = ["none", "Critical", "High", "Medium", "Low"];
 
   const ticket = live({ snapshot: "tickets.get", params: () => ({ id }), changes: "tickets.watch", key: "id",
-                        on: { amended: "upsert:ticket", status_changed: "upsert:ticket", kind_changed: "upsert:ticket", labels_changed: "upsert:ticket",
-                              severity_changed: "upsert:ticket", hidden_changed: "upsert:ticket", blockers_changed: "upsert:ticket",
-                              parent_changed: "upsert:ticket", frozen_changed: "upsert:ticket", deleted: "remove:ids" } });
-  // What the watch says of the ticket without carrying it (an undelete's tickets, a bulk update): each
-  // such event naming the id asks `get` again.
-  const said = live({ snapshot: "tickets.get", params: () => ({ id }), changes: "tickets.watch", key: "ids",
-                      on: { undeleted: "upsert:.", updated_many: "upsert:.", deleted: "upsert:." } });
-  let fresh = $state(null);
-  let heard = null;
-  $effect(() => {
-    const news = said.rows.filter((r) => Array.isArray(r.ids) && r.ids.includes(id));
-    if (heard === null) { heard = news; return; }
-    if (news.some((r) => !heard.includes(r))) regain();
-    heard = news;
-  });
-  async function regain() {
-    const r = await b.call("tickets.get", { id });
-    fresh = r.ok ? (r.events.find((e) => e?.type === "ticket")?.ticket ?? null) : null;
-  }
-  const t = $derived($ticket.rows[0] ?? (fresh?.id === id ? fresh : undefined));
+                        on: { amended: "upsert:ticket", status_changed: "upsert:ticket", kind_changed: "upsert:ticket", updated: "upsert:ticket",
+                              labels_changed: "upsert:ticket", severity_changed: "upsert:ticket", frozen_changed: "upsert:ticket", hidden_changed: "upsert:ticket",
+                              blockers_changed: "upsert:ticket", unlocks_changed: "upsert:ticket", unlocks_removed: "upsert:ticket", parent_changed: "upsert:ticket",
+                              commits_linked: "upsert:ticket", commits_unlinked: "upsert:ticket", revision_restored: "upsert:ticket", deleted: "upsert:." } });
+  // ticket-head's spec word for word: the page holds one `get` and one `watch` of the ticket, shared.
+  const t = $derived(ticket.rows.find((r) => r.title != null && !ticket.rows.some((x) => Array.isArray(x.tombstones))));
 
   let open = $state(false);
-  let draft = $state({ title: "", body: "", kind: "", severity: "none", parent: "", hidden: false, blockers: [], block: "" });
+  let draft = $state({ title: "", body: "", kind: "", severity: "none", parent: "", hidden: false, blockers: [] });
   // Each write's last answer: { said } or { refused }, by its method.
   let answers = $state({});
   let pending = $state(0);
@@ -66,7 +53,7 @@
 
   function edit() {
     if (!t) return;
-    draft = { title: t.title, body: t.body, kind: t.kind, severity: sevOf(t), parent: parentOf(t), hidden: t.hidden === true, blockers: [...(t.blocked_by ?? [])], block: "" };
+    draft = { title: t.title, body: t.body, kind: t.kind, severity: sevOf(t), parent: parentOf(t), hidden: t.hidden === true, blockers: [...(t.blocked_by ?? [])] };
     answers = {};
     open = true;
   }
@@ -77,7 +64,9 @@
     if (!open && (data?.id == null || data.id === id)) edit();
   });
   b.on("picked", (data) => {
-    if (data?.name === "parent" && data.id) draft.parent = data.id;
+    if (!open || !data?.id) return;
+    if (data.name === "parent") draft.parent = data.id;
+    else if (data.name === "blocker" && data.id !== id && !draft.blockers.includes(data.id)) draft.blockers.push(data.id);
   });
   $effect(() => {
     if (!open) return;
@@ -108,7 +97,6 @@
     if (dirty.kind) p.kind = draft.kind;
     if (dirty.severity) p.severity = draft.severity;
     if (dirty.hidden) p.hidden = draft.hidden;
-    // An emptied parent is asked as written: the store says whether a ticket may lose its parent.
     if (dirty.parent) p.parent = draft.parent.trim();
     const block = draft.blockers.filter((x) => !(t.blocked_by ?? []).includes(x));
     const unblock = (t.blocked_by ?? []).filter((x) => !draft.blockers.includes(x));
@@ -126,13 +114,6 @@
     saveFields(true);
     saveBody(true);
   }
-  function blockKeyed(ev) {
-    if (ev.key !== "Enter") return;
-    ev.preventDefault();
-    const x = draft.block.trim();
-    if (x && !draft.blockers.includes(x)) draft.blockers.push(x);
-    draft.block = "";
-  }
   function unblock(x) {
     draft.blockers = draft.blockers.filter((v) => v !== x);
   }
@@ -145,8 +126,7 @@
 {/snippet}
 
 <div class="ticket-edit" data-surface="ticket-edit" data-ticket={id}>
-  {#if $ticket.status === "pending"}<div class="skel" data-loading><span class="bar"></span></div>{/if}
-  {#if $ticket.status === "live" && !t}<p class="empty" data-empty>No ticket {id} to edit.</p>{/if}
+  {#if ticket.status === "pending"}<div class="skel" data-loading><span class="bar"></span></div>{/if}
   {#if t}
     {#if !open}
       <div class="closed">
@@ -182,15 +162,11 @@
             </label>
             <div class="te-f">
               <span class="te-l">parent{#if dirty.parent}<i class="dirty" title="changed"></i>{/if}</span>
-              <span class="te-chips">
-                {#if t.parent}<Chip id={t.parent} kind="parent"/>{/if}
-                <input class="in" data-field="parent" placeholder="an id" spellcheck="false" autocomplete="off"
-                       bind:value={draft.parent}/>
+              <span class="te-chips" data-field="parent-chosen">
+                {#if draft.parent}<Chip id={draft.parent} kind="parent"/>{/if}
+                {#if dirty.parent}<button type="button" class="x" data-action="unpick-parent" aria-label="keep the parent it has" onclick={() => (draft.parent = parentOf(t))}>×</button>{/if}
               </span>
-              <!-- SURFACE-5's picker, as `import Picker from "plexus-ui:ticket-picker"` draws it — a bound
-                   mark the host fills; the import refuses the build until ticket-picker is in src/, so the
-                   mark is written as the import resolves it (the merge turns it into the import). -->
-              <div class="picker" data-slot="ticket-picker" data-component="ticket-picker" data-name="parent"></div>
+              <Picker name="parent" label="parent"/>
             </div>
             <div class="te-f span2">
               <span class="te-l">blocked by{#if dirty.blockers}<i class="dirty" title="changed"></i>{/if}</span>
@@ -198,8 +174,8 @@
                 {#each draft.blockers as x (x)}
                   <span class="te-chip" data-blocker={x}><Chip id={x} kind="blocker"/><button type="button" class="x" data-unblock={x} aria-label={"unblock " + x} onclick={() => unblock(x)}>×</button></span>
                 {/each}
-                <input class="in" data-field="block" placeholder="+ an id" spellcheck="false" autocomplete="off" bind:value={draft.block} onkeydown={blockKeyed}/>
               </span>
+              <Picker name="blocker" label="a ticket it waits on"/>
             </div>
           </div>
           <div class="te-act">
