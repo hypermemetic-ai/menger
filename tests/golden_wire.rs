@@ -4,9 +4,15 @@
 //! answers is held two ways:
 //!
 //! 1. **round-trip**: each `data` item read as its activation's event type
-//!    (`TicketsEvent`, `CommentsEvent`, …) and written again is the very JSON
-//!    it arrived as — so every wire struct and event the script reaches
-//!    serializes as it deserializes, whatever its fields are typed as;
+//!    (`TicketsEvent`, `CommentsEvent`, …) and written again is the JSON it
+//!    arrived as — so every wire struct and event the script reaches
+//!    serializes as it deserializes, whatever its fields are typed as.
+//!    Compared as JSON (PERF-7, the owner's `json-bytes`, 2026-10-30): the
+//!    item on the wire is encoded once from its event, its keys in the
+//!    type's order, and here it is written again through a `Value` — so the
+//!    two are held equal as JSON, not as text. For every event the script
+//!    reaches this is also PERF-7's property: the single encode is today's
+//!    encode, as JSON;
 //! 2. **golden**: the items, their clocks set to 0, equal
 //!    `tests/fixtures/golden-wire.json` — written from main *before* ACCESS-8
 //!    (`GOLDEN_WRITE=1 cargo test --test golden_wire`, on the parent commit)
@@ -123,11 +129,7 @@ fn round_trip(namespace: &str, v: &Value) {
         "session" => again::<SessionEvent>(v),
         other => panic!("no event type for {other}"),
     };
-    assert_eq!(
-        serde_json::to_string(&back).unwrap(),
-        serde_json::to_string(v).unwrap(),
-        "{namespace}: an item does not round-trip byte for byte"
-    );
+    assert_eq!(&back, v, "{namespace}: an item does not round-trip as JSON");
 }
 
 /// `v` with its clocks set to 0 and the binary's version blanked: what the
