@@ -6,7 +6,8 @@
 //! the calls open on a connection are its subscriptions. [`rpc_module`] is
 //! the hub's own module ([`plexus_shell::rpc_module`]) with `menger.call`
 //! registered again over the same dispatch — the params read, the caller's
-//! identity from the upgrade, `hub.route`, each item piped out — and two
+//! identity from the upgrade, `hub.route`, each item piped out by
+//! plexus-core's own pipe (PERF-7: encoded once into its frame) — and two
 //! things added, per connection (the transport's
 //! [`plexus_transport::websocket::Connection`], AUTH-11):
 //!
@@ -36,7 +37,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
-use futures::StreamExt;
 use jsonrpsee::RpcModule;
 use plexus_core::plexus::{error_item, AuthContext, DynamicHub, PlexusContext, PlexusStreamItem, StreamMetadata};
 use plexus_transport::websocket::Connection;
@@ -105,25 +105,20 @@ pub fn rpc_module(hub: Arc<DynamicHub>, limits: CallLimits) -> anyhow::Result<Rp
                 let auth = caller(&hub, ext.get::<Arc<AuthContext>>().map(|a| a.as_ref()), &anonymous);
                 let result = hub.route(&p.method, p.params.unwrap_or_default(), auth).await;
                 let sink = pending.accept().await?;
-                match result {
-                    // Until the stream ends or the caller lets go (an
-                    // unsubscribe, the socket closed): a watch let go of
-                    // gives its place back at once, not at its next event.
-                    Ok(mut stream) => loop {
-                        tokio::select! {
-                            item = stream.next() => match item {
-                                Some(item) => sink.send(serde_json::value::to_raw_value(&item)?).await?,
-                                None => break,
-                            },
-                            _ = sink.closed() => break,
-                        }
-                    },
+                let piped = match result {
+                    // PERF-7: plexus-core's pipe, as its own `{ns}.call`
+                    // pipes — each item encoded once, straight into the frame
+                    // the socket writes. Until the stream ends or the caller
+                    // lets go (an unsubscribe, the socket closed): a watch let
+                    // go of gives its place back at once, not at its next event.
+                    Ok(stream) => plexus_core::plexus::wire::pipe(sink, stream, &ext).await,
                     Err(e) => {
                         let _ = sink.send(serde_json::value::to_raw_value(&error_item(ns, &e))?).await;
+                        Ok(())
                     }
-                }
+                };
                 drop(place);
-                jsonrpsee::core::SubscriptionResult::Ok(())
+                piped
             }
         })
         .map_err(|e| anyhow::anyhow!("rpc module build failed: {e}"))?;
