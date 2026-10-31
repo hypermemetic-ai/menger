@@ -18,6 +18,12 @@
 //!    (`GOLDEN_WRITE=1 cargo test --test golden_wire`, on the parent commit)
 //!    and never by the build it holds.
 //!
+//! PERF-9 (spec/13): the same script on sockets that asked for msgpack —
+//! every frame a binary message, a map with its field names and no
+//! `jsonrpc`, read with rmp-serde — round-trips the same way and equals the
+//! same fixture, as JSON: JSON → msgpack → JSON for every event the script
+//! reaches.
+//!
 //! The data is synthetic: the script makes it (DEPLOY-5: no snapshot of the
 //! tracker is a fixture).
 //!
@@ -366,5 +372,122 @@ async fn every_item_round_trips_and_the_json_is_what_it_was() {
             assert_eq!(a, b, "the JSON changed");
         }
         assert_eq!(g.len(), w.len(), "the script answered a different number of calls");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PERF-9: the script again, in msgpack
+// ---------------------------------------------------------------------------
+
+type MpSocket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// A socket signed in as the admin that asked for msgpack alone (spec/13).
+async fn mp_connect(port: u16) -> MpSocket {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    for _ in 0..50 {
+        let mut req = format!("ws://127.0.0.1:{port}").into_client_request().unwrap();
+        for (k, v) in support::admin_headers(port).iter() {
+            req.headers_mut().insert(k.clone(), v.clone());
+        }
+        req.headers_mut().insert("Sec-WebSocket-Protocol", "plexus.msgpack".parse().unwrap());
+        if let Ok((ws, resp)) = tokio_tungstenite::connect_async(req).await {
+            assert_eq!(resp.headers().get("Sec-WebSocket-Protocol").unwrap(), "plexus.msgpack", "the 101 names msgpack");
+            return ws;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("no msgpack socket on {port}");
+}
+
+/// `menger.call {method, params}` on a msgpack socket: the subscription's id.
+async fn mp_call(ws: &mut MpSocket, method: &str, params: Value) -> Value {
+    use futures::SinkExt;
+    use tokio_tungstenite::tungstenite::Message;
+    let call = json!({"id": 1, "method": "menger.call", "params": {"method": method, "params": params}});
+    ws.send(Message::Binary(rmp_serde::to_vec_named(&call).unwrap().into())).await.unwrap();
+    let answer = mp_frame(ws).await;
+    assert_eq!(answer["id"], 1, "the call's answer first: {answer}");
+    answer["result"].clone()
+}
+
+/// The next frame: one binary message, one msgpack map with no `jsonrpc`.
+async fn mp_frame(ws: &mut MpSocket) -> Value {
+    use tokio_tungstenite::tungstenite::Message;
+    loop {
+        match tokio::time::timeout(Duration::from_secs(10), ws.next()).await.expect("a frame in 10 s").unwrap().unwrap() {
+            Message::Binary(b) => {
+                let v: Value = rmp_serde::from_slice(&b).expect("one msgpack value");
+                assert!(v.get("jsonrpc").is_none(), "no `jsonrpc` in a msgpack frame: {v}");
+                return v;
+            }
+            Message::Text(t) => panic!("a text frame on a msgpack socket: {t}"),
+            _ => continue,
+        }
+    }
+}
+
+/// The `data` items' contents of the call open on `ws`, until `done` —
+/// or, with `last`, until the event it says ends it.
+async fn mp_items(ws: &mut MpSocket, last: Option<fn(&Value) -> bool>) -> Vec<Value> {
+    let mut out = Vec::new();
+    loop {
+        let f = mp_frame(ws).await;
+        let item = &f["params"]["result"];
+        match item["type"].as_str() {
+            Some("done") if last.is_none() => return out,
+            Some("data") => {
+                let ev = item["content"].clone();
+                let end = last.is_some_and(|l| l(&ev));
+                out.push(ev);
+                if end {
+                    return out;
+                }
+            }
+            Some(_) if last.is_some() => continue,
+            other => panic!("unexpected stream item type {other:?}: {f}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn in_msgpack_every_item_round_trips_and_is_the_json_it_was() {
+    let port = start_server().await;
+    let mut watch = mp_connect(port).await;
+    mp_call(&mut watch, "tickets.watch", json!({})).await;
+    let mut filtered = mp_connect(port).await;
+    mp_call(&mut filtered, "tickets.watch", json!({"filter": "not kind doc"})).await;
+    let mut comments = mp_connect(port).await;
+    mp_call(&mut comments, "comments.watch", json!({})).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let mut ws = mp_connect(port).await;
+    let mut golden = Vec::new();
+    for (method, params) in script() {
+        mp_call(&mut ws, method, params.clone()).await;
+        let items = mp_items(&mut ws, None).await;
+        let namespace = method.split('.').next().unwrap();
+        for item in &items {
+            round_trip(namespace, item);
+        }
+        golden.push(json!({"call": method, "params": params, "items": items.iter().map(steady).collect::<Vec<_>>()}));
+    }
+    let marker: fn(&Value) -> bool = |ev| ev["type"] == "amended" && ev["ticket"]["id"] == "GOLD-1";
+    let reopened: fn(&Value) -> bool = |ev| ev["type"] == "reopened";
+    for (name, sub, last, namespace) in [
+        ("tickets.watch", &mut watch, marker, "tickets"),
+        ("tickets.watch filtered", &mut filtered, marker, "tickets"),
+        ("comments.watch", &mut comments, reopened, "comments"),
+    ] {
+        let events = mp_items(sub, Some(last)).await;
+        for ev in &events {
+            round_trip(namespace, ev);
+        }
+        golden.push(json!({"call": name, "items": events.iter().map(steady).collect::<Vec<_>>()}));
+    }
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden-wire.json");
+    let want: Vec<Value> = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(golden.len(), want.len(), "the script answered a different number of calls");
+    for (a, b) in golden.iter().zip(&want) {
+        assert_eq!(a, b, "in msgpack, the JSON changed");
     }
 }
