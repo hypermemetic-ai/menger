@@ -332,6 +332,14 @@ struct Args {
     #[arg(long, env = "MENGER_IDLE_TIMEOUT_SECS", default_value_t = menger::calls::IDLE_SECS, value_name = "SECS", help_heading = LIMITS, hide_short_help = true)]
     idle_timeout_secs: u64,
 
+    // PERF-9 (spec/13).
+    /// The encodings the WebSocket offers, any order: msgpack, json, or both
+    /// (the default until every client of menger's speaks msgpack). A client
+    /// names the ones it speaks at the upgrade; one that names none gets JSON
+    /// while JSON is offered.
+    #[arg(long = "wire-encodings", env = "MENGER_WIRE_ENCODINGS", default_value = "msgpack,json", value_name = "LIST", value_parser = parse_wire_encodings, help_heading = RUN, hide_short_help = true)]
+    wire_encodings: plexus_transport::Encodings,
+
     // ACCESS-29 (AUTH-12's quotas).
     /// Connections open in all.
     #[arg(long, env = "MENGER_MAX_CONNECTIONS", default_value_t = ConnectionQuotas::default().max_connections, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
@@ -589,6 +597,8 @@ async fn run(args: Args) -> anyhow::Result<()> {
         // makes a call too — the transport closes it; menger's sweep keeps
         // the ones that did (src/calls.rs). Pings find a dead peer.
         .with_socket_limits(plexus_transport::SocketLimits { idle_timeout: limits.idle, ..Default::default() })
+        // PERF-9: what the socket offers (both, by default).
+        .with_wire_encodings(args.wire_encodings.clone())
         .with_allowed_hosts(hosts(ws_port));
     tracing::info!("WebSocket: ws://{}", std::net::SocketAddr::new(args.bind, ws_port));
     // IDENTITY-29: only menger's own pages may open the socket from a
@@ -807,6 +817,11 @@ async fn verify_derived(db_path: PathBuf) -> i32 {
 /// when none is given), without a trailing `/`.
 fn wiring_public_url(public_url: &Option<String>, shell_port: u16) -> String {
     public_url.clone().unwrap_or_else(|| format!("http://127.0.0.1:{shell_port}")).trim_end_matches('/').to_string()
+}
+
+/// `--wire-encodings`: `msgpack,json`, `json`, `msgpack` (spec/13).
+fn parse_wire_encodings(s: &str) -> Result<plexus_transport::Encodings, String> {
+    s.parse().map_err(|e: plexus_transport::EncodingsError| e.to_string())
 }
 
 /// IDENTITY-30: `--login-email <provider>[:<connection>]`, a button with no

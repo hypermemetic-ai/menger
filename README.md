@@ -5669,6 +5669,19 @@ synapse -P 4460 -t "$ADMIN" menger auth role_set --role viewer --grants tickets.
 role table against IDENTITY-21's); `tests/login_page.rs` runs the loopback
 sign-in end to end.
 
+### Encodings (PERF-9)
+
+The WebSocket carries JSON-RPC text or msgpack (plexus-wire spec/13): a
+client names the encodings it speaks at the upgrade,
+`Sec-WebSocket-Protocol: plexus.msgpack, plexus.json`, and gets the first
+one menger offers; one that names none gets JSON, as before. Under msgpack
+every frame both ways is one binary message, the JSON-RPC object as a map
+with its field names and no `jsonrpc`. `--wire-encodings`
+(`MENGER_WIRE_ENCODINGS`) says what menger offers — `msgpack,json` (the
+default), `json` or `msgpack`; it offers both until every client of its own
+speaks msgpack (TRANSPORT-21). A client that names only what is not
+offered gets the `101`, then a close `4415` whose reason lists the offer.
+
 ### Limits and caps (ACCESS-29)
 
 Nothing a caller does — anonymous or signed in — grows menger's memory
