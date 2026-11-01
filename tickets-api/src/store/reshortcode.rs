@@ -618,6 +618,10 @@ fn rekey(txn: &rusqlite::Transaction<'_>, map: &HashMap<String, String>, renamed
     // unrekeyed: a later service reads them through the old id's pin.
     const COLUMNS: &[(&str, &str)] = &[
         ("search_rows", "id"),
+        ("inputs", "ticket"),
+        ("answers", "ticket"),
+        ("queue", "ticket"),
+        ("queue_log", "ticket"),
         ("transitions", "ticket"),
         ("tombstones", "parent"),
         ("members", "scope"),
@@ -849,7 +853,8 @@ impl Store {
         // The derived state, built from the rows as the write leaves them;
         // the shortcodes with the one it mints, every namespace a moved root
         // changes checked.
-        let mut built = Cache::built(db::load_rows(&txn).map_err(|e| StoreError::Db(e.to_string()))?, cache.cells.keys());
+        let inputs = inputs::load(&txn)?;
+        let mut built = Cache::built(db::load_rows(&txn).map_err(|e| StoreError::Db(e.to_string()))?, inputs, cache.cells.keys());
         built.shortcodes = cache.shortcodes.clone();
         let first = p.steps.first().map(|s| s.row.id.to_string());
         if let Some(m) = cache.namespaces(built.rows(), &built.rollups, p.minted.as_ref(), first.as_deref())? {

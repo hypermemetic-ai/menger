@@ -307,6 +307,92 @@ async fn reads_under_random_filters_equal_the_evaluator_on_each_fixture() {
 // ---------------------------------------------------------------------------
 // inputs { filter }
 
+fn decision(id: &str) -> String {
+    format!(
+        "<m-decision data-field=\"decision\" id=\"{id}\">\n<m-question data-field=\"question\">Pick?</m-question>\n\
+         <m-option data-field=\"option\" name=\"A\" value=\"a\"></m-option>\n<m-option data-field=\"option\" name=\"B\" value=\"b\"></m-option>\n\
+         </m-decision>\n"
+    )
+}
+
+/// `inputs` under random filters equals `inputs` kept where the filter
+/// admits the input's ticket — with `ticket`, `epic` and `state` beside it —
+/// after random writes of every kind (which move tickets in and out of
+/// filters), answers, closes, and a body that drops its input.
+#[tokio::test]
+async fn inputs_under_random_filters_are_the_inputs_of_the_tickets_the_filter_admits() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("inputs.db");
+    let store = Store::open(&path).unwrap();
+    let epics = ["IN", "OUT", "ZED"];
+    for e in epics {
+        store.create(SYS, new_ticket(e, Kind::Scope, None, vec![])).await.unwrap();
+    }
+    let mut rng = Rng(0x1_F415);
+    let mut tally = Tally::default();
+    let mut declared: Vec<String> = Vec::new();
+    for step in 0..240 {
+        let what = match rng.below(5) {
+            0 => {
+                let epic = epics[rng.below(epics.len())];
+                let mut t = new_ticket(epic, Kind::Build, None, vec![]);
+                t.body = format!("{}{}", decision("pick"), if rng.below(2) == 0 { decision("second") } else { String::new() });
+                let id = store.create(SYS, t).await.unwrap().id;
+                declared.push(id.to_string());
+                format!("create {id} with inputs")
+            }
+            1 if !declared.is_empty() => {
+                let id = declared[rng.below(declared.len())].clone();
+                let _ = store.answer(SYS.permit(&id), "pick", InputValue::Choice { option: "b".into() }, None, AnswerSource::Api).await;
+                if rng.below(3) == 0 {
+                    let _ = store.close_input(SYS.permit(&id), "pick").await;
+                }
+                format!("answer {id}")
+            }
+            2 if !declared.is_empty() && rng.below(4) == 0 => {
+                let id = declared[rng.below(declared.len())].clone();
+                store.amend(SYS.permit(&id), None, Some("no inputs now".into())).await.unwrap();
+                format!("amend {id} without its inputs")
+            }
+            _ => random_write(&store, &mut rng, &epics, &mut tally).await,
+        };
+        if step % 8 != 7 {
+            continue;
+        }
+        let plain = Plain::of(&store);
+        let held = names(&store);
+        for _ in 0..4 {
+            let filter = random_filter(&mut rng, &held);
+            let lens = Lens::of(&filter).unwrap();
+            let ticket = match rng.below(4) {
+                0 if !declared.is_empty() => Some(declared[rng.below(declared.len())].to_ascii_lowercase()),
+                _ => None,
+            };
+            let epic = (rng.below(3) == 0).then(|| epics[rng.below(epics.len())].to_ascii_lowercase());
+            let state = match rng.below(4) {
+                0 => Some(InputState::Open),
+                1 => Some(InputState::Answered),
+                2 => Some(InputState::Closed),
+                _ => None,
+            };
+            let admitted = |id: &str| {
+                let i = plain.rows.iter().position(|t| t.id == id).expect("an input's ticket is a ticket");
+                filter.matches(&plain.facts(&plain.rows[i], plain.cells[i]))
+            };
+            let want: Vec<Input> = store
+                .inputs(SYS, ticket.as_deref(), epic.as_deref(), state)
+                .unwrap()
+                .into_iter()
+                .filter(|i| admitted(&i.ticket))
+                .collect();
+            let got = store.inputs_filtered(SYS, ticket.as_deref(), epic.as_deref(), state, &lens).unwrap();
+            assert_eq!(got, want, "step {step} ({what}): inputs {ticket:?} {epic:?} {state:?} under `{}`", filter.format());
+        }
+    }
+    assert!(store.inputs(SYS, None, None, None).unwrap().len() > 20, "enough inputs to filter");
+    assert!(matches!(store.inputs_filtered(SYS, Some("NONE-1"), None, None, &Lens::all()), Err(StoreError::NotFound(_))));
+}
+
 // ---------------------------------------------------------------------------
 // Without a filter, and the edges.
 

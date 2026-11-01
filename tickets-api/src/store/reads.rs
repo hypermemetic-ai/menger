@@ -458,6 +458,60 @@ impl Store {
         Ok(h)
     }
 
+    /// Every input, as a page of them would hold it: a test's read.
+    #[cfg(test)]
+    pub fn inputs(&self, who: &(impl Reader + ?Sized), ticket: Option<&str>, epic: Option<&str>, state: Option<InputState>) -> Result<Vec<Input>, StoreError> {
+        self.inputs_of(who, ticket, epic, state, None)
+    }
+
+    /// …of the tickets `lens` admits.
+    #[cfg(test)]
+    pub fn inputs_filtered(&self, who: &(impl Reader + ?Sized), ticket: Option<&str>, epic: Option<&str>, state: Option<InputState>, lens: &Lens) -> Result<Vec<Input>, StoreError> {
+        self.inputs_of(who, ticket, epic, state, Some(lens))
+    }
+
+    #[cfg(test)]
+    fn inputs_of(&self, who: &(impl Reader + ?Sized), ticket: Option<&str>, epic: Option<&str>, state: Option<InputState>, lens: Option<&Lens>) -> Result<Vec<Input>, StoreError> {
+        let mut out = Vec::new();
+        let mut ask = inputs::InputsAsk { ticket: ticket.map(str::to_string), epic: epic.map(str::to_string), state, limit: Some(inputs::INPUTS_PAGE_MAX), after: None };
+        loop {
+            let page = self.inputs_page(who, &ask, lens)?;
+            out.extend(page.inputs);
+            match page.next {
+                Some(next) => ask.after = Some(next),
+                None => return Ok(out),
+            }
+        }
+    }
+
+    /// V2-20: a page of the inputs — of `ask.ticket` (every ticket's, without
+    /// one), in the shortcode `ask.epic`, in `ask.state`, of the tickets `who`
+    /// sees and, FILTER-15, `lens` admits: each ticket that holds an input
+    /// one lookup, before anything is cloned. A `ticket` naming none it sees
+    /// is [`StoreError::NotFound`]; an `after` no page answered is refused.
+    /// From the cache alone.
+    pub fn inputs_page(&self, who: &(impl Reader + ?Sized), ask: &inputs::InputsAsk, lens: Option<&Lens>) -> Result<inputs::InputsPage, StoreError> {
+        let after = ask.after.as_deref().map(|a| inputs::cursor_at(a).ok_or_else(|| StoreError::Invalid(format!("`after` {a} is no place in the inputs — pass the `next` a page answered")))).transpose()?;
+        let limit = ask.limit.unwrap_or(inputs::INPUTS_PAGE).clamp(1, inputs::INPUTS_PAGE_MAX);
+        let seen = Seen::of(who)?;
+        let lens = lens.map(|l| seen.within(l)).transpose()?;
+        let cache = self.tickets.read().expect("store lock poisoned");
+        let sees = seen.sees(&cache);
+        // ORG-3: the ticket by any address; the shortcode by its letters or
+        // address, one naming several refused.
+        let ticket = ask.ticket.as_deref().map(|t| sees.resolve(t)).transpose()?;
+        let epic = ask.epic.as_deref().map(|e| span_shortcode(&cache, Some(e))).transpose()?.flatten();
+        let view = lens.as_ref().map(|l| lensed::lens_view(&cache, l)).transpose()?;
+        let (all, any_archived) = (sees.all(), cache.cells.archived(None) > 0);
+        let keep = |id: &str| {
+            // ARCHIVE-2: an archived ticket's inputs are in no list — but its
+            // own page still reads them, by naming it.
+            let live = ticket.is_some() || !any_archived || cache.get(id).is_none_or(|r| r.archived.is_none());
+            (all || sees.id(id)) && live && view.as_ref().is_none_or(|v| cache.at.get(id).is_some_and(|k| v.contains(&k.shortcode, k.seq)))
+        };
+        Ok(cache.inputs.page(ticket.as_deref(), epic.as_ref(), ask.state, after, limit, keep))
+    }
+
     /// FILTER-15: `member { ids, filter }` — for each of `ids`, whether
     /// `lens` admits it within `who`'s reach (an id it may not see is not
     /// admitted, as one naming no ticket). A reach that reaches nothing

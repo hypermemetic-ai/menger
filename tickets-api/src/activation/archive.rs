@@ -70,7 +70,7 @@ pub(super) fn archive_stream(store: Arc<Store>, caller: VerifiedUser, picked: Pi
         let (gate, at) = (Arc::clone(&caller), store.clone());
         let may = move |ids: &[String]| marking(&at, &gate, ids, "archive");
         match store.archive_by(select, act, dry_run, may).await {
-            Ok(ArchiveAnswer { ids, live, mark, dry_run }) => yield TicketsEvent::Archived { ids, live, mark, dry_run },
+            Ok(ArchiveAnswer { ids, live, unqueued, mark, dry_run }) => yield TicketsEvent::Archived { ids, live, unqueued, mark, dry_run },
             Err(e) => yield said(&store, &caller, e),
         }
     }

@@ -2,8 +2,9 @@
 //! named" on V2-4 lists what goes — the other services' activations, their
 //! store modules, the body parsers that served them, the webhook worker, the
 //! frames' SDK generator — and acceptance 4 holds the crate to it: no module
-//! names chats, comments, deployments, themes, the queue, media, notes,
-//! inputs, components or profiles. This file is that check, over the tree.
+//! names chats, comments, deployments, themes, media, notes, components or
+//! profiles. This file is that check, over the tree. V2-20: questions
+//! (`tickets inputs`) and the queue came back, and left it.
 
 use std::path::{Path, PathBuf};
 
@@ -16,9 +17,7 @@ fn root() -> PathBuf {
 /// directory. Grouped as the ticket names them.
 const GOES: &[&str] = &[
     // The activations: chats, comments, deployments (and webhook), media,
-    // notes, themes, profiles — and tickets' children inputs,
-    // components, the queue (await_reply, request_changes, queued, snooze,
-    // unqueue) and assign.
+    // notes, themes, profiles — and tickets' children components and assign.
     "tickets-api/src/chats_activation.rs",
     "tickets-api/src/chats_activation",
     "tickets-api/src/comments_activation.rs",
@@ -30,10 +29,7 @@ const GOES: &[&str] = &[
     "tickets-api/src/notes_activation.rs",
     "tickets-api/src/themes_activation.rs",
     "tickets-api/src/members_activation/profiles.rs",
-    "tickets-api/src/activation/inputs.rs",
     "tickets-api/src/activation/components.rs",
-    "tickets-api/src/activation/queue.rs",
-    "tickets-api/src/activation/await_reply.rs",
     "tickets-api/src/activation/assign.rs",
     // Their vocabularies (acceptance 4: no module names them).
     "tickets-api/src/chats.rs",
@@ -45,8 +41,6 @@ const GOES: &[&str] = &[
     "tickets-api/src/notes.rs",
     "tickets-api/src/themes.rs",
     "tickets-api/src/themes_tests.rs",
-    "tickets-api/src/inputs.rs",
-    "tickets-api/src/queue.rs",
     "tickets-api/src/assignees.rs",
     // Their store modules.
     "tickets-api/src/store/chats.rs",
@@ -58,17 +52,11 @@ const GOES: &[&str] = &[
     "tickets-api/src/store/notes.rs",
     "tickets-api/src/store/themes.rs",
     "tickets-api/src/store/theme_registry.rs",
-    "tickets-api/src/store/queue.rs",
-    "tickets-api/src/store/ask.rs",
-    "tickets-api/src/store/inputs.rs",
-    "tickets-api/src/store/input_writes.rs",
     "tickets-api/src/store/components.rs",
     "tickets-api/src/store/profiles.rs",
     "tickets-api/src/store/assignees.rs",
-    "tickets-api/src/store/replies.rs",
     "tickets-api/src/store/threads.rs",
     // …and their tests, gone with them.
-    "tickets-api/src/store/tests_ask.rs",
     "tickets-api/src/store/tests_assignees.rs",
     "tickets-api/src/store/tests_chat_inputs.rs",
     "tickets-api/src/store/tests_chat_reply.rs",
@@ -80,12 +68,9 @@ const GOES: &[&str] = &[
     "tickets-api/src/store/tests_comments.rs",
     "tickets-api/src/store/tests_components.rs",
     "tickets-api/src/store/tests_deployments.rs",
-    "tickets-api/src/store/tests_inputs.rs",
     "tickets-api/src/store/tests_media.rs",
     "tickets-api/src/store/tests_notes.rs",
     "tickets-api/src/store/tests_profiles.rs",
-    "tickets-api/src/store/tests_queue.rs",
-    "tickets-api/src/store/tests_queue_many.rs",
     "tickets-api/src/store/tests_queue_views.rs",
     "tickets-api/src/store/tests_replies.rs",
     "tickets-api/src/store/tests_theme_registry.rs",
@@ -106,7 +91,6 @@ const GOES: &[&str] = &[
     "tickets-api/tests/sdk_manifest.rs",
     // The wire tests of what went, removed with it.
     "tests/wire_chats.rs",
-    "tests/wire_ask.rs",
     "tests/wire_assign.rs",
     "tests/wire_deployments.rs",
     "tests/wire_media.rs",
@@ -128,7 +112,6 @@ const TYPES: &[&str] = &[
     "NotesActivation",
     "ThemesActivation",
     "ProfilesActivation",
-    "InputsActivation",
     "MessageInputsActivation",
     "ComponentsActivation",
 ];
@@ -196,8 +179,7 @@ fn a_name_is_found_only_as_an_identifier_of_its_own() {
 
 /// The store modules the cut names: none is declared in `store/mod.rs`.
 const STORE_MODULES: &[&str] = &[
-    "chats", "comments", "deployments", "media", "notes", "themes", "theme_registry", "queue", "ask", "inputs",
-    "input_writes", "components", "profiles", "assignees", "replies", "threads",
+    "chats", "comments", "deployments", "media", "notes", "themes", "theme_registry", "components", "profiles", "assignees", "threads",
 ];
 
 /// The crate's modules of the services that went, and the body parsers that
@@ -205,7 +187,7 @@ const STORE_MODULES: &[&str] = &[
 const CRATE_MODULES: &[&str] = &[
     "chats", "chats_activation", "chat_inputs", "chat_reply", "chat_tickets", "comments", "comments_activation",
     "deployments", "deployments_activation", "media", "media_activation", "notes", "notes_activation", "themes",
-    "themes_activation", "inputs", "queue", "assignees", "mockups", "component_docs", "html_runs", "theme_block",
+    "themes_activation", "assignees", "mockups", "component_docs", "html_runs", "theme_block",
 ];
 
 /// The `mod <name>` declarations in `text` (any visibility, inline or not),
@@ -232,7 +214,7 @@ fn declared<'a>(text: &str, names: &[&'a str]) -> Vec<&'a str> {
 
 #[test]
 fn no_module_of_the_other_services_is_declared() {
-    assert_eq!(declared("pub(crate) mod chats;\nmod tests_chats;\n// mod queue;\n    pub mod themes {", STORE_MODULES), ["chats", "themes"]);
+    assert_eq!(declared("pub(crate) mod chats;\nmod tests_chats;\n// mod comments;\n    pub mod themes {", STORE_MODULES), ["chats", "themes"]);
     let root = root();
     let store = std::fs::read_to_string(root.join("tickets-api/src/store/mod.rs")).unwrap();
     let lib = std::fs::read_to_string(root.join("tickets-api/src/lib.rs")).unwrap();
@@ -253,11 +235,12 @@ fn the_binary_has_no_flag_for_them() {
 }
 
 /// V2-8, acceptance 1: the words of what went, singular and plural, which
-/// README and AGENTS.md must no longer say — v1's services, its queue, its
-/// mockups, its browser toolchain and the old word for a service. Not
+/// README and AGENTS.md must no longer say — v1's services, its mockups, its
+/// browser toolchain and the old word for a service. V2-20: the queue's
+/// words left: it is back. Not
 /// `theme` (`data-theme` stays) and not `deployed` (the pipeline deploys).
 const GONE_WORDS: &[&str] = &[
-    "chats", "chat", "comments", "comment", "deployments", "deployment", "themes", "queue", "queues", "queued", "trunk",
+    "chats", "chat", "comments", "comment", "deployments", "deployment", "themes", "trunk",
     "Leptos", "sdk-codegen", "hub", "hubs", "mockup", "mockups",
 ];
 
@@ -379,8 +362,6 @@ fn a_gone_word_is_found_only_as_a_word_of_its_own() {
     for (text, word) in [
         ("Chats are the `chats` activation", "chats"),
         ("a chat of one", "chat"),
-        ("ask in the queue", "queue"),
-        ("`queued` is a filter cell", "queued"),
         ("run trunk build", "trunk"),
         ("the Leptos app", "Leptos"),
         ("a leptos crate", "Leptos"),
@@ -413,7 +394,7 @@ fn a_gone_word_is_found_only_as_a_word_of_its_own() {
     assert!(failures("README.md", "# menger\nv1 is tag v0.0.1.\n").is_empty());
 
     // The allowance is the first line with the tag, whatever it says.
-    let readme = "# menger\nv1 (tag v0.0.1) had chats, comments and a queue.\nNo hub here.\n";
+    let readme = "# menger\nv1 (tag v0.0.1) had chats, comments and a chat.\nNo hub here.\n";
     assert_eq!(stale("README.md", readme), ["README.md:3: No hub here."]);
     let twice = "Gone at v0.0.1: chats.\nAlso at v0.0.1: themes.\nOn GitHub.\n";
     assert_eq!(stale("README.md", twice), ["README.md:2: Also at v0.0.1: themes."]);
@@ -424,8 +405,8 @@ fn a_gone_word_is_found_only_as_a_word_of_its_own() {
     assert!(stale("AGENTS.md", "v0.0.1 had chats\n").is_empty());
 
     // The naming section: AGENTS.md's exact heading, once, to the next `## `.
-    let agents = format!("# menger\n{NAMING_HEADING}\nwe don't call them hubs; a hub is a service.\n### the sweep\nno hub.\n## Next\nthe queue\n");
-    assert_eq!(stale("AGENTS.md", &agents), ["AGENTS.md:7: the queue"]);
+    let agents = format!("# menger\n{NAMING_HEADING}\nwe don't call them hubs; a hub is a service.\n### the sweep\nno hub.\n## Next\nthe comment\n");
+    assert_eq!(stale("AGENTS.md", &agents), ["AGENTS.md:7: the comment"]);
     assert_eq!(stale("README.md", &agents).len(), 4, "the naming section, its heading too, is AGENTS.md's alone");
     assert_eq!(stale("AGENTS.md", "## Naming things\na hub\n"), ["AGENTS.md:2: a hub"], "only the exact heading");
     let again = format!("{NAMING_HEADING}\na hub\n## Other\n{NAMING_HEADING}\nhubs\n");

@@ -820,6 +820,303 @@ pub struct SearchWord {
     pub also: Vec<String>,
 }
 
+/// INPUT-3: what an **input** asks for (INPUT-1 decision 2, the owner's
+/// fixed set): `choice` — one of its options (an `<m-decision>`); `multi` —
+/// any of its options, a set; `text` — a free reply (both an `<m-input>`).
+/// Lowercase on the wire, as [`Kind`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum InputKind {
+    Choice,
+    Multi,
+    Text,
+}
+
+impl InputKind {
+    /// The wire spelling — also how a body's `kind="…"` writes it.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            InputKind::Choice => "choice",
+            InputKind::Multi => "multi",
+            InputKind::Text => "text",
+        }
+    }
+}
+
+impl fmt::Display for InputKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Case-insensitive and trimmed, as a body's `kind` attribute is read.
+impl FromStr for InputKind {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "choice" => Ok(Self::Choice),
+            "multi" => Ok(Self::Multi),
+            "text" => Ok(Self::Text),
+            other => Err(format!("unknown input kind '{other}' (expected choice, multi, or text)")),
+        }
+    }
+}
+
+/// INPUT-3: where an input stands (INPUT-1 decision 4): `open` — waiting
+/// for an answer; `answered` — it holds one, which may change; `closed` —
+/// frozen, with or without an answer (DECIDED, for a decision); `removed` —
+/// its body no longer declares it, and its history is kept. The state is
+/// what the history says (the last answer or clear, the last close or
+/// reopen) while the body declares the input, and `removed` when it does not.
+///
+/// MENGER-13: `withdrawn` — its ticket was canceled while it waited (open):
+/// nobody is asked any more, it takes no answer, and its history is kept;
+/// the ticket leaving `Canceled` restores it. "Has an input in state `open`"
+/// is therefore "is asking someone", with no case for a canceled ticket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputState {
+    Open,
+    Answered,
+    Closed,
+    Removed,
+    Withdrawn,
+}
+
+impl InputState {
+    pub const ALL: [InputState; 5] =
+        [InputState::Open, InputState::Answered, InputState::Closed, InputState::Removed, InputState::Withdrawn];
+
+    /// The wire spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            InputState::Open => "open",
+            InputState::Answered => "answered",
+            InputState::Closed => "closed",
+            InputState::Removed => "removed",
+            InputState::Withdrawn => "withdrawn",
+        }
+    }
+}
+
+impl fmt::Display for InputState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for InputState {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "open" => Ok(Self::Open),
+            "answered" => Ok(Self::Answered),
+            "closed" => Ok(Self::Closed),
+            "removed" => Ok(Self::Removed),
+            "withdrawn" => Ok(Self::Withdrawn),
+            other => Err(format!("unknown input state '{other}' (expected open, answered, closed, removed, or withdrawn)")),
+        }
+    }
+}
+
+/// INPUT-3: who made a change to an input (INPUT-1's language) — `app`, a
+/// viewer's click, which the host says on its `answer`; `api`, everything
+/// else (synapse, an agent). The only "who" until CONTEXT adds identity.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AnswerSource {
+    App,
+    #[default]
+    Api,
+    /// MENGER-13: the store itself — an input withdrawn because its ticket
+    /// was canceled, or restored when it was not any more. Never a caller's
+    /// to say: `inputs.answer` and `inputs.clear` refuse it.
+    System,
+}
+
+impl AnswerSource {
+    /// The wire spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            AnswerSource::App => "app",
+            AnswerSource::Api => "api",
+            AnswerSource::System => "system",
+        }
+    }
+}
+
+impl fmt::Display for AnswerSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for AnswerSource {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "app" => Ok(Self::App),
+            "api" => Ok(Self::Api),
+            "system" => Ok(Self::System),
+            other => Err(format!("unknown answer source '{other}' (expected app or api)")),
+        }
+    }
+}
+
+/// INPUT-3: an answer's value, typed by its input's kind — internally
+/// tagged, as [`Placement`] is: `{"type": "choice", "option": "archive"}`
+/// (one option's `value`), `{"type": "multi", "options": ["a", "b"]}` (a set
+/// of them — stored in the order the body declares them, each once; it may
+/// be empty: none ticked), `{"type": "text", "text": "…"}` (a reply, not
+/// blank). Through synapse, a param's fields are dotted flags:
+/// `--value.type choice --value.option archive`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum InputValue {
+    Choice { option: String },
+    Multi { options: Vec<String> },
+    Text { text: String },
+}
+
+impl InputValue {
+    /// The kind of input this value answers.
+    pub const fn kind(&self) -> InputKind {
+        match self {
+            InputValue::Choice { .. } => InputKind::Choice,
+            InputValue::Multi { .. } => InputKind::Multi,
+            InputValue::Text { .. } => InputKind::Text,
+        }
+    }
+}
+
+/// INPUT-3: one option an input declares — `value` is what an answer names
+/// (an `<m-option>`'s `value`, else its `name`; an `<m-choice>`'s `value`),
+/// `label` what a reader sees (the `name`, else the value; an `<m-choice>`'s
+/// text, else its value), `recommended` whether the option is marked so.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct InputOption {
+    pub value: String,
+    pub label: String,
+    pub recommended: bool,
+}
+
+/// INPUT-3: an input's current answer — the value, its rationale (`null`
+/// when none was given), who gave it and when (unix seconds). The latest
+/// `answered` of its history, unless a `cleared` came after it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Answer {
+    pub value: InputValue,
+    pub rationale: Option<String>,
+    pub source: AnswerSource,
+    pub at_unix: i64,
+    /// INPUT-3: who gave it — the caller's principal (absent on an answer
+    /// recorded before the record, and on the store's own entries).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
+    /// INPUT-3: the name `by` went by then (a person's sign-in, a key's
+    /// `--as`), when it had one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// INPUT-3: what one entry of an input's history did — an answer recorded
+/// (`answered`), the answer cleared (`cleared`), the input frozen
+/// (`closed`) or unfrozen (`reopened`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum InputAction {
+    Answered,
+    Cleared,
+    Closed,
+    Reopened,
+    /// MENGER-13: its ticket was canceled while it was open — it waits on
+    /// no one now (`withdrawn`); the rationale says why.
+    Withdrawn,
+    /// MENGER-13: its ticket left `Canceled` — it is what its history says
+    /// again.
+    Restored,
+}
+
+impl InputAction {
+    /// The wire spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            InputAction::Answered => "answered",
+            InputAction::Cleared => "cleared",
+            InputAction::Closed => "closed",
+            InputAction::Reopened => "reopened",
+            InputAction::Withdrawn => "withdrawn",
+            InputAction::Restored => "restored",
+        }
+    }
+}
+
+impl FromStr for InputAction {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "answered" => Ok(Self::Answered),
+            "cleared" => Ok(Self::Cleared),
+            "closed" => Ok(Self::Closed),
+            "reopened" => Ok(Self::Reopened),
+            "withdrawn" => Ok(Self::Withdrawn),
+            "restored" => Ok(Self::Restored),
+            other => Err(format!("unknown input action '{other}'")),
+        }
+    }
+}
+
+/// INPUT-3: one change an input went through, oldest first — the action,
+/// the value and rationale of an `answered` (`null` for the others), who
+/// made it and when (unix seconds). Every change is kept, a removed input's
+/// included.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct InputHistoryEntry {
+    pub action: InputAction,
+    pub value: Option<InputValue>,
+    pub rationale: Option<String>,
+    pub source: AnswerSource,
+    pub at_unix: i64,
+    /// INPUT-3: who made it — as [`Answer::by`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
+    /// INPUT-3: the name `by` went by then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// INPUT-3: one **input** — an element in a ticket's body that asks for an
+/// answer (INPUT-1), as the store keeps it: the ticket it is in, its `id`
+/// (unique in that ticket), its kind, what the body declares of it — the
+/// question (`null` without an `<m-question>`), the options in the body's
+/// order, the recommendation (the `<m-recommendation>`'s text, else the
+/// label of the option marked `recommended`; `null` with neither) — and
+/// what has been answered: its state, its current answer (`null` when it
+/// holds none) and its whole history, oldest first.
+///
+/// The declaration follows the body: every write of the body re-reads it.
+/// An answer stays what was recorded when a later body changes the options
+/// it named — the history is a record, never rewritten.
+///
+/// APP-84: `asked_unix` is when it was asked — the write whose body first
+/// declared it (or declared it again after it was removed); an input older
+/// than the record carries its ticket's creation. `null` only from a server
+/// before APP-84.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Input {
+    pub ticket: TicketId,
+    pub id: crate::vocab::InputId,
+    pub kind: InputKind,
+    pub question: Option<String>,
+    pub options: Vec<InputOption>,
+    pub recommendation: Option<String>,
+    pub state: InputState,
+    pub answer: Option<Answer>,
+    pub history: Vec<InputHistoryEntry>,
+    #[serde(default)]
+    pub asked_unix: Option<i64>,
+}
+
 /// MENGER-13: which of a ticket's fields a transition moved — its status, or
 /// its kind (SDLC-13's `set_kind`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
@@ -1055,6 +1352,11 @@ impl SummaryRow {
 pub enum Row {
     /// A summary row (`list`, `work.ready` with `summary`; `find`).
     Summary { summary: SummaryRow },
+    /// V2-20: a row of `queued` — the entry and its ticket's row, most
+    /// urgent first, then the oldest.
+    QueueRow { entry: crate::queue::QueueEntry, ticket: TicketSummary },
+    /// V2-20: a row of `inputs.list`, as [`TicketsEvent::Input`].
+    Input { input: Input },
     /// A whole ticket (`list`, `work.ready` without `summary`).
     Ticket { ticket: Ticket },
     /// A row of `nav.tree`, as [`TicketsEvent::Node`].
@@ -1089,6 +1391,9 @@ impl Row {
             Row::Summary { summary: SummaryRow::Whole(summary) } => TicketsEvent::Summary { summary },
             Row::Summary { summary: SummaryRow::Fields(_) } => return None,
             Row::Ticket { ticket } => TicketsEvent::Ticket { ticket },
+            // V2-20: a row with no event of its own.
+            Row::QueueRow { .. } => return None,
+            Row::Input { input } => TicketsEvent::Input { input },
             Row::Node { summary, matched, below } => TicketsEvent::Node { summary, matched, below },
             Row::Hit { summary, title, snippet, corrected } => TicketsEvent::Hit { summary, title, snippet, corrected },
             Row::Group { group } => TicketsEvent::Group { group },
@@ -1120,6 +1425,60 @@ pub enum TicketsEvent {
     /// `work.ready` yield per row instead of `ticket` when the call asked
     /// for `summary`, and what `find` always yields (SCALE-6).
     Summary { summary: TicketSummary },
+    /// INPUT-3: one input, as it is now (yielded per input by `inputs`, in
+    /// the store's order of tickets and the body's order inside one — a
+    /// removed input after the ones its body declares; and by a
+    /// `inputs.clear`, `inputs.close` or `inputs.reopen` that changed nothing).
+    Input { input: Input },
+    /// INPUT-3: an input changed (yielded by `inputs.answer`, `inputs.clear`,
+    /// `inputs.close` and `inputs.reopen`, and by `watch`) — answered, cleared,
+    /// closed, reopened; or, by a `create` or `amend` of its ticket's body,
+    /// declared, re-declared (its kind, question, options or recommendation),
+    /// removed from the body, or declared again. Carries the whole input —
+    /// its state, its answer and its history — so applying it is one upsert;
+    /// after every other event of its write. `watch { epic }` filters it by
+    /// its ticket's shortcode.
+    InputChanged { input: Input },
+    /// MENGER-39: a ticket put in front of the owner, or queued again
+    /// (`action`: `queued`, `raised` — a higher urgency —, `requeued` — the
+    /// urgency kept) — `queue`'s answer, and on `watch`; the entry as the
+    /// write leaves it and its ticket's row.
+    Queued { entry: crate::queue::QueueEntry, ticket: TicketSummary, action: crate::queue::QueueAction },
+    /// MENGER-39: a ticket out of the queue — `unqueue`'s answer, and on
+    /// `watch`; `action` `unqueued`, or `closed` (the input the entry named
+    /// was closed); the entry as it was, who took it out, when.
+    Unqueued { id: String, entry: crate::queue::QueueEntry, action: crate::queue::QueueAction, by: String, at_unix: i64 },
+    /// MENGER-39: a queued ticket snoozed until its entry's
+    /// `snoozed_until_unix` — `snooze`'s answer, and on `watch`.
+    Snoozed { entry: crate::queue::QueueEntry, ticket: TicketSummary },
+    /// APP-23: `request_changes`'s answer — what to change, kept on the
+    /// queue's log (`action: changes_requested`), and the ticket out of the
+    /// queue (`entry` as it was, who, when). `watch` carries the `unqueued`.
+    ChangesRequested { id: String, body: String, entry: crate::queue::QueueEntry, by: String, at_unix: i64 },
+    /// APP-24: `await_reply`'s first event, at once — the ticket it waits
+    /// on (its id as kept) and its queue entry, when it is queued.
+    Waiting {
+        ticket: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        queued: Option<crate::queue::QueueEntry>,
+    },
+    /// APP-24: `await_reply`'s answer — the first response on the ticket
+    /// since `since`; the stream ends after it.
+    Replied { ticket: String, reply: crate::queue::Reply },
+    /// APP-24: `await_reply` waited `timeout_minutes` and nothing came; the
+    /// stream ends.
+    TimedOut { ticket: String },
+    /// MENGER-39: `unqueue` of a ticket that is not queued — nothing written.
+    NotQueued { id: String },
+    /// MENGER-39: the last event of `queued`, after its `page` — how many
+    /// rows the whole queue holds in the caller's reach, how many of them
+    /// are snoozed, and the server's clock (a snooze's end is read against
+    /// it).
+    QueueEnd { count: u64, snoozed: u64, now_unix: i64 },
+    /// MENGER-39: a line of the ticket's queue history (yielded by `history`
+    /// after its transitions, oldest first): who queued it, why and at what
+    /// urgency; who snoozed it until when; who took it out.
+    QueueRecord { record: crate::queue::QueueRecord },
     /// PERF-15: a page's rows in one event — what every paged read (`list`,
     /// `work.ready`, `nav.tree`, `find`, `search`) and the board's listings
     /// (`nav.groups`, `nav.extents`, `nav.counts`) answer, then their one
@@ -1244,7 +1603,15 @@ pub enum TicketsEvent {
     /// `dry_run`: what the write would do, nothing written (`mark.write` is
     /// then 0). After it on `watch`: the groups that moved, and a filter's
     /// `left`.
-    Archived { ids: Vec<TicketId>, live: Vec<LiveTicket>, mark: Archived, dry_run: bool },
+    Archived {
+        ids: Vec<TicketId>,
+        live: Vec<LiveTicket>,
+        /// V2-20: those of them it took out of the queue; left out when none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        unqueued: Vec<TicketId>,
+        mark: Archived,
+        dry_run: bool,
+    },
     /// ARCHIVE-2: `restore`'s answer, and its write's event on `watch` (and
     /// a create's or a move's under an archived parent, after its own) —
     /// `ids` every ticket brought back, in the store's order: those named,

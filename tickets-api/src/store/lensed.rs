@@ -164,6 +164,12 @@ fn candidates<'c>(cache: &'c Cache, view: &View<'c>, after: Option<&OrderKey>, m
     }
 }
 
+/// FILTER-15: what `lens` admits, everywhere — `inputs.list { filter }`
+/// looks each ticket up in it.
+pub(super) fn lens_view<'c>(cache: &'c Cache, lens: &Lens) -> Result<View<'c>, StoreError> {
+    view(cache, &everywhere(lens))
+}
+
 impl Store {
     /// FILTER-15: `find { query, filter }` — one page of the tickets whose
     /// id or title contains `query` (the palette's rule, [`Needle`]) and

@@ -4,8 +4,8 @@
 //! — beside the protocol's `auth`, and (UI-3) the `ui` service, and nothing
 //! else; `tickets`' children are
 //! `commits`, `nav`, `work`, `filters`, `subtasks` and `revisions`, and
-//! nothing else (inputs, components, the queue and assign went with their
-//! services, and so did their methods and parameters). A body is text: what
+//! nothing else (components and assign went with their services, and so did
+//! their methods and parameters; V2-20: inputs and the queue came back). A body is text: what
 //! v1 parsed out of it is no longer read, so nothing in it refuses a write.
 //! A filter naming a cell of a service that went is refused, naming it —
 //! asked directly, or through a saved filter kept from v1.
@@ -139,7 +139,7 @@ async fn the_service_registers_tickets_members_orgs_epics_and_nothing_else() {
         (hub, tickets),
         (
             set(&["auth", "tickets", "members", "orgs", "epics", "session", "ui"]),
-            set(&["commits", "nav", "work", "filters", "subtasks", "revisions"])
+            set(&["commits", "inputs", "nav", "work", "filters", "subtasks", "revisions"])
         ),
         "(the hub's activations, tickets' children)"
     );
@@ -147,30 +147,35 @@ async fn the_service_registers_tickets_members_orgs_epics_and_nothing_else() {
     // profiles service's).
     assert_eq!(children(&one(&c, "members.schema", json!({})).await), set(&["teams"]), "members' children");
 
-    // The queue's methods and `assign` went with their services…
+    // V2-20: the queue's methods are back…
     let have = methods(&tickets_schema);
-    let gone: Vec<&str> = ["queue", "await_reply", "request_changes", "queued", "snooze", "unqueue", "assign"].into_iter().filter(|m| have.contains(*m)).collect();
-    assert!(gone.is_empty(), "tickets still has {gone:?}");
+    let back: Vec<&str> = ["queue", "await_reply", "request_changes", "queued", "snooze", "unqueue"].into_iter().filter(|m| !have.contains(*m)).collect();
+    assert!(back.is_empty(), "tickets lacks {back:?}");
+    // …and `assign` went with its service…
+    assert!(!have.contains("assign"), "tickets still has assign");
     // …and so did the parameters that served them.
     assert!(!params(&tickets_schema, "create").contains("chat"), "create takes no chat: {:?}", params(&tickets_schema, "create"));
     let many = params(&tickets_schema, "update_many");
     assert!(!many.contains("assign") && !many.contains("unassign"), "update_many takes no assign: {many:?}");
 }
 
-/// A body is text: two inputs with one id and a `theme` block the theme
-/// registry would refuse were refusals on v1, and are a body like any other
-/// on v2 — created, and read back as written.
+/// A body is text but for its inputs: a `theme` block the theme registry
+/// would refuse was a refusal on v1, and is a body like any other on v2 —
+/// created, and read back as written; V2-20: two inputs with one id are
+/// refused again, naming the input.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_body_is_text() {
     let port = start_server().await;
     let c = support::connect(port).await;
     let decision = "<m-decision id=\"a\"><m-question>Pick?</m-question><m-option name=\"Yes\" value=\"yes\"></m-option></m-decision>\n";
-    let body = format!("{decision}{decision}\n```theme broken extends=\n:root {{ not-a-token: ; }}\n```\n");
+    let body = format!("{decision}\n```theme broken extends=\n:root {{ not-a-token: ; }}\n```\n");
     one(&c, "tickets.create", json!({"epic": "TXT", "title": "root", "kind": "scope"})).await;
     let made = one(&c, "tickets.create", json!({"epic": "TXT", "title": "a body", "body": body})).await;
     assert_eq!(made["type"], "created", "{made}");
     let got = one(&c, "tickets.get", json!({"id": "TXT-2"})).await;
     assert_eq!(got["ticket"]["body"], body, "{got}");
+    let why = refusal(&c, "tickets.create", json!({"epic": "TXT", "title": "twice", "body": format!("{decision}\n{decision}")})).await;
+    assert!(why.contains("'a' twice"), "{why}");
 }
 
 /// A cell of a service that went is refused, naming it: asked directly…
@@ -203,13 +208,13 @@ async fn a_saved_filter_holding_a_dropped_cell_is_refused_when_used() {
         let items = serde_json::to_string(&items).unwrap();
         assert!(items.contains("Held") && !items.contains("\"error\""), "{items}");
     }
-    let n = rusqlite::Connection::open(&db).unwrap().execute("UPDATE saved_filters SET filter = 'queued' WHERE slug = 'held'", []).unwrap();
+    let n = rusqlite::Connection::open(&db).unwrap().execute("UPDATE saved_filters SET filter = 'chatting' WHERE slug = 'held'", []).unwrap();
     assert_eq!(n, 1);
 
     let port = serve(db, dir).await;
     let c = support::connect(port).await;
     let why = refusal(&c, "tickets.list", json!({"filter": "saved Held"})).await;
-    assert!(why.contains("queued"), "{why}");
+    assert!(why.contains("chatting"), "{why}");
 }
 
 /// One method's `returns`: its event's variants, by their `type`.
@@ -250,7 +255,7 @@ async fn a_page_is_one_rows_event_in_the_schema() {
             None => item,
         };
         let kinds: BTreeSet<String> = item["oneOf"].as_array().unwrap_or_else(|| panic!("{method}: an item is one of the row events: {item}")).iter().map(|v| tag(v).to_string()).collect();
-        assert_eq!(kinds, set(&["summary", "ticket", "node", "hit", "group", "extent", "count"]), "{method}: the items are the per-row events");
+        assert_eq!(kinds, set(&["summary", "ticket", "node", "hit", "group", "extent", "count", "queue_row", "input"]), "{method}: the items are the per-row events");
         // The trailer each page ends with is still its own event.
         let trailer = match method { "search" => Some("searched"), "list" | "find" | "ready" | "tree" => Some("page"), _ => None };
         if let Some(t) = trailer {

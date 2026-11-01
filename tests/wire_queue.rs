@@ -337,7 +337,7 @@ async fn an_agent_waits_for_the_first_response() {
     assert_eq!((c["type"].as_str(), c["body"].as_str()), (Some("changes_requested"), Some("thinner, please")), "{c}");
     let r = next(&mut wait).await;
     assert_eq!((r["reply"]["kind"].as_str(), r["reply"]["body"].as_str()), (Some("changes_requested"), Some("thinner, please")), "{r}");
-    assert!(call(&ada, "tickets.queued", json!({})).await.iter().all(|e| e["type"] != "queue_row"));
+    assert_eq!(ids(&call(&ada, "tickets.queued", json!({})).await), ["KILN-2"], "KILN-3 is out");
     let not = one(&boss, "tickets.request_changes", json!({ "id": "KILN-3", "body": "again" })).await;
     assert_eq!(not["type"], "error", "not queued: {not}");
 

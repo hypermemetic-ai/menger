@@ -4,7 +4,8 @@
 //! severity change is, what becomes of a deleted ticket's children.
 
 use crate::members::Role;
-use crate::types::{Kind, Severity, Status, TransitionSource};
+use crate::queue::Urgency;
+use crate::types::{AnswerSource, InputState, Kind, Severity, Status, TransitionSource};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -20,13 +21,17 @@ impl DeleteChildren {
 use std::fmt;
 use std::str::FromStr;
 
-lenient!(Status, Kind, Severity, TransitionSource, Role);
+lenient!(Status, Kind, Severity, InputState, AnswerSource, TransitionSource, Role, Urgency);
 lenient!(CallerSource, DeleteChildren, AmendedField, RevisionField);
 
 closed_schema!(Status, "A ticket's status — the canonical spellings; `active` (Coding) and `in review` are read too, any case", [
     Status::Pending, Status::Ready, Status::Coding, Status::InReview, Status::Blocked, Status::Complete,
     Status::Draft, Status::Epic, Status::Superseded, Status::Canceled, Status::Doc,
 ]);
+closed_schema!(InputState, "Where an input stands (any case)", [
+    InputState::Open, InputState::Answered, InputState::Closed, InputState::Removed, InputState::Withdrawn,
+]);
+closed_schema!(Urgency, "How urgently the owner should look (any case)", [Urgency::Whenever, Urgency::Today, Urgency::Now, Urgency::Blocking]);
 closed_schema!(Kind, "What shape of work a ticket is — the owner's five, and doc (any case)", [
     Kind::Scope, Kind::Execution, Kind::Build, Kind::Gap, Kind::Spike, Kind::Doc,
 ]);

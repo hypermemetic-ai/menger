@@ -33,10 +33,12 @@
 //! a struct.
 #![allow(clippy::too_many_arguments)]
 
-use crate::types::{Kind, Row, Severity, Status, SummaryRow, TicketsEvent};
+use crate::queue::Urgency;
+use crate::types::{InputState, InputValue, Kind, Row, Severity, Status, SummaryRow, TicketsEvent};
 // ACCESS-8: every parameter a type (MACRO-12's `typed_params` holds it).
 use crate::vocab::{
-    Body, CallerSource, Cursor, DeleteChildren, FilterText, Label, MengerPath, Message, Query, SeverityChange, ShortcodeRef, SummaryField, TicketRef, Title, Zone,
+    Body, CallerSource, Cursor, DeleteChildren, FilterText, InputId, InputIds, Label, MengerPath, Message, Query, Question, Reason, SeverityChange, ShortcodeRef,
+    SummaryField, TicketRef, Title, Zone,
 };
 use crate::address::OrgId;
 // ACCESS-48: what `not_found` / `ambiguous` echo.
@@ -44,7 +46,7 @@ use crate::address::OrgId;
 use crate::vocab::Asked;
 #[cfg(feature = "server")]
 use crate::store::{
-    BlockerRef, Change, Filtered, Lens, Membership, NewTicket, Page, PageQuery, Select, Step, Store, StoreError, Walk,
+    BlockerRef, Change, Filtered, InputWrite, Lens, Membership, NewTicket, Page, PageQuery, Select, Step, Store, StoreError, Walk,
 };
 #[cfg(feature = "server")]
 use crate::store::{TreePage, TreeQuery};
@@ -106,6 +108,12 @@ mod events;
 mod sight;
 #[cfg(feature = "server")]
 mod update;
+// ACCESS-14: inputs, filled and mounted (`tickets.inputs.<method>`). The
+// module is not gated: its attribute emits `InputsClient` in the client build.
+mod inputs;
+pub use inputs::InputsClient;
+#[cfg(feature = "server")]
+pub use inputs::{who_of, InputsActivation};
 #[cfg(feature = "server")]
 use events::*;
 /// PERF-15: what one `rows` event carries at most.
@@ -131,6 +139,14 @@ use archive::*;
 mod delete;
 #[cfg(feature = "server")]
 use delete::*;
+#[cfg(feature = "server")]
+mod await_reply;
+#[cfg(feature = "server")]
+use await_reply::await_reply_stream;
+#[cfg(feature = "server")]
+mod queue;
+#[cfg(feature = "server")]
+use queue::*;
 #[cfg(feature = "server")]
 mod reads;
 #[cfg(feature = "server")]
@@ -206,11 +222,12 @@ pub use revisions::RevisionsClient;
     typed_params,
     roles(
         viewer = [
-            "health", "get", "list", "find", "search", "watch", "history"
+            "health", "get", "list", "find", "search", "watch", "history",
+            "queued", "await_reply"
         ],
         editor = [
             viewer, "create", "set_status", "set_kind", "set_parent", "amend", "label", "update", "update_many",
-            "reshortcode", "rename", "archive", "restore"
+            "queue", "unqueue", "snooze", "request_changes", "reshortcode", "rename", "archive", "restore"
         ],
     )
 )]
@@ -1016,6 +1033,12 @@ impl TicketsActivation {
         SubtasksActivation { store: Arc::clone(&self.store), access: self.access.clone() }
     }
 
+    /// A ticket's inputs — `tickets.inputs.<method>`: list, answer, clear, close, reopen (INPUT-3, ACCESS-14).
+    #[plexus_macros::child]
+    pub fn inputs(&self) -> InputsActivation {
+        InputsActivation { store: self.store.clone(), access: self.access.clone() }
+    }
+
     /// A ticket's history: each status and kind transition (from, to, when, who, source, message, cause), oldest first, then those it caused in other tickets, then history_end (when the log began; what a restore would put back; since when it has held its status).
     ///
     /// MENGER-13: a ticket's history — every change of its status and its
@@ -1042,6 +1065,130 @@ impl TicketsActivation {
         id: TicketRef,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         crate::store::reading_as(user.principal_text(), history_stream(self.store.clone(), user, id.into_string()))
+    }
+
+    /// Queue a ticket for the owner — urgency whenever | today | now | blocking (blocking names the input that answers it), and why, with the inputs it asks (repeat --input; --blocking the one you are idle on); queued again it is raised, never lowered, and its inputs added; yields queued { entry, ticket, action }.
+    ///
+    /// MENGER-39: puts a ticket in front of the owner — at an urgency, for a
+    /// reason; `blocking` names the input that answers it. Queued again: the
+    /// urgency raised, never lowered. APP-86: several inputs, in order, and
+    /// the one the caller is idle on. Yields one `queued`, or an `error`.
+    #[plexus_macros::method(
+        group = "write",
+        target = "id",
+        values(urgency = ["whenever", "today", "now", "blocking"], source = ["app", "api", "pipeline"]),
+        example(note = "an agent idle until a decision is answered", params = r#"{"id": "RETURNS-13", "urgency": "blocking", "reason": "the import waits on this", "input": ["format", "naming"], "blocking": "naming"}"#)
+    )]
+    pub async fn queue(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// Ticket id, e.g. MENGER-39.
+        id: TicketRef,
+        /// whenever | today | now | blocking.
+        urgency: Urgency,
+        /// Why the owner should look (required).
+        reason: Reason,
+        /// The inputs on the ticket whose answers are asked, in order — repeat the flag (required for blocking); closing every one unqueues the ticket.
+        input: Option<InputIds>,
+        /// The one input the caller is idle on — among them; required with urgency blocking when there are several (optional).
+        blocking: Option<InputId>,
+        /// app | api | pipeline (optional, default api).
+        source: Option<CallerSource>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let (inputs, blocking) = (input.map(InputIds::into_strings).unwrap_or_default(), blocking.map(InputId::into_string));
+        let ask = Ask::Queue { urgency, reason, inputs, blocking };
+        queue_stream(self.store.clone(), user, id.into_string(), ask, source)
+    }
+
+    /// Take a ticket out of the owner's queue (done with it, or withdrawn); yields unqueued { id, entry, action, by, at_unix }, or not_queued.
+    ///
+    /// MENGER-39: takes a ticket out of the queue. Yields one `unqueued`,
+    /// `not_queued` (nothing written), or an `error`.
+    #[plexus_macros::method(group = "write", target = "id", values(source = ["app", "api", "pipeline"]))]
+    pub async fn unqueue(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// Ticket id, e.g. MENGER-39.
+        id: TicketRef,
+        /// app | api | pipeline (optional, default api).
+        source: Option<CallerSource>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        queue_stream(self.store.clone(), user, id.into_string(), Ask::Unqueue, source)
+    }
+
+    /// Snooze a queued ticket for some minutes (1 to a week): off the alerting surfaces, still queued; yields snoozed { entry, ticket }.
+    ///
+    /// MENGER-39: a queued ticket off the alerting surfaces for a while; it
+    /// stays queued. Yields one `snoozed`, or an `error`.
+    #[plexus_macros::method(group = "write", target = "id", values(source = ["app", "api", "pipeline"]))]
+    pub async fn snooze(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// Ticket id, e.g. MENGER-39.
+        id: TicketRef,
+        /// How long, in minutes.
+        minutes: u32,
+        /// app | api | pipeline (optional, default api).
+        source: Option<CallerSource>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        queue_stream(self.store.clone(), user, id.into_string(), Ask::Snooze { minutes }, source)
+    }
+
+    /// Request changes on a queued ticket: the body kept on the queue's log and the ticket unqueued (action changes_requested), in one write; its input stays open; yields changes_requested { id, body, entry, by, at_unix }.
+    ///
+    /// APP-23: hands a queued ticket back — what to change on the queue's log and the entry unqueued, one write.
+    #[plexus_macros::method(group = "write", target = "id", values(source = ["app", "api", "pipeline"]))]
+    pub async fn request_changes(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// The queued ticket, e.g. APP-21.
+        id: TicketRef,
+        /// What to change (markdown).
+        body: Body,
+        /// app | api | pipeline (optional, default api).
+        source: Option<CallerSource>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        request_changes_stream(self.store.clone(), user, id.into_string(), body.into_string(), source)
+    }
+
+    /// Wait for the owner's response on a ticket: waiting { ticket, queued } at once, then one replied { ticket, reply } — an input answered, changes requested, an unqueue by another, the ticket canceled, archived or deleted — and the end; timed_out after timeout_minutes.
+    ///
+    /// APP-24: after queueing, an agent waits here — `waiting`, then one `replied` (or `timed_out`), then the end.
+    #[plexus_macros::method(group = "read", streaming)]
+    pub async fn await_reply(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// The ticket, e.g. APP-21.
+        id: TicketRef,
+        /// Responses from this unix time, so a reconnect loses nothing (optional; default now).
+        since: Option<i64>,
+        /// Only this input's answer counts as answered (optional).
+        input: Option<InputId>,
+        /// Give up after this many minutes with timed_out (optional; default never).
+        timeout_minutes: Option<u32>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let (id, input) = (id.into_string(), input.map(String::from));
+        await_reply_stream(self.store.clone(), self.access.clone(), user, await_reply::Ask { id, since, input, timeout_minutes })
+    }
+
+    /// A page of the owner's queue, most urgent first, then oldest: rows of queue_row { entry, ticket }, then page { next, remaining }, then queue_end { count, snoozed, now_unix }.
+    ///
+    /// MENGER-39: the owner's queue, most urgent first, then the oldest.
+    /// V2-20: a page cut from the kept order; `limit` 200 unless asked, at
+    /// most 1,000; `after` the `next` a page answered.
+    #[plexus_macros::method(group = "read")]
+    pub async fn queued(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// Include the snoozed ones (optional; default true — each marked by its snoozed_until_unix).
+        snoozed: Option<bool>,
+        /// How many rows (optional; default 200, at most 1000).
+        limit: Option<u32>,
+        /// Start after this — the `next` a page answered (optional).
+        after: Option<Cursor>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let ask = crate::store::QueuedAsk { snoozed: snoozed.unwrap_or(true), limit: limit.map(|n| n as usize), after: after.map(String::from) };
+        queued_stream(self.store.clone(), user, ask)
     }
 
     /// Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / FrozenChanged / HiddenChanged / UnlocksChanged / UnlocksRemoved / BlockersChanged / SeverityChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / UpdatedMany / Deleted / Undeleted / Archived / Restored / Reshortcoded), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events; Entered / Left / Recount when the caller's grants move what it sees; WatchClosed { reason } when they end it.

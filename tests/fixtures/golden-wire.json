@@ -1780,6 +1780,18 @@
         "value": "no"
       },
       {
+        "field": "asking",
+        "held": 1,
+        "type": "facet",
+        "value": "yes"
+      },
+      {
+        "field": "asking",
+        "held": 2,
+        "type": "facet",
+        "value": "no"
+      },
+      {
         "field": "label",
         "held": 1,
         "type": "facet",
@@ -2771,6 +2783,32 @@
           "total": 2
         },
         "type": "group_changed"
+      },
+      {
+        "input": {
+          "answer": null,
+          "asked_unix": 0,
+          "history": [],
+          "id": "landing",
+          "kind": "choice",
+          "options": [
+            {
+              "label": "Archive",
+              "recommended": true,
+              "value": "archive"
+            },
+            {
+              "label": "Delete",
+              "recommended": false,
+              "value": "Delete"
+            }
+          ],
+          "question": "Archive or delete?",
+          "recommendation": "Archive",
+          "state": "open",
+          "ticket": "GOLD-2"
+        },
+        "type": "input_changed"
       },
       {
         "ticket": {
@@ -4186,6 +4224,32 @@
           "total": 2
         },
         "type": "group_changed"
+      },
+      {
+        "input": {
+          "answer": null,
+          "asked_unix": 0,
+          "history": [],
+          "id": "landing",
+          "kind": "choice",
+          "options": [
+            {
+              "label": "Archive",
+              "recommended": true,
+              "value": "archive"
+            },
+            {
+              "label": "Delete",
+              "recommended": false,
+              "value": "Delete"
+            }
+          ],
+          "question": "Archive or delete?",
+          "recommendation": "Archive",
+          "state": "open",
+          "ticket": "GOLD-2"
+        },
+        "type": "input_changed"
       },
       {
         "epic": "GOLD",

@@ -125,6 +125,16 @@ impl Times {
         self.touched.insert((t.touched, epic, seq));
     }
 
+    /// FILTER-30: activity on `(epic, seq)` at `at` — an answer to or a clear
+    /// of one of its inputs: kept, and its touch moved when later.
+    pub(crate) fn touch(&mut self, epic: u32, seq: u32, at: i64) {
+        let a = self.active.entry((epic, seq)).or_insert(at);
+        *a = (*a).max(at);
+        if let Some(t) = self.get(epic, seq) {
+            self.put(epic, seq, t);
+        }
+    }
+
     /// A status transition of `(epic, seq)` into status `to` at `at` — the
     /// log's append. A ticket not held yet (a newborn whose row comes in the
     /// same critical section) is put when its row is.

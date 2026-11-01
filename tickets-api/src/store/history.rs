@@ -364,6 +364,21 @@ impl Log {
         self.times.put(epic, row.seq, times::timed(row, latest, self.began));
     }
 
+    /// FILTER-30: activity on the ticket `(epic, seq)` at `at` — an answer to
+    /// or a clear of one of its inputs.
+    pub(super) fn touch(&mut self, epic: &ShortcodeId, seq: u32, at: i64) {
+        let e = self.intern_shortcode(epic);
+        self.times.touch(e, seq, at);
+    }
+
+    /// FILTER-30: every ticket's activity, as the inputs hold it
+    /// ([`activity`]) — at open, and by `--verify-derived`.
+    pub(super) fn touch_all(&mut self, activity: impl IntoIterator<Item = (OrderKey, i64)>) {
+        for (key, at) in activity {
+            self.touch(&key.shortcode, key.seq, at);
+        }
+    }
+
     /// FILTER-27: every row's times, afresh — at open, after the log is read.
     /// FILTER-30: the activity kept stays ([`Times::touch`]).
     pub(super) fn time_all<'r>(&mut self, rows: impl IntoIterator<Item = &'r TicketSummary>) {
@@ -495,8 +510,9 @@ impl Log {
             // ARCHIVE-2: the archive's own index, each way.
             Event::Archived => (&self.archive[1], actor.is_some()),
             Event::Restored => (&self.archive[0], actor.is_some()),
-            // Answered from the times, above.
-            Event::Created | Event::Touched | Event::Held(_) | Event::Became(_) => return out,
+            // Answered from the times, above; MENGER-39: `queued` and `asked`
+            // from the queue's entries ([`Cache::holds`]), never here.
+            Event::Created | Event::Touched | Event::Held(_) | Event::Became(_) | Event::Queued(_) | Event::Asked => return out,
         };
         let mut by_epic: HashMap<u32, RoaringBitmap> = HashMap::new();
         for &p in range(list, &self.marks, lo, hi) {
@@ -595,7 +611,7 @@ impl Log {
             let list: &[u32] = match &pred.event {
                 Event::Created => return self.times.first_born_from(from),
                 Event::Touched => return self.times.first_touched_from(from),
-                Event::Held(_) => return None,
+                Event::Held(_) | Event::Queued(_) | Event::Asked => return None,
                 Event::Entered(s) => self.entered.get(status_ix(*s) as usize).unwrap_or(&none),
                 Event::Left(s) => self.left.get(status_ix(*s) as usize).unwrap_or(&none),
                 Event::Changed => &self.by_time,
@@ -729,6 +745,13 @@ impl Clock {
         let next = today.checked_add(jiff::Span::new().days(ahead)).ok()?;
         next.to_zoned(self.tz.clone()).ok().map(|z| z.timestamp().as_second())
     }
+}
+
+/// FILTER-30: each ticket's activity — the moment of every answer to or
+/// clear of one of its inputs, placed by `at` (a ticket it does not place —
+/// a deleted one's — left out).
+pub(super) fn activity(at: &HashMap<String, OrderKey>, inputs: &super::inputs::Inputs) -> Vec<(OrderKey, i64)> {
+    inputs.activity().filter_map(|(id, t)| Some((at.get(id).cloned()?, t))).collect()
 }
 
 /// A zone by name — see [`Clock::zoned`].
@@ -935,8 +958,10 @@ pub(super) fn check(conn: &Connection, cache: &Cache) -> anyhow::Result<Option<(
         }
     }
     // FILTER-27: the times, as an open reads them, held to a fresh reading
-    // of every row and to themselves.
-    let log = load(conn, &cache.at, cache.order.values())?;
+    // of every row and to themselves. FILTER-30: with the answers' activity.
+    let mut log = load(conn, &cache.at, cache.order.values())?;
+    let inputs = super::inputs::load_if_any(conn)?;
+    log.touch_all(activity(&cache.at, &inputs));
     out.extend(log.check_times(cache.order.values()));
     out.sort();
     Ok(Some((all.len(), out)))

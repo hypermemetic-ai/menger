@@ -156,6 +156,12 @@ impl Lens {
         self.history.iter().any(|h| h.event == crate::filter::Event::Touched)
     }
 
+    /// MENGER-39: whether it asks `queued` — V2-20: or `asked` — what a queue
+    /// write can move.
+    pub fn asks_queued(&self) -> bool {
+        self.history.iter().any(|h| matches!(h.event, crate::filter::Event::Queued(_) | crate::filter::Event::Asked))
+    }
+
     /// MENGER-13: whether what it admits moves as time passes — a history
     /// predicate whose window is relative (`within`, `today`, `yesterday`,
     /// `this week`): a `watch` reads it again on a clock.
@@ -357,6 +363,7 @@ fn facts(letters: &str, key: Key, lineage: &[&str], holds: &[&str]) -> Facts {
         blocked: key.blocked(),
         has_commits: key.commits(),
         menger_doc: key.menger(),
+        asking: key.asking(),
         labels: key.labels().labels().iter().map(|l| l.to_string()).collect(),
         archived: key.archived(),
         frozen: key.frozen(),
@@ -432,6 +439,7 @@ fn slot(field: &str, k: Key) -> usize {
         "ready" => flag(crate::filter::category_of(k.status()) == Category::Ready && !k.blocked()),
         "has commits" => flag(k.commits()),
         "menger doc" => flag(k.menger()),
+        "asking" => flag(k.asking()),
         other => unreachable!("not a cell field: {other}"),
     }
 }
@@ -830,7 +838,7 @@ impl Store {
     /// none will move.
     pub fn next_boundary(&self, lens: &Lens) -> Option<i64> {
         let cache = self.tickets.read().expect("store lock poisoned");
-        lens.history().iter().filter_map(|h| cache.log.next_boundary(h, lens.clock())).min()
+        lens.history().iter().filter_map(|h| cache.next_boundary(h, lens.clock())).min()
     }
 
     /// MENGER-13: what time did to a `watch { filter }` whose filter has a

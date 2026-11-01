@@ -5,7 +5,7 @@
 //! 0, SCALE-32), whether it `has commits` (SDLC-9) and — FILTER-21 —
 //! whether it is a `menger doc` (its path starts with `_MENGER/`, WAVE-10;
 //! set at birth, so only a birth moves it) and — MENGER-12 — whether it is
-//! which labels it holds
+//! `asking` (it has an input in the state `open`) and which labels it holds
 //! (the set, interned: [`LabelSet`]). A cell is interned
 //! into the cell table on first use and named by its id from then on. Per
 //! shortcode and per cell it holds, the sequences of the shortcode's tickets
@@ -120,7 +120,7 @@ pub(super) const SEVERITIES: [Option<Severity>; 5] = [
 const ARRAY_MAX: usize = 4096;
 
 /// One cell: `(status, kind, severity, blocked, has commits, menger doc,
-/// labels)`,
+/// asking, labels)`,
 /// each as its place in [`Status::ALL`], [`Kind::ALL`] and [`SEVERITIES`] —
 /// so it is small, `Copy`, hashable and ordered without the wire enums
 /// being any of those.
@@ -133,6 +133,8 @@ pub struct Key {
     commits: bool,
     /// FILTER-21: one of menger's own documents.
     menger: bool,
+    /// MENGER-12: it has an input in the state `open`.
+    asking: bool,
     /// MENGER-12: the labels it holds.
     labels: LabelSet,
     /// ARCHIVE-2: it carries the archive's mark — so an archived ticket
@@ -158,6 +160,7 @@ impl Key {
             blocked,
             commits,
             menger,
+            asking: false,
             labels: LabelSet::NONE,
             archived: false,
             frozen: false,
@@ -180,16 +183,17 @@ impl Key {
         Self { hidden, ..self }
     }
 
-    /// MENGER-12: this cell, holding `labels`.
-    pub(super) fn with(self, labels: LabelSet) -> Self {
-        Self { labels, ..self }
+    /// MENGER-12: this cell, asking or not, holding `labels`.
+    pub(super) fn with(self, asking: bool, labels: LabelSet) -> Self {
+        Self { asking, labels, ..self }
     }
 
     /// A ticket's cell: its row as the write leaves it, its count of
-    /// unsatisfied blockers as the write leaves it. FILTER-21: its path
-    /// says whether it is a menger doc ([`crate::is_menger_doc`]).
-    /// MENGER-12: its row's labels are its set.
-    pub(super) fn of(t: &Row, unsatisfied: u32) -> Self {
+    /// unsatisfied blockers as the write leaves it, and — MENGER-12 —
+    /// whether it is asking as the write leaves it (the inputs say; the row
+    /// does not). FILTER-21: its path says whether it is a menger doc
+    /// ([`crate::is_menger_doc`]). MENGER-12: its row's labels are its set.
+    pub(super) fn of(t: &Row, unsatisfied: u32, asking: bool) -> Self {
         Self::new(
             t.status,
             t.kind,
@@ -198,7 +202,7 @@ impl Key {
             !t.commits.is_empty(),
             crate::is_menger_doc(t.path.as_deref()),
         )
-        .with(LabelSet::of(&t.labels))
+        .with(asking, LabelSet::of(&t.labels))
         .archiving(t.archived.is_some())
         .freezing(t.frozen)
         .hiding(t.hidden)
@@ -229,6 +233,11 @@ impl Key {
         self.menger
     }
 
+    /// MENGER-12: whether it has an open input.
+    pub fn asking(self) -> bool {
+        self.asking
+    }
+
     /// MENGER-12: the labels it holds.
     pub fn labels(self) -> LabelSet {
         self.labels
@@ -252,7 +261,7 @@ impl Key {
 
 /// As `--verify-derived` names a cell: `(Ready, build, none, blocked, no
 /// commits)` — FILTER-21: `, menger doc` last when it is one; MENGER-12:
-/// then `, labels a b` when it holds any.
+/// then `, asking` when it is, and `, labels a b` when it holds any.
 impl fmt::Display for Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let labels = match self.labels.is_empty() {
@@ -261,13 +270,14 @@ impl fmt::Display for Key {
         };
         write!(
             f,
-            "({}, {}, {}, {}, {}{}{}{}{}{})",
+            "({}, {}, {}, {}, {}{}{}{}{}{}{})",
             self.status(),
             self.kind(),
             self.severity().map_or("none".to_string(), |s| s.as_str().to_ascii_lowercase()),
             if self.blocked { "blocked" } else { "not blocked" },
             if self.commits { "has commits" } else { "no commits" },
             if self.menger { ", menger doc" } else { "" },
+            if self.asking { ", asking" } else { "" },
             labels,
             if self.archived { ", archived" } else { "" },
             if self.frozen { ", frozen" } else { "" },
@@ -554,21 +564,21 @@ impl Cells {
     /// Every ticket's cell, from the rows and the counts as kept — at a
     /// build, after a seed, and for `--verify-derived` to compare with. The
     /// rows arrive in the store's order, so each bitmap is built by pushing.
-    pub(super) fn build(rows: Rows<'_>, unsatisfied: impl Fn(&str) -> u32) -> Self {
-        Self::build_seeded(&[], rows, unsatisfied)
+    pub(super) fn build(rows: Rows<'_>, unsatisfied: impl Fn(&str) -> u32, asking: impl Fn(&str) -> bool) -> Self {
+        Self::build_seeded(&[], rows, unsatisfied, asking)
     }
 
     /// ACT-5: [`Cells::build`] with `seed`'s cells interned first, in its
     /// order — a delete's rebuild keeps every id the cache's table gave, so a
     /// filter compiled against it still means what it meant.
-    pub(super) fn build_seeded(seed: &[Key], rows: Rows<'_>, unsatisfied: impl Fn(&str) -> u32) -> Self {
+    pub(super) fn build_seeded(seed: &[Key], rows: Rows<'_>, unsatisfied: impl Fn(&str) -> u32, asking: impl Fn(&str) -> bool) -> Self {
         let mut c = Self::default();
         for k in seed {
             c.intern(*k);
         }
         let mut here: Option<(ShortcodeId, Held)> = None;
         for t in rows.tickets() {
-            let id = c.intern(Key::of(t, unsatisfied(&t.id)));
+            let id = c.intern(Key::of(t, unsatisfied(&t.id), asking(&t.id)));
             if here.as_ref().is_none_or(|(e, _)| *e != t.shortcode) {
                 if let Some((e, held)) = here.take() {
                     c.held.insert(e, held);

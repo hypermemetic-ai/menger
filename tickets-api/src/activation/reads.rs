@@ -62,6 +62,10 @@ pub(super) fn history_stream(store: Arc<Store>, caller: VerifiedUser, id: String
                 for transition in h.caused {
                     yield TicketsEvent::Transition { transition };
                 }
+                // MENGER-39: who queued it, why, at what urgency.
+                for record in store.queue_history(&caller, &id) {
+                    yield TicketsEvent::QueueRecord { record };
+                }
                 let (status_since_unix, status_since_exact) = (h.since.map(|s| s.0), h.since.map(|s| s.1));
                 yield TicketsEvent::HistoryEnd { began_unix: h.began, restorable: h.restorable, status_since_unix, status_since_exact, deletions: h.deletions };
             }
@@ -356,4 +360,48 @@ pub(super) fn listed(store: &Store, caller: &VerifiedUser, f: impl FnOnce(&Store
         Ok(_) => rows_events(f(store, caller)),
     };
     futures::stream::iter(events)
+}
+
+/// What `inputs.list` asks: the page, a filter on the input's ticket, and
+/// the zone that filter's days are read in.
+pub(super) struct InputsListAsk {
+    pub(super) ticket: Option<TicketRef>,
+    pub(super) epic: Option<ShortcodeRef>,
+    pub(super) state: Option<InputState>,
+    pub(super) filter: Option<FilterText>,
+    pub(super) tz: Option<Zone>,
+    pub(super) limit: Option<u32>,
+    pub(super) after: Option<Cursor>,
+}
+
+/// `inputs.list` — V2-20: a page of INPUT-3's inputs in the caller's reach:
+/// its `rows`, then one `page`; FILTER-15: of the tickets a filter admits, by
+/// the cells.
+pub(super) fn inputs_events(store: &Store, caller: &VerifiedUser, ask: InputsListAsk) -> Vec<TicketsEvent> {
+    let InputsListAsk { ticket, epic, state, filter, tz, limit, after } = ask;
+    let filter = match asked(store, caller, filter.as_deref()) {
+        Ok(v) => v,
+        Err(message) => return vec![TicketsEvent::Error { message }],
+    };
+    let lens = match zoned_lens(store, caller, filter.as_ref(), tz.as_deref()) {
+        Ok(lens) => lens,
+        Err(e) => return vec![veiled(caller, e)],
+    };
+    let page = crate::store::InputsAsk {
+        ticket: ticket.as_ref().map(|t| t.to_string()),
+        epic: epic.as_deref().map(str::to_string),
+        state,
+        limit: limit.map(|n| n as usize),
+        after: after.map(String::from),
+    };
+    match store.inputs_page(caller, &page, lens.as_ref()) {
+        Ok(p) => {
+            let mut events = rows_events(p.inputs.into_iter().map(|input| Row::Input { input }).collect());
+            events.push(TicketsEvent::Page { next: p.next, remaining: p.remaining, first: None });
+            events
+        }
+        // ACCESS-10: a ticket out of reach is not found, as one not there.
+        Err(StoreError::NotFound(id)) => vec![TicketsEvent::NotFound { id: ticket.map_or_else(|| Asked::stored(id), Asked::from) }],
+        Err(e) => vec![veiled(caller, e)],
+    }
 }

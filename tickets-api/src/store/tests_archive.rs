@@ -12,6 +12,7 @@
 
 use super::update_many::Selection;
 use super::*;
+use crate::queue::{QueueAction, Reply, Urgency};
 use crate::types::LiveTicket;
 
 fn new(epic: &str, title: &str, kind: Kind, parent: Option<&str>) -> NewTicket {
@@ -86,7 +87,7 @@ fn listed(store: &Store, filter: &str) -> Vec<String> {
 /// roll-ups, ready set, everything `--verify-derived` compares.
 fn assert_derived(store: &Store, after: &str) {
     let cache = store.tickets.read().unwrap();
-    let scanned = Cache::new(cache.order.values().map(|t| (t.id.to_string(), t.clone())).collect());
+    let scanned = Cache::new(cache.order.values().map(|t| (t.id.to_string(), t.clone())).collect(), cache.inputs.clone());
     assert_eq!(stored::compare(&cache.form(), &scanned.form()), Vec::<String>::new(), "after {after}");
 }
 
@@ -298,6 +299,20 @@ async fn archived_and_restored_are_filter_cells_read_from_the_log() {
 }
 
 #[tokio::test]
+async fn an_archived_ticket_asks_nothing() {
+    let store = store().await;
+    store.queue_by(SYS.permit("K-7"), Urgency::Today, "is the alarm loud enough?", None, Act::default()).await.unwrap();
+    let since = chrono::Utc::now().timestamp() - 1;
+    let a = store.archive_by(ids(&["K-1"]), Act { actor: "owner".into(), ..Act::default() }, false, |ids| Ok(SYS.permits(ids))).await.unwrap();
+    assert_eq!(texts(&a.unqueued), ["K-7"]);
+    assert!(store.queued(SYS, true, chrono::Utc::now().timestamp()).is_empty(), "in no tray");
+    let records = store.queue_history(SYS, "K-7");
+    assert_eq!(records.last().map(|r| r.action), Some(QueueAction::Archived), "recorded as by the archive");
+    let reply = store.reply_since(&replies::Awaiting { ticket: "K-7".into(), since, input: None, me: None });
+    assert!(matches!(reply, Some(Reply::Archived { ref by, .. }) if by == "owner"), "{reply:?}");
+}
+
+#[tokio::test]
 async fn the_archive_is_durable_and_verifies() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("archive.db");
@@ -357,13 +372,13 @@ async fn a_form_11_file_gains_the_archives_columns_in_place() {
     )
     .unwrap();
     drop(conn);
-    assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::NotStored(why) if why.contains("form 11; this build reads 16")));
+    assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::NotStored(why) if why.contains("form 11; this build reads 17")));
     let store = Store::open(&path).unwrap();
     assert_eq!(store.groups(SYS), groups, "answers as before, nothing built again");
     store.archive(SYS, ids(&["K-6"]), false).await.unwrap();
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
-    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 16);
+    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 17);
     drop(conn);
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { .. }));
 }

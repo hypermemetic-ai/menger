@@ -3,7 +3,8 @@
 //! *"we need to be able to fully update a ticket."*
 //!
 //! **The rules are the single writes'**, applied together
-//! ([`super::rules`]): `amend`'s (a title not blank, the body cap),
+//! ([`super::rules`]): `amend`'s (a title not blank, the body cap, input
+//! markup),
 //! `set_kind`'s (the doc line, a root's
 //! kind, a path holder's — the kind evaluated before the status, against the
 //! blockers the update leaves), `set_status`'s (no status on a doc, `Doc` on
@@ -19,8 +20,8 @@
 //! step, made in turn against the cache as the steps before it left it —
 //! so each moves what its single write moves (the roll-ups, the status
 //! counts and the ready set, the placements, the cells, the kept tree, the
-//! transition log, the forward references and the search index) — into one
-//! transaction, under the cache's write lock;
+//! transition log, the forward references, the search index, the registry
+//! and the inputs) — into one transaction, under the cache's write lock;
 //! a failed commit reads the cache back from the file. The steps go: the
 //! title and body (`amended`); the blockers, when the ticket becomes a doc
 //! (it sheds them first); the kind with its status (`kind_changed`), or the
@@ -38,7 +39,7 @@
 use super::cascade::{status_step, status_steps, Gathered};
 use super::history::Act;
 use super::*;
-use crate::types::{Transition, TransitionField};
+use crate::types::{InputHistoryEntry, Transition, TransitionField};
 
 /// MENGER-30: what an `update` asks for — every field optional, absent
 /// meaning unchanged.
@@ -81,6 +82,7 @@ pub(super) struct Plan {
     pub(super) id: String,
     title: Option<String>,
     body: Option<String>,
+    asked: inputs::Plan,
     /// A change of kind, with the status asked beside it.
     kind: Option<(Kind, Option<Status>)>,
     /// A change of status alone.
@@ -116,9 +118,9 @@ fn ids_of(cache: &Cache, entries: &[crate::vocab::TicketRef], refusals: &mut Vec
 
 /// SDLC-13 / MENGER-13: a change of kind's transitions — the kind's, then
 /// the status's when it moves, caused by the first — numbered from the
-/// log's next id. `old` is the row before, `row` after. Shared by
-/// `set_kind` and `update`.
-pub(super) fn kind_moves(cache: &Cache, old: &Row, row: &Row, act: &Act) -> Vec<Transition> {
+/// log's next id, and the inputs a crossing of `Canceled` moves. `old` is
+/// the row before, `row` after. Shared by `set_kind` and `update`.
+pub(super) fn kind_moves(cache: &Cache, old: &Row, row: &Row, act: &Act) -> (Vec<Transition>, Vec<(Input, InputHistoryEntry)>) {
     let first = cache.log.next_id();
     let transition = |id, field, from: &str, to: &str, cause: Option<(u64, &str)>| Transition {
         id,
@@ -144,7 +146,13 @@ pub(super) fn kind_moves(cache: &Cache, old: &Row, row: &Row, act: &Act) -> Vec<
         let id = first + made.len() as u64;
         made.push(transition(id, TransitionField::Status, old.status.as_str(), row.status.as_str(), cause));
     }
-    made
+    let reason = format!("{} is {} (by {})", row.id, row.status.as_str(), act.who());
+    let moved_inputs = match (old.status == Status::Canceled, row.status == Status::Canceled) {
+        (false, true) => cache.inputs.withdrawing(&row.id, &reason, row.updated_unix),
+        (true, false) => cache.inputs.restoring(&row.id, &reason, row.updated_unix),
+        _ => Vec::new(),
+    };
+    (made, moved_inputs)
 }
 
 impl Store {
@@ -175,13 +183,14 @@ impl Store {
                 refusals.push(e);
             }
         }
+        let declares = update.body.as_deref().map(crate::inputs::read);
         let serial = self.serial().await;
         let current = self.get_unscoped(&id).await?;
         let plan = {
             let cache = self.tickets.read().expect("store lock poisoned");
             let row = cache.get(&current.id).ok_or_else(|| StoreError::NotFound(id.clone()))?;
             at.check(&cache, row, &update)?;
-            plan(&cache, &current, update, &mut refusals)
+            plan(&cache, &current, update, declares, &mut refusals)
         };
         if refusals.len() == 1 {
             return Err(refusals.pop().expect("one refusal"));
@@ -222,10 +231,10 @@ pub(super) fn apply(
     now: i64,
     out: &mut Gathered,
 ) -> Result<(), StoreError> {
-    let Plan { id, title, body, kind, status, parent, severity, hidden, added, removed, blockers_first, labels, changed: _ } = plan;
+    let Plan { id, title, body, asked, kind, status, parent, severity, hidden, added, removed, blockers_first, labels, changed: _ } = plan;
     let blockers = !added.is_empty() || !removed.is_empty();
     if title.is_some() || body.is_some() {
-        amend_step(txn, cache, unders, &id, title, body, now, out)?;
+        amend_step(txn, cache, unders, &id, title, body, asked, now, out)?;
     }
     if blockers && blockers_first {
         blockers_step(txn, cache, unders, &id, &added, &removed, now, out)?;
@@ -267,6 +276,7 @@ pub(super) fn plan(
     cache: &Cache,
     current: &Ticket,
     u: Update,
+    declares: Option<(Vec<crate::inputs::Declared>, Vec<crate::inputs::Problem>)>,
     refusals: &mut Vec<StoreError>,
 ) -> Plan {
     let id = current.id.clone();
@@ -276,10 +286,18 @@ pub(super) fn plan(
     if title.is_some() {
         changed.push("title".into());
     }
-    // amend's: a body is text.
+    // amend's: a new body moves the inputs — refused, the whole update with
+    // it, when the markup is malformed.
+    let mut asked = inputs::Plan::default();
     let body = u.body.filter(|b| *b != current.body);
     if body.is_some() {
         changed.push("body".into());
+        if let Some((declared, problems)) = declares {
+            match problems.into_iter().next() {
+                Some(problem) => refusals.push(StoreError::InputMarkup { id: Some(id.to_string()), problem }),
+                None => asked = cache.inputs.plan(&id, declared),
+            }
+        }
     }
     // The blockers as the update leaves them — what the kind is checked
     // against.
@@ -393,6 +411,7 @@ pub(super) fn plan(
         hidden,
         added,
         removed,
+        asked,
         blockers_first: !final_kind.has_lifecycle(),
         labels,
         changed,
@@ -407,6 +426,7 @@ fn amend_step(
     id: &str,
     title: Option<String>,
     body: Option<String>,
+    mut asked: inputs::Plan,
     now: i64,
     out: &mut Gathered,
 ) -> Result<(), StoreError> {
@@ -425,17 +445,52 @@ fn amend_step(
         None => db::body(txn, id)?.ok_or_else(|| missing(id))?,
     };
     row.updated_unix = now;
-    // FILTER-30: the row is touched; no cell moves.
-    let under = lineage::under_before_with(unders, cache, || lineage::Touched::default().row(&row));
+    // MENGER-13: a canceled ticket asks no one.
+    let withdrawn = if row.status == Status::Canceled {
+        asked.withdraw_open(&format!("{} is canceled", row.id), now)
+    } else {
+        Vec::new()
+    };
+    let input_list = asked.list.take();
+    let asks = input_list.as_deref().map(inputs::asking_in);
+    let was = cache.inputs.asking(&row.id);
+    let derived = asks.filter(|a| *a != was).map(|a| cache.cell_change(&row, Some(a)));
+    // FILTER-30: the row is touched whether or not its cell moves.
+    let under = lineage::under_before_with(unders, cache, || {
+        lineage::Touched::of_moves(derived.as_ref().and_then(Derived::announced).as_deref()).row(&row)
+    });
+    let announced = derived.as_ref().and_then(Derived::announced);
     db::update_row(txn, &row)?;
     if let Some(b) = &body {
         db::set_body(txn, &row.id, b)?;
     }
     search::put(txn, &row.id, &row.title, &text)?;
+    if let Some(list) = &input_list {
+        inputs::store(txn, &row.id, list)?;
+    }
+    for (input, entry) in &withdrawn {
+        inputs::record(txn, input, entry)?;
+    }
+    let moved = match derived {
+        Some(Derived { stored, moved }) => {
+            stored.write(txn)?;
+            Some(moved)
+        }
+        None => None,
+    };
     let groups = cache.amended(row.clone(), title_changed);
+    if let Some(list) = input_list {
+        cache.inputs.take(&row.id, list);
+    }
+    if let Some(moved) = moved {
+        let more = cache.take(moved);
+        debug_assert!(more.is_empty(), "an input moves no roll-up");
+    }
+    let epic = row.shortcode.clone();
     out.tickets.push(Change::Amended { ticket: whole(row, text), changed });
     out.groups(groups);
-    out.filtered(None, under.and_then(|u| u.after_in(cache)));
+    out.inputs.extend(Change::inputs(&epic, asked));
+    out.filtered(announced, under.and_then(|u| u.after_in(cache)));
     Ok(())
 }
 
@@ -460,8 +515,8 @@ fn kind_step(
     row.kind = kind;
     row.status = status;
     row.updated_unix = now;
-    let made = kind_moves(cache, &old, &row, act);
-    let derived = cache.kind_change(&row, &old)?;
+    let (made, moved_inputs) = kind_moves(cache, &old, &row, act);
+    let derived = cache.kind_change(&row, &old, cache.inputs.asking_after(&row.id, &moved_inputs))?;
     // ORG-3: a ticket that now roots its shortcode may move its namespace —
     // its row takes the address the write leaves it.
     if let Some(m) = &derived.moved.namespaces {
@@ -485,6 +540,9 @@ fn kind_step(
     for t in &made {
         history::record(txn, t)?;
     }
+    for (input, entry) in &moved_inputs {
+        inputs::record(txn, input, entry)?;
+    }
     let body = db::body(txn, id)?.ok_or_else(|| missing(id))?;
     let key = OrderKey::of(&row);
     let epic = row.shortcode.clone();
@@ -492,10 +550,14 @@ fn kind_step(
     for t in &made {
         cache.log.append(t, &key);
     }
+    for (input, _) in &moved_inputs {
+        cache.inputs.put(input.clone());
+    }
     out.tickets.push(Change::KindChanged { ticket: whole(row, body), previous });
     out.tickets.extend(made.into_iter().map(|transition| Change::Transition { shortcode: epic.clone(), transition }));
     out.groups(groups);
     out.placed(placed);
+    out.inputs.extend(moved_inputs.into_iter().map(|(input, _)| Change::InputChanged { shortcode: epic.clone(), input }));
     out.filtered(announced, under.and_then(|u| u.after_in(cache)));
     Ok(())
 }
@@ -587,7 +649,7 @@ fn hidden_step(
         let groups = rollups.archive_moved(rows, &row, &old);
         let derived = if groups.is_empty() { Derived::none() } else { Derived::rolled(cache, rollups, groups) };
         let count = cache.ready.count(&row.id);
-        let (cells, tree) = cache.recell(rows, &row, false, &[(&row, count, count)]);
+        let (cells, tree) = cache.recell(rows, &row, false, &[(&row, count, count)], None);
         derived.celled(cells).treed(tree)
     };
     let under = lineage::under_before_with(unders, cache, || lineage::Touched::of_moves(derived.announced().as_deref()).row(&row));
@@ -633,7 +695,7 @@ pub(super) fn cell_step(
     out: &mut Gathered,
     change: impl FnOnce(Ticket) -> Change,
 ) -> Result<(), StoreError> {
-    let derived = cache.cell_change(&row);
+    let derived = cache.cell_change(&row, None);
     let under = lineage::under_before_with(unders, cache, || lineage::Touched::of_moves(derived.announced().as_deref()).row(&row));
     let announced = derived.announced();
     let Derived { stored, moved } = derived;
@@ -749,7 +811,7 @@ impl Cache {
         let rows = self.rows().with(row);
         let reblock = self.ids.reblock(rows, row, added, removed);
         let (ready, touched) = self.ready.reblocked_touching(rows, row);
-        let (cells, tree) = self.recell(rows, row, false, &touched);
+        let (cells, tree) = self.recell(rows, row, false, &touched, None);
         let mut derived = Derived::none().readied(ready).celled(cells).treed(tree);
         reblock.store(&mut derived.stored);
         derived.moved.placed = Some(Self::replace(rows, row, false));
