@@ -23,6 +23,7 @@
 </script>
 
 <script>
+  import { tick } from "svelte";
   import { bus, live } from "plexus-ui/host";
 
   let { sheet = null, sample = null } = $props();
@@ -56,7 +57,7 @@
   function changes(id) {
     asking = id;
     words = "";
-    queueMicrotask(() => form?.querySelector("textarea")?.focus());
+    tick().then(() => form?.querySelector("textarea")?.focus());
   }
   function send(ev) {
     ev?.preventDefault?.();
