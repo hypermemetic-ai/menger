@@ -2254,13 +2254,13 @@ dependencies = [
  "futures",
  "jsonrpsee",
  "menger-tickets-api",
- "plexus-auth-core",
+ "plexus-auth-core 0.2.2",
  "plexus-client",
- "plexus-core",
+ "plexus-core 0.7.0",
  "plexus-login",
- "plexus-macros",
+ "plexus-macros 0.7.0",
  "plexus-substrate",
- "plexus-transport",
+ "plexus-transport 0.6.0",
  "qrcode",
  "rqrr",
  "schemars",
@@ -2280,7 +2280,7 @@ version = "0.6.2"
 dependencies = [
  "futures",
  "plexus-client",
- "plexus-macros",
+ "plexus-macros 0.7.0",
  "pulldown-cmark",
  "schemars",
  "serde",
@@ -2696,7 +2696,25 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "plexus-auth-core"
-version = "0.2.1"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae965b52aff07935138fd7bcbfbfcc92705b8d6dcce2ba46d00bd32466623315"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "plexus-auth-core"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22d645424a9cf6d4ab52e939058b0f40a8702fa96731c23ac125722b778e34c6"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2717,7 +2735,9 @@ dependencies = [
 
 [[package]]
 name = "plexus-client"
-version = "0.6.1"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e18fe28fc8fa4658e2bd684f657dcef146ffeab5a0531e35b628b3872ab0c49e"
 dependencies = [
  "futures-channel",
  "futures-core",
@@ -2730,7 +2750,9 @@ dependencies = [
 
 [[package]]
 name = "plexus-core"
-version = "0.6.1"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ba00e3f27a305763eedaf3da447d4134b91ba8089b2f76d38a9ed1c1bd5f2bb"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2742,9 +2764,8 @@ dependencies = [
  "futures-util",
  "http",
  "jsonrpsee",
- "plexus-auth-core",
- "plexus-client",
- "plexus-macros",
+ "plexus-auth-core 0.1.0",
+ "plexus-macros 0.5.5",
  "rmcp",
  "schemars",
  "serde",
@@ -2752,6 +2773,42 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-stream",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "plexus-core"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d8178ff7e263769b067869f4da1a6bfca60c54b95e8197ed48d87f2df637f82"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "async-trait",
+ "base64 0.22.1",
+ "bitflags 2.13.2",
+ "bytes",
+ "chrono",
+ "ed25519-dalek",
+ "futures",
+ "futures-core",
+ "futures-util",
+ "http",
+ "jsonrpsee",
+ "pin-project-lite",
+ "plexus-auth-core 0.2.2",
+ "plexus-client",
+ "plexus-macros 0.7.0",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "shell-words",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-stream",
+ "tokio-tungstenite",
  "tracing",
  "uuid",
 ]
@@ -2767,9 +2824,9 @@ dependencies = [
  "futures",
  "ipnet",
  "jsonrpsee",
- "plexus-auth-core",
- "plexus-core",
- "plexus-transport",
+ "plexus-auth-core 0.2.2",
+ "plexus-core 0.7.0",
+ "plexus-transport 0.6.0",
  "rand 0.8.8",
  "reqwest",
  "serde",
@@ -2783,7 +2840,22 @@ dependencies = [
 
 [[package]]
 name = "plexus-macros"
-version = "0.6.1"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f64b29e6d196e089448e4ca136a84e2a86ff701a5f64c67099d6dadceefb4ee1"
+dependencies = [
+ "proc-macro-crate 3.5.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "uuid",
+]
+
+[[package]]
+name = "plexus-macros"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7302046ee12bf12baacfce7d560baeb229bd05b342757b1794359f3f6bb6cab5"
 dependencies = [
  "proc-macro-crate 3.5.0",
  "proc-macro2",
@@ -2794,14 +2866,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "plexus-registry"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "757985fbe5f176eca5a0822c54d51e3eba1ffd19c8fc6b926a0a1363a649012b"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "async-trait",
+ "clap",
+ "dirs",
+ "futures",
+ "futures-util",
+ "jsonrpsee",
+ "plexus-core 0.5.3",
+ "plexus-macros 0.5.5",
+ "plexus-transport 0.2.2",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-stream",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "plexus-substrate"
 version = "0.6.3"
+source = "git+https://github.com/hypermemetic-ai/plexus-substrate?branch=main#c8fac1c09ab2a4117bddba85bab5824e9aa3533e"
 dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
  "axum 0.7.9",
- "axum 0.8.9",
  "chrono",
  "clap",
  "cllient",
@@ -2817,12 +2919,10 @@ dependencies = [
  "http-body-util",
  "jsonrpsee",
  "mustache",
- "plexus-auth-core",
- "plexus-client",
- "plexus-core",
- "plexus-login",
- "plexus-macros",
- "plexus-transport",
+ "plexus-core 0.5.3",
+ "plexus-macros 0.5.5",
+ "plexus-registry",
+ "plexus-transport 0.2.2",
  "rand 0.8.8",
  "regex",
  "rmcp",
@@ -2844,7 +2944,9 @@ dependencies = [
 
 [[package]]
 name = "plexus-transport"
-version = "0.5.1"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8f03ef14f99b0e6cdc2e481a7265ede90047ed9712b625ad1aa3882afa3ced7"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2855,14 +2957,43 @@ dependencies = [
  "http",
  "http-body",
  "hyper",
+ "jsonrpsee",
+ "plexus-core 0.5.3",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tower 0.5.3",
+ "tracing",
+]
+
+[[package]]
+name = "plexus-transport"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d9955033575580772c0770f14aa70f8db2584f62b8190a559b14275edebad1fc"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "axum 0.8.9",
+ "bytes",
+ "form_urlencoded",
+ "futures",
+ "http",
+ "http-body",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "ipnet",
  "jsonrpsee",
- "plexus-core",
- "rmcp",
+ "log 0.4.34",
+ "plexus-core 0.7.0",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-tungstenite",
  "tower 0.5.3",
  "tracing",
 ]
@@ -3763,6 +3894,12 @@ checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
 dependencies = [
  "lazy_static",
 ]
+
+[[package]]
+name = "shell-words"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
 
 [[package]]
 name = "shlex"
@@ -4987,7 +5124,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

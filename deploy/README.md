@@ -99,9 +99,8 @@ The deploy runner does the first four by itself for every merge set In
 Review ("Automatic test", below); prod is the owner's.
 
 1. **Build** (`build [REV] [--no-gate]`, default `main`). A commit, never a
-   working tree: `../menger-build` — a sibling checkout, so menger's relative
-   plexus dependencies resolve — is moved to the commit and cleaned, keeping
-   only build outputs. A low disk refuses it before anything runs (CI-2:
+   working tree: `../menger-build`, a worktree of its own, is moved to the
+   commit and cleaned, keeping only build outputs. A low disk refuses it before anything runs (CI-2:
    `scripts/disk-check.sh` — under 50 GB free or 90% used, `DISK_MIN_FREE_GB`
    / `DISK_MAX_USED_PCT`); `status` says the disk on its last line.
 2. **Gate** — only without `--no-gate`: `cargo test --workspace` and the

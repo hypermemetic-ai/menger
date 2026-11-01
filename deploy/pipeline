@@ -85,8 +85,8 @@ set -euo pipefail
 
 # ── where things are ────────────────────────────────────────────────────────
 REPO=$(git -C "$(dirname "$(readlink -f "$0")")" rev-parse --show-toplevel)
-# The build checkout is a sibling of the repo: menger's plexus dependencies are
-# relative paths (../plexus-core …), so a checkout anywhere else cannot build.
+# The build checkout, beside the repo: a worktree of its own that keeps its
+# targets from run to run. Its plexus crates come from crates.io (PLEXUS-33).
 BUILD=$(dirname "$REPO")/menger-build
 HOME_DIR=${MENGER_DEPLOY_HOME:-$HOME/.local/share/menger-deploy}
 RELEASES=$HOME_DIR/releases
@@ -96,8 +96,8 @@ LOG=$HOME_DIR/deployments.log
 LOGS=${MENGER_DEPLOY_LOGS:-$HOME/.local/state/menger-deploy/logs}
 LOG_STAMP="" LOG_SHA=""
 KEEP_RELEASES=10
-# DEPLOY-52: the suite's own checkout, a sibling (the plexus paths resolve) apart from the
-# build's, so a suite running after one deploy never holds up the next build.
+# DEPLOY-52: the suite's own checkout, apart from the build's, so a suite running after one
+# deploy never holds up the next build.
 SUITE_CHECKOUT=${MENGER_SUITE_CHECKOUT:-$(dirname "$REPO")/menger-suite}
 # DEPLOY-52: test is app-test.menger.sh, prod app.menger.sh (MENGER_APP_TEST_URL, MENGER_APP_URL)
 APP_TEST_URL=${MENGER_APP_TEST_URL:-https://app-test.menger.sh}
@@ -326,8 +326,8 @@ flush_outbox() {
 }
 
 # ── build: commit → gate → release ──────────────────────────────────────────
-# checkout DIR SHA — DIR (a sibling worktree, so menger's relative plexus paths
-# resolve) at SHA, clean but for build outputs and installed node modules.
+# checkout DIR SHA — DIR (a worktree of its own) at SHA, clean but for build
+# outputs and installed node modules.
 checkout() {
   local dir=$1 sha=$2
   if [[ ! -d $dir/.git && ! -f $dir/.git ]]; then

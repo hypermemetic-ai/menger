@@ -1,5 +1,5 @@
 # COMPILE-4: `diagrams` — a Plexus RPC service that parses mermaid by driving
-# a Node program. Its own process, hub and port (4458), not an activation
+# a Node program. Its own process, service and port (4458), not an activation
 # inside menger: a diagram checker has nothing to do with tickets, a
 # JavaScript engine should not share menger's address space or its failures,
 # and menger must keep running when it is absent.
@@ -60,17 +60,17 @@ serde = { version = "1", features = ["derive"] }
 schemars = { version = "1.1", features = ["derive"] }
 futures = "0.3"
 
-# The 0.7 line, by sibling path (unpublished — MFE-10), exactly as
-# tickets-api takes it. `plexus-client` without a transport: a consumer adds
-# the backend it runs on (`ws-native`, `ws-web`).
-plexus-macros = { path = "../../plexus-macros" }
-plexus-client = { path = "../../plexus-macros/plexus-client", default-features = false }
+# The 0.7 line from crates.io (PLEXUS-33), exactly as tickets-api takes it.
+# `plexus-client` without a transport: a consumer adds the backend it runs on
+# (`ws-native`, `ws-web`).
+plexus-macros = "0.7.0"
+plexus-client = { version = "0.7.0", default-features = false }
 
 # Server-only. None of these builds for wasm32-unknown-unknown.
-plexus-core = { path = "../../plexus-core", optional = true }
+plexus-core = { version = "0.7.0", optional = true }
 # Slim, as menger takes it — no MCP stack, and no REST bridge either: the
 # service is reached over the WebSocket (or stdio).
-plexus-transport = { path = "../../plexus-transport", default-features = false, optional = true }
+plexus-transport = { version = "0.6.0", default-features = false, optional = true }
 async-trait = { version = "0.1", optional = true }
 jsonrpsee = { version = "0.26", features = ["server", "macros"], optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
@@ -93,7 +93,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"], option
 [dev-dependencies]
 # tests/wire.rs drives the generated MermaidClient over the native WebSocket
 # transport against the in-process service.
-plexus-client = { path = "../../plexus-macros/plexus-client", features = ["ws-native"] }
+plexus-client = { version = "0.7.0", features = ["ws-native"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 tempfile = "3"

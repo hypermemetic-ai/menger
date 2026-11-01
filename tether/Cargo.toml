@@ -23,28 +23,28 @@ path = "src/main.rs"
 
 [dependencies]
 # substrate, imported: its service is built inside tether and called over the
-# in-memory service transport. By sibling path, as substrate takes the plexus
-# 0.7 line (MFE-10) — one of each crate in the graph.
-plexus-substrate = { path = "../../plexus-substrate", default-features = false }
-plexus-core = { path = "../../plexus-core", version = "0.7" }
-plexus-macros = { path = "../../plexus-macros", version = "0.7" }
+# in-memory service transport. PLEXUS-33: from its public repository, and
+# tether does not build until that `main` takes the plexus 0.7 line (README,
+# "Its own workspace"). The rest of the line from crates.io.
+plexus-substrate = { git = "https://github.com/hypermemetic-ai/plexus-substrate", branch = "main", default-features = false }
+plexus-core = "0.7.0"
+plexus-macros = "0.7.0"
 # TETHER-9: the remote menger is reached as a client — WsTransport over a
 # native socket, signed in with a key proof on the upgrade (as synapse does).
-plexus-client = { path = "../../plexus-macros/plexus-client", version = "0.7", features = ["ws-native"] }
+plexus-client = { version = "0.7.0", features = ["ws-native"] }
 # wss:// to a remote behind TLS (app.menger.sh): the socket plexus-client's
 # ws-native opens, with rustls and the webpki roots.
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 # menger's vocabulary and its emitted clients (TicketsClient, CommentsClient,
 # ChatsClient) — the client half, no store, no rusqlite (TETHER-7's finding).
 menger-tickets-api = { path = "../tickets-api", default-features = false }
-plexus-transport = { path = "../../plexus-transport", version = "0.6" }
-plexus-auth-core = { path = "../../plexus-auth-core", version = "0.2", features = ["adapters"] }
+plexus-transport = "0.6.0"
+plexus-auth-core = { version = "0.2.2", features = ["adapters"] }
 base64 = "0.22"
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
-# The same path substrate names (`../menger/plexus-login`): two paths to one
-# crate are two packages to cargo, refused in one lockfile — so even from a
-# worktree of menger, this is the main checkout's.
-plexus-login = { path = "../../menger/plexus-login", version = "0.2" }
+# plexus-login from this repository. Two sources of one crate are two crates
+# to cargo: when substrate takes the 0.7 line, this names the plexus-login it names.
+plexus-login = { path = "../plexus-login", version = "0.2" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = { version = "1.1", features = ["derive", "uuid1"] }

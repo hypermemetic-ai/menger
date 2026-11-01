@@ -5866,10 +5866,10 @@ test is in the workspace run.
 
 `plexus-shell`, `menger-tickets-api`, `plexus-login` (SCAFFOLD-9) and
 `menger` go to crates.io, in that order. The plexus 0.7 line they depend on goes first: plexus-core,
-plexus-macros, plexus-client, plexus-auth-core, plexus-transport. Every
-sibling `path` dependency also names its `version`, which is what the
-published crates take. Dev dependencies stay path-only and are dropped from
-the package.
+plexus-macros, plexus-client, plexus-auth-core, plexus-transport, and
+every manifest here takes them by version from crates.io (PLEXUS-33), so a
+clone builds alone. The in-tree crates name a `path` and a `version`, the
+version being what the published crates take.
 
 ```sh
 scripts/publish.sh stage     # trunk build --release, stage the package, list it; publishes nothing

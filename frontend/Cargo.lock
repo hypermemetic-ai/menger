@@ -1086,6 +1086,8 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 [[package]]
 name = "plexus-client"
 version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e18fe28fc8fa4658e2bd684f657dcef146ffeab5a0531e35b628b3872ab0c49e"
 dependencies = [
  "futures-channel",
  "futures-core",
@@ -1101,6 +1103,8 @@ dependencies = [
 [[package]]
 name = "plexus-macros"
 version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7302046ee12bf12baacfce7d560baeb229bd05b342757b1794359f3f6bb6cab5"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
