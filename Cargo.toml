@@ -5,9 +5,9 @@
 # out of it — its empty [workspace] table detaches it, so `cargo build` here
 # still never needs the wasm toolchain.
 #
-# FRAME-4: the shell (`plexus-shell`, SCAFFOLD-5) and the login
-# (`plexus-login`, SCAFFOLD-9) are repositories of their own beside
-# plexus-core, taken by sibling path below — not members here.
+# FRAME-4: the shell (`plexus-webapp`, SCAFFOLD-5, published) and the login
+# (`plexus-login`, SCAFFOLD-9, by sibling path until it is published) are
+# repositories of their own, taken below — not members here.
 # FRAME-5: the ui service (UI-3's activation and its own file, `ui.db`) is
 # `../plexus-ui`'s `plexus-ui-service`, by sibling path below.
 # FRAME-3: the component compiler and the engine (UI-5, UI-6) are
@@ -61,25 +61,25 @@ menger-tickets-api = { path = "tickets-api", version = "0.6.2" }
 plexus-ui-service = { path = "../plexus-ui/service" }
 
 # SCAFFOLD-5: the shell (the app's build as a table, stamped and served) and
-# the local server (`menger::local`'s serving) — plexus-shell, a repository
-# of its own (FRAME-4), by sibling path as the plexus line is.
-plexus-shell = { path = "../plexus-shell", version = "0.1.3" }
+# the local server (`menger::local`'s serving) — plexus-webapp, a repository
+# of its own (FRAME-4), published as the plexus line is (PLEXUS-16).
+plexus-webapp = "0.2.0"
 
-# MFE-10: the plexus 0.6 line — plexus-core 0.6.0, plexus-macros 0.6.0
+# MFE-10: the plexus 0.7 line — plexus-core 0.7.0, plexus-macros 0.7.0
 # (the `client` / `server_cfg` activation flags, MACRO-4) and
-# plexus-transport 0.5.0 (the REST bridge fixes ported to HEAD, pinned to
-# core 0.6). In a checkout the three come from the sibling checkouts on
-# `main`, which reference each other the same way, so the graph resolves
-# exactly one of each. DIST-3: each carries its version too, which is what
-# the published crate takes from crates.io.
-plexus-core = { path = "../plexus-core", version = "0.6.1" }
+# plexus-transport 0.6.0 (the REST bridge fixes ported to HEAD, pinned to
+# core 0.7). PLEXUS-16: every one by its published version from crates.io,
+# never by path outside this repository, so the graph resolves exactly one
+# of each; only what is unpublished (plexus-login, plexus-ui's crates) stays
+# by sibling path, and those take the same published versions.
+plexus-core = "0.7.0"
 # Slim: default features off keeps the rmcp/MCP stack out (default-off as
 # of 0.5.0 anyway); http-gateway enables the REST + SSE bridge (MNG-8).
-plexus-transport = { path = "../plexus-transport", version = "0.5.1", default-features = false, features = ["http-gateway"] }
+plexus-transport = { version = "0.6.0", default-features = false, features = ["http-gateway"] }
 # IDENTITY-14: login at the boundary — the provider adapters (IDENTITY-13)
 # turn each provider's credential into Plexus types at the WebSocket upgrade.
 # Used only when an --auth-provider is given.
-plexus-auth-core = { path = "../plexus-auth-core", version = "0.2.1", features = ["adapters"] }
+plexus-auth-core = { version = "0.2.2", features = ["adapters"] }
 # SCAFFOLD-3/SCAFFOLD-9: the login — providers, the page, sessions, the
 # gate, the auth backend, the wiring — its own crate and repository
 # (FRAME-4), by sibling path; menger implements its `LoginAccess` over
@@ -129,10 +129,10 @@ jsonrpsee = { version = "0.26", features = ["server", "macros", "ws-client"] }
 serde_json = "1"
 # MFE-11: tests/wire_client.rs drives the generated TicketsClient over the
 # native WebSocket transport against the in-process server.
-plexus-client = { path = "../plexus-macros/plexus-client", features = ["ws-native"] }
+plexus-client = { version = "0.7.0", features = ["ws-native"] }
 # V2-4: tests/seam.rs declares a probe activation of its own, beside
 # `tickets` in a test hub, that reads through the in-memory transport.
-plexus-macros = { path = "../plexus-macros", version = "0.6.1" }
+plexus-macros = "0.7.0"
 schemars = { version = "1.1", features = ["derive"] }
 async-stream = "0.3"
 uuid = { version = "1", features = ["v4"] }
@@ -160,14 +160,14 @@ tar = { version = "0.4", default-features = false }
 # natively (the same bytes as the module, UI-5), and registers a reduced
 # `tickets` — a probe activation (plexus-macros, schemars, async-stream:
 # V2-4's, above) — to show the lint reads the running service.
-# FRAME-3: from the sibling checkout, as the plexus crates are (MFE-10).
+# FRAME-3: from the sibling checkout, unpublished (PLEXUS-16).
 plexus-ui-compiler = { path = "../plexus-ui/compiler" }
 # UI-7: the in-process tests' stub compiler modules, written as text.
 wat = "1"
 
 # MNG-8's `[patch.crates-io]` on the plexus-transport-v0.2.3 tag went with
 # MFE-10: the REST bridge fixes it carried are on plexus-transport `main`
-# (0.5.0), consumed by path above.
+# (0.5.0), published since.
 
 # UI-7: the compiler module is compiled by cranelift when the server starts
 # with --ui-compiler; unoptimised (a dev or test build) that takes ~15 s for

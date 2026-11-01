@@ -12,7 +12,7 @@
 //!   next thing v2 reworks.
 //!
 //! SCAFFOLD-5: the table, the stamping, the app's routes, the hardening
-//! (IDENTITY-38) and [`AppSource`] are `plexus-shell`'s; this module is
+//! (IDENTITY-38) and [`AppSource`] are `plexus-webapp`'s; this module is
 //! menger's part around them.
 //!
 //! ACCESS-28: every page goes out under a policy — the app's under
@@ -26,8 +26,8 @@ use axum::Router;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// DIST-3: where the Leptos app's build is served from — `plexus-shell`'s.
-pub use plexus_shell::AppSource;
+/// DIST-3: where the Leptos app's build is served from — `plexus-webapp`'s.
+pub use plexus_webapp::AppSource;
 
 pub struct ShellConfig {
     pub port: u16,
@@ -124,7 +124,7 @@ pub const ROOT_FILES: [&str; 6] =
 /// APP-92: where the app's service worker is served ([`ROOT_FILES`]).
 pub const SERVICE_WORKER: &str = "/sw.js";
 
-/// ACCESS-28: the app's pages' Content-Security-Policy (plexus-shell fills
+/// ACCESS-28: the app's pages' Content-Security-Policy (plexus-webapp fills
 /// `{{SCRIPTS}}` with the page's inline-script hashes and `{{SERVICE}}` with the
 /// service's WebSocket origins at the name the page was asked for):
 ///
@@ -225,20 +225,20 @@ pub fn preferred_app() -> AppSource {
     AppSource::Dir(default_app_dist())
 }
 
-/// menger's shell as plexus-shell serves it: the app under `/app/` (where
+/// menger's shell as plexus-webapp serves it: the app under `/app/` (where
 /// `Trunk.toml`'s `public_url` puts its assets, and MFE-1's deep links),
 /// titled for the environment (MFE-23), and `/` falling back to
 /// [`PLACEHOLDER`] when there is no build (MFE-4). No other routes: the
 /// login routes are added around it ([`serve_on`]).
-pub fn app_shell(env: Option<&str>, app: AppSource) -> plexus_shell::ShellConfig {
+pub fn app_shell(env: Option<&str>, app: AppSource) -> plexus_webapp::ShellConfig {
     app_shell_framed(env, app, &Framing::default())
 }
 
 /// [`app_shell`] under APP-110's [`Framing`]: the policy as [`page_csp`] says,
 /// and the app told which test app its bodies may draw (`{{LIVE_ORIGIN}}`,
 /// empty when none).
-pub fn app_shell_framed(env: Option<&str>, app: AppSource, framing: &Framing) -> plexus_shell::ShellConfig {
-    let mut cfg = plexus_shell::ShellConfig::new(tab_title(env), app);
+pub fn app_shell_framed(env: Option<&str>, app: AppSource, framing: &Framing) -> plexus_webapp::ShellConfig {
+    let mut cfg = plexus_webapp::ShellConfig::new(tab_title(env), app);
     cfg.stamps.push(("{{LIVE_ORIGIN}}".into(), framing.live.clone().unwrap_or_default()));
     cfg.root_fallback = Some(PLACEHOLDER.into());
     cfg.not_built = Some(NOT_BUILT.into());
@@ -270,8 +270,8 @@ pub async fn serve_on(
     // RUN-8: the startup log names the address the shell is bound to.
     let at = listener.local_addr()?;
     let app = router(cfg, at).await;
-    // IDENTITY-38: plexus-shell's `serve_on` hardens every answer.
-    plexus_shell::serve_on(listener, app, shutdown).await?;
+    // IDENTITY-38: plexus-webapp's `serve_on` hardens every answer.
+    plexus_webapp::serve_on(listener, app, shutdown).await?;
     Ok(())
 }
 
@@ -283,7 +283,7 @@ async fn router(cfg: ShellConfig, at: std::net::SocketAddr) -> Router {
     // behind a session when login is required — no anonymous view.
     let shell = app_shell_framed(cfg.env.as_deref(), cfg.app, &cfg.framing);
     let (stamps, csp) = (shell.stamps_for(cfg.ws_port), shell.csp.clone());
-    let mut app = plexus_shell::router(shell, cfg.ws_port).await;
+    let mut app = plexus_webapp::router(shell, cfg.ws_port).await;
     // UI-3, FRAME-5: `/`, `/app/` and `/app/*` from the ui store — the
     // framework's routes, inside the session check (mounted first, so it
     // runs after it). The login's session names whose preview to serve.
@@ -515,7 +515,7 @@ mod tests {
     #[test]
     fn the_placeholder_is_stamped_and_is_the_root_fallback() {
         let cfg = app_shell(Some("test"), AppSource::Dir("/nowhere".into()));
-        let stamped = plexus_shell::stamp(PLACEHOLDER, &cfg.stamps_for(4450));
+        let stamped = plexus_webapp::stamp(PLACEHOLDER, &cfg.stamps_for(4450));
         assert!(stamped.contains("<title>menger.test</title>") && stamped.contains("-P 4450") && !stamped.contains("{{"));
         assert_eq!(cfg.root_fallback.as_deref(), Some(PLACEHOLDER));
         assert!(cfg.pages.is_empty());
@@ -540,8 +540,8 @@ mod tests {
     #[test]
     fn the_app_is_told_the_live_origin() {
         let on = app_shell_framed(None, AppSource::Dir("/nowhere".into()), &Framing { ancestors: vec![], live: Some("https://t.example".into()) });
-        assert_eq!(plexus_shell::stamp("{{LIVE_ORIGIN}}", &on.stamps_for(4450)), "https://t.example");
-        assert_eq!(plexus_shell::stamp("[{{LIVE_ORIGIN}}]", &app_shell(None, AppSource::Dir("/nowhere".into())).stamps_for(4450)), "[]");
+        assert_eq!(plexus_webapp::stamp("{{LIVE_ORIGIN}}", &on.stamps_for(4450)), "https://t.example");
+        assert_eq!(plexus_webapp::stamp("[{{LIVE_ORIGIN}}]", &app_shell(None, AppSource::Dir("/nowhere".into())).stamps_for(4450)), "[]");
         assert!(on.csp.contains("frame-src 'self' https://t.example"));
     }
 

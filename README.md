@@ -245,7 +245,7 @@ FRAME-7): its own code is the tickets service (`tickets-api/`), the server
 that registers it (`src/`) and its UI's components (`ui/`); the ui service,
 the compiler, the engine, the routes that serve a bundle and the tool that
 builds, signs and pushes one are the framework's, taken from the sibling
-checkout as `../plexus-shell` and `../plexus-login` are. Any other Plexus
+checkout as `../plexus-login` is. Any other Plexus
 service ships with the framework the same way.
 
 A service that would rather not link it runs beside the framework's own
@@ -1016,8 +1016,8 @@ server.shutdown().await;
 
 `tests/local.rs` is the executable reference.
 
-**plexus-shell** (SCAFFOLD-5; `../plexus-shell`, a repository of its own
-since FRAME-4, taken by sibling path) is the serving half: `AppSource`, the
+**plexus-webapp** (SCAFFOLD-5; a repository of its own since FRAME-4,
+published on crates.io) is the serving half: `AppSource`, the
 hardened router, the page policy and its stamping, and `LocalServer` for
 any Plexus service. Its `toy/` is its worked example.
 

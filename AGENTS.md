@@ -596,18 +596,17 @@ question.
 
 ## Conventions
 
-- Plexus crates come from the **0.6 line by sibling path** (MFE-10):
-  `../plexus-core`, `../plexus-macros`, `../plexus-transport` — and
-  `../plexus-shell`, `../plexus-login` (FRAME-4: repositories of their
-  own) — all on
-  `main`, referencing each other the same way so the graph resolves one of
-  each. A clone of menger alone does not build; the sibling checkouts must
-  be beside it. Every activation is `impl FooActivation` (MACRO-13,
+- Plexus crates come from the **0.7 line by published version**
+  (PLEXUS-16): `plexus-core`, `plexus-macros`, `plexus-client`,
+  `plexus-transport`, `plexus-auth-core`, `plexus-webapp`. What is
+  unpublished stays by sibling path: `../plexus-login`, `../plexus-ui` and
+  tether's `../plexus-substrate`; a clone of menger alone does not build
+  until those are decided. Every activation is `impl FooActivation` (MACRO-13,
   MACRO-21): the stem names the namespace, the trait and the client.
 - **Workspace members** (`Cargo.toml`): `.`, `tickets-api`;
-  `tether/` is its own workspace. Three sibling repositories
-  hold what menger lifted out: `../plexus-shell` and `../plexus-login`
-  (FRAME-4), each taken by path like `../plexus-core`, and `../plexus-ui`,
+  `tether/` is its own workspace. Three repositories
+  hold what menger lifted out: `plexus-webapp` (FRAME-4; published),
+  `../plexus-login` (FRAME-4; by path) and `../plexus-ui`,
   of which menger takes `plexus-ui-service` (FRAME-5: a dependency, its
   routes mounted on the shell) and `plexus-ui-compiler` (FRAME-3: a
   dev-dependency) by path. The engine, `plexus-ui-engine`, is in no graph of

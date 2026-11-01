@@ -12,16 +12,16 @@
 //! - FRAME-8 (wave 2): the bundle is the framework's tool's — `plexus-ui`
 //!   (`plexus-ui-cli`), built from the sibling by `scripts/plexus-ui` and by
 //!   `deploy/pipeline` — and menger's own build and sign scripts went.
-//! - FRAME-4 (wave 1): `plexus-shell` and `plexus-login`, repositories of
-//!   their own beside plexus-core (`../plexus-shell`, `../plexus-login`);
+//! - FRAME-4 (wave 1): `plexus-webapp` (published; PLEXUS-16) and
+//!   `plexus-login` (`../plexus-login`), repositories of their own;
 //!   `tether/` apart — its `plexus-login` moves with substrate's (FRAME-9).
 //! - FRAME-5 (wave 2): the ui service, out to `../plexus-ui` as
 //!   `plexus-ui-service`, with no menger type in it; menger registers it
 //!   beside `tickets` and mounts its routes on its own shell.
 //! - FRAME-7 (wave 3): menger on top — a tenant of the framework. Its own
 //!   packages are `menger` and `menger-tickets-api` and nothing else; the
-//!   service, the shell, the login and the compiler come from their sibling
-//!   checkouts; its shell mounts the framework's routes and has none of its
+//!   service, the login and the compiler come from their sibling
+//!   checkouts, the shell from crates.io; its shell mounts the framework's routes and has none of its
 //!   own; its docs say the framework is `../plexus-ui` and menger a tenant,
 //!   and point a new component at the framework's tool and contract.
 //!
@@ -118,7 +118,6 @@ const GONE: &[&str] = &[
 const SIBLINGS: &[(&str, &str)] = &[
     ("plexus-ui-compiler", "plexus-ui"),
     ("plexus-ui-service", "plexus-ui"),
-    ("plexus-shell", "plexus-shell"),
     ("plexus-login", "plexus-login"),
 ];
 
@@ -318,7 +317,7 @@ fn tool_build_line(script: &str) -> Option<(usize, &str)> {
 fn the_framework_is_a_sibling() {
     let root = root();
     let parent = root.parent().expect("menger has a parent").to_path_buf();
-    for dir in ["plexus-ui", "plexus-shell", "plexus-login"] {
+    for dir in ["plexus-ui", "plexus-login"] {
         assert!(sibling(dir).join("Cargo.toml").is_file(), "FRAME-1: no checkout at {} (clone {dir} beside menger)", sibling(dir).display());
     }
     let broken = breaks(&packages(&metadata()), &parent, SIBLINGS, &old_packages());
@@ -680,18 +679,17 @@ fn the_checks_read_what_they_are_given() {
         { "name": "menger", "manifest_path": "/w/menger/Cargo.toml" },
         { "name": "plexus-ui-compiler", "manifest_path": "/w/plexus-ui/compiler/Cargo.toml" },
         { "name": "plexus-ui-service", "manifest_path": "/w/plexus-ui/service/Cargo.toml" },
-        { "name": "plexus-shell", "manifest_path": "/w/plexus-shell/Cargo.toml" },
         { "name": "plexus-login", "manifest_path": "/w/plexus-login/Cargo.toml" },
         { "name": old_service, "manifest_path": "/w/menger/ui-service/Cargo.toml" },
         { "name": old_engine, "manifest_path": "/w/menger/ui-engine/Cargo.toml" },
         { "name": "nameless" },
     ]});
     let pkgs = packages(&doc);
-    assert_eq!(pkgs.len(), 7, "a package with no manifest path is skipped: {pkgs:?}");
+    assert_eq!(pkgs.len(), 6, "a package with no manifest path is skipped: {pkgs:?}");
     assert_eq!(pkgs[1], ("plexus-ui-compiler".to_string(), PathBuf::from("/w/plexus-ui/compiler")));
 
     // Every sibling present and where it should be; an old name named.
-    assert!(breaks(&pkgs[..5], parent, SIBLINGS, &old_packages()).is_empty(), "the graph after FRAME-5");
+    assert!(breaks(&pkgs[..4], parent, SIBLINGS, &old_packages()).is_empty(), "the graph after FRAME-5");
     assert_eq!(
         breaks(&pkgs, parent, SIBLINGS, &old_packages()),
         [
@@ -703,8 +701,8 @@ fn the_checks_read_what_they_are_given() {
 
     // Missing is named; a near sibling, a copy in menger and the registry's are not the sibling.
     assert_eq!(breaks(&pkgs[..1], parent, &SIBLINGS[1..2], &[]), ["plexus-ui-service: not in the graph"]);
-    for elsewhere in ["/w/plexus-ui-old/service", "/w/menger/service", "/w/menger/plexus-shell", "/home/u/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/plexus-ui-service-0.1.0"] {
-        let one = [("plexus-ui-service".to_string(), PathBuf::from(elsewhere)), ("plexus-shell".to_string(), PathBuf::from(elsewhere))];
+    for elsewhere in ["/w/plexus-ui-old/service", "/w/menger/service", "/w/menger/plexus-login", "/home/u/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/plexus-ui-service-0.1.0"] {
+        let one = [("plexus-ui-service".to_string(), PathBuf::from(elsewhere)), ("plexus-login".to_string(), PathBuf::from(elsewhere))];
         assert_eq!(breaks(&one, parent, &[SIBLINGS[1], SIBLINGS[2]], &[]).len(), 2, "{elsewhere} taken for a sibling");
     }
 
@@ -757,7 +755,7 @@ fn the_checks_read_what_they_are_given() {
         ]
     );
     let meta = serde_json::json!({ "workspace_members": ["a 1", "b 1"], "packages": [
-        { "id": "a 1", "name": "menger" }, { "id": "b 1", "name": "menger-tickets-api" }, { "id": "c 1", "name": "plexus-shell" } ]});
+        { "id": "a 1", "name": "menger" }, { "id": "b 1", "name": "menger-tickets-api" }, { "id": "c 1", "name": "plexus-webapp" } ]});
     assert_eq!(member_names(&meta), ["menger", "menger-tickets-api"]);
 
     // The shell's code lines: a comment naming the routes is not a mount.

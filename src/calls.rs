@@ -4,7 +4,7 @@
 //! Every Plexus call is a `menger.call` subscription for as long as its
 //! stream runs (a unary answer for a moment, a `watch` for the session), so
 //! the calls open on a connection are its subscriptions. [`rpc_module`] is
-//! the hub's own module ([`plexus_shell::rpc_module`]) with `menger.call`
+//! the service's own module ([`plexus_webapp::rpc_module`]) with `menger.call`
 //! registered again over the same dispatch — the params read, the caller's
 //! identity from the upgrade, `hub.route`, each item piped out by
 //! plexus-core's own pipe (PERF-7: encoded once into its frame) — and two
@@ -68,7 +68,7 @@ pub const TOO_MANY_CALLS: &str = "too_many_calls";
 /// The hub's RPC module, `menger.call` held to `limits` (the module docs).
 /// Needs a Tokio runtime when `limits.idle` is set: the idle sweep runs on it.
 pub fn rpc_module(hub: Arc<DynamicHub>, limits: CallLimits) -> anyhow::Result<RpcModule<()>> {
-    let mut module = plexus_shell::rpc_module(hub.clone())?;
+    let mut module = plexus_webapp::rpc_module(hub.clone())?;
     let ns: &'static str = Box::leak(hub.runtime_namespace().to_string().into_boxed_str());
     let call: &'static str = Box::leak(format!("{ns}.call").into_boxed_str());
     let unsub: &'static str = Box::leak(format!("{ns}.call_unsub").into_boxed_str());

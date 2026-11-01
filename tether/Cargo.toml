@@ -22,23 +22,23 @@ name = "tether"
 path = "src/main.rs"
 
 [dependencies]
-# substrate, imported: its hub is built inside tether and called over the
-# in-memory hub transport. By sibling path, as substrate takes the plexus
-# 0.6 line (MFE-10) — one of each crate in the graph.
+# substrate, imported: its service is built inside tether and called over the
+# in-memory service transport. By sibling path while substrate is unpublished
+# (PLEXUS-16); the plexus 0.7 line below by version, one of each in the graph.
 plexus-substrate = { path = "../../plexus-substrate", default-features = false }
-plexus-core = { path = "../../plexus-core", version = "0.6" }
-plexus-macros = { path = "../../plexus-macros", version = "0.6" }
+plexus-core = "0.7.0"
+plexus-macros = "0.7.0"
 # TETHER-9: the remote menger is reached as a client — WsTransport over a
 # native socket, signed in with a key proof on the upgrade (as synapse does).
-plexus-client = { path = "../../plexus-macros/plexus-client", version = "0.6", features = ["ws-native"] }
+plexus-client = { version = "0.7.0", features = ["ws-native"] }
 # wss:// to a remote behind TLS (app.menger.sh): the socket plexus-client's
 # ws-native opens, with rustls and the webpki roots.
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 # menger's vocabulary and its emitted clients (TicketsClient, CommentsClient,
 # ChatsClient) — the client half, no store, no rusqlite (TETHER-7's finding).
 menger-tickets-api = { path = "../tickets-api", default-features = false }
-plexus-transport = { path = "../../plexus-transport", version = "0.5" }
-plexus-auth-core = { path = "../../plexus-auth-core", version = "0.2", features = ["adapters"] }
+plexus-transport = "0.6.0"
+plexus-auth-core = { version = "0.2.2", features = ["adapters"] }
 base64 = "0.22"
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 # The sibling checkout (`../plexus-login`, FRAME-4), the one path substrate

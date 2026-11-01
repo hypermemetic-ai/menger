@@ -83,8 +83,8 @@ set -euo pipefail
 
 # ── where things are ────────────────────────────────────────────────────────
 REPO=$(git -C "$(dirname "$(readlink -f "$0")")" rev-parse --show-toplevel)
-# The build checkout is a sibling of the repo: menger's plexus dependencies are
-# relative paths (../plexus-core …), so a checkout anywhere else cannot build.
+# The build checkout is a sibling of the repo: of menger's plexus dependencies,
+# what is unpublished is by relative path (../plexus-login, ../plexus-ui; PLEXUS-16), so a checkout anywhere else cannot build.
 # V2-7: MENGER_BUILD_CHECKOUT names another sibling (a worktree's own build, beside the runner's)
 BUILD=${MENGER_BUILD_CHECKOUT:-$(dirname "$REPO")/menger-build}
 HOME_DIR=${MENGER_DEPLOY_HOME:-$HOME/.local/share/menger-deploy}

@@ -16,7 +16,7 @@
 //! opening the shell). The upgrade admits that token and nothing else: no
 //! provider's credential, since nothing here is a provider.
 //!
-//! SCAFFOLD-5: the serving is `plexus-shell`'s [`plexus_shell::LocalServer`]
+//! SCAFFOLD-5: the serving is `plexus-webapp`'s [`plexus_webapp::LocalServer`]
 //! — any hub, any app — and this module is menger's part of it: the store
 //! and the hub, and menger's shell ([`crate::shell::app_shell`], the
 //! favicon). Its API is DIST-3's, unchanged.
@@ -53,11 +53,11 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// The origins a Tauri 2 webview loads its page from — plexus-shell's.
-pub use plexus_shell::TAURI_ORIGINS;
+/// The origins a Tauri 2 webview loads its page from — plexus-webapp's.
+pub use plexus_webapp::TAURI_ORIGINS;
 /// The hub as the WebSocket (and stdio) transport serves it, and the
-/// startup log of its activations — plexus-shell's.
-pub use plexus_shell::{log_activations, rpc_module};
+/// startup log of its activations — plexus-webapp's.
+pub use plexus_webapp::{log_activations, rpc_module};
 
 /// How to run a [`LocalServer`].
 #[derive(Debug, Clone)]
@@ -102,7 +102,7 @@ impl LocalConfig {
 /// A running menger: its WebSocket and its shell, on loopback, behind the
 /// gate (ACCESS-24).
 pub struct LocalServer {
-    server: plexus_shell::LocalServer,
+    server: plexus_webapp::LocalServer,
     access: Access,
     owner: String,
 }
@@ -129,7 +129,7 @@ impl LocalServer {
         let access = Access::with_login(table.clone(), vec![owner.clone()]).minting(table);
         let hub = crate::build_rpc(&cfg.db_path, access.clone()).await?;
         let app = shell::app_shell(cfg.env.as_deref(), cfg.app);
-        let local = plexus_shell::LocalConfig {
+        let local = plexus_webapp::LocalConfig {
             ws_port: cfg.ws_port,
             shell_port: cfg.shell_port,
             extra_origins: cfg.extra_origins,
@@ -139,7 +139,7 @@ impl LocalServer {
         let module = crate::calls::rpc_module(hub.clone(), crate::calls::CallLimits::default())?;
         let gate: Arc<dyn plexus_core::plexus::SessionValidator> = Arc::new(crate::sessions::Gate::new(sessions, None).noticing(crate::MengerAccess(access.clone())));
         let options = UpgradeOptions { anonymous_view: true, credential_cookies: vec!["access_token".into()], ..UpgradeOptions::default() };
-        let server = plexus_shell::LocalServer::start_guarded(hub, module, local, Some(gate), options).await?;
+        let server = plexus_webapp::LocalServer::start_guarded(hub, module, local, Some(gate), options).await?;
         Ok(LocalServer { server, access, owner })
     }
 
@@ -189,7 +189,7 @@ impl LocalServer {
 /// its port on 127.0.0.1 and on localhost, and the origin of the public URL
 /// people reach it at, when there is one.
 pub fn shell_origins(shell_port: u16, public_url: Option<&str>) -> Vec<String> {
-    let mut origins = plexus_shell::loopback_origins(shell_port);
+    let mut origins = plexus_webapp::loopback_origins(shell_port);
     if let Some(url) = public_url {
         let origin = crate::web_login::origin_of(url);
         if !origins.contains(&origin) {
