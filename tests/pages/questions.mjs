@@ -159,6 +159,63 @@ export default async (ctx) => {
     }
   });
 
+  await test("the_queues_head_moves_and_a_deleted_ticket_goes", async () => {
+    const [a, gone] = [make("the count's"), make("deleted while queued")];
+    for (const id of [a, gone]) sy("tickets", "queue", "--id", id, "--urgency", "today", "--reason", "count");
+    const { context, page } = await openPage("#/queue", { signedIn: true });
+    try {
+      const s = page.locator("[data-surface=queue-page]");
+      await s.locator(`[data-id="${gone}"]`).waitFor();
+      const count = async () => Number(await s.locator("[data-field=count]").innerText());
+      const first = await count();
+      assert(first === (await s.locator("[data-id]").count()), `the head is the rows: ${first}`);
+      const fresh = make("arrives while it is open");
+      sy("tickets", "queue", "--id", fresh, "--urgency", "today", "--reason", "new");
+      await eventually("the count rises", async () => (await count()) === first + 1);
+      const d = sy("tickets", "delete", "--ids", gone, "--message", "gone");
+      assert(d.some((e) => e.type === "deleted"), `deleted: ${JSON.stringify(d)}`);
+      await eventually("the row goes", async () => (await s.locator(`[data-id="${gone}"]`).count()) === 0);
+      await eventually("the count falls", async () => (await count()) === first);
+      // The ages read the server's clock as it moves: a write heard moves it.
+      const at = (await s.locator(`[data-id="${a}"]`).getAttribute("data-now")) ?? "";
+      await new Promise((r) => setTimeout(r, 1100));
+      sy("tickets", "queue", "--id", a, "--urgency", "today", "--reason", "again");
+      await eventually("the clock moved", async () => (await s.locator(`[data-id="${a}"]`).getAttribute("data-now")) > at);
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("changes_are_requested_from_the_queue", async () => {
+    const id = make("handed back");
+    sy("tickets", "queue", "--id", id, "--urgency", "whenever", "--reason", "look at it");
+    const { context, page } = await openPage("#/queue", { signedIn: true });
+    try {
+      const s = page.locator("[data-surface=queue-page]");
+      await s.locator(`[data-id="${id}"]`).waitFor();
+      await s.locator(`[data-id="${id}"] [data-action='tickets.request_changes']`).click();
+      const form = s.locator("[data-form='tickets.request_changes']");
+      await form.locator("textarea").fill("thinner, please");
+      await form.locator("button").click();
+      await eventually("handed back: out of the queue", async () => (await s.locator(`[data-id="${id}"]`).count()) === 0);
+      const lines = sy("tickets", "history", "--id", id).filter((e) => e.type === "queue_record");
+      const last = lines.at(-1)?.record;
+      assert(last?.action === "changes_requested" && last?.reason === "thinner, please", `kept on the log: ${JSON.stringify(last)}`);
+      // By its key, and a blank one is the service's refusal, in place.
+      const again = make("handed back by key");
+      sy("tickets", "queue", "--id", again, "--urgency", "now", "--reason", "by key");
+      await s.locator(`[data-id="${again}"]`).waitFor();
+      const n = await s.locator("[data-id]").count();
+      for (let i = 0; i < n; i++) await page.keyboard.press("k");
+      await page.keyboard.press("c");
+      await form.locator("textarea").waitFor();
+      await page.keyboard.press("Control+Enter");
+      await eventually("a blank body refused", async () => (await s.locator("[data-refused]").count()) === 1);
+    } finally {
+      await context.close();
+    }
+  });
+
   await test("g_q_from_the_board_opens_the_queue", async () => {
     const { context, page } = await openPage("#/", { signedIn: true });
     try {
