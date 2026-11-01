@@ -61,7 +61,7 @@
 //! rule never changes one. Wasm-safe, like [`super`], whose tag reading it
 //! shares.
 
-use super::{comment_end, open_end, raw_close, tag_name, Budget, VOID};
+use super::{comment_end, open_end, raw_close, tag_name, Budget, Walk, TAG_COST, VOID};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use std::borrow::Cow;
 
@@ -137,48 +137,72 @@ pub fn read<'a>(src: &'a str, options: Options, budget: &Budget) -> Option<Read<
     }
     let mut text = src.to_string();
     let mut marks: Vec<usize> = Vec::new();
-    // Blocks before `resume` are read already; one that runs on is read
-    // again from the top (what follows it may parse differently now).
+    // Blocks before `resume` are read already. V2-20: v1 read again from the
+    // top after each block that ran on (what follows it may parse
+    // differently now), a parse a block. One pass now marks every block it
+    // can trust: what starts past the run's true end, with nothing open
+    // across it, parses as it will once the run is marked. Anything that
+    // straddles that end stops the pass, and the next reads it afresh.
     let mut resume = 0;
-    'parse: loop {
+    loop {
         let mut depth = 0u32;
-        // V2-20: a parse from the top is the walk this rule repeats.
         if !budget.parse(text.len()) {
             return None;
         }
+        let mut pending: Vec<usize> = Vec::new();
+        // Where the last run truly ends: past the block its last mark joins.
+        let mut trusted = resume;
         for (event, range) in Parser::new_ext(&text, options).into_offset_iter() {
+            if !pending.is_empty() && matches!(event, Event::Start(_)) && range.start < trusted && range.end > trusted {
+                break;
+            }
             match event {
                 Event::Start(Tag::BlockQuote(_) | Tag::List(_) | Tag::Item | Tag::FootnoteDefinition(_)) => depth += 1,
                 Event::End(TagEnd::BlockQuote(_) | TagEnd::List(_) | TagEnd::Item | TagEnd::FootnoteDefinition) => {
                     depth = depth.saturating_sub(1)
                 }
-                Event::Start(Tag::HtmlBlock) if depth == 0 && range.start >= resume && !runs_to_its_end(&text[range.start..]) => {
+                Event::Start(Tag::HtmlBlock) if depth == 0 && range.start >= trusted && !runs_to_its_end(&text[range.start..]) => {
                     let blanks = blank_lines_inside(&text, range.start, budget)?;
                     let Some(&last) = blanks.last() else { continue };
-                    let mut marked = String::with_capacity(text.len() + blanks.len() * MARK.len_utf8());
-                    let mut from = 0;
-                    for &at in &blanks {
-                        marked.push_str(&text[from..at]);
-                        marked.push(MARK);
-                        from = at;
-                    }
-                    marked.push_str(&text[from..]);
-                    text = marked;
-                    // Marks already placed sit before this block: unmoved.
-                    let shift = MARK.len_utf8();
-                    marks.extend(blanks.iter().enumerate().map(|(k, &at)| at + shift * k));
-                    resume = last + shift * blanks.len();
-                    continue 'parse;
+                    pending.extend_from_slice(&blanks);
+                    trusted = run_end(&text, last);
                 }
                 _ => {}
             }
         }
-        break;
+        let Some(&last) = pending.last() else { break };
+        let mut marked = String::with_capacity(text.len() + pending.len() * MARK.len_utf8());
+        let mut from = 0;
+        for &at in &pending {
+            marked.push_str(&text[from..at]);
+            marked.push(MARK);
+            from = at;
+        }
+        marked.push_str(&text[from..]);
+        text = marked;
+        // Marks already placed sit before these: unmoved.
+        let shift = MARK.len_utf8();
+        marks.extend(pending.iter().enumerate().map(|(k, &at)| at + shift * k));
+        resume = last + shift * pending.len();
     }
     if marks.is_empty() {
         return Some(unmarked);
     }
     Some(Read { source: Cow::Owned(text), marks })
+}
+
+/// Where the block holding the marked blank line at `last` ends once it is
+/// marked: the next blank line after it, past which the body parses afresh.
+fn run_end(text: &str, last: usize) -> usize {
+    let mut at = text[last..].find('\n').map_or(text.len(), |j| last + j + 1);
+    while at < text.len() {
+        let end = text[at..].find('\n').map_or(text.len(), |j| at + j + 1);
+        if text[at..end].trim().is_empty() {
+            return end;
+        }
+        at = end;
+    }
+    text.len()
 }
 
 /// Does an HTML block starting here run to an end marker of its own —
@@ -195,6 +219,20 @@ fn runs_to_its_end(block: &str) -> bool {
             .and_then(|l| l.strip_prefix(name))
             .is_some_and(|rest| rest.is_empty() || rest.starts_with(|c: char| c.is_ascii_whitespace() || c == '>'))
     })
+}
+
+/// Past the first line of what starts at `start`.
+fn first_line(text: &str, start: usize) -> usize {
+    text[start..].find('\n').map_or(text.len(), |j| start + j)
+}
+
+/// Whether `gap` holds a whole line of nothing.
+fn holds_blank_line(gap: &str) -> bool {
+    let mut lines = gap.split('\n');
+    lines.next();
+    let mut whole: Vec<&str> = lines.collect();
+    whole.pop();
+    whole.iter().any(|l| l.trim_matches([' ', '\t', '\r']).is_empty())
 }
 
 /// One element opened at or after the block's start: just past its open
@@ -220,6 +258,15 @@ fn blank_lines_inside(text: &str, start: usize, budget: &Budget) -> Option<Vec<u
     let mut open: Vec<(String, usize)> = Vec::new();
     let mut i = start;
     while let Some(off) = text[i..].find('<') {
+        if !budget.spend(Walk::Blocks, off / 8 + TAG_COST) {
+            return None;
+        }
+        // V2-20: with nothing open, a blank line before the next tag is
+        // outside everything: the lines below stop there, and what lies past
+        // it is no part of this block. v1 read on to the body's end.
+        if open.is_empty() && i > first_line(text, start) && holds_blank_line(&text[i..i + off]) {
+            break;
+        }
         let lt = i + off;
         if let Some(end) = comment_end(text, lt) {
             spans.push((lt, end, text[lt + 4..end].ends_with("-->")));
@@ -237,7 +284,7 @@ fn blank_lines_inside(text: &str, start: usize, budget: &Budget) -> Option<Vec<u
                 let gt = text[name_end..].find('>').map_or(text.len(), |j| name_end + j + 1);
                 spans.push((lt, gt, gt <= text.len() && text[..gt].ends_with('>')));
                 let found = open.iter().rposition(|(n, _)| *n == name);
-                if !budget.spend((open.len() - found.unwrap_or(0)) * super::STEP_COST) {
+                if !budget.spend(Walk::Open, (open.len() - found.unwrap_or(0)) * super::STEP_COST) {
                     return None;
                 }
                 if let Some(k) = found {
@@ -255,7 +302,7 @@ fn blank_lines_inside(text: &str, start: usize, budget: &Budget) -> Option<Vec<u
         };
         let Some((gt, self_closing)) = open_end(text, name_end) else {
             // V2-20: a tag that never ends walked to the next `<`, or the end.
-            if !budget.spend(text.len() - name_end) {
+            if !budget.spend(Walk::Unended, text.len() - name_end) {
                 return None;
             }
             i = lt + 1;
@@ -285,7 +332,7 @@ fn blank_lines_inside(text: &str, start: usize, budget: &Budget) -> Option<Vec<u
         if content.trim_matches([' ', '\t']).is_empty() {
             // V2-20: what these walks cost, a blank line each.
             let ahead = text.len() - line_end - text[line_end..].trim_start().len();
-            if !budget.spend(ahead + (spans.len() + elements.len()) * 2) {
+            if !budget.spend(Walk::Blocks, ahead + elements.len()) {
                 return None;
             }
             if text[line_end..].trim().is_empty() {
@@ -340,8 +387,12 @@ enum Next {
 /// Is the blank line at `at` inside markup that goes on past it?
 fn inside(text: &str, at: usize, next: Next, elements: &[Element], spans: &[(usize, usize, bool)]) -> bool {
     // In a comment, a tag, a raw-text element's text: kept, if it ends.
-    if let Some(&(_, _, ends)) = spans.iter().find(|&&(s, e, _)| s < at && at < e) {
-        return ends;
+    // V2-20: they are in order and do not overlap: the last to start before it.
+    let before = spans.partition_point(|&(s, _, _)| s < at);
+    if let Some(&(_, e, ends)) = before.checked_sub(1).and_then(|k| spans.get(k)) {
+        if at < e {
+            return ends;
+        }
     }
     // The elements open here; the innermost decides.
     let open = || elements.iter().filter(|e| e.content <= at && e.close.is_none_or(|c| c > at));
@@ -376,6 +427,68 @@ mod tests {
         opts.insert(Options::ENABLE_TASKLISTS);
         opts.insert(Options::ENABLE_FOOTNOTES);
         opts
+    }
+
+    /// v1's rule, a parse from the top after each block that ran on: what the
+    /// one pass answers is held to it.
+    fn one_at_a_time(src: &str) -> String {
+        let budget = Budget::new();
+        let mut text = src.to_string();
+        let mut resume = 0;
+        'parse: loop {
+            let mut depth = 0u32;
+            for (event, range) in Parser::new_ext(&text, opts()).into_offset_iter() {
+                match event {
+                    Event::Start(Tag::BlockQuote(_) | Tag::List(_) | Tag::Item | Tag::FootnoteDefinition(_)) => depth += 1,
+                    Event::End(TagEnd::BlockQuote(_) | TagEnd::List(_) | TagEnd::Item | TagEnd::FootnoteDefinition) => depth = depth.saturating_sub(1),
+                    Event::Start(Tag::HtmlBlock) if depth == 0 && range.start >= resume && !runs_to_its_end(&text[range.start..]) => {
+                        let blanks = blank_lines_inside(&text, range.start, &budget).unwrap();
+                        let Some(&last) = blanks.last() else { continue };
+                        for &at in blanks.iter().rev() {
+                            text.insert(at, MARK);
+                        }
+                        resume = last + MARK.len_utf8() * blanks.len();
+                        continue 'parse;
+                    }
+                    _ => {}
+                }
+            }
+            return text;
+        }
+    }
+
+    #[test]
+    fn one_pass_marks_what_one_at_a_time_marks() {
+        const PIECES: [&str; 16] = [
+            "<div>\n<p>a</p>\n\n<p>b</p>\n</div>\n\n",
+            "plain words\n\n",
+            "```\n<div>\n\n```\n\n",
+            "<div>\n\n*x*\n\n</div>\n\n",
+            "- item\n\n  <div>\n\n  </div>\n\n",
+            "<section>\n<p>a</p>\n```\n\nfence inside\n</section>\n\n",
+            "<p>open\n\ntail\n\n",
+            "</div>\n",
+            "<pre>\n\n</pre>\n\n",
+            "> <div>\n\n",
+            "<div>\n<span>\n\n</span>\n\n<i>\n\n</i>\n</div>\nafter\n\n",
+            "<b>\n\nx\n</b>\n\n",
+            "<div>\n<p>a</p>\n\n    indented\n</div>\nthe same block\n<ul>\n<li>x</li>\n\n<li>y</li>\n</ul>\n\n",
+            "<!-- open\n\n",
+            "--> shut\n\n",
+            "~~~\n",
+        ];
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = |n: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % n as u64) as usize
+        };
+        for round in 0..4_000 {
+            let src: String = (0..1 + next(12)).map(|_| PIECES[next(PIECES.len())]).collect();
+            let got = read(&src, opts(), &Budget::new()).unwrap().source().to_string();
+            assert_eq!(got.replace(MARK, "¶"), one_at_a_time(&src).replace(MARK, "¶"), "round {round}: {src:?}");
+        }
     }
 
     /// The marked text with each mark shown as `¶`.

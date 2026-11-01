@@ -933,3 +933,12 @@ nothing, past the budget), before the write lock.
 New: an answer beside 100 watches of `asked`, 1.63 / 7.80, though the ringer's
 entries are all its own reader's, so those watches read an empty set. The four
 overs are the two already named, unchanged by the reader.
+
+The budget, recalibrated (N3). A parse was charged 16 units a byte and costs about
+7 ns, so a unit is about a nanosecond at 8; the waste was not the rate but the
+work: `runs::read` parsed from the top for every block, and every block walked to
+the body's end. One pass now marks each block it can trust (held to v1's rule by
+4,000 random bodies), and a block's walk stops at the first blank line outside
+everything. Release: a 1 MB report of 60 sections 436 → 4.7 ms; 3 MB of 12 pages
+and 12 sections refused → 156 ms; 8 MiB of blocks refused → 0.68 s, read. The
+worst shape at 8 MiB stays about 1.9 s.

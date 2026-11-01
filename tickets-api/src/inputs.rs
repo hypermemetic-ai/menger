@@ -149,7 +149,7 @@ pub fn read(body: &str) -> (Vec<Declared>, Vec<Problem>) {
         match marked(body, TAGS) {
             Ok(elements) => walk(&elements, &mut out, &mut problems, &mut seen),
             Err(Beyond::Deep) => problems.push(Problem::TooMuch { why: format!("its input markup nests more than {DEPTH_MAX} deep, and nothing was written") }),
-            Err(Beyond::Complex) => problems.push(Problem::TooMuch { why: "it takes too much work to read, and nothing was written: fewer tags, or fewer blank lines inside them".into() }),
+            Err(Beyond::Complex(walk)) => problems.push(Problem::TooMuch { why: format!("reading it reached its allowance of work, most of it on {}; nothing was written", walk.says()) }),
         }
         if out.len() > INPUTS_MAX {
             problems.insert(0, Problem::TooMuch { why: format!("a body declares at most {INPUTS_MAX} inputs, and nothing was written") });

@@ -119,6 +119,7 @@ fn heavy() -> Vec<(&'static str, String)> {
         ("closes that find nothing", format!("{}{}", "<span>".repeat(1024), fill("</b>", open))),
         ("paragraph-closers under spans", format!("{}{}", "<span>".repeat(1024), fill("<div></div>", open))),
         ("blank lines", fill("\n", &format!("{open}\n"))),
+        ("blocks left open", fill("<div>\n<p>a\n\n<p>b</p>\n</div>\n\n<section>\n<i>never closed\n\n", &format!("{open}</m-input>\n\n"))),
         ("mockups", fill("<m-mockup>a</m-mockup>\n\n", open)),
         ("blockquotes", fill(">", &format!("{open}\n"))),
         ("list items", fill("- a\n  - b\n", &format!("{open}\n"))),
@@ -212,9 +213,10 @@ fn large_bodies_v1_took_are_read() {
 /// A refusal says which limit it reached.
 #[test]
 fn a_refusal_names_the_limit_it_reached() {
-    let blocks = format!("{}{}", text("x"), "<div>\n<p>a</p>\n\n<p>b</p>\n</div>\n\n".repeat(200_000));
+    let blocks = format!("{}{}", text("x"), "<div>\n<p>a\n\n<p>b</p>\n</div>\n\n<section>\n<i>never closed\n\n".repeat(150_000));
+    let pages = format!("{}{}", text("x"), "<m-mockup>a</m-mockup>\n\n".repeat(300_000));
     let closes = format!("{}{}{}", text("x"), "<span>".repeat(1024), "</b>".repeat(2_000_000));
-    for (what, body, says) in [("blocks", blocks, "blank line"), ("closes", closes, "open elements")] {
+    for (what, body, says) in [("blocks", blocks, "blank line"), ("pages", pages, "page drawn whole"), ("closes", closes, "open elements")] {
         let (_, problems) = read(&body);
         let why = problems.first().map(ToString::to_string).unwrap_or_default();
         assert!(why.contains(says), "{what}: {why}");

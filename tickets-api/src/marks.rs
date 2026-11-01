@@ -23,18 +23,49 @@ mod runs;
 /// How deep marked elements nest.
 pub const DEPTH_MAX: u32 = 64;
 
-/// What one reading may walk, in bytes looked at: an 8 MiB body read once
-/// costs about a third of it, and the whole of it about 0.7 s.
+/// What one reading may walk, in bytes looked at: a unit is about a nanosecond: an
+/// 8 MiB body read once costs about a seventh of it.
 const WORK_MAX: u64 = 768 << 20;
 
-/// A parse costs more than a walk: what a byte parsed counts as.
-const PARSE_COST: u64 = 16;
+/// What a byte parsed counts as: measured, about 7 ns.
+const PARSE_COST: u64 = 8;
 
-/// …and a step up the open elements, which compares names.
-const STEP_COST: usize = 32;
+/// …a step up the open elements, which compares names…
+pub(self) const STEP_COST: usize = 32;
 
-/// What is left of a reading's allowance.
-pub struct Budget(Cell<u64>);
+/// …and a tag read while a block's elements are walked, which allocates.
+pub(self) const TAG_COST: usize = 24;
+
+/// What a reading spends its allowance on: what a refusal names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Walk {
+    /// Parsing the body, again for each pass over its HTML blocks.
+    Parse = 0,
+    /// Tags that never end.
+    Unended = 1,
+    /// Up the open elements.
+    Open = 2,
+    /// The HTML blocks with a blank line inside, each read to the body's end.
+    Blocks = 3,
+}
+
+impl Walk {
+    /// What it was, as a refusal says it.
+    pub fn says(self) -> &'static str {
+        match self {
+            Walk::Parse => "parsing it again, once for each page drawn whole in it and for each pass over its HTML blocks: fewer of those",
+            Walk::Unended => "tags that never end: close them",
+            Walk::Open => "close tags walking its open elements: close what it opens",
+            Walk::Blocks => "its HTML blocks with a blank line inside: fewer of those, or fewer tags in them",
+        }
+    }
+}
+
+/// What is left of a reading's allowance, and where it went.
+pub struct Budget {
+    left: Cell<u64>,
+    went: [Cell<u64>; 4],
+}
 
 impl Default for Budget {
     fn default() -> Self {
@@ -44,23 +75,30 @@ impl Default for Budget {
 
 impl Budget {
     pub fn new() -> Self {
-        Self(Cell::new(WORK_MAX))
+        Self { left: Cell::new(WORK_MAX), went: Default::default() }
     }
 
-    /// `n` more spent; whether any is left.
-    pub fn spend(&self, n: usize) -> bool {
-        self.0.set(self.0.get().saturating_sub(n as u64));
-        self.0.get() > 0
+    /// `n` more spent on `walk`; whether any is left.
+    pub fn spend(&self, walk: Walk, n: usize) -> bool {
+        let slot = &self.went[walk as usize];
+        slot.set(slot.get().saturating_add(n as u64));
+        self.left.set(self.left.get().saturating_sub(n as u64));
+        self.left.get() > 0
     }
 
     /// A parse of `n` bytes spent.
     pub fn parse(&self, n: usize) -> bool {
-        self.spend((n as u64).saturating_mul(PARSE_COST) as usize)
+        self.spend(Walk::Parse, (n as u64).saturating_mul(PARSE_COST) as usize)
     }
 
     /// Whether it is gone.
     pub fn spent(&self) -> bool {
-        self.0.get() == 0
+        self.left.get() == 0
+    }
+
+    /// The walk that took the most.
+    pub fn dearest(&self) -> Walk {
+        [Walk::Parse, Walk::Unended, Walk::Open, Walk::Blocks].into_iter().max_by_key(|w| self.went[*w as usize].get()).unwrap_or(Walk::Parse)
     }
 }
 
@@ -69,8 +107,8 @@ impl Budget {
 pub enum Beyond {
     /// Its marked elements nest past [`DEPTH_MAX`].
     Deep,
-    /// Reading it would walk past the budget.
-    Complex,
+    /// Reading it would walk past the budget, most of it on this.
+    Complex(Walk),
 }
 
 /// One element of the tags asked for, with the ones inside it.
@@ -189,14 +227,14 @@ impl Scan {
         // back (a mark ends its line, so a line's offsets still run on).
         // APP-32: a page inside an `<m-mockup>` is the page's, not the
         // body's markup — read blanked, offsets and lines as they were.
-        let blanked = pages::blank(rest, &scan.budget).ok_or(Beyond::Complex)?;
-        let read = runs::read(&blanked, options(), &scan.budget).ok_or(Beyond::Complex)?;
+        let blanked = pages::blank(rest, &scan.budget).ok_or_else(|| Beyond::Complex(scan.budget.dearest()))?;
+        let read = runs::read(&blanked, options(), &scan.budget).ok_or_else(|| Beyond::Complex(scan.budget.dearest()))?;
         if !scan.budget.parse(read.source().len()) {
-            return Err(Beyond::Complex);
+            return Err(Beyond::Complex(scan.budget.dearest()));
         }
         for (event, range) in Parser::new_ext(read.source(), options()).into_offset_iter() {
             if scan.budget.spent() {
-                return Err(Beyond::Complex);
+                return Err(Beyond::Complex(scan.budget.dearest()));
             }
             if scan.too_deep {
                 return Err(Beyond::Deep);
@@ -223,7 +261,7 @@ impl Scan {
             }
         }
         match (scan.budget.spent(), scan.too_deep) {
-            (true, _) => Err(Beyond::Complex),
+            (true, _) => Err(Beyond::Complex(scan.budget.dearest())),
             (_, true) => Err(Beyond::Deep),
             _ => Ok(scan),
         }
@@ -287,7 +325,7 @@ impl Scan {
             };
             let Some((gt, self_closing)) = open_end(html, name_end) else {
                 // V2-20: a tag that never ends walked to the next `<`, or the end.
-                self.budget.spend(html.len() - name_end);
+                self.budget.spend(Walk::Unended, html.len() - name_end);
                 i = lt + 1;
                 continue;
             };
@@ -319,7 +357,7 @@ impl Scan {
         let node = marked.then(|| {
             let id = self.nodes.len();
             let parent = self.stack.iter().rev().find_map(|o| o.node);
-            self.budget.spend(self.stack.len() * STEP_COST);
+            self.budget.spend(Walk::Open, self.stack.len() * STEP_COST);
             let depth = parent.map_or(0, |p| self.nodes[p].depth + 1);
             self.too_deep |= depth >= DEPTH_MAX;
             match parent {
@@ -345,7 +383,7 @@ impl Scan {
     /// it can reach, and everything open inside that.
     fn end(&mut self, name: &str, at: usize) {
         for k in (0..self.stack.len()).rev() {
-            self.budget.spend(STEP_COST);
+            self.budget.spend(Walk::Open, STEP_COST);
             let open = self.stack[k].name.as_str();
             if open == name || (is_heading(name) && is_heading(open)) {
                 self.pop_to(k, at);
@@ -370,7 +408,7 @@ impl Scan {
     /// An open `<p>` closed by a block opening at `at`.
     fn close_p(&mut self, at: usize) {
         for k in (0..self.stack.len()).rev() {
-            self.budget.spend(STEP_COST);
+            self.budget.spend(Walk::Open, STEP_COST);
             let open = self.stack[k].name.as_str();
             if open == "p" {
                 self.pop_to(k, at);
@@ -385,7 +423,7 @@ impl Scan {
     /// An open item (`names`) closed by the next opening at `at`.
     fn close_item(&mut self, names: &[&str], at: usize) {
         for k in (0..self.stack.len()).rev() {
-            self.budget.spend(STEP_COST);
+            self.budget.spend(Walk::Open, STEP_COST);
             let open = self.stack[k].name.as_str();
             if names.contains(&open) {
                 self.pop_to(k, at);
@@ -414,7 +452,7 @@ impl Scan {
     fn md_end(&mut self, at: usize) {
         let Some(id) = self.md.pop() else { return };
         let found = self.stack.iter().rposition(|o| o.md == Some(id));
-        self.budget.spend((self.stack.len() - found.unwrap_or(0)) * STEP_COST);
+        self.budget.spend(Walk::Open, (self.stack.len() - found.unwrap_or(0)) * STEP_COST);
         if let Some(k) = found {
             self.pop_to(k, at);
         }
@@ -731,8 +769,8 @@ mod tests {
     fn nesting_and_work_are_bounded() {
         assert_eq!(marked(&"<m-a>".repeat(1_000), TAGS).unwrap_err(), Beyond::Deep);
         let b = Budget::new();
-        assert!(b.spend(1) && !b.spent());
-        assert!(!b.parse(usize::MAX / 8) && b.spent());
+        assert!(b.spend(Walk::Open, 1) && !b.spent());
+        assert!(!b.parse(usize::MAX / 8) && b.spent() && b.dearest() == Walk::Parse);
     }
 
     #[test]

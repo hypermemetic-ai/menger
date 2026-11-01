@@ -73,7 +73,7 @@ impl Store {
         // V2-20: the body is read before the lock, then held to be the one
         // read: a heavy body waits alone, and a write between loses nothing.
         let mut tries = 0;
-        let (serial, ticket, id, read) = loop {
+        let (serial, ticket, chosen, read) = loop {
             let seen = self.get_unscoped(&crate::address::folded(on.id())).await?;
             let (_, (declared, _)) = inputs::read_off(seen.body.clone()).await;
             let known: Vec<String> = {
@@ -86,19 +86,27 @@ impl Store {
             let ticket = self.get_unscoped(&crate::address::folded(on.id())).await?;
             tries += 1;
             if ticket.body == seen.body {
-                break (serial, ticket, id, Some((body, read)));
+                break (serial, ticket, Some(id), Some((body, read)));
             }
             if tries == 3 {
                 // Moved under us three times: read under the lock.
-                break (serial, ticket, id, None);
+                break (serial, ticket, None, None);
             }
         };
-        let (body, read) = match read {
-            Some(r) => r,
-            None => {
+        let (id, (body, read)) = match (chosen, read) {
+            (Some(id), Some(r)) => (id, r),
+            // V2-20: the id too is the lock's here: another ask may have
+            // taken the one chosen before it.
+            _ => {
+                let (declared, _) = crate::inputs::read(&ticket.body);
+                let known: Vec<String> = {
+                    let cache = self.tickets.read().expect("store lock poisoned");
+                    cache.inputs.of(&ticket.id).iter().map(|i| i.id.to_string()).chain(declared.into_iter().map(|d| d.id)).collect()
+                };
+                let id = free_id(known.iter().map(String::as_str));
                 let body = with_question(&ticket.body, &id, question);
                 let read = crate::inputs::read(&body);
-                (body, read)
+                (id, (body, read))
             }
         };
         // V2-20: a body that ends inside a fence, a comment or a `<pre>`

@@ -3,7 +3,7 @@
 //! each out, offsets and lines held, for the reader of the body's own. v2
 //! draws no mockup, but a v1 body holds them, and an input in one is no input.
 
-use super::{open_end, options, raw_close, runs, tag_name, Budget};
+use super::{open_end, options, raw_close, runs, tag_name, Budget, Walk};
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use std::borrow::Cow;
 
@@ -79,7 +79,7 @@ fn scan(src: &str, from: usize, to: usize, state: &mut State, budget: &Budget) -
                 };
                 if name == TAG {
                     // V2-20: `element` walks past `to`.
-                    budget.spend(src.len() - name_end);
+                    budget.spend(Walk::Unended, src.len() - name_end);
                     if let Some(hit) = element(src, name_end) {
                         return Some(hit);
                     }
@@ -87,7 +87,7 @@ fn scan(src: &str, from: usize, to: usize, state: &mut State, budget: &Budget) -
                     continue;
                 }
                 if matches!(name.as_str(), "script" | "style" | "textarea" | "title") {
-                    budget.spend(src.len() - name_end);
+                    budget.spend(Walk::Unended, src.len() - name_end);
                     match open_end(src, name_end) {
                         Some((e, false)) => {
                             i = e;
