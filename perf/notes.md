@@ -906,4 +906,4 @@ watches, 44 gets, and the host's own `ui.slots.list` and `ui.routes.list`. Nothi
 once. So 44 instances stay blank, at least one drawn instance is not live (45 watches refused against 44 gets;
 the probe does not pair them), and the page loses its slot assignments and routes from the service. N = 250 stays
 under it only because its gets finish fast; the limit is shared with everything else on the page's one socket, and
-a ticket page alone holds eight streams (7 `tickets.watch`, `ui.watch`).
+one run of the ticket page test sent 7 `tickets.watch` and `ui.watch` (sent, not counted open).
