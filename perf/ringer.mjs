@@ -238,7 +238,12 @@ async function rung(exp, built) {
   const open = asked.slice();
   row(sheet, "ask", await timed(SAMPLES, () => main.call("tickets.inputs.ask", { ticket: pick(), question: "One more?" })), WRITE_BUDGET);
   // The control: the body's write alone, a question in it or not.
-  row(sheet, "amend, a line of a body (the control)", await timed(SAMPLES, (i) => main.call("tickets.amend", { id: ids[(i * 13) % ids.length], body: `A line of its own, the ${i}th, with words the index has not seen: w${i}x.` })), WRITE_BUDGET);
+  const bodies = [];
+  for (let i = 0; i < SAMPLES; i++) {
+    const got = await main.call("tickets.get", { id: ids[(i * 13) % ids.length] });
+    bodies.push(got.find((e) => e.type === "ticket")?.ticket);
+  }
+  row(sheet, "amend, a line more of a body (the control)", await timed(SAMPLES, (i) => main.call("tickets.amend", { id: bodies[i].id, body: `${bodies[i].body}\n\nA line more, w${i}x.\n` })), WRITE_BUDGET);
   row(sheet, "answer", await timed(SAMPLES, (i) => main.call("tickets.inputs.answer", { ticket: open[i].ticket, input: open[i].id, value: { type: "text", text: "yes" } })), WRITE_BUDGET);
   const fresh = ids.slice(entries);
   row(sheet, "queue, a new entry", await timed(Math.min(SAMPLES, Math.max(fresh.length, 1)), (i) => {
