@@ -259,6 +259,24 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     // TICKETS-28: a parent's subtasks — read as its children are; made like `create`, under it.
     ("tickets.subtasks.list", Today::Viewer, None),
     ("tickets.subtasks.create", Today::Editor, None),
+    // ACCESS-14: tickets' inputs child, gated by its whole path.
+    ("tickets.inputs.list", Today::Viewer, None),
+    // APP-90: a question filed as a text input — an editor's, on the ticket.
+    ("tickets.inputs.ask", Today::Editor, Some("ticket")),
+    ("tickets.inputs.answer", Today::Editor, Some("ticket")),
+    ("tickets.inputs.clear", Today::Editor, Some("ticket")),
+    ("tickets.inputs.close", Today::Editor, Some("ticket")),
+    ("tickets.inputs.reopen", Today::Editor, Some("ticket")),
+    // MENGER-39: the owner's queue — a write an editor's, on the ticket; the
+    // queue itself a read.
+    ("tickets.queue", Today::Editor, Some("id")),
+    ("tickets.unqueue", Today::Editor, Some("id")),
+    ("tickets.snooze", Today::Editor, Some("id")),
+    // APP-23: a change request unqueues — an editor's, on the ticket.
+    ("tickets.request_changes", Today::Editor, Some("id")),
+    ("tickets.queued", Today::Viewer, None),
+    // APP-24: waiting on a ticket is a read.
+    ("tickets.await_reply", Today::Viewer, None),
     // TICKETS-7: a ticket's revisions — read as the ticket is; restored by an editor of it.
     ("tickets.revisions.list", Today::Viewer, None),
     ("tickets.revisions.get", Today::Viewer, None),
