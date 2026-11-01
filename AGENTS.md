@@ -1060,9 +1060,10 @@ and `view: mockup` + `widths:` makes a whole body one.
   plexus-auth-core 0.2.2, one of each in the graph. A clone of menger alone
   builds. A manifest reaches outside this repository only by a published
   version or a git dependency on a pushed public repository; `plexus-login`
-  and `plexus-shell` are in the tree. **tether is the exception until
-  plexus-substrate's `main` takes the 0.7 line**: it names that repository,
-  still on the 0.5 line and without what tether imports, and does not build.
+  and `plexus-shell` are in the tree. tether alone takes plexus-substrate and
+  plexus-login from their public repositories, each at a revision, the
+  plexus-login being the one substrate names: two sources of one crate are
+  two crates to cargo, so a move of either moves both.
 - To build against a sibling checkout, override it and commit nothing:
   `cargo --config 'patch.crates-io.plexus-core.path="../plexus-core"' …`, or
   a `[patch.crates-io]` in a `.cargo/config.toml` above the checkout (one
