@@ -20,8 +20,8 @@ menger and acts on.
 substrate's `sqlx 0.8` links `libsqlite3-sys 0.30`, and cargo refuses two
 `links = "sqlite3"` in one resolve. `menger-tickets-api` with
 `default-features = false` (the client half, for the remote — TETHER-2)
-resolves beside substrate. It needs the sibling checkouts menger does
-(`../../plexus-core`, `../../plexus-substrate`, …); `plexus-login` is the
+resolves beside substrate. It takes the plexus line by published version
+and needs the sibling `../../plexus-substrate`; `plexus-login` is the
 sibling `../../plexus-login` (FRAME-4), the one path substrate and everyone
 else name now (FRAME-9), so the graph has one.
 

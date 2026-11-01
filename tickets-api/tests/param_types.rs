@@ -13,7 +13,7 @@
 //! ```
 //!
 //! This test holds the flag: it reads every file that declares an
-//! activation in menger's tree (FRAME-4: the shell's toy is plexus-shell's
+//! activation in menger's tree (FRAME-4: the shell's toy is plexus-webapp's
 //! own, in its repository) and fails on an attribute without `typed_params`, naming the file. (It
 //! replaces the hand-rolled guard ACCESS-8's body first described, which
 //! read the signatures; the macro reads them better.) A parameter's type
