@@ -528,7 +528,7 @@ answer, changes requested, an unqueue by another, the ticket canceled,
 archived or deleted.
 
 A body is read as the app renders it, through the app's markdown parser: code,
-comments, raw text and a mockup's page hold no input. A reading is bounded: at
+comments, raw text and a page drawn whole inside a body hold no input. A reading is bounded: at
 most 64 levels of marked nesting, 1,024 inputs a body and 256 options an input,
 and a fixed allowance of work, about 0.7 s of it; a body past any of them is
 refused in band, naming why, and a large one is read before the write lock.
