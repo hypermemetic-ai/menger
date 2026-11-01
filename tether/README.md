@@ -20,9 +20,15 @@ menger and acts on.
 substrate's `sqlx 0.8` links `libsqlite3-sys 0.30`, and cargo refuses two
 `links = "sqlite3"` in one resolve. `menger-tickets-api` with
 `default-features = false` (the client half, for the remote — TETHER-2)
-resolves beside substrate. It needs the sibling checkouts menger does
-(`../../plexus-core`, `../../plexus-substrate`, …); `plexus-login` is named
-`../../menger/plexus-login`, the path substrate names, so the graph has one.
+resolves beside substrate. The plexus crates come from crates.io by version
+(PLEXUS-33) and `plexus-login` from this repository.
+
+**It does not build today.** Substrate comes from its public repository,
+`main`, and that `main` has not caught up: it takes the plexus 0.5 line, so
+the lock holds plexus-core 0.5.3 beside 0.7.0, and it has none of what tether
+imports (`cargo check` stops at `build_plexus_rpc_with` and
+`ClaudeCodeClient`). It builds once that `main` takes the 0.7 line, and
+`cargo update -p plexus-substrate` here then moves the lock to it.
 
 ```sh
 cd tether

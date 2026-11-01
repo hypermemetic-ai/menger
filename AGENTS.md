@@ -1054,13 +1054,29 @@ and `view: mockup` + `widths:` makes a whole body one.
 
 ## Conventions
 
-- Plexus crates come from the **0.7 line by sibling path** (MFE-10):
-  `../plexus-core` 0.7.0, `../plexus-macros` 0.7.0, `../plexus-transport`
-  0.6.0, all on `main`, referencing each other the same way so the graph
-  resolves one of each. Each carries its version beside its path, and the
-  line is on crates.io (PLEXUS-13), but menger takes the checkouts, so a
-  clone of menger alone does not build; the sibling
-  checkouts must be beside it. Same macro API as before
+- Plexus crates come from **crates.io, by version** (owner, 2026-11-01: "make
+  sure they only reference published repos"; PLEXUS-33): plexus-core 0.7.0,
+  plexus-macros 0.7.0, plexus-client 0.7.0, plexus-transport 0.6.0,
+  plexus-auth-core 0.2.2, one of each in the graph. A clone of menger alone
+  builds. A manifest reaches outside this repository only by a published
+  version or a git dependency on a pushed public repository; `plexus-login`
+  and `plexus-shell` are in the tree. **tether is the exception until
+  plexus-substrate's `main` takes the 0.7 line**: it names that repository,
+  still on the 0.5 line and without what tether imports, and does not build.
+- To build against a sibling checkout, override it and commit nothing:
+  `cargo --config 'patch.crates-io.plexus-core.path="../plexus-core"' …`, or
+  a `[patch.crates-io]` in a `.cargo/config.toml` above the checkout (one
+  above the workspace also reaches `../menger-build` and `../menger-suite`,
+  so a release: keep yours above a directory of your own). Cargo rewrites
+  `Cargo.lock` to match; never commit that. The limit (PLEXUS-22): a patch
+  applies only while what asks for the crate accepts the local version. A
+  core at 0.8 is not used (cargo warns `was not used in the crate graph`)
+  until the manifests here and the crates between ask for it.
+- `tests/children.rs` and `tests/conformance.rs` run plexus-wire's stub child
+  and kit, so they want a checkout of it beside the repository (or
+  `PLEXUS_STUB_CHILD`, `PLEXUS_WIRE`) and fail, naming it, without one, until
+  the owner decides plexus-wire's home (PLEXUS-33).
+- Same macro API as before
   (`#[plexus_macros::activation]` + `#[plexus_macros::method]`); every
   activation is `impl FooActivation` (MACRO-13's rule, MACRO-21): the stem
   names the namespace, the trait and the client, so no `namespace`,

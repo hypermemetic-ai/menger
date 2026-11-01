@@ -18,9 +18,11 @@ use support::{principal_of, proof_of, ADMIN};
 const STRANGER: [u8; 32] = [0x11; 32];
 
 fn stub() -> PathBuf {
-    std::env::var_os("PLEXUS_STUB_CHILD").map(PathBuf::from).unwrap_or_else(|| {
+    let p = std::env::var_os("PLEXUS_STUB_CHILD").map(PathBuf::from).unwrap_or_else(|| {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../plexus-wire/conformance/examples/stub_child.py")
-    })
+    });
+    assert!(p.exists(), "the stub child is not at {} (a plexus-wire checkout beside menger, or PLEXUS_STUB_CHILD)", p.display());
+    p
 }
 
 struct Server {

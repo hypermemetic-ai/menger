@@ -39,12 +39,13 @@ required-features = ["server"]
 serde = { version = "1", features = ["derive"] }
 schemars = { version = "1.1", features = ["derive"] }
 futures = "0.3"
-# The 0.7 line by sibling path, as tickets-api takes it.
-plexus-macros = { path = "../../../plexus-macros" }
-plexus-client = { path = "../../../plexus-macros/plexus-client", default-features = false }
+# The 0.7 line from crates.io, as tickets-api takes it (PLEXUS-33: given
+# versions, not compiled; this spike is not built).
+plexus-macros = "0.7.0"
+plexus-client = { version = "0.7.0", default-features = false }
 
-plexus-core = { path = "../../../plexus-core", optional = true }
-plexus-transport = { path = "../../../plexus-transport", default-features = false, optional = true }
+plexus-core = { version = "0.7.0", optional = true }
+plexus-transport = { version = "0.6.0", default-features = false, optional = true }
 async-trait = { version = "0.1", optional = true }
 jsonrpsee = { version = "0.26", features = ["server", "macros"], optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
@@ -56,5 +57,5 @@ uuid = { version = "1.6", features = ["v4", "serde"], optional = true }
 
 [dev-dependencies]
 serde_json = "1"
-plexus-client = { path = "../../../plexus-macros/plexus-client", features = ["ws-native"] }
+plexus-client = { version = "0.7.0", features = ["ws-native"] }
 tokio = { version = "1", features = ["full"] }

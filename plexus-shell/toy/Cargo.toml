@@ -1,4 +1,4 @@
-# SCAFFOLD-5: plexus-shell's worked example — a hub with one activation and a
+# SCAFFOLD-5: plexus-shell's worked example — a service with one activation and a
 # two-file app, the app embedded by this crate's build script and served by
 # plexus-shell's LocalServer. `cargo test -p plexus-shell-toy` runs it;
 # `cargo run -p plexus-shell-toy` serves it until Ctrl-C. Never published.
@@ -20,8 +20,8 @@ plexus-shell = { path = "..", default-features = false, features = ["build"] }
 
 [dependencies]
 plexus-shell = { path = ".." }
-plexus-core = { path = "../../../plexus-core" }
-plexus-macros = { path = "../../../plexus-macros" }
+plexus-core = "0.7.0"
+plexus-macros = "0.7.0"
 async-trait = "0.1"
 uuid = { version = "1", features = ["v4", "v5"] }
 async-stream = "0.3"

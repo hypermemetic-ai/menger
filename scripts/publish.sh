@@ -14,8 +14,8 @@
 #
 # 1. `trunk build --release` in frontend/ (README "Frontend" has the
 #    toolchain). The app's build is frontend/dist; no build, no publish.
-# 2. The package is staged in a directory beside the repository (a sibling,
-#    so the plexus crates' relative paths — ../plexus-core … — resolve):
+# 2. The package is staged in a directory beside the repository, outside
+#    any repository:
 #    the files git keeps (tracked, and untracked but not ignored), plus
 #    frontend/dist, minus frontend/Cargo.toml. Why a stage: cargo never
 #    packages a file under a directory holding another package's
@@ -33,10 +33,10 @@
 #    cargo's verification builds, so the build it checks is the one with the
 #    app embedded from the packaged dist.
 #
-# Publishing needs the plexus 0.6 line (plexus-core, plexus-macros,
-# plexus-client, plexus-auth-core, plexus-transport) on crates.io first
-# (DIST-1 step 1): until then `dry-run` stops at resolving them. A crates.io
-# token comes from `cargo login` or CARGO_REGISTRY_TOKEN.
+# Publishing needs the plexus line the manifests name (plexus-core,
+# plexus-macros, plexus-client, plexus-auth-core, plexus-transport) on
+# crates.io first (DIST-1 step 1): until then `dry-run` stops at resolving
+# them. A crates.io token comes from `cargo login` or CARGO_REGISTRY_TOKEN.
 #
 # Run by hyperforge (`build publish`, .hyperforge/config.toml [publish]),
 # HF_CARGO_CONFIG names a cargo config with a [patch.crates-io] for the

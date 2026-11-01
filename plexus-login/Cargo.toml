@@ -3,7 +3,7 @@ name = "plexus-login"
 version = "0.2.2"
 edition = "2021"
 license = "MIT"
-description = "Login for a Plexus RPC hub — our own sign-in page over a swappable identity backend (WorkOS, plexus-idp, memory), provider specs (OIDC, WorkOS, Auth0, plexus-idp, nostr, agent keys), the login page and its routes, sessions, the WebSocket gate and the auth backend — generic over the app's access rules"
+description = "Login for a Plexus RPC service — our own sign-in page over a swappable identity backend (WorkOS, plexus-idp, memory), provider specs (OIDC, WorkOS, Auth0, plexus-idp, nostr, agent keys), the login page and its routes, sessions, the WebSocket gate and the auth backend — generic over the app's access rules"
 repository = "https://github.com/hypermemetic-ai/menger"
 readme = "README.md"
 keywords = ["plexus", "login", "oidc", "workos", "auth"]
@@ -20,13 +20,12 @@ categories = ["authentication", "web-programming::http-server"]
 include = ["/src/**", "/web/login.html", "/README.md", "/LICENSE"]
 
 [dependencies]
-# The plexus 0.7 line, by sibling path in a checkout (menger's MFE-10) and
-# by version from crates.io once published.
-plexus-core = { path = "../../plexus-core", version = "0.7.0" }
-plexus-auth-core = { path = "../../plexus-auth-core", version = "0.2.2", features = ["adapters"] }
+# The plexus 0.7 line from crates.io (PLEXUS-33).
+plexus-core = "0.7.0"
+plexus-auth-core = { version = "0.2.2", features = ["adapters"] }
 # SCAFFOLD-9: `Wired::apply` puts the gate, the anonymous view and the
 # protected resource on a TransportServerBuilder. Slim: no MCP, no REST.
-plexus-transport = { path = "../../plexus-transport", version = "0.6.0", default-features = false }
+plexus-transport = { version = "0.6.0", default-features = false }
 axum = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 url = "2"

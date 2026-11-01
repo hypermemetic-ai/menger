@@ -2097,6 +2097,8 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 [[package]]
 name = "plexus-auth-core"
 version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22d645424a9cf6d4ab52e939058b0f40a8702fa96731c23ac125722b778e34c6"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2118,6 +2120,8 @@ dependencies = [
 [[package]]
 name = "plexus-client"
 version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e18fe28fc8fa4658e2bd684f657dcef146ffeab5a0531e35b628b3872ab0c49e"
 dependencies = [
  "futures-channel",
  "futures-core",
@@ -2131,6 +2135,8 @@ dependencies = [
 [[package]]
 name = "plexus-core"
 version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d8178ff7e263769b067869f4da1a6bfca60c54b95e8197ed48d87f2df637f82"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2194,6 +2200,8 @@ dependencies = [
 [[package]]
 name = "plexus-macros"
 version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7302046ee12bf12baacfce7d560baeb229bd05b342757b1794359f3f6bb6cab5"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -2241,6 +2249,8 @@ dependencies = [
 [[package]]
 name = "plexus-transport"
 version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d9955033575580772c0770f14aa70f8db2584f62b8190a559b14275edebad1fc"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2271,6 +2281,8 @@ dependencies = [
 [[package]]
 name = "plexus-transport-mcp"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25485551e7bfd6106aba89eb6d05aa896987e1a5e0f117d7363ee00c69d40c00"
 dependencies = [
  "axum",
  "futures",
