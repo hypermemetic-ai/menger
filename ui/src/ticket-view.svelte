@@ -43,6 +43,7 @@
   .status[data-status=Superseded] { background: var(--st-superseded-bg); color: var(--st-superseded-fg); }
   .status[data-status=Canceled] { background: var(--st-canceled-bg); color: var(--st-canceled-fg); }
   .status[data-status=Epic] { background: var(--st-epic-bg); color: var(--st-epic-fg); }
+  .status[data-status=Doc] { background: var(--st-doc-bg); color: var(--st-doc-fg); }
   .md { font-family: var(--sans); line-height: 1.55; overflow-wrap: anywhere; }
   .md :global(h1), .md :global(h2), .md :global(h3) { margin: 16px 0 4px; font-family: var(--font-display); font-size: 14px; font-weight: var(--weight-strong); }
   .md :global(p) { margin: 8px 0; }

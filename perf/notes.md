@@ -889,7 +889,7 @@ machine's noise. `ticket-body` imports the view as a sibling for that reason; a 
 the view swapped by version.
 
 **Fatness.** Beyond the first, an instance costs about 31 KiB of heap and wasm and 148 nodes, most of it the
-ticket's own markdown (54 elements for this body), about 1.3 ms to draw, and no call. A thousand is about 32 MiB
+ticket's own markdown (54 elements for this body), about 1.3 ms to draw, and no call. A thousand is about 30.6 MiB
 above the empty page, plus the DOM's native memory. The cost is the document's, not the component's.
 
 **The database** (from the source, not counted at run time). Bodies are not in the cache (SCALE-14), so a body is
