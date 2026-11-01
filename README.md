@@ -527,6 +527,14 @@ waiting on the reader. `await_reply` holds until the first response: an
 answer, changes requested, an unqueue by another, the ticket canceled,
 archived or deleted.
 
+A body is read as the app renders it, through the app's markdown parser: code,
+comments, raw text and a mockup's page hold no input. A reading is bounded: at
+most 64 levels of marked nesting, 1,024 inputs a body and 256 options an input,
+and a fixed allowance of work, about 0.7 s of it; a body past any of them is
+refused in band, naming why, and a large one is read before the write lock.
+`ask` declares its input or writes nothing: a body that ends inside a fence, a
+comment or raw text is refused.
+
 `queued` and `inputs list` are pages cut from orders the cache keeps, so a
 page costs its rows: `rows { items }`, `page { next, remaining }` and, for
 `queued`, `queue_end { count, snoozed, now_unix }`. A queue page's `next` is a

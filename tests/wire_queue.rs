@@ -386,10 +386,19 @@ async fn a_watch_of_asked_agrees_with_list() {
     // Requeued by ada: hers again.
     one(&ada, "tickets.queue", json!({ "id": "KILN-2", "urgency": "whenever", "reason": "hers" })).await;
     until(&mut watch, "entered").await;
-    // Closed, with no cell moving.
+    // Closed, the entry goes with its last input; reopened, it is queued anew.
     one(&boss, "tickets.inputs.close", json!({ "ticket": "KILN-2", "input": "cone" })).await;
     until(&mut watch, "left").await;
     one(&boss, "tickets.inputs.reopen", json!({ "ticket": "KILN-2", "input": "cone" })).await;
+    one(&ada, "tickets.queue", json!({ "id": "KILN-2", "urgency": "now", "reason": "again", "input": ["cone", "checks"] })).await;
+    until(&mut watch, "entered").await;
+    // Closed, one of two, with no cell moving: `checks` still asks.
+    one(&boss, "tickets.inputs.close", json!({ "ticket": "KILN-2", "input": "cone" })).await;
+    assert_eq!(ids(&asked().await), ["KILN-2"], "still asked");
+    one(&boss, "tickets.inputs.close", json!({ "ticket": "KILN-2", "input": "checks" })).await;
+    until(&mut watch, "left").await;
+    one(&boss, "tickets.inputs.reopen", json!({ "ticket": "KILN-2", "input": "cone" })).await;
+    one(&ada, "tickets.queue", json!({ "id": "KILN-2", "urgency": "now", "reason": "once more", "input": "cone" })).await;
     until(&mut watch, "entered").await;
     // Dropped from the body, `notes` still asking.
     let body = "<m-input id=\"notes\" kind=\"text\"><m-question>Anything else?</m-question></m-input>\n";

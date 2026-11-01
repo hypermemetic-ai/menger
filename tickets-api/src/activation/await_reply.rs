@@ -15,7 +15,7 @@
 use super::*;
 use crate::access::Following;
 use crate::store::{reply_key, Awaiting};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use tokio::sync::broadcast::error::RecvError;
 
 /// What a call asks: the ticket, since when, which input, how long.
@@ -59,10 +59,14 @@ pub(super) fn await_reply_stream(
             input: ask.input.clone().map(|i| i.trim().to_string()).filter(|i| !i.is_empty()),
             me: Some(caller.principal_text()),
         };
-        let before: HashSet<String> = match ask.since {
-            Some(_) => HashSet::new(),
-            None => store.replies_since(caller, &w).iter().map(reply_key).collect(),
-        };
+        // V2-20: counted: the same value twice in a second is one key, and
+        // the second answer is news when only the first was set aside.
+        let mut before: HashMap<String, usize> = HashMap::new();
+        if ask.since.is_none() {
+            for r in store.replies_since(caller, &w) {
+                *before.entry(reply_key(&r)).or_default() += 1;
+            }
+        }
         Some((w, following, before))
     });
     // Subscribed before the first ask.
@@ -85,7 +89,15 @@ pub(super) fn await_reply_stream(
         let sleep = tokio::time::sleep_until(deadline.unwrap_or_else(|| tokio::time::Instant::now() + std::time::Duration::from_secs(10 * 365 * 24 * 3600)));
         tokio::pin!(sleep);
         loop {
-            if let Some(reply) = store.replies_since(following.user(), &w).into_iter().find(|r| !before.contains(&reply_key(r))) {
+            let mut aside = before.clone();
+            let new = store.replies_since(following.user(), &w).into_iter().find(|r| match aside.get_mut(&reply_key(r)) {
+                Some(n) if *n > 0 => {
+                    *n -= 1;
+                    false
+                }
+                _ => true,
+            });
+            if let Some(reply) = new {
                 yield TicketsEvent::Replied { ticket: ticket.clone(), reply };
                 return;
             }

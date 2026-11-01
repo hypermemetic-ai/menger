@@ -1848,7 +1848,21 @@ pub(super) fn under_before_with(unders: &UnderWatches, cache: &Cache, touched: i
 /// such watch is open (a watch that does not ask `touched` cannot see such
 /// a write).
 pub(super) fn touch_before_with(unders: &UnderWatches, cache: &Cache, keys: &[(&ShortcodeId, u32)]) -> Option<UnderBefore> {
-    let watches: Vec<Arc<UnderWatch>> = unders.live().into_iter().filter(|w| w.lens.asks_touched()).collect();
+    let watches: Vec<Arc<UnderWatch>> = unders.live().into_iter().filter(|w| w.lens.asks_touched() || w.lens.asks_asked()).collect();
+    before_of(watches, cache, || {
+        let mut t = Touched::default();
+        for (e, s) in keys {
+            t.ticket(e, *s);
+        }
+        t
+    })
+}
+
+/// V2-20: what a requeue that moves no urgency does to the open watches whose
+/// filter asks `asked`: the tickets at `keys`, before it. `None` when no such
+/// watch is open.
+pub(super) fn asked_before_with(unders: &UnderWatches, cache: &Cache, keys: &[(&ShortcodeId, u32)]) -> Option<UnderBefore> {
+    let watches: Vec<Arc<UnderWatch>> = unders.live().into_iter().filter(|w| w.lens.asks_asked()).collect();
     before_of(watches, cache, || {
         let mut t = Touched::default();
         for (e, s) in keys {

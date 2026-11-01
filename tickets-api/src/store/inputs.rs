@@ -313,10 +313,21 @@ pub(crate) struct Inputs {
     /// V2-20: those with an `open` one — `asking` — each with how many, so a
     /// page's count of the rest asks no list and no map.
     open: BTreeMap<Place, u32>,
+    /// V2-20: how many writes have moved them: what a set read from them
+    /// is kept against ([`super::queue::Queue::asked`]).
+    moves: u64,
 }
 
-/// A ticket's place in the store's order ([`super::db::by_epic_seq`]).
+/// A ticket's place in the store's order: its shortcode, its number, its
+/// id — a subtask `<parent>.N` beside its parent, in its parent's shortcode.
 type Place = (String, u32, String);
+
+/// `ticket`'s [`Place`].
+fn place_of(ticket: &str) -> Place {
+    let whole = ticket.split_once('.').map_or(ticket, |(head, _)| head);
+    let (epic, seq, _) = super::db::by_epic_seq(whole);
+    (epic, seq, ticket.to_string())
+}
 
 /// The most inputs a page of `inputs.list` holds unless asked, and at most.
 pub const INPUTS_PAGE: usize = 200;
@@ -361,6 +372,11 @@ pub(crate) fn asking_in(list: &[Input]) -> bool {
 }
 
 impl Inputs {
+    /// How many writes have moved the inputs.
+    pub(crate) fn moves(&self) -> u64 {
+        self.moves
+    }
+
     /// `ticket`'s inputs, in order.
     pub(crate) fn of(&self, ticket: &str) -> &[Input] {
         self.by_ticket.get(ticket).map_or(&[], Vec::as_slice)
@@ -427,7 +443,7 @@ impl Inputs {
     ) -> InputsPage {
         let mut out = InputsPage::default();
         let mut last = None;
-        let start = after.map(|(t, _)| super::db::by_epic_seq(t)).or_else(|| epic.map(|e| (e.as_str().to_string(), 0, String::new())));
+        let start = after.map(|(t, _)| place_of(t)).or_else(|| epic.map(|e| (e.as_str().to_string(), 0, String::new())));
         let mut visit = |id: &str, open: u32| {
             // Past the page, an open count needs no list.
             if out.inputs.len() == limit && state == Some(InputState::Open) {
@@ -450,7 +466,7 @@ impl Inputs {
         };
         let in_epic = |p: &Place| epic.is_none_or(|e| p.0 == e.as_str());
         match (ticket, state) {
-            (Some(t), _) if keep(t) && in_epic(&super::db::by_epic_seq(t)) => visit(t, 0),
+            (Some(t), _) if keep(t) && in_epic(&place_of(t)) => visit(t, 0),
             (Some(_), _) => {}
             (None, Some(InputState::Open)) => {
                 let from = start.as_ref().map_or(std::ops::Bound::Unbounded, std::ops::Bound::Included);
@@ -563,7 +579,8 @@ impl Inputs {
 
     /// V2-20: `ticket`'s places as its list stands.
     fn index(&mut self, ticket: &str) {
-        let place = super::db::by_epic_seq(ticket);
+        self.moves += 1;
+        let place = place_of(ticket);
         let open = self.of(ticket).iter().filter(|i| i.state == InputState::Open).count() as u32;
         match self.by_ticket.contains_key(ticket) {
             true => self.order.insert(place.clone()),
@@ -849,31 +866,78 @@ pub(crate) fn migrate(conn: &mut Connection) -> anyhow::Result<bool> {
     Ok(true)
 }
 
-/// V2-20: `inputs` against the bodies as they stand, for a file v2 wrote
-/// bodies to without reading them — each ticket whose body names an input,
-/// or that has a row here, planned as a write of its body would: an input
-/// the body declares gained, one it no longer declares removed, its history
-/// kept. Additive: no row of `answers` moves. In the caller's transaction,
-/// before the build that reads them. Returns how many tickets moved.
+/// The tables that name a ticket by its key, as v2 left them behind a
+/// reshortcode.
+const STRANDED: [&str; 4] = ["inputs", "answers", "queue", "queue_log"];
+
+/// V2-20: what a build of form 16 left, reconciled once, in the caller's
+/// transaction, before the build that reads it. Additive: no `answers` row
+/// is lost, and what it adds is history.
+///
+/// - **A ticket v2 moved** took no input with it: rows under an id that is
+///   gone follow its pin to the ticket it names.
+/// - **A body v2 wrote** was never read: each ticket whose body names an
+///   input, or that has a row here, is planned as a write of its body
+///   would be — an input the body declares gained, one it no longer
+///   declares removed, its history kept. A body past what a reading takes
+///   keeps what it has: its next change is refused while it holds it.
+/// - **A ticket v2 canceled** left its inputs open, and one it took out of
+///   `Canceled` left them withdrawn: each is moved as the status write would
+///   have, by the system.
+///
+/// Returns how many tickets moved.
 pub(crate) fn settle(conn: &Connection) -> anyhow::Result<usize> {
-    let held = load(conn)?;
+    let mut moved = 0;
+    let stranded: Vec<(String, String)> = conn
+        .prepare(
+            "SELECT DISTINCT p.text, p.ticket FROM pins p JOIN tickets t ON t.id = p.ticket
+                 WHERE p.text <> p.ticket AND p.text NOT IN (SELECT id FROM tickets)
+                   AND (p.text IN (SELECT ticket FROM inputs) OR p.text IN (SELECT ticket FROM answers)
+                        OR p.text IN (SELECT ticket FROM queue) OR p.text IN (SELECT ticket FROM queue_log))",
+        )?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    for (old, new) in stranded {
+        for table in STRANDED {
+            // A row the new id already holds stands; the old one waits, unread.
+            conn.execute(&format!("UPDATE OR IGNORE {table} SET ticket = ?2 WHERE ticket = ?1"), [&old, &new])?;
+        }
+        moved += 1;
+    }
+    let mut held = load(conn)?;
+    let now = chrono::Utc::now().timestamp();
     let mut stmt = conn.prepare(
-        "SELECT id, body FROM tickets
+        "SELECT id, body, status FROM tickets
              WHERE instr(lower(body), '<m-decision') > 0 OR instr(lower(body), '<m-input') > 0
                 OR id IN (SELECT ticket FROM inputs)",
     )?;
     let mut rows = stmt.query([])?;
-    let mut moved = 0;
     while let Some(r) = rows.next()? {
         let id = r.get_ref(0)?.as_str()?.to_string();
         let (declared, problems) = markup::read(r.get_ref(1)?.as_str()?);
+        let canceled = r.get_ref(2)?.as_str()? == "Canceled";
+        let beyond = problems.iter().any(|p| matches!(p, Problem::TooMuch { .. }));
         for problem in problems {
             tracing::warn!("V2-20: {id}: {problem} — not kept; its next body change is refused while it holds it");
         }
-        if let Some(list) = held.plan(&id, declared).list {
-            store(conn, &id, &list)?;
-            moved += 1;
+        let mut touched = false;
+        if !beyond {
+            if let Some(list) = held.plan(&id, declared).list {
+                store(conn, &id, &list)?;
+                held.take(&id, list);
+                touched = true;
+            }
         }
+        let due = match canceled {
+            true => held.withdrawing(&id, &format!("{id} is canceled"), now),
+            false => held.restoring(&id, &format!("{id} is not canceled"), now),
+        };
+        for (input, entry) in due {
+            record(conn, &input, &entry)?;
+            held.put(input);
+            touched = true;
+        }
+        moved += usize::from(touched);
     }
     Ok(moved)
 }

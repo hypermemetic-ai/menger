@@ -1190,7 +1190,7 @@ impl TicketsActivation {
         after: Option<Cursor>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let ask = crate::store::QueuedAsk { id: id.map(TicketRef::into_string), snoozed: snoozed.unwrap_or(true), limit: limit.map(|n| n as usize), after: after.map(String::from) };
-        queued_stream(self.store.clone(), user, ask)
+        crate::store::reading_as(user.principal_text(), queued_stream(self.store.clone(), user, ask))
     }
 
     /// Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / FrozenChanged / HiddenChanged / UnlocksChanged / UnlocksRemoved / BlockersChanged / SeverityChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / UpdatedMany / Deleted / Undeleted / Archived / Restored / Reshortcoded), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events; Entered / Left / Recount when the caller's grants move what it sees; WatchClosed { reason } when they end it.

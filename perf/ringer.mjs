@@ -323,6 +323,21 @@ async function rung(exp, built) {
     await sleep(300);
   }
 
+  // A write beside 100 watches of `asked`: they all read it, whoever's it is.
+  {
+    console.error("  fan-out, 100 watches of `asked`");
+    const sockets = await Promise.all(Array.from({ length: 100 }, () => Client.open(server.ws, token)));
+    const streams = sockets.map((s) => s.stream("tickets.watch", { filter: "asked", membership: true }, () => {}));
+    await sleep(500);
+    row(sheet, "an answer beside 100 watches of `asked`", await timed(100, (i) => {
+      const a = open[(2500 + i) % open.length];
+      return main.call("tickets.inputs.answer", { ticket: a.ticket, input: a.id, value: { type: "text", text: "yes" } });
+    }), WRITE_BUDGET);
+    streams.forEach((s) => s.close());
+    sockets.forEach((s) => s.close());
+    await sleep(300);
+  }
+
   // 1,000 asks in parallel.
   console.error("  parallel");
   const par = async (sockets, n) => {

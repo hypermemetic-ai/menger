@@ -154,6 +154,9 @@ pub(crate) struct Queue {
     /// every filter and every open watch of the word shares it, so a write
     /// beside 100 of them walks the entries once, not 200 times.
     held: Mutex<HashMap<Option<Urgency>, Arc<Held>>>,
+    /// V2-20: what `asked` holds for, by reader, and the inputs' move it was
+    /// read at: it turns on the entries and on the inputs they name.
+    asked: Mutex<HashMap<String, (u64, Arc<Held>)>>,
     /// V2-20: the entries in the queue's order — what a page is cut from.
     order: BTreeSet<Place>,
     /// V2-20: each ticket's `queued` record's id: its [`Place`]'s third.
@@ -187,7 +190,7 @@ impl Queue {
 
     /// `ticket` out of the kept order, its entry staying.
     fn unplace(&mut self, ticket: &str) {
-        self.held.get_mut().expect("queue's kept sets poisoned").clear();
+        self.forget_sets();
         if let Some(old) = self.entries.get(ticket) {
             let place = Self::place(old, self.ranks.get(ticket).copied().unwrap_or(0));
             self.order.remove(&place);
@@ -197,9 +200,15 @@ impl Queue {
         }
     }
 
+    /// The kept sets, gone with what they were read from.
+    fn forget_sets(&mut self) {
+        self.held.get_mut().expect("queue's kept sets poisoned").clear();
+        self.asked.get_mut().expect("queue's kept sets poisoned").clear();
+    }
+
     /// `e` into the entries and the kept order.
     fn insert(&mut self, e: QueueEntry) {
-        self.held.get_mut().expect("queue's kept sets poisoned").clear();
+        self.forget_sets();
         let rank = self.ranks.get(&e.ticket).copied().unwrap_or(0);
         self.order.insert(Self::place(&e, rank));
         if let Some(until) = e.snoozed_until_unix {
@@ -260,7 +269,13 @@ impl Queue {
     /// shortcode — an entry someone else queued that names an input still
     /// `open`: a question waiting on the reader, never one's own.
     pub(super) fn asked(&self, me: &str, inputs: &super::inputs::Inputs, at: &HashMap<String, OrderKey>) -> BTreeMap<ShortcodeId, RoaringBitmap> {
-        let mut out: BTreeMap<ShortcodeId, RoaringBitmap> = BTreeMap::new();
+        let mut kept = self.asked.lock().expect("queue's kept sets poisoned");
+        if let Some((moves, set)) = kept.get(me) {
+            if *moves == inputs.moves() {
+                return set.as_ref().clone();
+            }
+        }
+        let mut out = Held::new();
         for e in self.entries.values().filter(|e| e.by != me) {
             let open = |i: &&str| inputs.get(&e.ticket, i).is_some_and(|x| x.state == InputState::Open);
             if e.named().iter().any(|i| open(i)) {
@@ -269,6 +284,7 @@ impl Queue {
                 }
             }
         }
+        kept.insert(me.to_string(), (inputs.moves(), Arc::new(out.clone())));
         out
     }
 
@@ -651,6 +667,10 @@ impl Store {
         let (row, entry, record, action, under) = {
             let cache = self.tickets.read().expect("store lock poisoned");
             let row = cache.get(&id).cloned().ok_or_else(|| StoreError::NotFound(id.clone()))?;
+            // ARCHIVE-2: an archived ticket asks nothing.
+            if row.archived.is_some() {
+                return Err(StoreError::Invalid(format!("{id} is archived: an archived ticket asks nothing — restore it first (nothing was written)")));
+            }
             for i in &asked {
                 check_input(&cache, &id, i)?;
             }
@@ -712,7 +732,11 @@ impl Store {
             // `queued` and `queued <urgency>` move only when it enters the
             // queue or its urgency does.
             let moves = held.is_none_or(|h| h.urgency != entry.urgency);
-            let under = moves.then(|| self.queued_before(&cache, &row)).flatten();
+            // V2-20: `asked` moves on who queued it and what it names too.
+            let under = match moves {
+                true => self.queued_before(&cache, &row),
+                false => lineage::asked_before_with(&self.unders, &cache, &[(&row.shortcode, row.seq)]),
+            };
             (row, entry, record, action, under)
         };
         let change = QueueChange::Queued { entry: entry.clone(), ticket: row.clone(), action };

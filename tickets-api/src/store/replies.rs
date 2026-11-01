@@ -81,7 +81,9 @@ impl Store {
             if w.input.as_deref().is_some_and(|only| only != input.id.as_str()) {
                 continue;
             }
-            if let Some(h) = input.history.iter().find(|h| h.action == InputAction::Answered && h.at_unix >= w.since) {
+            // V2-20: every answer since, not the input's first: a wait sets
+            // aside what stood in its own second, and must hear the next.
+            for h in input.history.iter().filter(|h| h.action == InputAction::Answered && h.at_unix >= w.since) {
                 if let Some(value) = h.value.clone() {
                     found.push(Reply::Answered { input: input.id.to_string(), value, rationale: h.rationale.clone(), source: h.source, at_unix: h.at_unix });
                 }

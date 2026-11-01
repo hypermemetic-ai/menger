@@ -108,11 +108,12 @@ impl Store {
                 let (d, u) = self.cell_derived(&row, Some(asks));
                 (Some(d), u)
             }
-            false if touches => {
+            // V2-20: a close or a reopen touches nothing, but `asked` reads
+            // an input's state: `touch_before` holds both kinds of watch.
+            false => {
                 let cache = self.tickets.read().expect("store lock poisoned");
                 (None, self.touch_before(&cache, &[(&row.shortcode, row.seq)]))
             }
-            false => (None, None),
         };
         if let (Some(Some(_)), None) = (&closing, &derived) {
             let cache = self.tickets.read().expect("store lock poisoned");

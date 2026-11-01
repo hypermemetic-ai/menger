@@ -101,6 +101,14 @@ impl Store {
                 (body, read)
             }
         };
+        // V2-20: a body that ends inside a fence, a comment or a `<pre>`
+        // swallows what is appended: nothing is written that declares nothing.
+        if read.1.is_empty() && !read.0.iter().any(|d| d.id == id) {
+            return Err(StoreError::Invalid(format!(
+                "{} ends inside a code fence, a comment or raw text, so a question appended to it would not be read: close it first (nothing was written)",
+                ticket.id
+            )));
+        }
         self.amend_under(serial, on, None, Some(body), Some(read)).await?;
         let cache = self.tickets.read().expect("store lock poisoned");
         let input = cache.inputs.get(&ticket.id, &id).cloned().ok_or_else(|| StoreError::InputUnknown {

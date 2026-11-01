@@ -606,7 +606,8 @@ a type in the vocabulary — every activation is `typed_params` and
 A question for the owner is filed on its ticket, never asked only in
 conversation (owner, 2026-10-12, MENGER-12): label the ticket `needs-you`
 with the reason in its body, and mention the ticket id. Its saved filter,
-`Needs you`, is `label needs-you`; whoever acts on it takes the label off:
+`Needs you`, is `queued or asking or asked or label needs-you`; whoever acts
+on it takes the label off:
 
 ```sh
 synapse -P 4460 menger tickets label --id MENGER-40 --add needs-you

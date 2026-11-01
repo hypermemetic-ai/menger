@@ -162,6 +162,12 @@ impl Lens {
         self.history.iter().any(|h| matches!(h.event, crate::filter::Event::Queued(_) | crate::filter::Event::Asked))
     }
 
+    /// V2-20: whether it asks `asked` — what any write of an input can move,
+    /// and a requeue of its entry.
+    pub fn asks_asked(&self) -> bool {
+        self.history.iter().any(|h| h.event == crate::filter::Event::Asked)
+    }
+
     /// MENGER-13: whether what it admits moves as time passes — a history
     /// predicate whose window is relative (`within`, `today`, `yesterday`,
     /// `this week`): a `watch` reads it again on a clock.
