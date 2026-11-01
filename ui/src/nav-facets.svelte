@@ -14,8 +14,8 @@
      it is heard; without it, at once. -->
 <script module>
   export const uses = ["tickets.nav.facets"];
-  const FIELDS = ["status", "category", "kind", "severity", "in", "ready", "blocked", "has commits", "menger doc"];
-  const FLAGS = new Set(["blocked", "ready", "has commits", "menger doc"]);
+  const FIELDS = ["status", "category", "kind", "severity", "in", "ready", "blocked", "has commits", "menger doc", "asking"];
+  const FLAGS = new Set(["blocked", "ready", "has commits", "menger doc", "asking"]);
 
   /** The rule a chip stands for, in the filter language's own spelling. */
   export function ruleOf(field, value) {
