@@ -1,7 +1,7 @@
 <script>
   // STUDIO-12: the ticket page — an rhx page the studio edits, placing the
   // ticket's parts, each a svelte/1 component the host fills into its bound
-  // mark (`<ticket-head id={id}/>`): the head, the body, the edit, the
+  // mark (`<ticket-head id={id}/>`): the head, the body, its questions, the edit, the
   // relations (which place the subtasks and the blockers), the actions, the
   // commits, the history and the revisions; the app's top in its `top`
   // section (app-top by ui/slots.json). It was ticket-page-sv (SURFACE-3);
@@ -63,6 +63,7 @@
             <div class="cell head"><ticket-head id={id}/></div>
             <div class="cell main">
               <ticket-body id={id}/>
+              <ticket-questions id={id}/>
               <div class={if state.knocked == 0 { "hole" } else if state.knocked % 2 == 1 { "hole heard" } else { "hole heard-again" }} data-mark="ticket-edit" data-id={id}><ticket-edit id={id}/></div>
               <ticket-relations id={id}/>
             </div>

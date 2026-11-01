@@ -141,10 +141,19 @@ pub(super) fn wire_event(change: Change) -> Option<TicketsEvent> {
         Change::SeverityChanged { ticket, previous } => TicketsEvent::SeverityChanged { ticket, previous },
         // ACT-2: an `update_many`'s write, after its tickets' own events.
         Change::UpdatedMany { ids, changed } => TicketsEvent::UpdatedMany { ids, changed, tickets: Vec::new(), unchanged: Vec::new() },
+        // INPUT-3: its ticket's shortcode filtered `watch { epic }` on the way
+        // here; the wire carries the input.
+        Change::InputChanged { input, .. } => TicketsEvent::InputChanged { input },
+        // MENGER-39: and the queue write.
+        Change::Queue { change, .. } => match change {
+            crate::store::QueueChange::Queued { entry, ticket, action } => TicketsEvent::Queued { id: entry.ticket.clone(), entry, ticket, action },
+            crate::store::QueueChange::Unqueued { id, entry, action, by, at_unix } => TicketsEvent::Unqueued { id, entry, action, by, at_unix },
+            crate::store::QueueChange::Snoozed { entry, ticket } => TicketsEvent::Snoozed { id: entry.ticket.clone(), entry, ticket },
+        },
         // ACT-5: a delete's and an undelete's, as their answers are.
         Change::Deleted { ids, tombstones } => TicketsEvent::Deleted { ids, tombstones },
         Change::Undeleted { ids, tickets } => TicketsEvent::Undeleted { ids, tickets },
-        Change::Archived { ids, live, mark } => TicketsEvent::Archived { ids, live, mark, dry_run: false },
+        Change::Archived { ids, live, unqueued, mark } => TicketsEvent::Archived { ids, live, unqueued, mark, dry_run: false },
         Change::Restored { ids, ancestors, still_archived, by } => TicketsEvent::Restored { ids, ancestors, still_archived, by, dry_run: false },
         // ACT-6: a reshortcode's, as its answer is.
         Change::Reshortcoded { moves, tickets } => TicketsEvent::Reshortcoded { moves, tickets },
@@ -238,6 +247,18 @@ fn frozen(scope: String, numbers: Option<String>) -> TicketsEvent {
 /// crosses the wire.
 pub(super) fn change_event(change: Change) -> TicketsEvent {
     wire_event(change).expect("a write answers with a change the wire carries")
+}
+
+/// INPUT-3: a write to one input, as its one event — `input_changed` for a
+/// change, `input` for one that changed nothing, `not_found` for a ticket
+/// that is none, an in-band `error` for every refusal.
+pub(super) fn input_event(written: Result<InputWrite, StoreError>, ticket: String) -> TicketsEvent {
+    match written {
+        Ok(InputWrite::Changed(input)) => TicketsEvent::InputChanged { input },
+        Ok(InputWrite::Unchanged(input)) => TicketsEvent::Input { input },
+        Err(StoreError::NotFound(_)) => TicketsEvent::NotFound { id: Asked::stored(ticket) },
+        Err(e) => refusal(e),
+    }
 }
 
 /// ACCESS-13: why a call answers other than with its event — the one shape

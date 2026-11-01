@@ -242,6 +242,8 @@ pub(super) fn holds_by_rule(pred: &crate::filter::History, own: &[crate::types::
             Event::Created
             | Event::Touched
             | Event::Held(_)
+            | Event::Queued(_)
+            | Event::Asked
             | Event::Became(_) => false,
         };
         let when = lo.is_none_or(|l| t.at_unix >= l) && hi.is_none_or(|h| t.at_unix < h);
@@ -263,7 +265,8 @@ fn who_is(pred: &crate::filter::History, actor: &str, clock: &Clock) -> bool {
 impl Plain {
     pub(super) fn of(store: &Store) -> Self {
         let rows = rows(store);
-        let by = scanned(&rows);
+        let asking = super::tests_cells::asking(store);
+        let by = scanned(&rows, &asking);
         let cells = rows.iter().map(|t| by[&OrderKey::of(t)]).collect();
         let at = rows.iter().enumerate().map(|(i, t)| (t.id.to_string(), i)).collect();
         let by_id: HashMap<&str, &Row> = rows.iter().map(|t| (t.id.as_str(), t)).collect();
@@ -321,6 +324,7 @@ impl Plain {
     /// its whole lineage included.
     pub(super) fn facts(&self, t: &Row, k: Key) -> crate::filter::Facts {
         crate::filter::Facts {
+            asking: k.asking(),
             labels: t.labels.iter().map(|l| l.to_string()).collect(),
             archived: k.archived(),
             frozen: k.frozen(),

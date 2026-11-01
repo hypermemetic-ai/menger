@@ -92,10 +92,8 @@ pub(super) fn act_of(caller: &VerifiedUser, source: Option<CallerSource>, messag
 /// principal and name, from where the server reads it (`app` for a person
 /// signed in through a provider, `api` otherwise; ACCESS-14), no message.
 pub(super) fn caller_act(caller: &VerifiedUser) -> Act {
-    // ACCESS-14: `app` for a person signed in through a provider, `api`
-    // for an agent's key and every call that proves no one.
-    let source = match caller.context() {
-        Some(ctx) if ctx.is_authenticated() && ctx.get_metadata_string(crate::access::AGENT_KEY).is_none() => TransitionSource::App,
+    let source = match super::inputs::source_of(caller) {
+        crate::types::AnswerSource::App => TransitionSource::App,
         _ => TransitionSource::Api,
     };
     Act {

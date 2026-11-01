@@ -364,7 +364,7 @@ impl<'c> Compiled<'c> {
         let hist = lens.has_history().then(|| {
             let clock = lens.clock();
             let mut keys: Vec<String> = lens.history().iter().map(crate::filter::History::format).collect();
-            let mut sets: Vec<BTreeMap<ShortcodeId, RoaringBitmap>> = lens.history().iter().map(|h| cache.log.holds(h, clock)).collect();
+            let mut sets: Vec<BTreeMap<ShortcodeId, RoaringBitmap>> = lens.history().iter().map(|h| cache.holds(h, clock)).collect();
             // ACCESS-21: `ticket <ID>` holds for the one ticket it names (any
             // address; one naming none or several holds for none).
             for name in lens.tickets() {
@@ -665,14 +665,33 @@ impl<'c> Compiled<'c> {
         let base = self.base_matches_in(epic);
         let Some(spoken) = self.hist.as_ref().and_then(|h| h.any.get(epic)) else { return base };
         let mut out = base - spoken;
+        let mut key = OrderKey { shortcode: epic.clone(), seq: 0 };
         for seq in spoken {
-            if let Some(t) = self.cache.order.get(&OrderKey { shortcode: epic.clone(), seq }) {
-                if self.judge_row(t) {
-                    out.insert(seq);
-                }
+            key.seq = seq;
+            if self.cache.order.get(&key).is_some_and(|t| self.judge_row(t)) {
+                out.insert(seq);
             }
         }
         out
+    }
+
+    /// V2-20: [`Compiled::matches_in`] among `area`, or everywhere in `epic`
+    /// with none — a write's few tickets judged one by one, so a watch's
+    /// cost is the write's, not the size of its shortcode.
+    pub(super) fn matches_among(&self, epic: &ShortcodeId, area: Option<&RoaringBitmap>) -> RoaringBitmap {
+        match area {
+            Some(a) if a.len() <= AMONG_FEW => {
+                let mut key = OrderKey { shortcode: epic.clone(), seq: 0 };
+                a.iter()
+                    .filter(|seq| {
+                        key.seq = *seq;
+                        self.cache.order.get(&key).is_some_and(|t| self.judge_row(t))
+                    })
+                    .collect()
+            }
+            Some(a) => self.matches_in(epic) & a,
+            None => self.matches_in(epic),
+        }
     }
 
     /// The base's matches in `epic`, as one bitmap.
@@ -1795,6 +1814,10 @@ impl Touched {
     }
 }
 
+/// V2-20: how many of a write's tickets are judged one by one; past it the
+/// shortcode's bitmap is cheaper.
+const AMONG_FEW: u64 = 64;
+
 /// The open `under` watches' matches among what a write touches, before it
 /// commits — what [`UnderBefore::after`] compares with.
 pub(super) struct UnderBefore {
@@ -1825,7 +1848,48 @@ pub(super) fn under_before_with(unders: &UnderWatches, cache: &Cache, touched: i
 /// such watch is open (a watch that does not ask `touched` cannot see such
 /// a write).
 pub(super) fn touch_before_with(unders: &UnderWatches, cache: &Cache, keys: &[(&ShortcodeId, u32)]) -> Option<UnderBefore> {
-    let watches: Vec<Arc<UnderWatch>> = unders.live().into_iter().filter(|w| w.lens.asks_touched()).collect();
+    let watches: Vec<Arc<UnderWatch>> = unders.live().into_iter().filter(|w| w.lens.asks_touched() || w.lens.asks_asked()).collect();
+    before_of(watches, cache, || {
+        let mut t = Touched::default();
+        for (e, s) in keys {
+            t.ticket(e, *s);
+        }
+        t
+    })
+}
+
+/// V2-20: what a requeue that moves no urgency does to the open watches whose
+/// filter asks `asked`: the tickets at `keys`, before it. `None` when no such
+/// watch is open.
+pub(super) fn asked_before_with(unders: &UnderWatches, cache: &Cache, keys: &[(&ShortcodeId, u32)]) -> Option<UnderBefore> {
+    let watches: Vec<Arc<UnderWatch>> = unders.live().into_iter().filter(|w| w.lens.asks_asked()).collect();
+    before_of(watches, cache, || {
+        let mut t = Touched::default();
+        for (e, s) in keys {
+            t.ticket(e, *s);
+        }
+        t
+    })
+}
+
+/// MENGER-39: what a queue write does to the open watches whose filter asks
+/// `queued`: the tickets at `keys`, before it. `None` when no such watch is
+/// open.
+pub(super) fn queued_before_with(unders: &UnderWatches, cache: &Cache, keys: &[(&ShortcodeId, u32)]) -> Option<UnderBefore> {
+    let watches: Vec<Arc<UnderWatch>> = unders.live().into_iter().filter(|w| w.lens.asks_queued()).collect();
+    before_of(watches, cache, || {
+        let mut t = Touched::default();
+        for (e, s) in keys {
+            t.ticket(e, *s);
+        }
+        t
+    })
+}
+
+/// APP-23: one write that touches the tickets at `keys` and moves them out
+/// of the queue — the watches asking either, before it, once each.
+pub(super) fn touch_or_queued_before_with(unders: &UnderWatches, cache: &Cache, keys: &[(&ShortcodeId, u32)]) -> Option<UnderBefore> {
+    let watches: Vec<Arc<UnderWatch>> = unders.live().into_iter().filter(|w| w.lens.asks_touched() || w.lens.asks_queued()).collect();
     before_of(watches, cache, || {
         let mut t = Touched::default();
         for (e, s) in keys {
@@ -1855,13 +1919,7 @@ fn before_of(watches: Vec<Arc<UnderWatch>>, cache: &Cache, touched: impl FnOnce(
                 touched
                     .areas()
                     .into_iter()
-                    .map(|(e, area)| {
-                        let m = c.matches_in(e);
-                        (e.clone(), match area {
-                            Some(a) => m & a,
-                            None => m,
-                        })
-                    })
+                    .map(|(e, area)| (e.clone(), c.matches_among(e, area)))
                     .collect()
             })
             .collect();
@@ -1892,11 +1950,7 @@ impl UnderBefore {
                 if w.epic.as_ref().is_some_and(|x| x != e) {
                     continue;
                 }
-                let m = c.matches_in(e);
-                let now = match area {
-                    Some(a) => m & a,
-                    None => m,
-                };
+                let now = c.matches_among(e, area);
                 let was = before.get(e).cloned().unwrap_or_default();
                 let n = moved.len();
                 let entered = &now - &was;

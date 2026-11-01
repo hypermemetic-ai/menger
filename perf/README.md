@@ -17,6 +17,7 @@ npm run smoke                     # the concurrency ladder's smoke — must pass
 | -- | -- | -- |
 | `pages-probe.mjs` | UI-8: the first pages on the engine — board first rows painted, wasm memory, rows held | its own (`scripts/ui-throwaway.mjs`) |
 | `concurrency.mjs` (+ `concurrency-worker.mjs`) | PERF-12: memory and CPU at 1 … 10ⁿ signed-in WebSockets, idle, under load and after | its own |
+| `ringer.mjs` | V2-20: questions and the queue at 10³, 10⁵, 10⁶: reads, writes, a burst, fan-out, parallel asks, `await_reply` held, restart, memory, `--page` | its own |
 | `flood.mjs` | ACCESS-29: a flood of upgrades and logins leaves memory flat | its own |
 | `large-parent.py` | SCALE-3 / SCALE-4: one write under a small and a large parent | its own |
 | `filter-sheet.py` | FILTER-4: two binaries' start, memory and filter reads, side by side | its own (two) |

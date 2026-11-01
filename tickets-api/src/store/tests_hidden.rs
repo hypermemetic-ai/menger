@@ -56,7 +56,7 @@ fn tree(store: &Store, parent: Option<&str>, epic: Option<&str>, filter: &str, m
 
 fn assert_derived(store: &Store, after: &str) {
     let cache = store.tickets.read().unwrap();
-    let scanned = Cache::new(cache.order.values().map(|t| (t.id.to_string(), t.clone())).collect());
+    let scanned = Cache::new(cache.order.values().map(|t| (t.id.to_string(), t.clone())).collect(), cache.inputs.clone());
     assert_eq!(stored::compare(&cache.form(), &scanned.form()), Vec::<String>::new(), "after {after}");
 }
 
@@ -160,7 +160,7 @@ async fn a_database_from_before_the_column_gains_it_with_every_row_false() {
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch("ALTER TABLE cells DROP COLUMN hidden; ALTER TABLE tickets DROP COLUMN hidden; UPDATE derived_state SET form = 14;").unwrap();
     drop(conn);
-    assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::NotStored(why) if why.contains("form 14; this build reads 16")));
+    assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::NotStored(why) if why.contains("form 14; this build reads 17")));
 
     let store = Store::open(&path).unwrap();
     assert_eq!(store.groups(SYS), groups, "answers as before, nothing built again");
@@ -176,7 +176,7 @@ async fn a_database_from_before_the_column_gains_it_with_every_row_false() {
     assert_eq!((total, visible), (4, 3), "a NOT NULL column; only the one hidden since is true");
     let notnull: i64 = conn.query_row("SELECT \"notnull\" FROM pragma_table_info('tickets') WHERE name = 'hidden'", [], |r| r.get(0)).unwrap();
     assert_eq!(notnull, 1);
-    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 16);
+    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 17);
     drop(conn);
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { .. }));
 

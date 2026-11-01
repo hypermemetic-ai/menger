@@ -855,6 +855,8 @@ engine and on FRAME-50's. The probe again with it, the same pairs (load 1.5–14
 In a quiet window the first row is 150–153 → 118–120 ms at 10³ and 168 → 137–140 ms at 10⁶ (the 144 the
 gate held by hand had shown).
 
+
+
 ## One ticket-view or many: what embedding costs (SURFACE-16, 2026-11-01)
 
 `node perf/view-probe.mjs --no-build`: a throwaway with 1,000 tickets of 2,120 B of markdown (headings, a list,
@@ -907,3 +909,36 @@ once. So 44 instances stay blank, at least one drawn instance is not live (45 wa
 the probe does not pair them), and the page loses its slot assignments and routes from the service. N = 250 stays
 under it only because its gets finish fast; the limit is shared with everything else on the page's one socket, and
 one run of the ticket page test sent 7 `tickets.watch` and `ui.watch` (sent, not counted open).
+
+### After the review: v1's reader, bounded (V2-20, 2026-11-01)
+
+The rows the reader can move, 10⁶ tickets, p50 / p99 ms, the same ringer. The
+bodies here are small, so this shows a reading costs a small body nothing; it
+says nothing of a heavy one, which `tests_reading.rs` holds: every shape at
+8 MiB read or refused in band, the worst 1.7 s in release (closes that find
+nothing, past the budget), before the write lock.
+
+| what | before | after | budget |
+|---|---|---|---|
+| ask | 1.59 / 30.9 | 1.44 / 41.5 | 20 **over** |
+| amend, the control | 1.56 / 45.1 | 1.53 / 50.7 | 20 **over** |
+| queued, a page of 200 | 1.70 / 3.63 | 1.65 / 3.59 | 5 |
+| inputs list open, 200 | 0.62 / 1.37 | 0.59 / 1.06 | 5 |
+| list `queued` | 6.33 / 12.4 | 6.93 / 13.5 | 5 **over** |
+| list `queued now` | 2.90 / 5.79 | 2.96 / 5.75 | 5 **over** |
+| write beside 100 watches of `queued` | 4.09 / 11.2 | 4.35 / 11.2 | 20 |
+| ask beside 200 `await_reply` held | 3.03 / 65.7 | 3.03 / 70.8 | 20 **over** |
+| #/queue's first row, cold | 113 / 116 | 114 / 123 | 300 |
+
+New: an answer beside 100 watches of `asked`, 1.63 / 7.80, though the ringer's
+entries are all its own reader's, so those watches read an empty set. The four
+overs are the two already named, unchanged by the reader.
+
+The budget, recalibrated (N3). A parse was charged 16 units a byte and costs about
+7 ns, so a unit is about a nanosecond at 8; the waste was not the rate but the
+work: `runs::read` parsed from the top for every block, and every block walked to
+the body's end. One pass now marks each block it can trust (held to v1's rule by
+4,000 random bodies), and a block's walk stops at the first blank line outside
+everything. Release: a 1 MB report of 60 sections 436 → 4.7 ms; 3 MB of 12 pages
+and 12 sections refused → 156 ms; 8 MiB of blocks refused → 0.68 s, read. The
+worst shape at 8 MiB stays about 1.9 s.

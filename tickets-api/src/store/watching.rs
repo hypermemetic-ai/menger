@@ -172,6 +172,7 @@ fn cut(sees: &Sees<'_>, change: Change) -> Option<Change> {
         Change::ChildRemoved { id, shortcode, removed, child_count } => {
             sees.id(&id).then(|| Change::ChildRemoved { id, shortcode, removed: name(removed), child_count })
         }
+        Change::InputChanged { shortcode, input } => sees.id(input.ticket.as_str()).then_some(Change::InputChanged { shortcode, input }),
         // MENGER-13: a transition is its ticket's; the ticket that caused
         // it may be hidden.
         Change::Transition { shortcode, mut transition } => sees.id(transition.ticket.as_str()).then(|| {
@@ -183,6 +184,23 @@ fn cut(sees: &Sees<'_>, change: Change) -> Option<Change> {
         // TICKETS-7: a revision is its ticket's; what it changed says nothing
         // of another.
         Change::Revised { shortcode, ticket, rev, fields } => sees.id(&ticket).then_some(Change::Revised { shortcode, ticket, rev, fields }),
+        // MENGER-39: a queue write is its ticket's; its row redacted.
+        Change::Queue { shortcode, change } => {
+            let change = match change {
+                queue::QueueChange::Queued { entry, mut ticket, action } => sees.id(&entry.ticket).then(|| {
+                    sees.row(&mut ticket);
+                    queue::QueueChange::Queued { entry, ticket, action }
+                }),
+                queue::QueueChange::Unqueued { id, entry, action, by, at_unix } => {
+                    sees.id(&entry.ticket).then_some(queue::QueueChange::Unqueued { id, entry, action, by, at_unix })
+                }
+                queue::QueueChange::Snoozed { entry, mut ticket } => sees.id(&entry.ticket).then(|| {
+                    sees.row(&mut ticket);
+                    queue::QueueChange::Snoozed { entry, ticket }
+                }),
+            }?;
+            Some(Change::Queue { shortcode, change })
+        }
 
         // ── About a saved filter (FILTER-46): the filters are the
         // organization's to read, heard by whoever may.
@@ -222,10 +240,10 @@ fn cut(sees: &Sees<'_>, change: Change) -> Option<Change> {
             (!ids.is_empty()).then_some(Change::Undeleted { ids, tickets })
         }
         // ARCHIVE-2: of the tickets the reach holds.
-        Change::Archived { ids, live, mark } => {
+        Change::Archived { ids, live, unqueued, mark } => {
             let ids = sees.keep(ids);
             let live = live.into_iter().filter(|l| sees.id(&l.id)).collect();
-            (!ids.is_empty()).then(|| Change::Archived { ids, live, mark })
+            (!ids.is_empty()).then(|| Change::Archived { ids, live, unqueued: sees.keep(unqueued), mark })
         }
         Change::Restored { ids, ancestors, still_archived, by } => {
             let ids = sees.keep(ids);

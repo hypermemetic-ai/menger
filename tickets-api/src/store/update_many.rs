@@ -183,7 +183,8 @@ impl Store {
                     (Some(u), Some(row)) => u.check(&cache, row, &update)?,
                     _ => return Err(StoreError::Invalid(format!("{}: the write was not given the proof it needs (nothing written)", current.id))),
                 }
-                plan(&cache, &current, update.clone(), &mut refused)
+                // No body: an update of many refuses one, above.
+                plan(&cache, &current, update.clone(), None, &mut refused)
             };
             if !refused.is_empty() {
                 refusals.push((String::from(current.id), refused));

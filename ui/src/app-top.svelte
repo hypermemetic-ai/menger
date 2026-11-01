@@ -31,7 +31,7 @@
   const loading = $derived(born.status === "pending" || gone.status === "pending");
   const base = $derived(born.rows.find((r) => r.ticket_count != null)?.ticket_count ?? 0);
   const count = $derived(base + born.rows.filter((r) => r.ticket_count == null).length - gone.rows.filter((r) => r.ticket_count == null).length);
-  const LINKS = [["board", "#/"], ["ready", "#/ready"], ["waves", "#/waves"], ["filters", "#/filters"], ["new", "#/new"], ["me", "#/me"]];
+  const LINKS = [["board", "#/"], ["queue", "#/queue"], ["ready", "#/ready"], ["waves", "#/waves"], ["filters", "#/filters"], ["new", "#/new"], ["me", "#/me"]];
 
   // STUDIO-11: who may edit a page — ui.author's roles, one held on * (the
   // UI has no scope).

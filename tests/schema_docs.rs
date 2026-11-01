@@ -22,8 +22,6 @@
 //!   the events it said them by). In the `ui` service (`ui`, `ui.slots`)
 //!   `component` / `components` are its own word — the UI's components —
 //!   and are allowed there alone.
-//! - [`no_answer_carries_a_field_of_the_queue`]: no property of anything a
-//!   method yields is named for the queue.
 //! - [`the_ui_docs_say_who_may`]: each `ui` method's description names the
 //!   role that holds it as the server declares it, and no other.
 //! - [`the_tickets_docs_name_what_remains`]: `tickets.delete`, `archive` and
@@ -45,32 +43,28 @@ use std::sync::Arc;
 use std::time::Duration;
 
 /// V2-8's words (`tickets-api/tests/cut.rs`'s `GONE_WORDS`, copied): v1's
-/// services, its queue, its mockups, its browser toolchain and the old
-/// word for a service.
+/// services, its mockups, its browser toolchain and the old word for a
+/// service.
 const GONE_WORDS: &[&str] = &[
-    "chats", "chat", "comments", "comment", "deployments", "deployment", "themes", "queue", "queues", "queued", "trunk",
+    "chats", "chat", "comments", "comment", "deployments", "deployment", "themes", "trunk",
     "Leptos", "sdk-codegen", "hub", "hubs", "mockup", "mockups",
 ];
 
 /// The schema's own: what went from the tickets service's surface with
-/// v2 — a ticket's inputs, its components, its assignees, media, notes and
-/// the deploy webhook — and the names v1 said them by (each matched as a
-/// whole identifier): its events, and the field `unqueued`.
+/// v2 — a ticket's components, its assignees, media, notes and the deploy
+/// webhook — and the names v1 said them by (each matched as a whole
+/// identifier): its events.
 const SCHEMA_WORDS: &[&str] = &[
-    "inputs", "input", "components", "component", "assignees", "media", "notes", "note's", "webhook", "unqueued", "AssigneesChanged",
-    "ComponentChanged", "ComponentRemoved", "InputChanged",
+    "components", "component", "assignees", "media", "notes", "note's", "webhook", "AssigneesChanged", "ComponentChanged", "ComponentRemoved",
 ];
 
 /// The words the `ui` service may say: its components are the UI's.
 const UI_WORDS: &[&str] = &["components", "component"];
 
-/// Fields of the queue, which no answer carries on v2.
-const QUEUE_FIELDS: &[&str] = &["unqueued", "queued", "queue"];
-
 /// Every service a v2 server registers, and their children, by path.
 const PATHS: &[&str] = &[
     "auth", "epics", "members", "members.teams", "orgs", "session", "tickets", "tickets.commits", "tickets.filters",
-    "tickets.nav", "tickets.revisions", "tickets.subtasks", "tickets.work", "ui", "ui.routes", "ui.slots",
+    "tickets.inputs", "tickets.nav", "tickets.revisions", "tickets.subtasks", "tickets.work", "ui", "ui.routes", "ui.slots",
 ];
 
 /// Whether `word` occurs in `text` as an identifier of its own, ignoring
@@ -359,30 +353,6 @@ async fn every_description_says_what_v2_does() {
     );
 }
 
-/// V2-11: the queue went, and with it every field that reported on it —
-/// no property of anything a method yields (an event's, a type's in
-/// `$defs`) is named [`QUEUE_FIELDS`].
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn no_answer_carries_a_field_of_the_queue() {
-    let (port, _) = start_server().await;
-    let c = support::connect(port).await;
-    let all = schemas(&c).await;
-    let mut left = BTreeSet::new();
-    let mut fields = 0;
-    for (path, schema) in &all {
-        for m in methods(schema) {
-            for (name, field) in read_method(path, &m).fields {
-                fields += 1;
-                if QUEUE_FIELDS.contains(&field.as_str()) {
-                    left.insert(name);
-                }
-            }
-        }
-    }
-    assert!(fields > 100, "read {fields} fields of answers: too few to be the surface");
-    assert!(left.is_empty(), "V2-11: {} answer field(s) of the queue:\n  {}", left.len(), left.into_iter().collect::<Vec<_>>().join("\n  "));
-}
-
 /// Who may call each `ui` method, as its description must say it. The rule:
 /// a method held by more than a viewer names its role — `Deployer only.`,
 /// `Admin only.` — and no other; a viewer's read names no role, as the
@@ -489,7 +459,7 @@ async fn the_tickets_docs_name_what_remains() {
 fn a_word_is_found_only_as_a_word_of_its_own() {
     for (text, word) in [
         ("Chats are the `chats` activation", "chats"),
-        ("a queued one leaves the queue", "queue"),
+        ("the Leptos app", "Leptos"),
         ("a hub, a Hub", "hub"),
         ("the hub-codegen generator", "hub"),
         ("an InputChanged by its ticket's", "InputChanged"),
@@ -521,7 +491,7 @@ fn a_word_is_found_only_as_a_word_of_its_own() {
     assert_eq!(gone_in("ui.slots", "the components of a version"), Vec::<&str>::new());
     assert_eq!(gone_in("tickets", "a component it defines"), ["component"]);
     assert_eq!(gone_in("uikit", "a component"), ["component"], "the allowance is the ui service, not a prefix");
-    assert_eq!(gone_in("ui", "a component's comment on the queue"), ["comment", "queue"], "only `component` is allowed in ui");
+    assert_eq!(gone_in("ui", "a component's comment on the chat"), ["chat", "comment"], "only `component` is allowed in ui");
     assert_eq!(gone_in("ui", "a ComponentChanged"), ["ComponentChanged"], "v1's event is not the UI's component");
 
     // Everything a method carries is held, each by its path: its own
@@ -538,7 +508,7 @@ fn a_word_is_found_only_as_a_word_of_its_own() {
         },
         "returns": {
             "oneOf": [
-                { "description": "Gone.", "properties": { "type": { "const": "deleted" }, "unqueued": { "description": "out of the queue" } } },
+                { "description": "Gone.", "properties": { "type": { "const": "deleted" }, "unqueued": { "description": "out of the chat" } } },
             ],
             "$defs": { "WatchEnd": { "description": "Why it ended.", "properties": { "reason": { "description": "a themes watch's" } } } }
         }
@@ -549,7 +519,7 @@ fn a_word_is_found_only_as_a_word_of_its_own() {
     get["returns"] = json!({});
     let stand_in = json!({ "name": "commits", "role": {"kind": "static_child"}, "description": "a component" });
     let tickets = json!({
-        "description": "Tickets, and their inputs.",
+        "description": "Tickets, and their notes.",
         "children": [{ "namespace": "commits", "description": "a ticket's commits" }],
         "methods": [delete.clone(), get, stand_in]
     });
@@ -558,8 +528,8 @@ fn a_word_is_found_only_as_a_word_of_its_own() {
         [
             "<Body> [\"comment\"] (in 2 methods): A body — a ticket's, a comment's.",
             "<WatchEnd>.reason [\"themes\"]: a themes watch's",
-            "tickets (service) [\"inputs\"]: Tickets, and their inputs.",
-            "tickets.delete→deleted.unqueued [\"queue\"]: out of the queue",
+            "tickets (service) [\"notes\"]: Tickets, and their notes.",
+            "tickets.delete→deleted.unqueued [\"chat\"]: out of the chat",
             "tickets.delete [\"components\"]: Delete tickets, and their components.",
         ],
         "a type once, with every method that carries it; what a method yields is read; a child's stand-in is not"

@@ -286,9 +286,9 @@ export default async (ctx) => {
       const by = calls.reduce((m, c) => ((m[c.method] = (m[c.method] ?? 0) + 1), m), {});
       console.log(`     sent: ${JSON.stringify(by)}`);
       assert(calls.filter((c) => c.method === "tickets.get" && c.params.id === t.id).length === 1, `one get of ${t.id}: ${JSON.stringify(by)}`);
-      // STUDIO-12: the page carries the app's top (app-top, its count live on `watch { membership }`), apart from the five.
+      // STUDIO-12: the page carries the app's top (app-top, its count live on `watch { membership }`), apart from the six (V2-20: ticket-questions the sixth).
       const own = calls.filter((c) => c.method === "tickets.watch" && c.params?.membership !== true).length;
-      assert(own <= 5, `at most five watches of the ticket's (${own}): ${JSON.stringify(by)}`);
+      assert(own <= 6, `at most six watches of the ticket's (${own}): ${JSON.stringify(by)}`);
       for (const [mark, where] of [["ticket-edit", tp], ["ticket-actions", tp], ["work-blockers", tp.locator("[data-surface=ticket-relations]")]]) {
         const m = where.locator(`[data-mark=${mark}]`);
         assert((await m.count()) === 1, `${mark}'s mark is placed`);

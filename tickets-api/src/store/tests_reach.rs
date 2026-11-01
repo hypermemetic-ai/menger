@@ -135,8 +135,9 @@ async fn hidden_is_not_found() {
     for id in ["SECRET-2", "SECRET-99"] {
         assert!(matches!(s.get(&v, id).await, Err(StoreError::NotFound(_))), "{id}");
         assert!(matches!(s.history(&v, id), Err(StoreError::NotFound(_))), "{id}");
+        assert!(matches!(s.inputs(&v, Some(id), None, None), Err(StoreError::NotFound(_))), "{id}");
         assert!(matches!(s.waves_to(&v, id, &[Kind::Build]), Err(StoreError::NotFound(_))), "{id}");
-        assert!(s.tombstone(&v, id).is_none());
+        assert!(s.tombstone(&v, id).is_none() && s.queue_history(&v, id).is_empty());
     }
     assert_eq!(s.member(&v, &["OPEN-2".into(), "SECRET-2".into(), "SECRET-99".into()], &Lens::all()), [true, false, false]);
     assert_eq!(s.count(&v), 4);

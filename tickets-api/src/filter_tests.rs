@@ -414,6 +414,7 @@ fn every_status_has_its_category() {
 fn facts(id: &str, title: &str, status: Status, kind: Kind) -> Facts {
     let epic = id.rsplit_once('-').map_or(id, |(e, _)| e).to_string();
     Facts {
+        asking: false,
         labels: Vec::new(),
         archived: false,
         frozen: false,
@@ -501,6 +502,82 @@ fn menger_doc_is_a_flag_that_round_trips_and_admits_menger_paths() {
     assert!(m("menger doc and kind doc and category static and in PLEXUS", &board));
     assert!(m("(menger doc or ready)", &board) && m("(menger doc or ready)", &work) && !m("(menger doc or ready)", &plain));
     assert!(m("not menger doc and kind doc", &plain) && !m("not menger doc and kind doc", &board));
+}
+
+/// MENGER-12: `asking` is a flag like `menger doc`, and `label <name>` a
+/// value — read whatever their case (a label folded to lower case), written
+/// back canonical, `label` listable (`label in (a, b)`); `asking` admits the
+/// tickets with an open input, `label x` those holding `x`; a bad label is
+/// refused, naming why.
+#[test]
+fn asking_and_label_round_trip_and_admit() {
+    let label = |l: &str| Field::Label(l.into());
+    let cases: Vec<(&str, Vec<Group>, &str)> = vec![
+        ("asking", vec![one(is(Field::Asking))], "asking"),
+        ("NOT Asking", vec![one(not(Field::Asking))], "not asking"),
+        ("label needs-you", vec![one(is(label("needs-you")))], "label needs-you"),
+        ("label Needs-You", vec![one(is(label("needs-you")))], "label needs-you"),
+        ("label \"needs-you\"", vec![one(is(label("needs-you")))], "label needs-you"),
+        ("not label p1", vec![one(not(label("p1")))], "not label p1"),
+        ("asking or label needs-you", vec![Group::any(vec![is(Field::Asking), is(label("needs-you"))])], "(asking or label needs-you)"),
+        ("label in (a, b)", vec![Group::any(vec![is(label("a")), is(label("b"))])], "label in (a, b)"),
+        ("not label in (a, b)", vec![Group::all(vec![not(label("a")), not(label("b"))])], "not label in (a, b)"),
+        ("asking and in MENGER", vec![one(is(Field::Asking)), one(is(within("MENGER")))], "asking and in MENGER"),
+    ];
+    for (text, want, canonical) in cases {
+        let f = parsed(text);
+        assert_eq!(f.groups, want, "{text}");
+        assert_eq!(f.format(), canonical, "{text}");
+        assert_eq!(parsed(canonical), f, "{canonical} is a fixed point");
+    }
+    assert_eq!((Field::Asking.name(), Field::Asking.value()), ("asking", None));
+    assert_eq!((label("x").name(), label("x").value()), ("label", Some("x".to_string())));
+    for (text, why) in [
+        ("asking yes", "takes no value"),
+        ("label", "needs a value"),
+        ("label \"two words\"", "not a label"),
+        ("label a_b", "not a label"),
+        ("tag needs-you", "no data"),
+    ] {
+        let e = refused(text);
+        assert_eq!(e.chunks.len(), 1, "{text}: {e}");
+        assert!(e.chunks[0].why.contains(why), "{text}: {}", e.chunks[0].why);
+    }
+    assert!(refused("frobnicate").chunks[0].why.contains("`asking`, `label`"), "the predicates listed name them");
+
+    // The evaluator: one asking, one labelled, one both, one neither.
+    let mut asks = facts("MENGER-2", "asks", Status::Coding, Kind::Build);
+    asks.asking = true;
+    let mut tagged = facts("MENGER-3", "tagged", Status::Ready, Kind::Build);
+    tagged.labels = vec!["needs-you".into(), "p1".into()];
+    let mut both = facts("MENGER-4", "both", Status::Doc, Kind::Doc);
+    (both.asking, both.labels) = (true, vec!["needs-you".into()]);
+    let quiet = facts("MENGER-5", "quiet", Status::Pending, Kind::Build);
+    let m = |text: &str, t: &Facts| parsed(text).matches(t);
+    let who = |text: &str| -> Vec<&str> {
+        [&asks, &tagged, &both, &quiet].into_iter().filter(|t| m(text, t)).map(|t| t.id.as_str()).collect()
+    };
+    assert_eq!(who("asking"), ["MENGER-2", "MENGER-4"]);
+    assert_eq!(who("not asking"), ["MENGER-3", "MENGER-5"]);
+    assert_eq!(who("label needs-you"), ["MENGER-3", "MENGER-4"]);
+    assert_eq!(who("asking or label needs-you"), ["MENGER-2", "MENGER-3", "MENGER-4"]);
+    assert_eq!(who("label in (p1, later)"), ["MENGER-3"]);
+    assert_eq!(who("not label in (p1, needs-you)"), ["MENGER-2", "MENGER-5"]);
+    assert_eq!(who("label needs-you and label p1"), ["MENGER-3"], "two labels of one ticket: both hold");
+
+    // Merges: a ticket holds many labels, so two inclusions never
+    // intersect (as `under`'s), and an inclusion is not cut by an exclusion.
+    let a = parsed("label in (a, b)");
+    assert_eq!(a.and(&parsed("label in (b, c)")).format(), "label in (a, b) and label in (b, c)");
+    assert_eq!(a.and(&parsed("not label a")).format(), "label in (a, b) and not label a");
+    assert_eq!(parsed("not label a").and(&parsed("not label b")).format(), "not label in (a, b)");
+
+    // Contradictions: the flag against itself; a label against itself; two
+    // different labels never clash.
+    assert!(parsed("asking and not asking").admits_nothing().is_some());
+    assert!(parsed("label a and not label a").admits_nothing().is_some());
+    assert!(parsed("label a and not label b").admits_nothing().is_none());
+    assert!(parsed("asking and kind doc and status Doc").admits_nothing().is_none(), "a doc may ask");
 }
 
 /// `palette_match` from `frontend/src/keys.rs` — find's rule, which the
@@ -738,7 +815,7 @@ fn random_value(rng: &mut Rng, field: usize, pools: &Pools) -> Field {
         8 => Field::HasCommits,
         9 => Field::MengerDoc,
         // MENGER-12.
-        11 => Field::Blocked,
+        11 => Field::Asking,
         12 => Field::Label(rng.pick(pools.labels).to_string()),
         _ => text(rng.pick(pools.texts)),
     }
@@ -799,6 +876,7 @@ fn random_facts(rng: &mut Rng, pools: &Pools) -> Facts {
     let mut lineage = vec![id.clone(), epic.clone()];
     lineage.extend(pools.unders.iter().filter(|_| rng.below(3) == 0).map(|u| u.to_string()));
     Facts {
+        asking: rng.coin(),
         labels: pools.labels.iter().filter(|_| rng.coin()).map(|l| l.to_string()).collect(),
         archived: false,
         frozen: false,
@@ -888,13 +966,15 @@ fn some_world_matches(f: &Filter) -> bool {
                 for (blocked, commits) in [(false, false), (false, true), (true, false), (true, true)] {
                     for &menger in mengers {
                         // MENGER-12: any ticket may ask.
-                        cells.push(Cell { status, kind, severity, blocked, commits, menger });
+                        for asking in [false, true] {
+                            cells.push(Cell { asking, status, kind, severity, blocked, commits, menger });
+                        }
                     }
                 }
             }
         }
     }
-    assert_eq!(cells.len(), 1040);
+    assert_eq!(cells.len(), 2080);
     for epic in &epics {
         for u in 0..1usize << unders.len() {
             for t in 0..1usize << texts.len() {
@@ -903,7 +983,8 @@ fn some_world_matches(f: &Filter) -> bool {
                     xs.iter().enumerate().filter(|(i, _)| mask >> i & 1 == 1).map(|(_, x)| x.clone()).collect()
                 };
                 let mut x = Facts {
-                                labels: chosen(&labels, l),
+                    asking: false,
+                    labels: chosen(&labels, l),
                     archived: false,
                     frozen: false,
                     hidden: false,
@@ -920,8 +1001,8 @@ fn some_world_matches(f: &Filter) -> bool {
                     history: Vec::new(),
                 };
                 for c in &cells {
-                    (x.status, x.kind, x.severity, x.blocked, x.has_commits, x.menger_doc) =
-                        (c.status, c.kind, c.severity, c.blocked, c.commits, c.menger);
+                    (x.status, x.kind, x.severity, x.blocked, x.has_commits, x.menger_doc, x.asking) =
+                        (c.status, c.kind, c.severity, c.blocked, c.commits, c.menger, c.asking);
                     if f.matches(&x) {
                         return true;
                     }
@@ -1321,20 +1402,20 @@ fn nested_canonical_texts_are_fixed_points() {
     for text in [
         "(ready or (blocked and kind build))",
         "(ready or (blocked and kind build)) and has commits",
-        "(frozen or (label needs-you and (blocked or status Pending)))",
-        "(kind build and (blocked or ready) and (frozen or has commits))",
+        "(asking or (label needs-you and (blocked or status Pending)))",
+        "(kind build and (blocked or ready) and (asking or has commits))",
         "not (blocked or ready)",
         "not (blocked and kind build)",
         "(ready or not (blocked and kind build))",
         "(blocked and status in (Ready, Pending))",
-        "(frozen or (kind build and not status Complete))",
+        "(asking or (kind build and not status Complete))",
         "saved \"Needs you\"",
         "saved Plexus-Ready",
         "not saved \"Needs you\"",
         "(saved \"Needs you\" or saved Plexus-Ready)",
         "(saved Deployment and saved Plexus-Coding)",
         "(ready or (saved Deployment and not blocked)) and kind build",
-        "text \"watch\" and (ready or (blocked and frozen))",
+        "text \"watch\" and (ready or (blocked and asking))",
         "(ready or (blocked and kind build)) · flat",
     ] {
         let f = parsed(text);
@@ -1358,7 +1439,7 @@ fn nested_canonical_texts_are_fixed_points() {
 fn nested_groups_settle_to_the_canonical_shape() {
     for (text, canonical) in [
         ("((ready or blocked) or kind build)", "(ready or blocked or kind build)"),
-        ("(ready and (blocked and (kind build and frozen)))", "(ready and blocked and kind build and frozen)"),
+        ("(ready and (blocked and (kind build and asking)))", "(ready and blocked and kind build and asking)"),
         ("((ready and blocked))", "(ready and blocked)"),
         ("(ready or (blocked))", "(ready or blocked)"),
         ("(ready or not (blocked))", "(ready or not blocked)"),
@@ -1519,23 +1600,23 @@ fn lookup_in<'a>(saved: &'a [(&'a str, &'a str)]) -> impl FnMut(&str) -> Option<
 #[test]
 fn resolve_expands_names_where_they_stand() {
     let saved = [
-        ("Needs you", "(label needs-you or blocked)"),
+        ("Needs you", "(queued or asking or asked or label needs-you)"),
         ("Plexus-Ready", "in (PLEXUS, SYNAPSE) and not category done and not blocked"),
         ("Deployment", "in (DEPLOY, FILTER) and not kind doc"),
         ("Both", "saved \"needs you\" and kind build"),
     ];
     for (text, resolved) in [
-        ("saved \"Needs you\"", "(label needs-you or blocked)"),
+        ("saved \"Needs you\"", "(queued or asking or asked or label needs-you)"),
         ("saved Plexus-Ready", "in (PLEXUS, SYNAPSE) and not category done and not blocked"),
         ("kind build and saved plexus-ready", "kind build and in (PLEXUS, SYNAPSE) and not category done and not blocked"),
         (
             "saved \"Needs you\" or saved Plexus-Ready",
-            "(label needs-you or blocked or (in (PLEXUS, SYNAPSE) and not category done and not blocked))",
+            "(queued or asking or asked or label needs-you or (in (PLEXUS, SYNAPSE) and not category done and not blocked))",
         ),
         ("not saved Deployment", "not (in (DEPLOY, FILTER) and not kind doc)"),
-        ("not saved \"Needs you\"", "not (label needs-you or blocked)"),
+        ("not saved \"Needs you\"", "not (queued or asking or asked or label needs-you)"),
         ("(ready or saved Deployment) · flat", "(ready or (in (DEPLOY, FILTER) and not kind doc)) · flat"),
-        ("saved Both", "(label needs-you or blocked) and kind build"),
+        ("saved Both", "(queued or asking or asked or label needs-you) and kind build"),
         ("blocked and status Ready", "blocked and status Ready"),
     ] {
         let got = parsed(text).resolve(&mut lookup_in(&saved)).unwrap_or_else(|e| panic!("{text}: {e}"));
@@ -1605,7 +1686,7 @@ fn an_unresolved_name_matches_nothing_and_clashes_with_nothing() {
     assert!(parsed("saved X and not saved x").admits_nothing().is_some(), "a name and its negation, by slug");
     assert_eq!(parsed("saved A or saved B or not ready").saved_names(), ["A", "B"]);
     assert!(!parsed("status Ready").is_nested() && !parsed("(ready or blocked)").is_nested());
-    assert!(parsed("saved A").is_nested() && parsed("(ready or (blocked and frozen))").is_nested());
+    assert!(parsed("saved A").is_nested() && parsed("(ready or (blocked and asking))").is_nested());
 }
 
 /// ACCESS-21: `ticket <ID>` — the ticket alone: written by any address of
@@ -1688,7 +1769,7 @@ fn a_mistake_is_placed_with_its_fix() {
         assert!(e.chunks.iter().flat_map(|c| &c.mistakes).all(|m| !m.words.contains("a predicate is")), "{text}: {e:?}");
     }
     // Mixed joins are placed on the group.
-    assert!(mistakes("(ready or blocked and frozen)")[0].1.contains("mixed"));
+    assert!(mistakes("(ready or blocked and asking)")[0].1.contains("mixed"));
     // The nearest: within two edits (or a third of the word), best first.
     assert_eq!(nearest("bild", ["build", "gap", "spike"]), ["build"]);
     assert_eq!(nearest("statu", ["status", "state", "kind"]), ["status", "state"]);
@@ -1718,10 +1799,6 @@ fn a_dropped_cell_is_refused_by_name() {
         ("assigned", "assigned"),
         ("assigned me", "assigned"),
         ("unassigned", "unassigned"),
-        ("queued", "queued"),
-        ("queued now", "queued"),
-        ("asked", "asked"),
-        ("asking", "asking"),
     ] {
         let e = match Filter::parse(text) {
             Ok(f) => panic!("V2-4: `{text}` names a cell of a service that does not exist yet, and is refused — but it parsed as {f:?}"),
@@ -1857,4 +1934,17 @@ async fn the_day_one_cells_parse() {
         let f = parsed(text);
         assert_eq!(parsed(&f.format()), f, "{text}: reads back from {:?}", f.format());
     }
+}
+
+/// V2-20: the queue's words are the language's again: `queued [urgency]`
+/// and `asked` take nothing else, `asking` is a flag on the cell.
+#[test]
+fn the_queues_words_are_read_and_say_themselves() {
+    for text in ["queued", "queued now", "asked", "asking", "not asking", "queued blocking or label x"] {
+        let f = Filter::parse(text).unwrap_or_else(|e| panic!("{text}: {e}"));
+        assert_eq!(f.to_string(), Filter::parse(&f.to_string()).unwrap().to_string(), "{text} round trips");
+    }
+    assert!(Filter::parse("queued soon").unwrap_err().to_string().contains("whenever, today, now, blocking"));
+    assert!(Filter::parse("asked within 3d").unwrap_err().to_string().contains("takes nothing after it"));
+    assert!(Filter::parse("queued now within 3d").unwrap_err().to_string().contains("no window"));
 }

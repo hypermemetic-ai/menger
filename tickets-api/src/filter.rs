@@ -20,7 +20,7 @@
 //!   `status <name>` · `category <open|ready|active|review|done|dropped|static>`
 //!   · `kind <name>` · `severity <critical|high|medium|low|none>` ·
 //!   `blocked` · `ready` · `has commits` · `menger doc` (FILTER-21) ·
-//!   `label <name>` (and
+//!   `asking` (MENGER-12: it has an open input) · `label <name>` (and
 //!   `label in (a, b)`; MENGER-12) ·
 //!   `in <SHORTCODE>` (and `in (A, B)`, `not in (A, B)`) ·
 //!   `under <ID or SHORTCODE>` · `text "…"`, or a bare `"…"` · FILTER-36:
@@ -165,6 +165,11 @@ pub enum Field {
     /// starts with `_MENGER/` (WAVE-10), as each shortcode's board note's
     /// does.
     MengerDoc,
+    /// `asking` (MENGER-12): it has an input in the state `open` — a
+    /// question waiting on the owner (INPUT-1). An answer, a close or the
+    /// body dropping it takes the ticket out; a clear or a reopen with no
+    /// answer puts it back.
+    Asking,
     /// `label <name>` (MENGER-12): the ticket holds the label (lower case,
     /// [`crate::labels::normalize`]). A ticket holds many, so — as `under` —
     /// two inclusions never intersect.
@@ -266,6 +271,7 @@ impl Field {
             Field::Ready => "ready",
             Field::HasCommits => "has commits",
             Field::MengerDoc => "menger doc",
+            Field::Asking => "asking",
             Field::Label(_) => "label",
             Field::Archived => "archived",
             Field::Frozen => "frozen",
@@ -289,7 +295,7 @@ impl Field {
             Field::Category(c) => c.as_str().into(),
             Field::Kind(k) => k.as_str().into(),
             Field::Severity(s) => severity_name(*s).into(),
-            Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc | Field::Archived | Field::Frozen | Field::Hidden => return None,
+            Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc | Field::Asking | Field::Archived | Field::Frozen | Field::Hidden => return None,
             // ORG-13: an epic's `under` says its name back (`any` for `~*`).
             Field::Under(x) if x == EPIC_ANY => "any".into(),
             Field::Under(x) if is_epic_name(x) => x[EPIC_MARK.len_utf8()..].to_ascii_lowercase(),
@@ -341,6 +347,7 @@ impl Field {
             Field::Ready => category_of(c.status) == Category::Ready && !c.blocked,
             Field::HasCommits => c.commits,
             Field::MengerDoc => c.menger,
+            Field::Asking => c.asking,
             Field::In(_)
             | Field::Under(_)
             | Field::Ticket(_)
@@ -408,7 +415,7 @@ impl Predicate {
     pub fn format(&self) -> String {
         let head = if self.not { "not " } else { "" };
         match &self.field {
-            Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc | Field::Archived | Field::Frozen | Field::Hidden => {
+            Field::Blocked | Field::Ready | Field::HasCommits | Field::MengerDoc | Field::Asking | Field::Archived | Field::Frozen | Field::Hidden => {
                 format!("{head}{}", self.field.name())
             }
             Field::Text(t) => format!("{head}text \"{t}\""),
@@ -771,6 +778,8 @@ pub struct Facts {
     /// FILTER-21: its path starts with `_MENGER/` — one of menger's own
     /// documents ([`crate::is_menger_doc`]).
     pub menger_doc: bool,
+    /// MENGER-12: it has an input in the state `open`.
+    pub asking: bool,
     /// MENGER-12: its labels, lower case.
     pub labels: Vec<String>,
     /// ARCHIVE-2: it carries the archive's mark.
@@ -797,6 +806,7 @@ impl Facts {
             blocked: self.blocked,
             commits: self.has_commits,
             menger: self.menger_doc,
+            asking: self.asking,
         }
     }
 }
@@ -1469,8 +1479,8 @@ const TEXT_ALONE: &str = "`text` is tested on rows, so it stands alone as a top-
 const MIXED: &str = "`or` and `and` do not mix inside one pair of parentheses: a group is all `or` or all `and`";
 const UNBALANCED: &str = "a group's parentheses close where they open: `(a or (b and c))`";
 const NOT_UNDERSTOOD: &str = "not understood: a predicate is `status`, `category`, `kind`, `severity`, `blocked`, \
-                              `ready`, `has commits`, `menger doc`, `label`, `in`, `under`, `text`, \
-                              `entered`, `left`, `moved`, `changed`, `by`, `created`, `for` or \
+                              `ready`, `has commits`, `menger doc`, `asking`, `label`, `in`, `under`, `text`, \
+                              `entered`, `left`, `moved`, `changed`, `by`, `created`, `for`, `queued`, `asked` or \
                               `saved`, a group in parentheses, or a quoted text";
 const QUOTES: &str = "a quoted value is quoted whole — one `\"` before it and one after, none inside";
 
@@ -1681,6 +1691,7 @@ fn read_field(rest: &str) -> Result<Field, String> {
         "ready" => flag(Field::Ready),
         "has commits" => flag(Field::HasCommits),
         "menger doc" => flag(Field::MengerDoc),
+        "asking" => flag(Field::Asking),
         // TICKETS-6: the frozen mark (a cell).
         "frozen" => flag(Field::Frozen),
         // TICKETS-27: the hidden mark (a cell).
@@ -1755,6 +1766,9 @@ fn read_field(rest: &str) -> Result<Field, String> {
         "touched" => read_history(name, tail).map(Field::History),
         // V2-4: the cells of the services that are not the tickets
         // service's — refused, naming the word, whatever follows it.
+        // MENGER-39: over the queue's kept entries; V2-20: `asked` too, for
+        // the reader.
+        "queued" | "asked" => read_history(name, tail).map(Field::History),
         name if GONE.contains(&name) => Err(gone(name)),
         "for" => read_held("", &rest[name.len()..]).map(Field::History),
         // FILTER-36: a saved filter, by its name.
@@ -2035,6 +2049,15 @@ fn parse_group(s: &str) -> Result<Group, String> {
 /// What a history predicate asks happened.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
+    /// MENGER-39: `queued` — the ticket is in the owner's queue; `queued
+    /// <urgency>`, at that urgency (a snooze does not take it out). Answered
+    /// from the queue's kept entries; no window, no `by`.
+    Queued(Option<crate::queue::Urgency>),
+    /// V2-20: `asked` — the queue holds the ticket, someone other than the
+    /// reader queued it, and an input it names is `open`: a question waiting
+    /// on the reader. Answered for the reader (the clock's `me`) from the
+    /// queue's kept entries and the inputs; no window, no `by`.
+    Asked,
     /// A transition into this status.
     Entered(Status),
     /// A transition out of this status.
@@ -2100,6 +2123,8 @@ impl Event {
     /// with a time is its field's.
     pub const fn name(&self) -> &'static str {
         match self {
+            Event::Queued(_) => "queued",
+            Event::Asked => "asked",
             Event::Entered(_) => "entered",
             Event::Left(_) => "status left",
             Event::Changed => "moved",
@@ -2411,6 +2436,9 @@ impl History {
     /// `status Pending for over 2w`.
     pub fn format(&self) -> String {
         let mut out = match &self.event {
+            Event::Queued(None) => "queued".to_string(),
+            Event::Queued(Some(u)) => format!("queued {u}"),
+            Event::Asked => "asked".to_string(),
             Event::Entered(s) => format!("entered {}", quoted(s.as_str())),
             // FILTER-52: `left` reads as before and prints as the grammar's
             // `status left`; `changed` (any transition) as `moved`; the
@@ -2503,6 +2531,21 @@ fn read_history(name: &str, tail: &str) -> Result<History, String> {
         ))
     };
     let (event, mut by) = match name {
+        // MENGER-39: `queued [urgency]`, and nothing after it.
+        "queued" => {
+            let u = w.first().map(|u| u.parse::<crate::queue::Urgency>()).transpose()?;
+            if let Some(extra) = w.get(usize::from(u.is_some())) {
+                return Err(format!("`{extra}` is not understood here — `queued` takes an urgency (whenever, today, now, blocking) and nothing else: no window, no `by`"));
+            }
+            return Ok(History { event: Event::Queued(u), window: None, by: None });
+        }
+        // V2-20: `asked`, and nothing after it.
+        "asked" => {
+            if let Some(extra) = w.first() {
+                return Err(format!("`{extra}` is not understood here — `asked` takes nothing after it: no window, no `by`"));
+            }
+            return Ok(History { event: Event::Asked, window: None, by: None });
+        }
         "entered" => (Event::Entered(status(&w, &mut i)?), None),
         "left" => (Event::Left(status(&w, &mut i)?), None),
         // FILTER-52: `moved` is any transition — what `changed` read before;
@@ -2849,6 +2892,8 @@ struct Cell {
     blocked: bool,
     commits: bool,
     menger: bool,
+    /// MENGER-12: it has an open input.
+    asking: bool,
 }
 
 const SEVERITIES: [Option<Severity>; 5] =
@@ -2857,9 +2902,10 @@ const SEVERITIES: [Option<Severity>; 5] =
 /// Every cell a ticket can be in: status × kind × severity-or-none ×
 /// blocked × has commits × menger doc, where a doc holds `Doc` and only a
 /// doc does (SDLC-11), and only a doc carries a path (WAVE-10), so only a
-/// doc is one of menger's own — 940 of them.
+/// doc is one of menger's own — 940 of them; MENGER-12: × asking, any
+/// ticket may ask (a doc's body may declare an input) — 1,880.
 fn cells() -> Vec<Cell> {
-    let mut out = Vec::with_capacity(940);
+    let mut out = Vec::with_capacity(1880);
     for status in Status::ALL {
         for kind in Kind::ALL {
             if (status == Status::Doc) != (kind == Kind::Doc) {
@@ -2870,7 +2916,9 @@ fn cells() -> Vec<Cell> {
                 for blocked in [false, true] {
                     for commits in [false, true] {
                         for &menger in mengers {
-                            out.push(Cell { status, kind, severity, blocked, commits, menger });
+                            for asking in [false, true] {
+                                out.push(Cell { status, kind, severity, blocked, commits, menger, asking });
+                            }
                         }
                     }
                 }
@@ -2891,6 +2939,8 @@ enum Dim {
     Blocked,
     Severity,
     Commits,
+    /// MENGER-12: whether it has an open input.
+    Asking,
     Epic,
     Under(String),
     Text(String),
@@ -2917,6 +2967,7 @@ fn dims(field: &Field) -> Vec<Dim> {
         Field::Blocked => vec![Dim::Blocked],
         Field::Severity(_) => vec![Dim::Severity],
         Field::HasCommits => vec![Dim::Commits],
+        Field::Asking => vec![Dim::Asking],
         Field::In(_) => vec![Dim::Epic],
         Field::Under(_) | Field::Ticket(_) | Field::Text(_) | Field::Label(_) | Field::History(_) | Field::Saved(_) | Field::Archived | Field::Frozen | Field::Hidden => {
             var(field).into_iter().collect()
@@ -3031,6 +3082,7 @@ fn satisfiable(groups: &[&Group]) -> bool {
             blocked: false,
             commits: false,
             menger: false,
+            asking: false,
         }],
     };
     if vars.len() > 20 || cells.len().saturating_mul(epics.len() + 1).saturating_mul(1 << vars.len()) > WORLD_LIMIT {
@@ -3082,13 +3134,12 @@ fn satisfiable(groups: &[&Group]) -> bool {
 mod tests;
 
 /// V2-4: the cells of the services that are not the tickets service's — the
-/// chats', the deployments', the queue's, the assignments', a message's
-/// questions'. Each is a word the language knows, so a filter naming one is
+/// chats', the deployments', the assignments'. Each is a word the language knows, so a filter naming one is
 /// refused by that name rather than read as another cell (`ready for prod`
 /// is not `ready`). When a service comes back, its words leave this list.
-pub const GONE: [&str; 15] = [
+pub const GONE: [&str; 12] = [
     "chatting", "unread", "deployed", "deploying", "failed", "behind", "ready for", "requested", "waiting", "assigned",
-    "unassigned", "queued", "asked", "asking", "in chat",
+    "unassigned", "in chat",
 ];
 
 /// V2-4: why a cell of [`GONE`] is refused — its word, named.

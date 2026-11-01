@@ -593,6 +593,7 @@ async fn nonexistent_parent_is_refused_and_a_three_deep_chain_reads_back() {
             .into_iter()
             .map(|t| (t.id.to_string(), t))
             .collect(),
+        Default::default(),
     );
     assert_eq!(
         find_parent_cycle(&tickets, "CHAIN-1", "OTHER-2"),

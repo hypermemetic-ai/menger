@@ -56,7 +56,7 @@ fn listed(store: &Store, filter: &str) -> Vec<String> {
 
 fn assert_derived(store: &Store, after: &str) {
     let cache = store.tickets.read().unwrap();
-    let scanned = Cache::new(cache.order.values().map(|t| (t.id.to_string(), t.clone())).collect());
+    let scanned = Cache::new(cache.order.values().map(|t| (t.id.to_string(), t.clone())).collect(), cache.inputs.clone());
     assert_eq!(stored::compare(&cache.form(), &scanned.form()), Vec::<String>::new(), "after {after}");
 }
 

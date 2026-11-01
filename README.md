@@ -11,7 +11,7 @@ components written in rhx (Rhai in markup, `ui/src/<name>.rhx`, profile
 `rhx/1`; `../plexus-ui/CONTRACT.md`), pushed as signed bundles,
 versioned by content hash and drawn by a small engine.
 
-v1 is tag `v0.0.1`; what v2 cut — the chats, comments, deployments, themes, media, notes, assignees, the owner's queue, inputs and components, the Leptos app (trunk) with the frames' SDK (sdk-codegen) and mockups, the diagrams service — lives there.
+v1 is tag `v0.0.1`; what v2 cut — the chats, comments, deployments, themes, media, notes, assignees and components, the Leptos app (trunk) with the frames' SDK (sdk-codegen) and mockups, the diagrams service — lives there.
 
 ## Run
 
@@ -225,7 +225,7 @@ children and `child_count`, its count of unsatisfied blockers, the ready
 set, each shortcode's status counts, the filter cells and their bitmaps,
 the kept tree, the search index — is stored beside them, written by every
 write in the same transaction, and read at start instead of rebuilt. The
-form is **16** (V2-4: the cells no longer carry what the cut services kept);
+form is **17** (V2-20: the cells carry `asking` again);
 a file in an older form is built again, once, on its first open, and the
 log says so.
 
@@ -344,7 +344,17 @@ whole. synapse `-j` prints the `rows` event as one line (SYNAPSE-36).
 | `delete` | `[--ids] [--filter] [--max] [--children] [--unblock] [--message] [--tz]` | gone for good, a tombstone kept (admin) |
 | `undelete` | `--ids` | back within 30 days (admin) |
 | `freeze` / `unfreeze` | `--id` | a scope that takes no new children or numbers (admin) |
-| `history` | `--id` | each status and kind transition, then `history_end` |
+| `history` | `--id` | each status and kind transition, then the queue's lines, then `history_end` |
+| `inputs list` | `[--ticket] [--epic] [--state] [--filter] [--tz] [--limit] [--after]` | a page of a ticket's questions, or of every ticket's |
+| `inputs ask` | `--ticket --question` | a question filed as a text input of its body |
+| `inputs answer` | `--ticket --input --value [--rationale]` | an answer, checked against what the input declares |
+| `inputs clear` · `close` · `reopen` | `--ticket --input` | open it again · freeze it · thaw it |
+| `queue` | `--id --urgency --reason [--input] [--blocking] [--source]` | in front of the owner; again raises, never lowers |
+| `unqueue` | `--id [--source]` | out of the queue |
+| `snooze` | `--id --minutes [--source]` | off the alerting surfaces, still queued |
+| `request_changes` | `--id --body [--source]` | handed back: the words on the queue's log, the entry out |
+| `queued` | `[--id] [--snoozed] [--limit] [--after]` | a page of the queue, most urgent first, then oldest |
+| `await_reply` | `--id [--since] [--input] [--timeout-minutes]` | an agent waits for the first response |
 | `watch` | `[--epic] [--filter] [--membership] [--revisions] [--tz]` | every change, open-ended |
 | `commits link` | `--commits [--id] [--ids]` | the commits that finished a ticket |
 | `commits unlink` | `--id --commits` | take them off |
@@ -493,8 +503,43 @@ answered from the kept cells, never by testing a ticket:
 
 A word of a service v2 cut — `chatting`, `unread`, `deployed`,
 `deploying`, `failed`, `behind`, `ready for`, `requested`, `waiting`,
-`assigned`, `unassigned`, `asked`, `asking` and the rest of `filter.rs`'s
-`GONE` — is refused by name, never read as another cell.
+`assigned`, `unassigned` and the rest of `filter.rs`'s `GONE` — is refused
+by name, never read as another cell.
+
+### Questions and the queue (V2-20)
+
+A **question** is an input of a ticket's body — `<m-decision id>` (a choice),
+`<m-input id kind="multi">`, `<m-input id kind="text">` — read from the body
+on every write and kept beside it, with its whole history. `inputs ask` files
+a text one, appended to the body in one write. An input is `open`, `answered`,
+`closed` (frozen), `removed` (its body no longer declares it; its history
+stays) or `withdrawn` (its ticket is canceled). `asking` is on the cell: a
+ticket with an `open` input. Malformed input markup refuses the write, naming
+the input.
+
+The **queue** puts a ticket in front of the owner, with an urgency
+(`whenever`, `today`, `now`, `blocking`, which names the input it is idle on)
+and a reason. One entry a ticket: queueing it again raises the urgency, never
+lowers it, adds the inputs, ends a snooze. Closing the last input an entry
+names takes it out; so does an archive. `queued [urgency]` is the entries;
+`asked` an entry someone else queued that names an open input, a question
+waiting on the reader. `await_reply` holds until the first response: an
+answer, changes requested, an unqueue by another, the ticket canceled,
+archived or deleted.
+
+A body is read as the app renders it, through the app's markdown parser: code,
+HTML's `<!-- -->`, raw text and a page drawn whole inside a body hold no input. A reading is bounded: at
+most 64 levels of marked nesting, 1,024 inputs a body and 256 options an input,
+and a fixed allowance of work, about 0.7 s of it; a body past any of them is
+refused in band, naming why, and a large one is read before the write lock.
+`ask` declares its input or writes nothing: a body that ends inside a fence, a
+`<!--` or raw text is refused.
+
+`queued` and `inputs list` are pages cut from orders the cache keeps, so a
+page costs its rows: `rows { items }`, `page { next, remaining }` and, for
+`queued`, `queue_end { count, snoozed, now_unix }`. A queue page's `next` is a
+place in the order, so a ticket leaving does not lose the walk. The app's
+views are `#/queue` and the ticket page's questions.
 
 ## Access
 

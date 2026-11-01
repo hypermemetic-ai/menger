@@ -248,7 +248,7 @@ export default async (ctx) => {
     const mine = overlay.locator("[data-component=board-rows-sv]");
     assert((await mine.count()) === 1, "the overlay has board-rows-sv's section");
     const chords = await mine.locator("[data-chord]").evaluateAll((els) => els.map((e) => [e.getAttribute("data-chord"), e.querySelector("[data-label]")?.textContent ?? ""]));
-    for (const c of ["j", "k", "arrowdown", "arrowup", "enter", "x", "shift+x", "c", "/", "g b", "g r", "g w", "escape"]) {
+    for (const c of ["j", "k", "arrowdown", "arrowup", "enter", "x", "shift+x", "c", "/", "g b", "g r", "g q", "g w", "escape"]) {
       const row = chords.find(([chord]) => chord === c);
       assert(row && row[1].trim() && row[1] !== c, `the overlay lists ${c} with its label: ${JSON.stringify(chords)}`);
     }

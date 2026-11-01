@@ -2398,7 +2398,7 @@ async fn labels_are_filters_over_the_wire() {
     assert_eq!(menu(&facets, "label"), [("needs-you".to_string(), 1)]);
     let fields: Vec<&str> = facets.iter().map(|f| f["field"].as_str().unwrap()).collect();
     let at = |name: &str| fields.iter().position(|f| *f == name).unwrap();
-    assert!(!fields.contains(&"asking") && at("menger doc") < at("label") && at("label") < at("in"), "{fields:?}");
+    assert!(at("menger doc") < at("asking") && at("asking") < at("label") && at("label") < at("in"), "{fields:?}");
     let members = collect(call(&client, "tickets.nav.member", json!({"ids": ["HOME-2", "HOME-3", "HOME-4"], "filter": "label needs-you"})).await).await;
     let matched: Vec<bool> = members.iter().map(|m| m["matched"].as_bool().unwrap()).collect();
     assert_eq!(matched, [false, true, false]);

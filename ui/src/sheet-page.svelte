@@ -82,6 +82,9 @@
   import TicketPicker from "plexus-ui:ticket-picker";
   import TicketRelations from "plexus-ui:ticket-relations";
   import TicketRevisions from "plexus-ui:ticket-revisions";
+  import TicketQuestions from "plexus-ui:ticket-questions";
+  import QueuePage from "plexus-ui:queue-page";
+  import PageQueue from "plexus-ui:page-queue";
   import TicketSubtasks from "plexus-ui:ticket-subtasks";
   import UiVersions from "plexus-ui:ui-versions";
   import WorkBlocker from "plexus-ui:work-blocker";
@@ -120,6 +123,32 @@
   // The palettes' held rows: the second hit, hovered or selected — never
   // the first, which the palette selects itself.
   const HITS = { hover: ["li:nth-child(2) > .palette-hit"], focus: [".palette-input"], selected: ["li:nth-child(2) > .palette-hit"] };
+  // V2-20: every kind of question in every state, and a queue with every
+  // urgency and a snooze: the sheet's own rows, so a store that asks nothing
+  // still shows them.
+  const Q = (id, kind, state, more = {}) => ({ id, kind, state, question: `A ${kind} question, ${state}?`, options: [], answer: null, history: [], ...more });
+  const OPTIONS = [{ value: "a", label: "Archive", recommended: true }, { value: "b", label: "Delete", recommended: false }];
+  const QUESTIONS = (t) => [
+    Q("c-open", "choice", "open", { ticket: t, options: OPTIONS, recommendation: "Archive: holds are real." }),
+    Q("c-said", "choice", "answered", { ticket: t, options: OPTIONS, answer: { value: { type: "choice", option: "a" }, rationale: "holds", name: "the owner" } }),
+    Q("m-open", "multi", "open", { ticket: t, options: OPTIONS }),
+    Q("m-said", "multi", "answered", { ticket: t, options: OPTIONS, answer: { value: { type: "multi", options: ["b"] } } }),
+    Q("t-open", "text", "open", { ticket: t }),
+    Q("t-said", "text", "answered", { ticket: t, answer: { value: { type: "text", text: "ship it" } } }),
+    Q("closed", "choice", "closed", { ticket: t, options: OPTIONS, answer: { value: { type: "choice", option: "b" } } }),
+    Q("gone", "text", "withdrawn", { ticket: t }),
+  ];
+  const AT = 1_800_000_000;
+  const ROW = (id, urgency, reason, more = {}) => ({ id, ticket: { id, title: `the ticket ${id}` }, entry: { ticket: id, urgency, reason, queued_unix: AT - 7200, ...more } });
+  const QUEUED = [
+    ROW("SHEET-1", "blocking", "idle until it is answered", { input: "landing" }),
+    ROW("SHEET-2", "now", "something waits", { inputs: ["a", "b"] }),
+    ROW("SHEET-3", "today", "before the day is out"),
+    ROW("SHEET-4", "today", "asleep for an hour", { snoozed_until_unix: AT + 3600 }),
+    ROW("SHEET-5", "whenever", "when there is time", { queued_unix: AT }),
+  ];
+  const HOLD_Q = { hover: [".tq-opt"], focus: [".tq-opt"], selected: [".tq-opt"], checked: [".tq-opt"] };
+  const HOLD_ROW = { hover: [".q-row"], focus: [".q-id"], selected: [".q-row"] };
   const SHEET = [
     ["the board", [
       ["board-rows-sv", BoardRowsSv, F, ["hover", "focus", "selected", "checked"], fil],
@@ -169,6 +198,10 @@
       ["ticket-create", TicketCreate, (t) => ({ parent: t }), ["hover", "focus", "disabled", "checked"], { loading: { sheet: "loading" } }, true, { checked: [".tab"], disabled: [".go"] }],
       ["ticket-picker", TicketPicker, (t) => ({ name: "sheet", label: "a ticket" }), ["hover", "focus"], {}],
     ]],
+    ["the queue", [
+      ["ticket-questions", TicketQuestions, (t) => ({ id: t, sample: JSON.stringify(QUESTIONS(t)) }), ["hover", "focus", "selected", "checked"], { loading: { sheet: "loading", sample: null }, empty: { id: NONE, sample: null } }, false, HOLD_Q],
+      ["queue-page", QueuePage, () => ({ sample: JSON.stringify(QUEUED) }), ["hover", "focus", "selected"], { loading: { sheet: "loading", sample: "[]" }, empty: { sample: "[]" } }, true, HOLD_ROW],
+    ]],
     ["the order of work", [
       ["work-ready", WorkReady, F, ["hover", "focus"], { loading: { sheet: "loading" }, ...fil }],
       ["work-ready-row", WorkReadyRow, ID, ["hover", "focus"], {}],
@@ -183,6 +216,7 @@
     // STUDIO-12: the pages — each route's rhx page, placing its components by their marks (#/sheet's own, page-sheet, aside: it places this).
     ["the pages", [
       ["page-ticket", PageTicket, ID, [], { loading: { sheet: "loading" }, ...gone }, true],
+      ["page-queue", PageQueue, F, [], {}, true],
       ["page-new", PageNew, (t) => ({ parent: t }), [], {}, true],
       ["page-search", PageSearch, (t) => ({ q: t }), [], { empty: { q: "zzqqxxjj" } }, true],
       ["page-ready", PageReady, F, [], fil, true],

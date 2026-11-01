@@ -37,6 +37,13 @@ pub use revisions::{FieldChange, Revision, RevisionDiff, RevisionSource};
 /// [`vocab::FilterText`], …). Wasm-safe.
 #[macro_use]
 pub mod vocab;
+/// V2-20: a body's marked elements, read as the app renders it: v1's reader,
+/// bounded. Wasm-safe, like [`inputs`].
+pub mod marks;
+/// INPUT-3: a body's inputs — `<m-decision id>` and `<m-input id kind>` with
+/// their options, question and recommendation — and an answer's value
+/// checked against them. Wasm-safe.
+pub mod inputs;
 /// ORG-3: what names a shortcode and a ticket — [`OrgId`], [`Code`],
 /// [`ShortcodeId`], [`Namespace`], [`Shortcode`], [`TicketId`] — and
 /// [`Address::parse`], the one parser from text to an address. Wasm-safe.
@@ -60,7 +67,12 @@ pub mod limits;
 /// MENGER-12: a ticket's labels — what a label is, and how `label` moves a
 /// ticket's set. Wasm-safe: the app checks what a reader types with it.
 pub mod labels;
+/// MENGER-39: the queue — a ticket put in front of the owner with an
+/// urgency. Wasm-safe: the store keeps it, the queue view draws it.
+pub mod queue;
+pub use queue::{Ending, QueueAction, QueueEntry, QueueRecord, Reply, Urgency};
 pub use types::{
+    Answer, AnswerSource, Input, InputAction, InputHistoryEntry, InputKind, InputOption, InputState, InputValue,
     is_menger_doc, is_menger_path, path_address, Group, Kind, Marked, Placement, PlacementChange, RootRow, SearchWord, Severity, Status, Ticket,
     TicketSummary, TicketsEvent, MENGER_PATH_PREFIX,
 };
