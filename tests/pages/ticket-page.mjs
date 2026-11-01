@@ -5,7 +5,8 @@
 // ticket …", `[data-deleted]`), `[data-surface=ticket-head]`
 // `[data-field=id|title|kind|status|severity|labels|parent|address]`,
 // `[data-badge=hidden|archived|frozen]` and `[data-sib=prev|next]`,
-// `[data-surface=ticket-body]` `[data-field=body]`, `[data-surface=ticket-relations]`
+// `[data-surface=ticket-body]` `[data-field=body]` (SURFACE-16: drawn by `[data-surface=ticket-view]`, the
+// rendering alone, its code inlined: props in, no call), `[data-surface=ticket-relations]`
 // (`[data-ticket-child=<id>]`, `[data-field=blocked_by|unlocks]`), `[data-surface=ticket-subtasks]`
 // (`[data-id]`, `[data-form=tickets.subtasks.create]`, `[data-refused]`), `[data-surface=ticket-commits]`
 // (`[data-id=<ref>]`, `[data-form=tickets.commits.link]`, `[data-action=tickets.commits.unlink]`,
@@ -15,10 +16,10 @@
 // tickets' marks `[data-mark=X]` (carrying `data-id`) holding — or being — the bound mark
 // `[data-slot=X][data-component=X]` for ticket-edit, ticket-actions (SURFACE-4; the rhx page's
 // wrapper around its `<ticket-edit id/>`, STUDIO-12) and work-blockers (SURFACE-7, ticket-relations' own).
-import { sentCalls } from "../../scripts/ui-throwaway.mjs";
+import { bundle, push, sentCalls } from "../../scripts/ui-throwaway.mjs";
 
 export default async (ctx) => {
-  const { test, assert, eventually, sleep, openPage, sy, groupsNow, fs, path, session } = ctx;
+  const { test, assert, eventually, sleep, openPage, sy, groupsNow, fs, path, session, server, v1 } = ctx;
   const trimmed = (t) => String(t ?? "").trim();
   const text = async (loc) => trimmed(await loc.first().textContent({ timeout: 1000 }));
   const scratch = path.dirname(session);
@@ -342,6 +343,87 @@ export default async (ctx) => {
       await eventually("g b goes to the board", async () => !(await page.evaluate(() => location.hash)).includes("/ticket/"), 5_000);
     } finally {
       await context.close();
+    }
+  });
+
+  // SURFACE-16: ticket-body keeps its live spec and places ticket-view, a
+  // sibling inlined in its module: the marks as before, no section of its own.
+  await test("ticket_body_draws_through_ticket_view", async () => {
+    const t = made("the view's ticket", "--body", body("The **glaze** fires at cone 6.\n"));
+    const none = made("the view's empty ticket");
+    const { page, tp, context, seen } = await open(t.id);
+    try {
+      const b = tp.locator("[data-surface=ticket-body] [data-surface=ticket-view] [data-field=body][data-ticket-body]");
+      await eventually("the body, through the view", async () => (await text(b)).includes("fires at cone 6"));
+      assert(trimmed(await b.locator("strong").textContent({ timeout: 1000 })) === "glaze", "the body as markdown");
+      assert((await tp.locator("[data-surface=ticket-body] [data-field=title], [data-surface=ticket-body] [data-field=status]").count()) === 0, "the page's title and status stay ticket-head's");
+      assert((await tp.locator("[data-surface=ticket-body] [data-slot]").count()) === 0, "the view is no section of ticket-body's");
+      assert(!seen.requests.some((u) => /\/components\/ticket-view\.js$/.test(new URL(u).pathname)), "the view's code came inside ticket-body's module");
+      sy("tickets", "amend", "--id", t.id, "--body", body("Now *bisque* first.\n"));
+      await eventually("an amend redraws the body in place", async () => (await text(b)).includes("bisque"), 5_000);
+      await page.evaluate((r) => (location.hash = r), `${ROUTE}${none.id}`);
+      const empty = tp.locator("[data-surface=ticket-body] [data-surface=ticket-view] [data-field=body][data-empty]");
+      await eventually("no body yet", async () => (await text(empty)) === "No body yet.", 5_000);
+    } finally {
+      await context.close();
+    }
+  });
+
+  // SURFACE-16: a bundle of ticket-view and a page that places it, nothing else
+  // of menger — by its sibling import and by its bound mark — draws from props
+  // alone: `uses` empty, and no call of a service's on the wire.
+  await test("ticket_view_draws_from_props_with_no_call", async () => {
+    const live = () => sy("ui", "versions").find((e) => e.type === "version" && e.live)?.hash;
+    const host = `<script module>
+  export const uses = [];
+</script>
+<script>
+  import View from "./ticket-view.svelte";
+  import Bound from "plexus-ui:ticket-view";
+  const md = "The **glaze** fires.\\n\\n<img src=x onerror=alert(1)><script>window.pwned = 1</scr" + "ipt>\\n";
+</script>
+<main id="host">
+  <div id="inlined"><View body={md} title="KILN-1 the kiln" status="Ready"/></div>
+  <div id="bare"><View body=""/></div>
+  <div id="bound"><Bound body={md} title="KILN-2 the bound" status="Coding"/></div>
+</main>
+`;
+    const alone = bundle(path.dirname(session), "view-alone", {
+      engine: v1.engine,
+      edit: (ui) => {
+        for (const f of fs.readdirSync(path.join(ui, "src"))) if (f !== "ticket-view.svelte") fs.rmSync(path.join(ui, "src", f));
+        fs.writeFileSync(path.join(ui, "src", "view-host.svelte"), host);
+        fs.writeFileSync(path.join(ui, "routes.json"), JSON.stringify({ "#/": "view-host" }));
+        fs.writeFileSync(path.join(ui, "slots.json"), "{}");
+      },
+    });
+    const m = JSON.parse(alone.manifest);
+    assert(JSON.stringify(Object.keys(m.components).sort()) === JSON.stringify(["ticket-view", "view-host"]), `the bundle holds the view and its page: ${Object.keys(m.components)}`);
+    assert(m.components["ticket-view"].uses.length === 0 && m.components["view-host"].uses.length === 0, "uses empty, the page's and the view's");
+    const was = live();
+    const answer = push(server, session, path.join(path.dirname(session), "signer.key"), alone);
+    assert(answer?.type === "pushed", `pushed: ${JSON.stringify(answer)}`);
+    await eventually("the view's bundle is live", async () => live() === alone.version);
+    const { page, context, seen } = await openPage("#/");
+    try {
+      const v = (at) => page.locator(`#${at} [data-surface=ticket-view]`);
+      await eventually("the view draws", async () => (await v("inlined").locator("[data-ticket-body] strong").count()) === 1, 10_000);
+      await eventually("the bound one draws", async () => (await v("bound").locator("[data-ticket-body] strong").count()) === 1, 10_000);
+      assert((await text(v("inlined").locator("[data-field=title]"))) === "KILN-1 the kiln", "the title, from its prop");
+      assert((await v("inlined").locator("[data-field=status]").getAttribute("data-status")) === "Ready", "the status, from its prop");
+      assert((await page.locator("#bound [data-component=ticket-view][data-slot]").count()) === 1, "the bound one is a section");
+      assert((await text(v("bare").locator("[data-field=body][data-empty]"))) === "No body yet.", "no body: says so");
+      assert((await v("bare").locator("[data-field=title], [data-field=status]").count()) === 0, "no title, no status: neither drawn");
+      assert((await page.locator("[data-ticket-body] script, [data-ticket-body] [onerror]").count()) === 0 && !(await page.evaluate(() => window.pwned)), "the body through the host's sanitizer");
+      await sleep(300);
+      const calls = (await sentCalls(page)).filter((c) => !String(c.method).startsWith("ui."));
+      assert(calls.length === 0, `no call: ${calls.map((c) => c.method).join(", ")}`);
+      const failed = seen.console.filter((l) => /pageerror/.test(l));
+      assert(failed.length === 0, `no page error:\n${failed.join("\n")}`);
+    } finally {
+      await context.close();
+      sy("ui", "rollback", "--to", was);
+      await eventually("the version the runner left is live again", async () => live() === was);
     }
   });
 };
