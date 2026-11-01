@@ -173,3 +173,51 @@ async fn a_heavy_body_does_not_hold_the_write_lock() {
     let _ = heavy.await.unwrap();
     assert!(beside < Duration::from_millis(500), "a small write waited {beside:?}");
 }
+
+/// Prose, as a report's sections hold it: `paragraphs` of about 500 bytes,
+/// a blank line between them, inside one `<section>`.
+fn section(n: usize, paragraphs: usize) -> String {
+    let line = "The kiln held its temperature through the second soak, and the glaze came out even across the shelf. ".repeat(5);
+    let body: String = (0..paragraphs).map(|_| format!("<p>{line}</p>\n\n")).collect();
+    format!("<section id=\"s{n}\">\n<p>Its first words.</p>\n\n{body}<p>Its last.</p>\n</section>\n\n")
+}
+
+/// A report: 1 MB in 60 sections, a blank line inside each, and its question.
+fn report() -> String {
+    let parts: String = (0..60).map(|n| section(n, 32)).collect();
+    format!("{parts}{}", text("verdict"))
+}
+
+/// 3 MB: 12 pages drawn whole and 12 sections between them, and its question.
+fn mocked() -> String {
+    let page = format!("<m-mockup>\n<html><body>{}</body></html>\n</m-mockup>\n\n", "<div class=\"row\"><span>a cell</span></div>\n".repeat(4_000));
+    let parts: String = (0..12).map(|n| format!("{page}{}", section(n, 150))).collect();
+    format!("{parts}{}", text("verdict"))
+}
+
+/// V2-20's re-review, N3: bodies v1 took are read, and the budget still bounds
+/// the wall time at the cap.
+#[test]
+fn large_bodies_v1_took_are_read() {
+    for (what, body, size) in [("a report", report(), 900_000), ("pages and sections", mocked(), 2_500_000)] {
+        assert!(body.len() > size, "{what}: {}", body.len());
+        let t = Instant::now();
+        let (found, problems) = read(&body);
+        eprintln!("{what}: {} bytes, {:?}", body.len(), t.elapsed());
+        assert!(problems.is_empty(), "{what}: {problems:?}");
+        assert_eq!(found.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), ["verdict"], "{what}");
+    }
+}
+
+/// A refusal says which limit it reached.
+#[test]
+fn a_refusal_names_the_limit_it_reached() {
+    let blocks = format!("{}{}", text("x"), "<div>\n<p>a</p>\n\n<p>b</p>\n</div>\n\n".repeat(200_000));
+    let closes = format!("{}{}{}", text("x"), "<span>".repeat(1024), "</b>".repeat(2_000_000));
+    for (what, body, says) in [("blocks", blocks, "blank line"), ("closes", closes, "open elements")] {
+        let (_, problems) = read(&body);
+        let why = problems.first().map(ToString::to_string).unwrap_or_default();
+        assert!(why.contains(says), "{what}: {why}");
+        assert!(!why.contains("fewer tags, or fewer blank lines"), "{what}: {why}");
+    }
+}

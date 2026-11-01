@@ -210,3 +210,29 @@ async fn the_shortcuts_equal_the_walks() {
     store.set_status(SYS.permit("Q-3"), Status::Coding).await.unwrap();
     check(&store, "moved");
 }
+
+/// V2-20's re-review, N1: asks at once on one ticket all land, each with an
+/// id of its own, however often the body moved under them.
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn asks_at_once_on_one_ticket_all_land() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = std::sync::Arc::new(Store::open(&dir.path().join("t.db")).unwrap());
+    let sys = store.system().unwrap();
+    store.create(&sys, new("Q", Kind::Scope, "root")).await.unwrap();
+    store.create(&sys, new("Q", Kind::Build, "the body")).await.unwrap();
+    const N: usize = 64;
+    let mut asks = Vec::new();
+    for n in 0..N {
+        let (s, on) = (store.clone(), sys.permit("Q-2"));
+        asks.push(tokio::spawn(async move { s.ask(on, &format!("Question {n}?")).await }));
+    }
+    let mut ids = std::collections::HashSet::new();
+    for a in asks {
+        match a.await.unwrap() {
+            Ok(InputWrite::Changed(i)) => assert!(ids.insert(i.id.to_string()), "{} twice", i.id),
+            other => panic!("{other:?}"),
+        }
+    }
+    assert_eq!(store.inputs(SYS, Some("Q-2"), None, None).unwrap().len(), N);
+    assert_eq!(ids.len(), N);
+}
