@@ -197,7 +197,7 @@ fn run_end(text: &str, last: usize) -> usize {
     let mut at = text[last..].find('\n').map_or(text.len(), |j| last + j + 1);
     while at < text.len() {
         let end = text[at..].find('\n').map_or(text.len(), |j| at + j + 1);
-        if text[at..end].trim().is_empty() {
+        if text[at..end].trim_matches([' ', '\t', '\r', '\n']).is_empty() {
             return end;
         }
         at = end;
