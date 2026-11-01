@@ -909,3 +909,27 @@ once. So 44 instances stay blank, at least one drawn instance is not live (45 wa
 the probe does not pair them), and the page loses its slot assignments and routes from the service. N = 250 stays
 under it only because its gets finish fast; the limit is shared with everything else on the page's one socket, and
 one run of the ticket page test sent 7 `tickets.watch` and `ui.watch` (sent, not counted open).
+
+### After the review: v1's reader, bounded (V2-20, 2026-11-01)
+
+The rows the reader can move, 10⁶ tickets, p50 / p99 ms, the same ringer. The
+bodies here are small, so this shows a reading costs a small body nothing; it
+says nothing of a heavy one, which `tests_reading.rs` holds: every shape at
+8 MiB read or refused in band, the worst 1.7 s in release (closes that find
+nothing, past the budget), before the write lock.
+
+| what | before | after | budget |
+|---|---|---|---|
+| ask | 1.59 / 30.9 | 1.44 / 41.5 | 20 **over** |
+| amend, the control | 1.56 / 45.1 | 1.53 / 50.7 | 20 **over** |
+| queued, a page of 200 | 1.70 / 3.63 | 1.65 / 3.59 | 5 |
+| inputs list open, 200 | 0.62 / 1.37 | 0.59 / 1.06 | 5 |
+| list `queued` | 6.33 / 12.4 | 6.93 / 13.5 | 5 **over** |
+| list `queued now` | 2.90 / 5.79 | 2.96 / 5.75 | 5 **over** |
+| write beside 100 watches of `queued` | 4.09 / 11.2 | 4.35 / 11.2 | 20 |
+| ask beside 200 `await_reply` held | 3.03 / 65.7 | 3.03 / 70.8 | 20 **over** |
+| #/queue's first row, cold | 113 / 116 | 114 / 123 | 300 |
+
+New: an answer beside 100 watches of `asked`, 1.63 / 7.80, though the ringer's
+entries are all its own reader's, so those watches read an empty set. The four
+overs are the two already named, unchanged by the reader.
