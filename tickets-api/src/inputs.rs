@@ -83,6 +83,8 @@ pub enum Problem {
     OptionTwice { input: String, value: String },
     /// A text input holding options.
     TextOptions { input: String },
+    /// The body is past what a reading takes (V2-20): `why` names the bound.
+    TooMuch { why: String },
 }
 
 impl fmt::Display for Problem {
@@ -115,6 +117,7 @@ impl fmt::Display for Problem {
                 f,
                 "the input '{input}' declares the option '{value}' twice: an option's value is unique in its input"
             ),
+            Self::TooMuch { why } => write!(f, "the body's inputs are not read: {why}"),
             Self::TextOptions { input } => write!(
                 f,
                 "the input '{input}' is kind=\"text\", which takes a reply, not options: remove its <m-choice>s, or \
