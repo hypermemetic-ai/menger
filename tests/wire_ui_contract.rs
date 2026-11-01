@@ -153,7 +153,7 @@ fn unknown(p: &Value) {
     assert!(p["contract_matches"].is_null(), "a contract of unknown is unknown (null), never false: {p}");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_bundle_stamped_from_the_service_matches() {
     let m = start().await;
     let admin = connect(m.s.port).await;
@@ -173,7 +173,7 @@ async fn a_bundle_stamped_from_the_service_matches() {
     assert_eq!(p["contract_matches"], true, "a bundle stamped from this server matches it: {p}");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn another_hash_does_not_match() {
     let m = start().await;
     let admin = connect(m.s.port).await;
@@ -194,7 +194,7 @@ async fn another_hash_does_not_match() {
     assert!(pushed(&evs)["contract_matches"].is_null(), "no service named: null: {evs:?}");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_empty_or_absent_contract_stays_refused() {
     let m = start().await;
     let admin = connect(m.s.port).await;
@@ -213,7 +213,7 @@ async fn an_empty_or_absent_contract_stays_refused() {
     unknown(pushed(&evs));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_bundle_built_without_contract_from_is_unknown() {
     let m = start().await;
     let admin = connect(m.s.port).await;
@@ -230,7 +230,7 @@ async fn a_bundle_built_without_contract_from_is_unknown() {
 /// reads the hash from the binary it built and hands it to the build, which
 /// is given no key to sign in with, so it could ask none. The hash is the
 /// one the push compares against, so the bundle matches.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_contract_passed_straight_is_stamped_and_asks_no_server() {
     let m = start().await;
     let admin = connect(m.s.port).await;
@@ -250,7 +250,7 @@ async fn a_contract_passed_straight_is_stamped_and_asks_no_server() {
 /// it explicitly (`--contract unknown`), the build refuses, naming the
 /// flag, and writes no bundle — a build that meant to stamp a hash and has
 /// none stops there, never shipping a bundle that says unknown.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unknown_passed_explicitly_is_refused_naming_the_flag() {
     let dir = scratch("menger-ui-contract-unknown-");
     fixture(dir.path());
