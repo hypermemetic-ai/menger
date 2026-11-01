@@ -2096,7 +2096,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "plexus-auth-core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2117,7 +2117,7 @@ dependencies = [
 
 [[package]]
 name = "plexus-client"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "futures-channel",
  "futures-core",
@@ -2130,7 +2130,7 @@ dependencies = [
 
 [[package]]
 name = "plexus-core"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2193,7 +2193,7 @@ dependencies = [
 
 [[package]]
 name = "plexus-macros"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -2240,7 +2240,7 @@ dependencies = [
 
 [[package]]
 name = "plexus-transport"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-stream",

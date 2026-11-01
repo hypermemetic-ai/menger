@@ -60,7 +60,7 @@ serde = { version = "1", features = ["derive"] }
 schemars = { version = "1.1", features = ["derive"] }
 futures = "0.3"
 
-# The 0.6 line, by sibling path (unpublished — MFE-10), exactly as
+# The 0.7 line, by sibling path (unpublished — MFE-10), exactly as
 # tickets-api takes it. `plexus-client` without a transport: a consumer adds
 # the backend it runs on (`ws-native`, `ws-web`).
 plexus-macros = { path = "../../plexus-macros" }

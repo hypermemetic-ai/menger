@@ -1054,11 +1054,12 @@ and `view: mockup` + `widths:` makes a whole body one.
 
 ## Conventions
 
-- Plexus crates come from the **0.6 line by sibling path** (MFE-10):
-  `../plexus-core` 0.6.0, `../plexus-macros` 0.6.0, `../plexus-transport`
-  0.5.0, all on `main`, referencing each other the same way so the graph
-  resolves one of each. The line is unpublished and untagged — MACRO-8 is
-  that release — so a clone of menger alone does not build; the sibling
+- Plexus crates come from the **0.7 line by sibling path** (MFE-10):
+  `../plexus-core` 0.7.0, `../plexus-macros` 0.7.0, `../plexus-transport`
+  0.6.0, all on `main`, referencing each other the same way so the graph
+  resolves one of each. Each carries its version beside its path, and the
+  line is on crates.io (PLEXUS-13), but menger takes the checkouts, so a
+  clone of menger alone does not build; the sibling
   checkouts must be beside it. Same macro API as before
   (`#[plexus_macros::activation]` + `#[plexus_macros::method]`); every
   activation is `impl FooActivation` (MACRO-13's rule, MACRO-21): the stem
@@ -1084,7 +1085,7 @@ and `view: mockup` + `widths:` makes a whole body one.
   `/rest` proxy (ACCESS-33) and serves only menger's pages and the app's
   build, read into a table — never a request path on disk. `frontend/src`
   must contain no `/rest/`, no hand-parsed SSE, and no `serde_json::Value`
-  on a wire path. Both halves are on the plexus 0.6 line (MFE-10), and the
+  on a wire path. Both halves are on the plexus 0.7 line (MFE-10), and the
   client the app uses is emitted from the server's own activation (MFE-11).
 - **Every page goes out under a Content-Security-Policy** (ACCESS-28,
   `src/shell.rs`'s `PAGE_CSP`; README "Security headers"): the app runs no
