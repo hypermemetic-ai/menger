@@ -30,6 +30,10 @@
     "top": "app-top",
     "palette": "jump-palette-sv"
   },
+  "page-queue": {
+    "top": "app-top",
+    "palette": "jump-palette-sv"
+  },
   "page-ready": {
     "top": "app-top",
     "palette": "jump-palette-sv"

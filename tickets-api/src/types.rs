@@ -1352,9 +1352,9 @@ impl SummaryRow {
 pub enum Row {
     /// A summary row (`list`, `work.ready` with `summary`; `find`).
     Summary { summary: SummaryRow },
-    /// V2-20: a row of `queued` — the entry and its ticket's row, most
-    /// urgent first, then the oldest.
-    QueueRow { entry: crate::queue::QueueEntry, ticket: TicketSummary },
+    /// V2-20: a row of `queued` — its ticket's id (what a page keys it by),
+    /// the entry and its ticket's row, most urgent first, then the oldest.
+    QueueRow { id: String, entry: crate::queue::QueueEntry, ticket: TicketSummary },
     /// V2-20: a row of `inputs.list`, as [`TicketsEvent::Input`].
     Input { input: Input },
     /// A whole ticket (`list`, `work.ready` without `summary`).
@@ -1443,14 +1443,14 @@ pub enum TicketsEvent {
     /// (`action`: `queued`, `raised` — a higher urgency —, `requeued` — the
     /// urgency kept) — `queue`'s answer, and on `watch`; the entry as the
     /// write leaves it and its ticket's row.
-    Queued { entry: crate::queue::QueueEntry, ticket: TicketSummary, action: crate::queue::QueueAction },
+    Queued { id: String, entry: crate::queue::QueueEntry, ticket: TicketSummary, action: crate::queue::QueueAction },
     /// MENGER-39: a ticket out of the queue — `unqueue`'s answer, and on
     /// `watch`; `action` `unqueued`, or `closed` (the input the entry named
     /// was closed); the entry as it was, who took it out, when.
     Unqueued { id: String, entry: crate::queue::QueueEntry, action: crate::queue::QueueAction, by: String, at_unix: i64 },
     /// MENGER-39: a queued ticket snoozed until its entry's
     /// `snoozed_until_unix` — `snooze`'s answer, and on `watch`.
-    Snoozed { entry: crate::queue::QueueEntry, ticket: TicketSummary },
+    Snoozed { id: String, entry: crate::queue::QueueEntry, ticket: TicketSummary },
     /// APP-23: `request_changes`'s answer — what to change, kept on the
     /// queue's log (`action: changes_requested`), and the ticket out of the
     /// queue (`entry` as it was, who, when). `watch` carries the `unqueued`.

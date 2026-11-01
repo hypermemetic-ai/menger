@@ -1180,6 +1180,8 @@ impl TicketsActivation {
     pub async fn queued(
         &self,
         #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// Only this ticket's entry, e.g. MENGER-39 (optional): what a ticket's page reads.
+        id: Option<TicketRef>,
         /// Include the snoozed ones (optional; default true — each marked by its snoozed_until_unix).
         snoozed: Option<bool>,
         /// How many rows (optional; default 200, at most 1000).
@@ -1187,7 +1189,7 @@ impl TicketsActivation {
         /// Start after this — the `next` a page answered (optional).
         after: Option<Cursor>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        let ask = crate::store::QueuedAsk { snoozed: snoozed.unwrap_or(true), limit: limit.map(|n| n as usize), after: after.map(String::from) };
+        let ask = crate::store::QueuedAsk { id: id.map(TicketRef::into_string), snoozed: snoozed.unwrap_or(true), limit: limit.map(|n| n as usize), after: after.map(String::from) };
         queued_stream(self.store.clone(), user, ask)
     }
 

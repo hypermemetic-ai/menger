@@ -10,9 +10,9 @@ use crate::store::QueueChange;
 /// A queue write's answer as its wire event.
 fn wire(change: QueueChange) -> TicketsEvent {
     match change {
-        QueueChange::Queued { entry, ticket, action } => TicketsEvent::Queued { entry, ticket, action },
+        QueueChange::Queued { entry, ticket, action } => TicketsEvent::Queued { id: entry.ticket.clone(), entry, ticket, action },
         QueueChange::Unqueued { id, entry, action, by, at_unix } => TicketsEvent::Unqueued { id, entry, action, by, at_unix },
-        QueueChange::Snoozed { entry, ticket } => TicketsEvent::Snoozed { entry, ticket },
+        QueueChange::Snoozed { entry, ticket } => TicketsEvent::Snoozed { id: entry.ticket.clone(), entry, ticket },
     }
 }
 
@@ -122,7 +122,7 @@ pub(super) fn queued_stream(store: Arc<Store>, caller: VerifiedUser, ask: crate:
         match store.queued_page(&caller, ask, now) {
             Err(e) => yield refusal(e),
             Ok(page) => {
-                let items = page.rows.into_iter().map(|(entry, ticket)| Row::QueueRow { entry, ticket }).collect();
+                let items = page.rows.into_iter().map(|(entry, ticket)| Row::QueueRow { id: entry.ticket.clone(), entry, ticket }).collect();
                 for ev in rows_events(items) {
                     yield ev;
                 }

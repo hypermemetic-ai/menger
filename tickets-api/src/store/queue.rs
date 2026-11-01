@@ -292,6 +292,8 @@ fn place_of(text: &str) -> Option<Place> {
 /// What `queued` asks.
 #[derive(Debug, Clone, Default)]
 pub struct QueuedAsk {
+    /// Only this ticket's entry, when it has one and the reader sees it.
+    pub id: Option<String>,
     /// Whether the snoozed ones (at `now`) are in it.
     pub snoozed: bool,
     /// How many rows; [`QUEUED_PAGE`] unless asked, at most [`QUEUED_PAGE_MAX`].
@@ -789,6 +791,20 @@ impl Store {
         let sees = seen.sees(&cache);
         let shows = |e: &QueueEntry| (ask.snoozed || !e.snoozed_at(now)) && sees.id(&e.ticket);
         let mut page = QueuedPage::default();
+        // One ticket's: its place alone, nothing walked.
+        if let Some(id) = &ask.id {
+            let key = sees.resolve(id)?;
+            if let Some(entry) = cache.queue.get(&key).filter(|e| shows(e)) {
+                if let Some(row) = cache.get(&key).filter(|r| r.archived.is_none()) {
+                    let mut row = row.clone();
+                    sees.row(&mut row);
+                    page.rows.push((entry.clone(), row));
+                    page.count = 1;
+                    page.snoozed = u64::from(entry.snoozed_at(now));
+                }
+            }
+            return Ok(page);
+        }
         let mut last = None;
         // The rows, then the rest of the order — counted, never cloned.
         for (place, entry) in cache.queue.in_order(after.as_ref()).filter(|(_, e)| shows(e)) {
@@ -821,7 +837,7 @@ impl Store {
         let mut out = Vec::new();
         let mut after = None;
         loop {
-            let page = self.queued_page(who, QueuedAsk { snoozed, limit: Some(QUEUED_PAGE_MAX), after }, now).expect("a page");
+            let page = self.queued_page(who, QueuedAsk { id: None, snoozed, limit: Some(QUEUED_PAGE_MAX), after }, now).expect("a page");
             out.extend(page.rows);
             match page.next {
                 Some(next) => after = Some(next),

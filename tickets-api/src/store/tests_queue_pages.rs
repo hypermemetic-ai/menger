@@ -53,7 +53,7 @@ async fn pages_of_the_queue_walk_it_in_order_and_a_raise_moves_it() {
     let all = store.queued(SYS, true, 0);
     assert_eq!(all.iter().map(|(e, _)| e.ticket.as_str()).collect::<Vec<_>>(), ["Q-5", "Q-3", "Q-2", "Q-4", "R-1"], "most urgent, then the first queued");
 
-    let ask = |after: Option<String>| QueuedAsk { snoozed: true, limit: Some(2), after };
+    let ask = |after: Option<String>| QueuedAsk { id: None, snoozed: true, limit: Some(2), after };
     let first = store.queued_page(SYS, ask(None), 0).unwrap();
     assert_eq!((tickets(&first), first.remaining, first.count), (vec!["Q-5", "Q-3"], 3, 5));
     let second = store.queued_page(SYS, ask(first.next.clone()), 0).unwrap();

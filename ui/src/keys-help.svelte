@@ -25,6 +25,7 @@
     ["/", ["/"], "filter"],
     ["g b", ["g", "b"], "board"],
     ["g r", ["g", "r"], "ready"],
+    ["g q", ["g", "q"], "queue"],
     ["g w", ["g", "w"], "waves"],
     ["ctrl+k", ["ctrl", "k"], "jump"],
     ["escape", ["esc"], "clear"],

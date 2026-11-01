@@ -153,6 +153,7 @@
     "/": { to: () => b.emit("filter.focus", {}), label: "the filter line" },
     "g b": { to: () => b.navigate(base), label: "the board" },
     "g r": { to: () => b.navigate("#/ready"), label: "ready" },
+    "g q": { to: () => b.navigate("#/queue"), label: "the queue" },
     "g w": { to: () => b.navigate("#/waves"), label: "waves" },
     escape: { to: clear, label: "clear the selection" },
   });

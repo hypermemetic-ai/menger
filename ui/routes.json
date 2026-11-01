@@ -13,6 +13,7 @@
   "#/new/:parent": "page-new",
   "#/bulk": "page-bulk",
   "#/bulk/:ids": "page-bulk",
+  "#/queue": "page-queue",
   "#/ready": "page-ready",
   "#/ready/:filter": "page-ready",
   "#/waves": "page-waves",

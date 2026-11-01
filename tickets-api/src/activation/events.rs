@@ -146,9 +146,9 @@ pub(super) fn wire_event(change: Change) -> Option<TicketsEvent> {
         Change::InputChanged { input, .. } => TicketsEvent::InputChanged { input },
         // MENGER-39: and the queue write.
         Change::Queue { change, .. } => match change {
-            crate::store::QueueChange::Queued { entry, ticket, action } => TicketsEvent::Queued { entry, ticket, action },
+            crate::store::QueueChange::Queued { entry, ticket, action } => TicketsEvent::Queued { id: entry.ticket.clone(), entry, ticket, action },
             crate::store::QueueChange::Unqueued { id, entry, action, by, at_unix } => TicketsEvent::Unqueued { id, entry, action, by, at_unix },
-            crate::store::QueueChange::Snoozed { entry, ticket } => TicketsEvent::Snoozed { entry, ticket },
+            crate::store::QueueChange::Snoozed { entry, ticket } => TicketsEvent::Snoozed { id: entry.ticket.clone(), entry, ticket },
         },
         // ACT-5: a delete's and an undelete's, as their answers are.
         Change::Deleted { ids, tombstones } => TicketsEvent::Deleted { ids, tombstones },
