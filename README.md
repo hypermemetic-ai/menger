@@ -5865,7 +5865,7 @@ test is in the workspace run.
 ## Publishing (DIST-3)
 
 `plexus-shell`, `menger-tickets-api`, `plexus-login` (SCAFFOLD-9) and
-`menger` go to crates.io, in that order. The plexus 0.6 line they depend on goes first: plexus-core,
+`menger` go to crates.io, in that order. The plexus 0.7 line they depend on goes first: plexus-core,
 plexus-macros, plexus-client, plexus-auth-core, plexus-transport. Every
 sibling `path` dependency also names its `version`, which is what the
 published crates take. Dev dependencies stay path-only and are dropped from

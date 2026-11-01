@@ -20,13 +20,13 @@ categories = ["authentication", "web-programming::http-server"]
 include = ["/src/**", "/web/login.html", "/README.md", "/LICENSE"]
 
 [dependencies]
-# The plexus 0.6 line, by sibling path in a checkout (menger's MFE-10) and
+# The plexus 0.7 line, by sibling path in a checkout (menger's MFE-10) and
 # by version from crates.io once published.
-plexus-core = { path = "../../plexus-core", version = "0.6.1" }
-plexus-auth-core = { path = "../../plexus-auth-core", version = "0.2.1", features = ["adapters"] }
+plexus-core = { path = "../../plexus-core", version = "0.7.0" }
+plexus-auth-core = { path = "../../plexus-auth-core", version = "0.2.2", features = ["adapters"] }
 # SCAFFOLD-9: `Wired::apply` puts the gate, the anonymous view and the
 # protected resource on a TransportServerBuilder. Slim: no MCP, no REST.
-plexus-transport = { path = "../../plexus-transport", version = "0.5.1", default-features = false }
+plexus-transport = { path = "../../plexus-transport", version = "0.6.0", default-features = false }
 axum = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 url = "2"
