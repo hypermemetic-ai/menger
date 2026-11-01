@@ -854,3 +854,56 @@ engine and on FRAME-50's. The probe again with it, the same pairs (load 1.5–14
 
 In a quiet window the first row is 150–153 → 118–120 ms at 10³ and 168 → 137–140 ms at 10⁶ (the 144 the
 gate held by hand had shown).
+
+## One ticket-view or many: what embedding costs (SURFACE-16, 2026-11-01)
+
+`node perf/view-probe.mjs --no-build`: a throwaway with 1,000 tickets of 2,120 B of markdown (headings, a list,
+code, a table), three cold loads each, the median, the machine at load 15–25. Three shapes: **view**, one
+`tickets.list` and a sibling-imported `ticket-view` per row; **mark**, the same list and a bound mark per row
+(`plexus-ui:ticket-view`, the body as `data-body`); **body**, N `ticket-body`s with distinct ids. All are measured
+over an empty page (2.45 MB of heap, 2 MiB of wasm, 56 nodes). The JS heap excludes wasm and Blink's own DOM memory, which
+nothing here measures. Wasm grows in steps, so read it at the larger N. "Drawn" is navigation start to the
+frame after the last body is in the DOM: laid out, not rastered past the fold.
+
+| shape | N | JS heap / inst. | wasm / inst. | DOM nodes / inst. | drawn (median, range of the runs) | calls on the wire | open `tickets.watch` | received |
+|---|---|---|---|---|---|---|---|---|
+| view | 1 | 161 KiB (the first's code) | 0 | 173 | 117 ms (107–141) | 1 list | 0 | 4.2 KB |
+| view | 100 | 11.6 KiB | 21.1 KiB | 148 | 204 ms (200–207) | 1 list | 0 | 256 KB |
+| view | 1000 | 8.9 KiB | 22.5 KiB | 148 | 1,418 ms (1,134–1,447) | 1 list | 0 | 2.56 MB |
+| mark | 1 | 226 KiB (the first's code) | 0 | 179 | 135 ms (130–144) | 1 list | 0 | 4.2 KB |
+| mark | 100 | 19.4 KiB | 21.1 KiB | 151 | 264 ms (250–402) | 1 list | 0 | 256 KB |
+| mark | 1000 | 13.6 KiB | 22.5 KiB | 151 | 1,252 ms (1,239–1,253) | 1 list | 0 | 2.56 MB |
+| body | 1 | 140 KiB (the first's code) | 0 | 156 | 124 ms (115–134) | 1 get, 1 watch | 1 | 3.9 KB |
+| body | 100 | 11.5 KiB | 23.7 KiB | 142 | 259 ms (258–281) | 100 get, 100 watch | 100 | 309 KB |
+| body | 200 | 10.0 KiB | 25.3 KiB | 142 | 404 ms (378–423) | 200 get, 200 watch | 200 | 620 KB |
+| body | 250 | 9.7 KiB | 25.6 KiB | 142 | 472 ms (456–480) | 250 get, 250 watch | 250 | 775 KB |
+| body | 300 | not comparable | not comparable | not comparable | never: 256 of 300 | 300 get, 300 watch sent, 91–93 refused | 255 | 834 KB |
+
+Module bytes (raw / gzip): `ticket-view.js` 4,956 / 1,645; `ticket-body.js` 6,822 / 2,328, was 5,069 / 1,762, the
+view's status rules and head coming with it; a list page with the view inlined 6,269 / 2,202, with it by mark
+2,491 / 1,236 plus one fetch of `ticket-view.js`; the shared `svelte-runtime.js` 113,266 / 39,789.
+
+**The mark.** A section per instance adds about 4.7 KiB of heap (53% over the inlined view at 1,000), 3 DOM nodes and
+a copy of the body in an attribute, the last outside these numbers. Drawn time shows no difference above this
+machine's noise. `ticket-body` imports the view as a sibling for that reason; a mark is for a bundle that wants
+the view swapped by version.
+
+**Fatness.** Beyond the first, an instance costs about 31 KiB of heap and wasm and 148 nodes, most of it the
+ticket's own markdown (54 elements for this body), about 1.3 ms to draw, and no call. A thousand is about 32 MiB
+above the empty page, plus the DOM's native memory. The cost is the document's, not the component's.
+
+**The database** (from the source, not counted at run time). Bodies are not in the cache (SCALE-14), so a body is
+read from SQLite. A view reads nothing: its parent's one `tickets.list` reads N bodies in one read transaction on
+a read connection (`Store::full`, one primary-key lookup a row). A `tickets.list --summary true` reads none. A
+`ticket-body` is a `tickets.get` of its own: one read transaction per instance, the same lookup. Its watch reads
+nothing to open, and holds a broadcast receiver. That watch has no params, so each instance has its own
+unfiltered `tickets.watch` of the whole store: one write anywhere is delivered N times, each dropped by the page.
+
+**Past the limit.** At N = 300 the refusals are `too_many_calls` from `--max-calls-per-connection` (256,
+`src/calls.rs`): the socket's limit on calls open at once, never the store's or SQLite's. A watch holds a slot for its life, a `get`
+for its moment, so `ui.watch` and 255 `tickets.watch` fill the socket and everything after is refused. A run: 45
+watches, 44 gets, and the host's own `ui.slots.list` and `ui.routes.list`. Nothing retries: each call was sent
+once. So 44 instances stay blank, at least one drawn instance is not live (45 watches refused against 44 gets;
+the probe does not pair them), and the page loses its slot assignments and routes from the service. N = 250 stays
+under it only because its gets finish fast; the limit is shared with everything else on the page's one socket, and
+a ticket page alone holds eight streams (7 `tickets.watch`, `ui.watch`).
