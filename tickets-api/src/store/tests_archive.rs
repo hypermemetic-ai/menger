@@ -308,7 +308,7 @@ async fn an_archived_ticket_asks_nothing() {
     assert!(store.queued(SYS, true, chrono::Utc::now().timestamp()).is_empty(), "in no tray");
     let records = store.queue_history(SYS, "K-7");
     assert_eq!(records.last().map(|r| r.action), Some(QueueAction::Archived), "recorded as by the archive");
-    let reply = store.reply_since(&replies::Awaiting { ticket: "K-7".into(), since, input: None, me: None });
+    let reply = store.reply_since(SYS, &replies::Awaiting { ticket: "K-7".into(), since, input: None, me: None });
     assert!(matches!(reply, Some(Reply::Archived { ref by, .. }) if by == "owner"), "{reply:?}");
 }
 

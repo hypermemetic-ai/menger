@@ -244,6 +244,18 @@ impl Queue {
         set.as_ref().clone()
     }
 
+    /// [`Queue::holds`] from the entries, kept set aside: what a test holds it to.
+    #[cfg(test)]
+    pub(super) fn holds_walked(&self, urgency: Option<Urgency>, at: &HashMap<String, OrderKey>) -> BTreeMap<ShortcodeId, RoaringBitmap> {
+        let mut out = Held::new();
+        for e in self.entries.values().filter(|e| urgency.is_none_or(|u| e.urgency == u)) {
+            if let Some(key) = at.get(&e.ticket) {
+                out.entry(key.shortcode.clone()).or_default().insert(key.seq);
+            }
+        }
+        out
+    }
+
     /// V2-20: the tickets `asked` holds for, for the reader `me`, per
     /// shortcode — an entry someone else queued that names an input still
     /// `open`: a question waiting on the reader, never one's own.

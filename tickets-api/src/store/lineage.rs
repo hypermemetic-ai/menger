@@ -678,7 +678,7 @@ impl<'c> Compiled<'c> {
     /// V2-20: [`Compiled::matches_in`] among `area`, or everywhere in `epic`
     /// with none — a write's few tickets judged one by one, so a watch's
     /// cost is the write's, not the size of its shortcode.
-    fn matches_among(&self, epic: &ShortcodeId, area: Option<&RoaringBitmap>) -> RoaringBitmap {
+    pub(super) fn matches_among(&self, epic: &ShortcodeId, area: Option<&RoaringBitmap>) -> RoaringBitmap {
         match area {
             Some(a) if a.len() <= AMONG_FEW => {
                 let mut key = OrderKey { shortcode: epic.clone(), seq: 0 };

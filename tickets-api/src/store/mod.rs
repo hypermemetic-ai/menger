@@ -5076,6 +5076,8 @@ mod tests_queue_many;
 mod tests_queue_pages;
 #[cfg(test)]
 mod tests_reading;
+#[cfg(test)]
+mod tests_review;
 
 /// NOTE-2: the notes store — kept, listed, filtered and paged; an upgrade's
 /// one write and its refusals; across a reopen.

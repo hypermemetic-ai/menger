@@ -61,7 +61,7 @@ pub(super) fn await_reply_stream(
         };
         let before: HashSet<String> = match ask.since {
             Some(_) => HashSet::new(),
-            None => store.replies_since(&w).iter().map(reply_key).collect(),
+            None => store.replies_since(caller, &w).iter().map(reply_key).collect(),
         };
         Some((w, following, before))
     });
@@ -85,7 +85,7 @@ pub(super) fn await_reply_stream(
         let sleep = tokio::time::sleep_until(deadline.unwrap_or_else(|| tokio::time::Instant::now() + std::time::Duration::from_secs(10 * 365 * 24 * 3600)));
         tokio::pin!(sleep);
         loop {
-            if let Some(reply) = store.replies_since(&w).into_iter().find(|r| !before.contains(&reply_key(r))) {
+            if let Some(reply) = store.replies_since(following.user(), &w).into_iter().find(|r| !before.contains(&reply_key(r))) {
                 yield TicketsEvent::Replied { ticket: ticket.clone(), reply };
                 return;
             }

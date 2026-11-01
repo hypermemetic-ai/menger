@@ -66,13 +66,13 @@ async fn start() -> u16 {
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let sessions = Arc::new(Sessions::new(3600, &menger::login_names()));
     let access = Access::with_login(menger::session_table(&sessions), vec![principal(&BOSS)]).minting(menger::session_table(&sessions));
-    let hub = build_rpc_offering(&dir.path().join("t.db"), None, Default::default(), Vec::new(), access.clone()).await.unwrap();
+    let service = build_rpc_offering(&dir.path().join("t.db"), None, Default::default(), Vec::new(), access.clone()).await.unwrap();
     let carriers = login::boundary_at(&providers, &login::socket_urls(port, None)).unwrap();
     let gate = Arc::new(Gate::new(sessions, carriers).noticing(menger::MengerAccess(access)));
     let conv = |arc: Arc<DynamicHub>| DynamicHub::arc_into_rpc_module(arc).map_err(|e| anyhow::anyhow!("{e}"));
     tokio::spawn(async move {
         let _keep = dir;
-        TransportServer::builder(hub, conv)
+        TransportServer::builder(service, conv)
             .with_websocket(port)
             .with_session_validator(gate)
             .anonymous_view()
@@ -352,4 +352,62 @@ async fn an_agent_waits_for_the_first_response() {
     one(&boss, "tickets.set_status", json!({ "id": "KILN-3", "status": "Canceled" })).await;
     let r = next(&mut wait).await;
     assert_eq!((r["reply"]["kind"].as_str(), r["reply"]["how"].as_str()), (Some("ended"), Some("canceled")), "{r}");
+}
+
+/// `asked` on a watch says what `list` says: a question answered or cleared,
+/// closed, requeued by the reader, or dropped from the body moves it, with
+/// no cell moving and no urgency either. V2-20's review, B5.
+#[tokio::test]
+async fn a_watch_of_asked_agrees_with_list() {
+    let port = start().await;
+    let (boss, ada, _, _) = fixture(port).await;
+    // Two questions: the entry names cone; `notes` keeps the ticket asking.
+    one(&ada, "tickets.queue", json!({ "id": "KILN-2", "urgency": "now", "reason": "look", "input": "cone" })).await;
+    let mut watch = subscribe(&boss, "tickets.watch", json!({ "filter": "asked", "membership": true })).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let asked = || call(&boss, "tickets.list", json!({ "filter": "asked", "summary": true }));
+    assert_eq!(ids(&asked().await), ["KILN-2"]);
+    async fn until(watch: &mut Subscription<Value>, want: &str) {
+        let mut e = next(watch).await;
+        while e["type"] != want {
+            assert!(!matches!(e["type"].as_str(), Some("entered" | "left")), "{want}: {e}");
+            e = next(watch).await;
+        }
+    }
+    one(&boss, "tickets.inputs.answer", json!({ "ticket": "KILN-2", "input": "cone", "value": { "type": "choice", "option": "6" } })).await;
+    until(&mut watch, "left").await;
+    assert!(ids(&asked().await).is_empty());
+    one(&boss, "tickets.inputs.clear", json!({ "ticket": "KILN-2", "input": "cone" })).await;
+    until(&mut watch, "entered").await;
+    // Requeued at the same urgency by the reader: its own question now.
+    one(&boss, "tickets.queue", json!({ "id": "KILN-2", "urgency": "now", "reason": "mine now" })).await;
+    until(&mut watch, "left").await;
+    assert!(ids(&asked().await).is_empty());
+    // Requeued by ada: hers again.
+    one(&ada, "tickets.queue", json!({ "id": "KILN-2", "urgency": "whenever", "reason": "hers" })).await;
+    until(&mut watch, "entered").await;
+    // Closed, with no cell moving.
+    one(&boss, "tickets.inputs.close", json!({ "ticket": "KILN-2", "input": "cone" })).await;
+    until(&mut watch, "left").await;
+    one(&boss, "tickets.inputs.reopen", json!({ "ticket": "KILN-2", "input": "cone" })).await;
+    until(&mut watch, "entered").await;
+    // Dropped from the body, `notes` still asking.
+    let body = "<m-input id=\"notes\" kind=\"text\"><m-question>Anything else?</m-question></m-input>\n";
+    one(&boss, "tickets.amend", json!({ "id": "KILN-2", "body": body })).await;
+    until(&mut watch, "left").await;
+    assert!(ids(&asked().await).is_empty());
+}
+
+/// A wait set aside what stood in its own second; the next answer, the same
+/// value in that second too, is its reply. V2-20's review.
+#[tokio::test]
+async fn a_wait_hears_an_answer_in_its_own_second() {
+    let port = start().await;
+    let (boss, ada, _, _) = fixture(port).await;
+    let answer = json!({ "ticket": "KILN-2", "input": "notes", "value": { "type": "text", "text": "same" } });
+    one(&boss, "tickets.inputs.answer", answer.clone()).await;
+    let mut wait = subscribe(&ada, "tickets.await_reply", json!({ "id": "KILN-2" })).await;
+    assert_eq!(next(&mut wait).await["type"], "waiting");
+    one(&boss, "tickets.inputs.answer", answer).await;
+    assert_eq!(next(&mut wait).await["type"], "replied");
 }

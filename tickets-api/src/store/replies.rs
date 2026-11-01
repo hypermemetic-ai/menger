@@ -19,7 +19,7 @@
 //! is. "Someone other than the caller" is told by
 //! principal.
 
-use super::{shortcodes, Store};
+use super::{shortcodes, Reader, Seen, Store};
 use crate::queue::{Ending, QueueAction, Reply};
 use crate::types::{InputAction, TransitionField};
 
@@ -52,14 +52,24 @@ pub fn reply_key(r: &Reply) -> String {
 impl Store {
     /// APP-24: the first response on `w.ticket` at or after `w.since`, or
     /// `None` while there is none.
-    pub fn reply_since(&self, w: &Awaiting) -> Option<Reply> {
-        self.replies_since(w).into_iter().next()
+    pub fn reply_since(&self, who: &(impl Reader + ?Sized), w: &Awaiting) -> Option<Reply> {
+        self.replies_since(who, w).into_iter().next()
     }
 
     /// APP-24: every response on `w.ticket` at or after `w.since`, the
     /// earliest first — at one moment, in the table's order (an answer, a
     /// change request, an unqueue, a cancel, a delete).
-    pub fn replies_since(&self, w: &Awaiting) -> Vec<Reply> {
+    pub fn replies_since(&self, who: &(impl Reader + ?Sized), w: &Awaiting) -> Vec<Reply> {
+        // ACCESS-10: a live ticket out of `who`'s reach says nothing; a
+        // deleted one was admitted by its tombstone at the call.
+        if let Ok(seen) = Seen::of(who) {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            if cache.get(&w.ticket).is_some() && !seen.sees(&cache).id(&w.ticket) {
+                return Vec::new();
+            }
+        } else {
+            return Vec::new();
+        }
         // Its transitions, asked first (`history` takes the lock itself).
         let transitions = self.history_unscoped(&w.ticket).map(|h| h.own).unwrap_or_default();
         let cache = self.tickets.read().expect("store lock poisoned");

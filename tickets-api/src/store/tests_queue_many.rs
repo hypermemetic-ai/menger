@@ -192,16 +192,16 @@ async fn await_reply_hears_each_answer_and_only_the_last_close() {
     store.queue_with(SYS.permit("G-2"), ask(Urgency::Blocking, &["format", "fields", "naming"], Some("naming")), act("agent:glaze")).await.unwrap();
     let w = |input: Option<&str>, since: i64| Awaiting { ticket: "G-2".into(), since, input: input.map(str::to_string), me: Some("agent:glaze".into()) };
     store.answer(SYS.permit("G-2"), "format", InputValue::Choice { option: "card".into() }, None, AnswerSource::App).await.unwrap();
-    let r = store.reply_since(&w(None, 0));
+    let r = store.reply_since(SYS, &w(None, 0));
     assert!(matches!(r, Some(Reply::Answered { ref input, .. }) if input == "format"), "{r:?}");
-    assert_eq!(store.reply_since(&w(Some("naming"), 0)), None, "named: only that one");
+    assert_eq!(store.reply_since(SYS, &w(Some("naming"), 0)), None, "named: only that one");
     store.answer(SYS.permit("G-2"), "naming", InputValue::Text { text: "the firing card".into() }, None, AnswerSource::App).await.unwrap();
-    let r = store.reply_since(&w(Some("naming"), 0));
+    let r = store.reply_since(SYS, &w(Some("naming"), 0));
     assert!(matches!(r, Some(Reply::Answered { ref input, .. }) if input == "naming"), "{r:?}");
-    let all = store.replies_since(&w(None, 0));
+    let all = store.replies_since(SYS, &w(None, 0));
     assert_eq!(all.iter().filter(|r| matches!(r, Reply::Answered { .. })).count(), 2, "each answer is a reply: {all:?}");
     // The agent closes two: progress, no unqueue heard.
     store.close_input(SYS.permit("G-2"), "format").await.unwrap();
     store.close_input(SYS.permit("G-2"), "naming").await.unwrap();
-    assert!(!store.replies_since(&w(None, 0)).iter().any(|r| matches!(r, Reply::Unqueued { .. })));
+    assert!(!store.replies_since(SYS, &w(None, 0)).iter().any(|r| matches!(r, Reply::Unqueued { .. })));
 }
