@@ -177,6 +177,21 @@ export default async (ctx) => {
     }
   });
 
+  // SURFACE-16: ticket-view, drawn from its props alone, in each state it has.
+  await test("the_sheet_holds_ticket_view", async () => {
+    const { page, context } = await sheetPage();
+    try {
+      for (const s of ["light", "dark"]) {
+        const tile = (state) => scheme(page, s).locator(`[data-sheet-component=ticket-view] [data-sheet-state=${state}] [data-component=ticket-view]`);
+        await eventually(`${s}: the plain view`, async () => (await tile("plain").locator("[data-surface=ticket-view] [data-ticket-body] h2").count()) === 1, 30_000);
+        assert((await tile("plain").locator("[data-field=status]").getAttribute("data-status")) === "Ready", `${s}: the status, from its prop`);
+        await eventually(`${s}: the empty view`, async () => (await tile("empty").locator("[data-surface=ticket-view] [data-field=body][data-empty]").count()) === 1);
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
   await test("no_literal_colour_in_any_sheet", async () => {
     const all = sheets();
     assert(all.length > 20, `the bundle's sheets: ${all.length}`);
