@@ -4,7 +4,7 @@ A plan is a program whose leaves are prose. menger is a Plexus RPC
 ticketing service and the seed of a Plexus-native reactive web framework.
 This is **v2**: the tickets service and the ui service, nothing else.
 
-v1 is tag `v0.0.1`; v2 cut its chats, comments, deployments, themes, media, notes, assignees, the queue, inputs and components, the Leptos app (trunk) and the frames' SDK (sdk-codegen), mockups and the diagrams service — read v1 there, never here.
+v1 is tag `v0.0.1`; v2 cut its chats, comments, deployments, themes, media, notes, assignees and components, the Leptos app (trunk) and the frames' SDK (sdk-codegen), mockups and the diagrams service — read v1 there, never here.
 
 README.md is the reference: the services and their methods ("Surface"),
 the flags ("Run" → Every flag), the rules each ticket set down. This file is
@@ -68,7 +68,7 @@ as any Plexus service may: its own code is `tickets-api/`, `src/` and the
 components in `ui/`, nothing of the framework's.
 
 **The services registered** (`src/builder.rs`, one process): `tickets`
-(children `commits`, `filters`, `nav`, `revisions`, `subtasks`, `work`),
+(children `commits`, `filters`, `inputs`, `nav`, `revisions`, `subtasks`, `work`),
 `members` (child `teams`), `orgs`, `epics`, `session`, `auth`, and `ui`
 (child `slots`). A service reaches another as a client, through
 plexus-core's `HubTransport::as_(service, caller)` — the ui service's seam
@@ -78,7 +78,8 @@ gate a socket reaches; it never opens the tickets file.
 
 **The tickets service** is v1's core and nothing else: the cache
 (`tickets-api/src/store/`), the cells and the lens over Roaring bitmaps, the
-kept tree, the stored derived state (form 16), FTS5 search, the filter
+kept tree, the stored derived state (form 17), FTS5 search, questions
+(`tickets inputs`) and the queue (V2-20; README "Questions and the queue"), the filter
 language. `tickets-api/tests/cut.rs` holds the cut: no module of a service
 that went, no flag for one, and README and this file naming none of them.
 
@@ -440,6 +441,29 @@ synapse -P 4460 menger tickets revisions list --id DEPLOY-9 --limit 20
 synapse -P 4460 menger tickets revisions get --id DEPLOY-9 --rev 3
 synapse -P 4460 menger tickets revisions diff --id DEPLOY-9 --from 3 --to 5 --text true
 synapse -P 4460 menger tickets revisions restore --id DEPLOY-9 --rev 3 --fields body --message "why"
+```
+
+### Questions and the queue
+
+A question is an input of a ticket's body; `ask` appends a text one. An
+agent queues the ticket, then waits (`await_reply`, open-ended) for the
+first response. `queued` and `inputs list` are pages (`--limit`, `--after`
+the `next` a page answered):
+
+```sh
+synapse -P 4460 menger tickets inputs list --state open --limit 50
+synapse -P 4460 menger tickets inputs ask --ticket KILN-2 --question "Hold at cone 6 or 5?"
+synapse -P 4460 menger tickets inputs answer --ticket KILN-2 --input ask-1 --value.type text --value.text "cone 6"
+synapse -P 4460 menger tickets inputs close --ticket KILN-2 --input ask-1
+synapse -P 4460 menger tickets inputs reopen --ticket KILN-2 --input ask-1
+synapse -P 4460 menger tickets inputs clear --ticket KILN-2 --input ask-1
+synapse -P 4460 menger tickets queue --id KILN-2 --urgency blocking --reason "idle until it is decided" --input ask-1
+synapse -P 4460 menger tickets queued --limit 50
+synapse -P 4460 menger tickets snooze --id KILN-2 --minutes 60
+synapse -P 4460 menger tickets request_changes --id KILN-2 --body @body.md
+synapse -P 4460 menger tickets unqueue --id KILN-2
+synapse -P 4460 menger tickets await_reply --id KILN-2 --input ask-1 --timeout-minutes 30    # open-ended
+synapse -P 4460 menger tickets list --filter 'queued now or asking or asked' --summary true
 ```
 
 ### Filters, the nav and the order of work
