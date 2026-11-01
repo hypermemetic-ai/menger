@@ -665,14 +665,33 @@ impl<'c> Compiled<'c> {
         let base = self.base_matches_in(epic);
         let Some(spoken) = self.hist.as_ref().and_then(|h| h.any.get(epic)) else { return base };
         let mut out = base - spoken;
+        let mut key = OrderKey { shortcode: epic.clone(), seq: 0 };
         for seq in spoken {
-            if let Some(t) = self.cache.order.get(&OrderKey { shortcode: epic.clone(), seq }) {
-                if self.judge_row(t) {
-                    out.insert(seq);
-                }
+            key.seq = seq;
+            if self.cache.order.get(&key).is_some_and(|t| self.judge_row(t)) {
+                out.insert(seq);
             }
         }
         out
+    }
+
+    /// V2-20: [`Compiled::matches_in`] among `area`, or everywhere in `epic`
+    /// with none — a write's few tickets judged one by one, so a watch's
+    /// cost is the write's, not the size of its shortcode.
+    fn matches_among(&self, epic: &ShortcodeId, area: Option<&RoaringBitmap>) -> RoaringBitmap {
+        match area {
+            Some(a) if a.len() <= AMONG_FEW => {
+                let mut key = OrderKey { shortcode: epic.clone(), seq: 0 };
+                a.iter()
+                    .filter(|seq| {
+                        key.seq = *seq;
+                        self.cache.order.get(&key).is_some_and(|t| self.judge_row(t))
+                    })
+                    .collect()
+            }
+            Some(a) => self.matches_in(epic) & a,
+            None => self.matches_in(epic),
+        }
     }
 
     /// The base's matches in `epic`, as one bitmap.
@@ -1795,6 +1814,10 @@ impl Touched {
     }
 }
 
+/// V2-20: how many of a write's tickets are judged one by one; past it the
+/// shortcode's bitmap is cheaper.
+const AMONG_FEW: u64 = 64;
+
 /// The open `under` watches' matches among what a write touches, before it
 /// commits — what [`UnderBefore::after`] compares with.
 pub(super) struct UnderBefore {
@@ -1882,13 +1905,7 @@ fn before_of(watches: Vec<Arc<UnderWatch>>, cache: &Cache, touched: impl FnOnce(
                 touched
                     .areas()
                     .into_iter()
-                    .map(|(e, area)| {
-                        let m = c.matches_in(e);
-                        (e.clone(), match area {
-                            Some(a) => m & a,
-                            None => m,
-                        })
-                    })
+                    .map(|(e, area)| (e.clone(), c.matches_among(e, area)))
                     .collect()
             })
             .collect();
@@ -1919,11 +1936,7 @@ impl UnderBefore {
                 if w.epic.as_ref().is_some_and(|x| x != e) {
                     continue;
                 }
-                let m = c.matches_in(e);
-                let now = match area {
-                    Some(a) => m & a,
-                    None => m,
-                };
+                let now = c.matches_among(e, area);
                 let was = before.get(e).cloned().unwrap_or_default();
                 let n = moved.len();
                 let entered = &now - &was;
