@@ -855,76 +855,57 @@ engine and on FRAME-50's. The probe again with it, the same pairs (load 1.5–14
 In a quiet window the first row is 150–153 → 118–120 ms at 10³ and 168 → 137–140 ms at 10⁶ (the 144 the
 gate held by hand had shown).
 
-## Questions and the queue, through the ringer — `ringer.mjs` (V2-20, 2026-11-01)
 
-The owner: *"start trying to perf it. run it through the ringer."* A release
-binary on this machine (24 threads, NVMe, `synchronous = FULL`), one throwaway
-a rung, filled over the wire with 10⁴ open inputs and 10⁴ queued (10³ tickets
-hold 10³ entries: a ticket is queued once). The client is Node on the same
-machine; one socket, one call at a time, 500 samples, unless the row says.
-Times in ms. A reorder is a raise: the queue's order is urgency, then age, so
-`queue` at a higher urgency is what moves a row. "reorder" raises to `now`.
 
-| what | 10³ p50 / p99 | 10⁵ p50 / p99 | 10⁶ p50 / p99 | budget |
-|---|---|---|---|---|
-| queued, a page of 200 | 1.22 / 2.00 | 1.62 / 3.54 | 1.70 / 3.63 | 5 |
-| queued, a page of 50 | 0.40 / 0.53 | 0.80 / 1.83 | 0.83 / 1.79 | 5 |
-| inputs list open, 200 | 0.45 / 0.58 | 0.59 / 1.27 | 0.62 / 1.37 | 5 |
-| inputs list open, 50 | 0.18 / 0.25 | 0.31 / 0.51 | 0.34 / 0.52 | 5 |
-| list `asking`, 200 summaries | 0.84 / 1.06 | 0.96 / 1.72 | 0.95 / 2.24 | 5 |
-| list `queued`, 200 summaries | 1.34 / 1.81 | 6.40 / 11.7 | 6.33 / 12.4 | 5 |
-| list `queued now`, 200 summaries | 1.05 / 1.60 | 2.87 / 4.60 | 2.90 / 5.79 | 5 |
-| list `asked`, 200 summaries | 0.14 / 0.22 | 0.24 / 0.74 | 0.24 / 0.36 | 5 |
-| nav counts `asking` | 0.13 / 0.18 | 0.15 / 0.20 | 0.17 / 0.19 | 5 |
-| ask | 1.55 / 10.5 | 1.42 / 8.64 | 1.59 / 30.9 | 20 |
-| amend, a line more of a body (the control) | 1.49 / 11.3 | 1.30 / 11.3 | 1.56 / 45.1 | 20 |
-| answer | 1.14 / 2.09 | 1.01 / 1.75 | 1.02 / 1.63 | 20 |
-| queue, a new entry | – (all queued) | 1.01 / 2.31 | 1.00 / 1.99 | 20 |
-| reorder: a raise to now, then whenever kept | 1.09 / 2.40 | 1.03 / 2.14 | 1.05 / 3.67 | 20 |
-| unqueue | 1.08 / 2.23 | 1.00 / 1.81 | 1.01 / 1.92 | 20 |
-| queued 50 under a burst (573 writes/s) | 0.46 / 0.69 | – | – |  |
-| inputs list 50 under the burst | 0.24 / 0.41 | 0.37 / 0.69 | 0.38 / 0.73 | 5 |
-| a write beside 100 plain watches | 3.53 / 15.4 | 3.39 / 13.9 | 3.24 / 37.0 | 20 |
-| its fan-out to the last of 100 plain watches | 3.90 / 15.9 | 3.82 / 14.2 | 3.52 / 37.1 |  |
-| a write beside 100 watches of `queued` | 3.16 / 14.4 | 4.66 / 15.9 | 4.09 / 11.2 | 20 |
-| its fan-out to the last of 100 watches of `queued` | 3.21 / 14.4 | 4.73 / 16.0 | 4.13 / 11.1 |  |
-| 1,000 asks in parallel over one socket, each | 916.3 / 1794.1 | 879.2 / 1700.5 | 1204.5 / 2272.1 |  |
-| 1,000 asks in parallel over 100 sockets, each | 906.0 / 1781.0 | 897.9 / 1698.1 | 1317.5 / 2380.4 |  |
-| ask beside 200 await_reply held | 3.05 / 15.7 | 2.80 / 14.5 | 3.03 / 65.7 | 20 |
-| answer beside the waits | 1.38 / 3.43 | 1.33 / 7.03 | 1.38 / 2.37 | 20 |
-| an answer to its wait's reply | 1.20 / 3.46 | 1.16 / 7.00 | 1.22 / 2.33 |  |
-| the page: #/queue's first row, cold | 112.2 / 117.2 | 114.0 / 115.5 | 113.2 / 115.7 | 300 |
-| the page: a queued row's frame to its row | – (no fresh ticket) | 6.00 / 6.50 | 6.00 / 6.10 |  |
-| queued 50 under a burst (609 writes/s) | – | 0.99 / 2.22 | – |  |
-| queued 50 under a burst (386 writes/s) | – | – | 0.94 / 1.99 | 5 |
+## One ticket-view or many: what embedding costs (SURFACE-16, 2026-11-01)
 
-| at | 10³ | 10⁵ | 10⁶ |
-|---|---|---|---|
-| ask burst, 32 writers | 573 /s | 609 /s | 386 /s |
-| 1,000 asks in parallel, wall, one socket / 100 | 1.8 / 1.8 s | 1.7 / 1.7 s | 2.3 / 2.4 s |
-| restart to its first signed-in answer | 0.5 s | 1.1 s | 9.4 s |
-| memory an input or entry, RSS growth over the fill | 1.4 KiB | 2.0 KiB | 2.4 KiB |
+`node perf/view-probe.mjs --no-build`: a throwaway with 1,000 tickets of 2,120 B of markdown (headings, a list,
+code, a table), three cold loads each, the median, the machine at load 15–25. Three shapes: **view**, one
+`tickets.list` and a sibling-imported `ticket-view` per row; **mark**, the same list and a bound mark per row
+(`plexus-ui:ticket-view`, the body as `data-body`); **body**, N `ticket-body`s with distinct ids. All are measured
+over an empty page (2.45 MB of heap, 2 MiB of wasm, 56 nodes). The JS heap excludes wasm and Blink's own DOM memory, which
+nothing here measures. Wasm grows in steps, so read it at the larger N. "Drawn" is navigation start to the
+frame after the last body is in the DOM: laid out, not rastered past the fold.
 
-- **1,000 in parallel** is the write-serial lock: every ask waits its turn, about
-  2 ms each, so a call's time is its place in the line. One socket and 100 are
-  the same. The ringer raises `--max-calls-per-connection` (default 256) and the
-  connection caps. By those flags (read, not measured here) one socket takes 256
-  at once and the rest are
-  `too_many_calls`, and 64 connections a principal.
-- **`await_reply` held by 200** costs a write about 1.5 ms: each wait wakes on
-  every change and asks the store again (`replies_since`). The first response
-  reaches its waiter in 1.2 ms. Past thousands held it would want waking by
-  ticket; it is inside budget here.
-- **The page**: `#/queue` at 10⁶, first row 113 ms cold, against the board's 0.3 s;
-  a queued row, its frame to its row, 6 ms. (10³'s row is left out: its tickets
-  are all queued already, so nothing arrives.)
-- **Restart at 10⁶** has no baseline with no inputs here; 9.4 s is all of it.
+| shape | N | JS heap / inst. | wasm / inst. | DOM nodes / inst. | drawn (median, range of the runs) | calls on the wire | open `tickets.watch` | received |
+|---|---|---|---|---|---|---|---|---|
+| view | 1 | 161 KiB (the first's code) | 0 | 173 | 117 ms (107–141) | 1 list | 0 | 4.2 KB |
+| view | 100 | 11.6 KiB | 21.1 KiB | 148 | 204 ms (200–207) | 1 list | 0 | 256 KB |
+| view | 1000 | 8.9 KiB | 22.5 KiB | 148 | 1,418 ms (1,134–1,447) | 1 list | 0 | 2.56 MB |
+| mark | 1 | 226 KiB (the first's code) | 0 | 179 | 135 ms (130–144) | 1 list | 0 | 4.2 KB |
+| mark | 100 | 19.4 KiB | 21.1 KiB | 151 | 264 ms (250–402) | 1 list | 0 | 256 KB |
+| mark | 1000 | 13.6 KiB | 22.5 KiB | 151 | 1,252 ms (1,239–1,253) | 1 list | 0 | 2.56 MB |
+| body | 1 | 140 KiB (the first's code) | 0 | 156 | 124 ms (115–134) | 1 get, 1 watch | 1 | 3.9 KB |
+| body | 100 | 11.5 KiB | 23.7 KiB | 142 | 259 ms (258–281) | 100 get, 100 watch | 100 | 309 KB |
+| body | 200 | 10.0 KiB | 25.3 KiB | 142 | 404 ms (378–423) | 200 get, 200 watch | 200 | 620 KB |
+| body | 250 | 9.7 KiB | 25.6 KiB | 142 | 472 ms (456–480) | 250 get, 250 watch | 250 | 775 KB |
+| body | 300 | not comparable | not comparable | not comparable | never: 256 of 300 | 300 get, 300 watch sent, 91–93 refused | 255 | 834 KB |
 
-### What failed its budget, and what became of it
+Module bytes (raw / gzip): `ticket-view.js` 4,956 / 1,645; `ticket-body.js` 6,822 / 2,328, was 5,069 / 1,762, the
+view's status rules and head coming with it; a list page with the view inlined 6,269 / 2,202, with it by mark
+2,491 / 1,236 plus one fetch of `ticket-view.js`; the shared `svelte-runtime.js` 113,266 / 39,789.
 
-| found | cause | now |
-|---|---|---|
-| a write beside 100 watches of `queued`: 941 ms at 10⁵, 1,763 ms at 10⁶ | each watch, before and after, walked the entries for the word's set, then judged every ticket the word speaks of in the write's shortcode, to read one ticket's answer | **fixed**: the set is kept between writes (`Queue::holds`); a write's few tickets are judged one by one (`matches_among`, every filtered watch gains it): 4.1 ms p50, 11.2 p99 |
-| `inputs list --state open`, 6 ms p99 at 10⁶ | a map lookup per asking ticket, to count the rest | **fixed**: the open set holds its counts: 0.62 / 1.37 |
-| `list queued`, 12.4 p99 at 10⁶ (29 before); `list queued now` 5.8 | `Compiled::matches_in` judges each of the 10⁴ tickets the word holds (0.6 µs each), lineage walk included, though a page wants 200. A shortcut for filters naming no lineage failed tests_tree (`under` is not always an atom) and was reverted | **open, to file**. The queue's own view reads `queued`, 3.6 p99 |
-| ask 30.9 p99, 121 max at 10⁶; a write beside plain watches 37; ask beside the waits 65.7 | **not the questions**: `amend`, the control, spikes the same (45.1 p99), and answer, which writes no body, does not (1.63). Common to both: `db::set_body`, `search::put`, the revision. Not the WAL's checkpoint: with `wal_autocheckpoint = 0` the spikes stayed. FTS5's segment merges are the suspect, unproved | **open, to file**: a body write's 1% tail, on v2 before this ticket. p50 1.6 |
+**The mark.** A section per instance adds about 4.7 KiB of heap (53% over the inlined view at 1,000), 3 DOM nodes and
+a copy of the body in an attribute, the last outside these numbers. Drawn time shows no difference above this
+machine's noise. `ticket-body` imports the view as a sibling for that reason; a mark is for a bundle that wants
+the view swapped by version.
+
+**Fatness.** Beyond the first, an instance costs about 31 KiB of heap and wasm and 148 nodes, most of it the
+ticket's own markdown (54 elements for this body), about 1.3 ms to draw, and no call. A thousand is about 30.6 MiB
+above the empty page, plus the DOM's native memory. The cost is the document's, not the component's.
+
+**The database** (from the source, not counted at run time). Bodies are not in the cache (SCALE-14), so a body is
+read from SQLite. A view reads nothing: its parent's one `tickets.list` reads N bodies in one read transaction on
+a read connection (`Store::full`, one primary-key lookup a row). A `tickets.list --summary true` reads none. A
+`ticket-body` is a `tickets.get` of its own: one read transaction per instance, the same lookup. Its watch reads
+nothing to open, and holds a broadcast receiver. That watch has no params, so each instance has its own
+unfiltered `tickets.watch` of the whole store: one write anywhere is delivered N times, each dropped by the page.
+
+**Past the limit.** At N = 300 the refusals are `too_many_calls` from `--max-calls-per-connection` (256,
+`src/calls.rs`): the socket's limit on calls open at once, never the store's or SQLite's. A watch holds a slot for its life, a `get`
+for its moment, so `ui.watch` and 255 `tickets.watch` fill the socket and everything after is refused. A run: 45
+watches, 44 gets, and the host's own `ui.slots.list` and `ui.routes.list`. Nothing retries: each call was sent
+once. So 44 instances stay blank, at least one drawn instance is not live (45 watches refused against 44 gets;
+the probe does not pair them), and the page loses its slot assignments and routes from the service. N = 250 stays
+under it only because its gets finish fast; the limit is shared with everything else on the page's one socket, and
+one run of the ticket page test sent 7 `tickets.watch` and `ui.watch` (sent, not counted open).

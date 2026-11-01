@@ -70,6 +70,7 @@
   import SearchPage from "plexus-ui:search-page";
   import TicketActions from "plexus-ui:ticket-actions";
   import TicketBody from "plexus-ui:ticket-body";
+  import TicketView from "plexus-ui:ticket-view";
   import TicketChip from "plexus-ui:ticket-chip";
   import TicketChipSv from "plexus-ui:ticket-chip-sv";
   import TicketCommits from "plexus-ui:ticket-commits";
@@ -182,6 +183,7 @@
       ["ticket-page", TicketPage, ID, ["hover", "focus"], gone, true],
       ["ticket-head", TicketHead, ID, ["hover", "focus"], gone],
       ["ticket-body", TicketBody, ID, [], gone],
+      ["ticket-view", TicketView, (t) => ({ title: t, status: "Ready", body: "## A ticket\n\nDrawn from its **props**, no call.\n\n- a list\n- of two\n" }), [], { empty: { body: "" } }],
       ["ticket-relations", TicketRelations, ID, ["hover", "focus"], { loading: { sheet: "loading" } }],
       ["ticket-subtasks", TicketSubtasks, ID, ["hover", "focus"], { loading: { sheet: "loading" } }],
       ["ticket-commits", TicketCommits, ID, ["hover", "focus"], {}],

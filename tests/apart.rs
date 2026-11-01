@@ -1467,13 +1467,15 @@ type Wants = (&'static str, &'static [(&'static str, usize)], &'static [&'static
 /// `update` (`params: () =>`, `debounce_ms: 20`, never a collection remade
 /// in a `$derived`); the ticket page composed of its parts by their marks
 /// (SURFACE-3), its collections followed, not remade (a route to it is an
-/// `update(props)`) — its body through `markdown`, its head's chips imported
+/// `update(props)`) — its body through `markdown` in ticket-view, its head's chips imported
 /// and none drawn inline; the nav's Flat and children imported and none
 /// drawn inline.
-const BUS_WANTS: [Wants; 5] = [
+const BUS_WANTS: [Wants; 6] = [
     ("jump-palette-sv.svelte", &[("debounce_ms: 80", 2), ("when:", 2)], &[], &[]),
     ("board-rows-sv.svelte", &[("debounce_ms: 20", 1), ("params: () =>", 1)], &["$derived(b.live(", "$derived(live("], &[]),
-    ("ticket-body.svelte", &[("{@html markdown(", 1)], &["$derived(b.live(", "$derived(live("], &[]),
+    // SURFACE-16: the rendering is ticket-view's, from props alone; ticket-body keeps the live spec and places it.
+    ("ticket-body.svelte", &[], &["markdown(", "$derived(b.live(", "$derived(live("], &["ticket-view"]),
+    ("ticket-view.svelte", &[("{@html markdown(", 1), ("export const uses = [];", 1)], &["live(", "bus(", "call("], &[]),
     ("ticket-head.svelte", &[], &["data-chip-id", "{#snippet chip", "$derived(b.live(", "$derived(live("], &["ticket-chip-sv"]),
     ("nav-tree-sv.svelte", &[], &["data-nav-flat-row", "data-nav-row", "\"tickets.list\""], &["nav-flat-sv", "nav-children-sv"]),
 ];
@@ -1562,10 +1564,11 @@ fn the_svelte_board_rides_the_bus() {
     let palette = format!("{head}<script>\n  // the hand-made setTimeout( went\n  import {{ live }} from \"plexus-ui/host\";\n  const found = live({{ snapshot: \"tickets.find\", params: () => ({{ query: q }}), key: \"id\", when: () => q.length > 0, debounce_ms: 80 }});\n  const searched = live({{ snapshot: \"tickets.search\", params: () => ({{ query: q }}), key: \"id\", when: () => q.length > 0, debounce_ms: 80 }});\n  const hits = $derived($found.rows);\n</script>\n{{#each hits as f (f.id)}}<a href=\"https://x\">{{f.id}}</a>{{/each}}\n");
     let rows = format!("{head}<script>\n  import {{ live }} from \"plexus-ui/host\";\n  const rows = live({{ snapshot: \"tickets.list\", params: () => ({{ at }}), key: \"id\", debounce_ms: 20 }});\n</script>\n");
     let page = format!("{head}<script>\n  import {{ live }} from \"plexus-ui/host\";\n  import Head from \"plexus-ui:ticket-head\";\n  import Body from \"plexus-ui:ticket-body\";\n</script>\n<!-- no DOMParser, no allow-list, no data-chip-id -->\n<Head id={{id}}/><Body id={{id}}/><svelte:element this={{\"h\" + n}}>x</svelte:element>\n");
-    let body = format!("{head}<script>\n  import {{ live, markdown }} from \"plexus-ui/host\";\n</script>\n<div>{{@html markdown(t.body)}}</div>\n");
+    let body = format!("{head}<script>\n  import {{ live }} from \"plexus-ui/host\";\n  import View from \"./ticket-view.svelte\";\n</script>\n<View body={{t.body}}/>\n");
+    let view = format!("{head}<script>\n  import {{ markdown }} from \"plexus-ui/host\";\n</script>\n<div>{{@html markdown(body)}}</div>\n");
     let chips = format!("{head}<script>\n  import Chip from \"./ticket-chip-sv.svelte\";\n</script>\n<Chip id={{p}}/>\n");
     let nav = format!("{head}<script>\n  import NavFlat from \"./nav-flat-sv.svelte\";\n  import NavChildren from \"./nav-children-sv.svelte\";\n</script>\n");
-    let good = given(&[("jump-palette-sv.svelte", &palette), ("board-rows-sv.svelte", &rows), ("ticket-page-sv.svelte", &page), ("ticket-body.svelte", &body), ("ticket-head.svelte", &chips), ("nav-tree-sv.svelte", &nav), ("x.rhx", "{#each $x as y}DOMParser")]);
+    let good = given(&[("jump-palette-sv.svelte", &palette), ("board-rows-sv.svelte", &rows), ("ticket-page-sv.svelte", &page), ("ticket-body.svelte", &body), ("ticket-view.svelte", &view), ("ticket-head.svelte", &chips), ("nav-tree-sv.svelte", &nav), ("x.rhx", "{#each $x as y}DOMParser")]);
     assert_eq!(bus_breaks(&good), Vec::<String>::new());
     let old_palette = format!("{head}<script>\n  import {{ bus }} from \"plexus-ui/host\";\n  const b = bus();\n  const NONE = {{ subscribe: (fn) => (fn({{ rows: [] }}), () => {{}}) }};\n  const found = $derived(asked ? b.live({{ snapshot: \"tickets.find\", params: {{ query: asked }}, key: \"id\" }}) : NONE);\n  function typed(ev) {{ clearTimeout(timer); timer = setTimeout(() => (asked = q), 80); }}\n</script>\n{{#each $found.rows as f (f.id)}}{{f.id}}{{/each}}\n");
     let old_rows = format!("{head}<script>\n  import {{ bus }} from \"plexus-ui/host\";\n  const b = bus();\n  const rows = $derived(b.live({{ snapshot: \"tickets.list\", params: {{ at: win.at }}, key: \"id\", debounce_ms: 20 }}));\n</script>\n");
@@ -1593,6 +1596,7 @@ fn the_svelte_board_rides_the_bus() {
         "ui/src/ticket-page-sv.svelte: markdown( not imported from plexus-ui/host",
         "ui/src/ticket-page-sv.svelte: a store subscribed or stood in by hand (`.subscribe(`): the face's live is the store",
         "ui/src/ticket-body.svelte is missing",
+        "ui/src/ticket-view.svelte is missing",
         "ui/src/ticket-head.svelte is missing",
     ];
     let mut sorted = found.clone();
