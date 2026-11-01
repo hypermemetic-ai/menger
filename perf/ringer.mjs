@@ -387,7 +387,7 @@ async function rung(exp, built) {
               super(...a);
               this.addEventListener("message", (e) => {
                 if (typeof e.data !== "string" || !e.data.includes('"queued"')) return;
-                const m = /"type":"queued"/.test(e.data) ? /"id":"([^"]+)"/.exec(e.data) : null;
+                const m = e.data.includes('"type":"queued"') ? /"entry":\{[^}]*?"ticket":"([^"]+)"/.exec(e.data) : null;
                 if (m && !(m[1] in window.__queued)) window.__queued[m[1]] = performance.now();
               });
             }
@@ -400,7 +400,7 @@ async function rung(exp, built) {
         if (i > 0) firsts.push(first);
         await sleep(300);
         const id = fresh[100 + i] ?? ids[i + 40];
-        await main.call("tickets.queue", { id, urgency: "blocking", reason: "the page", input: inputOf.get(id) ?? undefined }).catch(() => main.call("tickets.queue", { id, urgency: "now", reason: "the page" }));
+        await main.call("tickets.queue", { id, urgency: "now", reason: "the page" });
         const until = Date.now() + 5000;
         while (Date.now() < until) {
           const t = await page.evaluate((id) => ({ frame: window.__queued[id], row: window.__pages.rows[id] }), id);

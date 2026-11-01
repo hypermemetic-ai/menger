@@ -56,7 +56,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// The tables.
 pub(super) const TABLES: &str = "
@@ -138,15 +138,22 @@ fn list_of(text: Option<String>) -> Vec<String> {
 /// then by id.
 type Place = (Reverse<Urgency>, i64, u64, String);
 
+/// The tickets a word holds for, per shortcode.
+type Held = BTreeMap<ShortcodeId, RoaringBitmap>;
+
 /// The most rows a page of `queued` holds unless asked, and at most.
 pub const QUEUED_PAGE: usize = 200;
 pub const QUEUED_PAGE_MAX: usize = 1_000;
 
 /// The queue as the cache holds it: each queued ticket's entry, the entries
 /// in the queue's order, and each ticket's history records, oldest first.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub(crate) struct Queue {
     entries: HashMap<String, QueueEntry>,
+    /// V2-20: what `queued [urgency]` holds for, built once between writes:
+    /// every filter and every open watch of the word shares it, so a write
+    /// beside 100 of them walks the entries once, not 200 times.
+    held: Mutex<HashMap<Option<Urgency>, Arc<Held>>>,
     /// V2-20: the entries in the queue's order — what a page is cut from.
     order: BTreeSet<Place>,
     /// V2-20: each ticket's `queued` record's id: its [`Place`]'s third.
@@ -180,6 +187,7 @@ impl Queue {
 
     /// `ticket` out of the kept order, its entry staying.
     fn unplace(&mut self, ticket: &str) {
+        self.held.get_mut().expect("queue's kept sets poisoned").clear();
         if let Some(old) = self.entries.get(ticket) {
             let place = Self::place(old, self.ranks.get(ticket).copied().unwrap_or(0));
             self.order.remove(&place);
@@ -191,6 +199,7 @@ impl Queue {
 
     /// `e` into the entries and the kept order.
     fn insert(&mut self, e: QueueEntry) {
+        self.held.get_mut().expect("queue's kept sets poisoned").clear();
         let rank = self.ranks.get(&e.ticket).copied().unwrap_or(0);
         self.order.insert(Self::place(&e, rank));
         if let Some(until) = e.snoozed_until_unix {
@@ -222,13 +231,17 @@ impl Queue {
     /// entries, never a scan of the tickets. A snooze does not take a ticket
     /// out: it is still queued, only off the alerting surfaces.
     pub(super) fn holds(&self, urgency: Option<Urgency>, at: &HashMap<String, OrderKey>) -> BTreeMap<ShortcodeId, RoaringBitmap> {
-        let mut out: BTreeMap<ShortcodeId, RoaringBitmap> = BTreeMap::new();
-        for e in self.entries.values().filter(|e| urgency.is_none_or(|u| e.urgency == u)) {
-            if let Some(key) = at.get(&e.ticket) {
-                out.entry(key.shortcode.clone()).or_default().insert(key.seq);
+        let mut held = self.held.lock().expect("queue's kept sets poisoned");
+        let set = held.entry(urgency).or_insert_with(|| {
+            let mut out = Held::new();
+            for e in self.entries.values().filter(|e| urgency.is_none_or(|u| e.urgency == u)) {
+                if let Some(key) = at.get(&e.ticket) {
+                    out.entry(key.shortcode.clone()).or_default().insert(key.seq);
+                }
             }
-        }
-        out
+            Arc::new(out)
+        });
+        set.as_ref().clone()
     }
 
     /// V2-20: the tickets `asked` holds for, for the reader `me`, per

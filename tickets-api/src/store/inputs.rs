@@ -285,11 +285,11 @@ pub(crate) fn touches(entry: &InputHistoryEntry) -> bool {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct Inputs {
     by_ticket: HashMap<String, Vec<Input>>,
-    /// V2-20: the tickets that hold inputs in the store's order, each with
-    /// how many are `open`.
-    order: BTreeMap<Place, u32>,
-    /// V2-20: those with an `open` one: `asking`, in order.
-    open: BTreeSet<Place>,
+    /// V2-20: the tickets that hold inputs in the store's order.
+    order: BTreeSet<Place>,
+    /// V2-20: those with an `open` one — `asking` — each with how many, so a
+    /// page's count of the rest asks no list and no map.
+    open: BTreeMap<Place, u32>,
 }
 
 /// A ticket's place in the store's order ([`super::db::by_epic_seq`]).
@@ -431,14 +431,14 @@ impl Inputs {
             (Some(_), _) => {}
             (None, Some(InputState::Open)) => {
                 let from = start.as_ref().map_or(std::ops::Bound::Unbounded, std::ops::Bound::Included);
-                for p in self.open.range::<Place, _>((from, std::ops::Bound::Unbounded)).take_while(|p| in_epic(p)).filter(|p| keep(&p.2)) {
-                    visit(&p.2, self.order.get(p).copied().unwrap_or(0));
+                for (p, open) in self.open.range::<Place, _>((from, std::ops::Bound::Unbounded)).take_while(|(p, _)| in_epic(p)).filter(|(p, _)| keep(&p.2)) {
+                    visit(&p.2, *open);
                 }
             }
             (None, _) => {
                 let from = start.as_ref().map_or(std::ops::Bound::Unbounded, std::ops::Bound::Included);
-                for (p, open) in self.order.range::<Place, _>((from, std::ops::Bound::Unbounded)).take_while(|(p, _)| in_epic(p)).filter(|(p, _)| keep(&p.2)) {
-                    visit(&p.2, *open);
+                for p in self.order.range::<Place, _>((from, std::ops::Bound::Unbounded)).take_while(|p| in_epic(p)).filter(|p| keep(&p.2)) {
+                    visit(&p.2, 0);
                 }
             }
         }
@@ -543,11 +543,11 @@ impl Inputs {
         let place = super::db::by_epic_seq(ticket);
         let open = self.of(ticket).iter().filter(|i| i.state == InputState::Open).count() as u32;
         match self.by_ticket.contains_key(ticket) {
-            true => self.order.insert(place.clone(), open),
+            true => self.order.insert(place.clone()),
             false => self.order.remove(&place),
         };
         match open > 0 {
-            true => self.open.insert(place),
+            true => self.open.insert(place, open),
             false => self.open.remove(&place),
         };
     }
