@@ -23,10 +23,9 @@ path = "src/main.rs"
 
 [dependencies]
 # substrate, imported: its service is built inside tether and called over the
-# in-memory service transport. PLEXUS-33: from its public repository, and
-# tether does not build until that `main` takes the plexus 0.7 line (README,
-# "Its own workspace"). The rest of the line from crates.io.
-plexus-substrate = { git = "https://github.com/hypermemetic-ai/plexus-substrate", branch = "main", default-features = false }
+# in-memory service transport. PLEXUS-33: from its public repository, at a
+# revision on the plexus 0.7 line; the rest of the line from crates.io.
+plexus-substrate = { git = "https://github.com/hypermemetic-ai/plexus-substrate", rev = "7b6c9afe07f1be71c9a8e76941ceb999dad8826f", default-features = false }
 plexus-core = "0.7.0"
 plexus-macros = "0.7.0"
 # TETHER-9: the remote menger is reached as a client — WsTransport over a
@@ -42,9 +41,9 @@ plexus-transport = "0.6.0"
 plexus-auth-core = { version = "0.2.2", features = ["adapters"] }
 base64 = "0.22"
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
-# plexus-login from this repository. Two sources of one crate are two crates
-# to cargo: when substrate takes the 0.7 line, this names the plexus-login it names.
-plexus-login = { path = "../plexus-login", version = "0.2" }
+# The plexus-login substrate names, by the same URL and revision: two sources
+# of one crate are two crates to cargo, so never this repository's in-tree copy.
+plexus-login = { git = "https://github.com/hypermemetic-ai/plexus-login", rev = "23b9e2c8ba710e78a296091775823760eeab078a" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = { version = "1.1", features = ["derive", "uuid1"] }

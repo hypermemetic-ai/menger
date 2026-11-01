@@ -154,45 +154,11 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "axum"
-version = "0.7.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edca88bc138befd0323b20752846e6587272d3b03b0343c8ea28a6f819e6e71f"
-dependencies = [
- "async-trait",
- "axum-core 0.4.5",
- "bytes",
- "futures-util",
- "http",
- "http-body",
- "http-body-util",
- "hyper",
- "hyper-util",
- "itoa",
- "matchit 0.7.3",
- "memchr",
- "mime",
- "percent-encoding",
- "pin-project-lite",
- "rustversion",
- "serde",
- "serde_json",
- "serde_path_to_error",
- "serde_urlencoded",
- "sync_wrapper",
- "tokio",
- "tower 0.5.3",
- "tower-layer",
- "tower-service",
- "tracing",
-]
-
-[[package]]
-name = "axum"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "31b698c5f9a010f6573133b09e0de5408834d0c82f8d7475a89fc1867a71cd90"
 dependencies = [
- "axum-core 0.5.6",
+ "axum-core",
  "bytes",
  "form_urlencoded",
  "futures-util",
@@ -202,7 +168,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "itoa",
- "matchit 0.8.4",
+ "matchit",
  "memchr",
  "mime",
  "percent-encoding",
@@ -213,28 +179,7 @@ dependencies = [
  "serde_urlencoded",
  "sync_wrapper",
  "tokio",
- "tower 0.5.3",
- "tower-layer",
- "tower-service",
- "tracing",
-]
-
-[[package]]
-name = "axum-core"
-version = "0.4.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09f2bd6146b97ae3359fa0cc6d6b376d9539582c7b4220f041a33ec24c226199"
-dependencies = [
- "async-trait",
- "bytes",
- "futures-util",
- "http",
- "http-body",
- "http-body-util",
- "mime",
- "pin-project-lite",
- "rustversion",
- "sync_wrapper",
+ "tower",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -1810,6 +1755,8 @@ checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
 dependencies = [
  "equivalent",
  "hashbrown 0.17.1",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -1976,7 +1923,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-stream",
- "tower 0.5.3",
+ "tower",
  "tracing",
  "wasm-bindgen-futures",
 ]
@@ -2000,7 +1947,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
- "tower 0.5.3",
+ "tower",
  "url",
 ]
 
@@ -2040,7 +1987,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
- "tower 0.5.3",
+ "tower",
  "tracing",
 ]
 
@@ -2065,7 +2012,7 @@ dependencies = [
  "jsonrpsee-client-transport",
  "jsonrpsee-core",
  "jsonrpsee-types",
- "tower 0.5.3",
+ "tower",
 ]
 
 [[package]]
@@ -2078,7 +2025,7 @@ dependencies = [
  "jsonrpsee-client-transport",
  "jsonrpsee-core",
  "jsonrpsee-types",
- "tower 0.5.3",
+ "tower",
  "url",
 ]
 
@@ -2215,12 +2162,6 @@ dependencies = [
 
 [[package]]
 name = "matchit"
-version = "0.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e7465ac9959cc2b1404e8e2367b43684a6d13790fe23056cc8c6c5a6b7bcb94"
-
-[[package]]
-name = "matchit"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
@@ -2254,13 +2195,13 @@ dependencies = [
  "futures",
  "jsonrpsee",
  "menger-tickets-api",
- "plexus-auth-core 0.2.2",
+ "plexus-auth-core",
  "plexus-client",
- "plexus-core 0.7.0",
+ "plexus-core",
  "plexus-login",
- "plexus-macros 0.7.0",
+ "plexus-macros",
  "plexus-substrate",
- "plexus-transport 0.6.0",
+ "plexus-transport",
  "qrcode",
  "rqrr",
  "schemars",
@@ -2280,7 +2221,7 @@ version = "0.6.2"
 dependencies = [
  "futures",
  "plexus-client",
- "plexus-macros 0.7.0",
+ "plexus-macros",
  "pulldown-cmark",
  "schemars",
  "serde",
@@ -2696,22 +2637,6 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "plexus-auth-core"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae965b52aff07935138fd7bcbfbfcc92705b8d6dcce2ba46d00bd32466623315"
-dependencies = [
- "async-trait",
- "chrono",
- "schemars",
- "serde",
- "serde_json",
- "tracing",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "plexus-auth-core"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "22d645424a9cf6d4ab52e939058b0f40a8702fa96731c23ac125722b778e34c6"
@@ -2750,35 +2675,6 @@ dependencies = [
 
 [[package]]
 name = "plexus-core"
-version = "0.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ba00e3f27a305763eedaf3da447d4134b91ba8089b2f76d38a9ed1c1bd5f2bb"
-dependencies = [
- "anyhow",
- "async-stream",
- "async-trait",
- "bitflags 2.13.2",
- "chrono",
- "futures",
- "futures-core",
- "futures-util",
- "http",
- "jsonrpsee",
- "plexus-auth-core 0.1.0",
- "plexus-macros 0.5.5",
- "rmcp",
- "schemars",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "plexus-core"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2d8178ff7e263769b067869f4da1a6bfca60c54b95e8197ed48d87f2df637f82"
@@ -2797,10 +2693,10 @@ dependencies = [
  "http",
  "jsonrpsee",
  "pin-project-lite",
- "plexus-auth-core 0.2.2",
+ "plexus-auth-core",
  "plexus-client",
- "plexus-macros 0.7.0",
- "rmcp",
+ "plexus-macros",
+ "rmcp 0.12.0",
  "schemars",
  "serde",
  "serde_json",
@@ -2816,17 +2712,18 @@ dependencies = [
 [[package]]
 name = "plexus-login"
 version = "0.2.2"
+source = "git+https://github.com/hypermemetic-ai/plexus-login?rev=23b9e2c8ba710e78a296091775823760eeab078a#23b9e2c8ba710e78a296091775823760eeab078a"
 dependencies = [
  "anyhow",
  "async-trait",
- "axum 0.8.9",
+ "axum",
  "base64 0.22.1",
  "futures",
  "ipnet",
  "jsonrpsee",
- "plexus-auth-core 0.2.2",
- "plexus-core 0.7.0",
- "plexus-transport 0.6.0",
+ "plexus-auth-core",
+ "plexus-core",
+ "plexus-transport",
  "rand 0.8.8",
  "reqwest",
  "serde",
@@ -2836,19 +2733,6 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
-]
-
-[[package]]
-name = "plexus-macros"
-version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f64b29e6d196e089448e4ca136a84e2a86ff701a5f64c67099d6dadceefb4ee1"
-dependencies = [
- "proc-macro-crate 3.5.0",
- "proc-macro2",
- "quote",
- "syn 2.0.119",
- "uuid",
 ]
 
 [[package]]
@@ -2866,44 +2750,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "plexus-registry"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "757985fbe5f176eca5a0822c54d51e3eba1ffd19c8fc6b926a0a1363a649012b"
-dependencies = [
- "anyhow",
- "async-stream",
- "async-trait",
- "clap",
- "dirs",
- "futures",
- "futures-util",
- "jsonrpsee",
- "plexus-core 0.5.3",
- "plexus-macros 0.5.5",
- "plexus-transport 0.2.2",
- "schemars",
- "serde",
- "serde_json",
- "sqlx",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "toml",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "plexus-substrate"
 version = "0.6.3"
-source = "git+https://github.com/hypermemetic-ai/plexus-substrate?branch=main#c8fac1c09ab2a4117bddba85bab5824e9aa3533e"
+source = "git+https://github.com/hypermemetic-ai/plexus-substrate?rev=7b6c9afe07f1be71c9a8e76941ceb999dad8826f#7b6c9afe07f1be71c9a8e76941ceb999dad8826f"
 dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
- "axum 0.7.9",
+ "axum",
  "chrono",
  "clap",
  "cllient",
@@ -2911,21 +2765,20 @@ dependencies = [
  "dirs",
  "dotenvy",
  "either",
- "form_urlencoded",
  "futures",
  "futures-util",
  "hostname",
  "http",
- "http-body-util",
  "jsonrpsee",
  "mustache",
- "plexus-core 0.5.3",
- "plexus-macros 0.5.5",
- "plexus-registry",
- "plexus-transport 0.2.2",
+ "plexus-auth-core",
+ "plexus-client",
+ "plexus-core",
+ "plexus-login",
+ "plexus-macros",
+ "plexus-transport",
  "rand 0.8.8",
  "regex",
- "rmcp",
  "schemars",
  "serde",
  "serde_json",
@@ -2934,38 +2787,10 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "toml",
- "tower 0.4.13",
- "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber",
  "uuid",
  "which",
-]
-
-[[package]]
-name = "plexus-transport"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8f03ef14f99b0e6cdc2e481a7265ede90047ed9712b625ad1aa3882afa3ced7"
-dependencies = [
- "anyhow",
- "async-stream",
- "axum 0.8.9",
- "bytes",
- "form_urlencoded",
- "futures",
- "http",
- "http-body",
- "hyper",
- "jsonrpsee",
- "plexus-core 0.5.3",
- "rmcp",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tower 0.5.3",
- "tracing",
 ]
 
 [[package]]
@@ -2976,7 +2801,7 @@ checksum = "d9955033575580772c0770f14aa70f8db2584f62b8190a559b14275edebad1fc"
 dependencies = [
  "anyhow",
  "async-stream",
- "axum 0.8.9",
+ "axum",
  "bytes",
  "form_urlencoded",
  "futures",
@@ -2988,13 +2813,34 @@ dependencies = [
  "ipnet",
  "jsonrpsee",
  "log 0.4.34",
- "plexus-core 0.7.0",
+ "plexus-core",
+ "plexus-transport-mcp",
+ "rmcp 0.12.0",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
  "tokio-tungstenite",
- "tower 0.5.3",
+ "tower",
+ "tracing",
+]
+
+[[package]]
+name = "plexus-transport-mcp"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25485551e7bfd6106aba89eb6d05aa896987e1a5e0f117d7363ee00c69d40c00"
+dependencies = [
+ "axum",
+ "futures",
+ "http",
+ "plexus-client",
+ "rmcp 3.8.0",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tower",
  "tracing",
 ]
 
@@ -3363,8 +3209,8 @@ dependencies = [
  "tokio-native-tls",
  "tokio-rustls",
  "tokio-util",
- "tower 0.5.3",
- "tower-http 0.6.11",
+ "tower",
+ "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
@@ -3406,6 +3252,38 @@ dependencies = [
  "pin-project-lite",
  "rand 0.9.5",
  "rmcp-macros",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sse-stream",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tower-service",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "rmcp"
+version = "3.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8be15815186873ea063bf005011d16c356804973489e40c39116ae3a2878d1f"
+dependencies = [
+ "async-trait",
+ "base64 0.23.1",
+ "bytes",
+ "chrono",
+ "futures",
+ "http",
+ "http-body",
+ "http-body-util",
+ "indexmap",
+ "libc",
+ "pastey",
+ "pin-project-lite",
+ "rand 0.10.3",
  "schemars",
  "serde",
  "serde_json",
@@ -4627,17 +4505,6 @@ checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
 
 [[package]]
 name = "tower"
-version = "0.4.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8fa9be0de6cf49e536ce1851f987bd21a43b771b09473c3549a6c853db37c1c"
-dependencies = [
- "tower-layer",
- "tower-service",
- "tracing",
-]
-
-[[package]]
-name = "tower"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebe5ef63511595f1344e2d5cfa636d973292adc0eec1f0ad45fae9f0851ab1d4"
@@ -4647,24 +4514,6 @@ dependencies = [
  "pin-project-lite",
  "sync_wrapper",
  "tokio",
- "tower-layer",
- "tower-service",
- "tracing",
-]
-
-[[package]]
-name = "tower-http"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e9cd434a998747dd2c4276bc96ee2e0c7a2eadf3cae88e52be55a05fa9053f5"
-dependencies = [
- "bitflags 2.13.2",
- "bytes",
- "http",
- "http-body",
- "http-body-util",
- "pin-project-lite",
- "tower 0.4.13",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -4682,7 +4531,7 @@ dependencies = [
  "http",
  "http-body",
  "pin-project-lite",
- "tower 0.5.3",
+ "tower",
  "tower-layer",
  "tower-service",
  "url",
