@@ -131,14 +131,17 @@ fn heavy() -> Vec<(&'static str, String)> {
 
 #[test]
 fn every_shape_at_the_cap_ends() {
+    let mut worst = Duration::ZERO;
     for (what, body) in heavy() {
-        assert!(body.len() <= CAP + 1024, "{what}: {}", body.len());
+        assert!(body.len() <= CAP + 8192, "{what}: {}", body.len());
         let t = Instant::now();
         let (found, problems) = read(&body);
         let took = t.elapsed();
         eprintln!("{what}: {took:?}, {} found, {:?}", found.len(), problems.first());
         assert!(took < AT_MOST, "{what}: {took:?}");
+        worst = worst.max(took);
     }
+    eprintln!("the worst shape: {worst:?}");
 }
 
 /// Past what a body may hold, a write is refused in band, naming why.

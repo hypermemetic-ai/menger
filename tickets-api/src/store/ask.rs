@@ -70,16 +70,38 @@ impl Store {
     /// `--max-body-bytes`, malformed markup elsewhere in it), and
     /// [`StoreError::NotFound`] for no ticket — nothing written.
     pub async fn ask(&self, on: Permit<Editor>, question: &str) -> Result<InputWrite, StoreError> {
-        let serial = self.serial().await;
-        let ticket = self.get_unscoped(&crate::address::folded(on.id())).await?;
-        let id = {
-            let cache = self.tickets.read().expect("store lock poisoned");
-            let (declared, _) = crate::inputs::read(&ticket.body);
-            let known: Vec<String> = cache.inputs.of(&ticket.id).iter().map(|i| i.id.to_string()).chain(declared.into_iter().map(|d| d.id)).collect();
-            free_id(known.iter().map(String::as_str))
+        // V2-20: the body is read before the lock, then held to be the one
+        // read: a heavy body waits alone, and a write between loses nothing.
+        let mut tries = 0;
+        let (serial, ticket, id, read) = loop {
+            let seen = self.get_unscoped(&crate::address::folded(on.id())).await?;
+            let (_, (declared, _)) = inputs::read_off(seen.body.clone()).await;
+            let known: Vec<String> = {
+                let cache = self.tickets.read().expect("store lock poisoned");
+                cache.inputs.of(&seen.id).iter().map(|i| i.id.to_string()).chain(declared.into_iter().map(|d| d.id)).collect()
+            };
+            let id = free_id(known.iter().map(String::as_str));
+            let (body, read) = inputs::read_off(with_question(&seen.body, &id, question)).await;
+            let serial = self.serial().await;
+            let ticket = self.get_unscoped(&crate::address::folded(on.id())).await?;
+            tries += 1;
+            if ticket.body == seen.body {
+                break (serial, ticket, id, Some((body, read)));
+            }
+            if tries == 3 {
+                // Moved under us three times: read under the lock.
+                break (serial, ticket, id, None);
+            }
         };
-        let body = with_question(&ticket.body, &id, question);
-        self.amend_under(serial, on, None, Some(body)).await?;
+        let (body, read) = match read {
+            Some(r) => r,
+            None => {
+                let body = with_question(&ticket.body, &id, question);
+                let read = crate::inputs::read(&body);
+                (body, read)
+            }
+        };
+        self.amend_under(serial, on, None, Some(body), Some(read)).await?;
         let cache = self.tickets.read().expect("store lock poisoned");
         let input = cache.inputs.get(&ticket.id, &id).cloned().ok_or_else(|| StoreError::InputUnknown {
             ticket: ticket.id.to_string(),

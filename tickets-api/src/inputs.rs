@@ -51,9 +51,13 @@
 //! value; an option value declared twice in one input; a text input with
 //! options.
 
-use crate::marks::{marked, text, Element};
+use crate::marks::{marked, text, Beyond, Element, DEPTH_MAX};
 use crate::types::{InputKind, InputOption, InputValue};
 use std::collections::HashSet;
+
+/// V2-20: the most inputs one body declares, and options one input holds.
+pub const INPUTS_MAX: usize = 1_024;
+pub const OPTIONS_MAX: usize = 256;
 use std::fmt;
 
 /// The elements an input is written with.
@@ -142,7 +146,14 @@ pub fn read(body: &str) -> (Vec<Declared>, Vec<Problem>) {
     let mut problems = Vec::new();
     if mentions(body) {
         let mut seen = HashSet::new();
-        walk(&marked(body, TAGS), &mut out, &mut problems, &mut seen);
+        match marked(body, TAGS) {
+            Ok(elements) => walk(&elements, &mut out, &mut problems, &mut seen),
+            Err(Beyond::Deep) => problems.push(Problem::TooMuch { why: format!("its input markup nests more than {DEPTH_MAX} deep, and nothing was written") }),
+            Err(Beyond::Complex) => problems.push(Problem::TooMuch { why: "it takes too much work to read, and nothing was written: fewer tags, or fewer blank lines inside them".into() }),
+        }
+        if out.len() > INPUTS_MAX {
+            problems.insert(0, Problem::TooMuch { why: format!("a body declares at most {INPUTS_MAX} inputs, and nothing was written") });
+        }
     }
     (out, problems)
 }
@@ -152,7 +163,7 @@ fn is_input(tag: &str) -> bool {
 }
 
 /// Every input in `elements` and inside them, in document order.
-fn walk(elements: &[Element], out: &mut Vec<Declared>, problems: &mut Vec<Problem>, seen: &mut HashSet<String>) {
+fn walk(elements: &[Element<'_>], out: &mut Vec<Declared>, problems: &mut Vec<Problem>, seen: &mut HashSet<String>) {
     for e in elements {
         if is_input(&e.tag) {
             if let Some(id) = e.attr("id").map(str::trim).filter(|id| !id.is_empty()) {
@@ -172,7 +183,7 @@ fn walk(elements: &[Element], out: &mut Vec<Declared>, problems: &mut Vec<Proble
 
 /// The input's own parts: inside it at any depth, not inside a nested input
 /// element.
-fn own<'e>(parts: &'e [Element], out: &mut Vec<&'e Element>) {
+fn own<'e, 'b>(parts: &'e [Element<'b>], out: &mut Vec<&'e Element<'b>>) {
     for p in parts {
         if is_input(&p.tag) {
             continue;
@@ -183,7 +194,7 @@ fn own<'e>(parts: &'e [Element], out: &mut Vec<&'e Element>) {
 }
 
 /// A non-blank attribute value, trimmed.
-fn value_of<'e>(e: &'e Element, name: &str) -> Option<&'e str> {
+fn value_of<'e>(e: &'e Element<'_>, name: &str) -> Option<&'e str> {
     e.attr(name).map(str::trim).filter(|v| !v.is_empty())
 }
 
@@ -192,7 +203,7 @@ fn some_text(content: &str) -> Option<String> {
     Some(text(content)).filter(|t| !t.is_empty())
 }
 
-fn declare(id: &str, e: &Element) -> Result<Declared, Problem> {
+fn declare(id: &str, e: &Element<'_>) -> Result<Declared, Problem> {
     let written = e.attr("kind").map(str::to_string);
     let kind = match (e.tag.as_str(), written.as_deref().map(str::parse::<InputKind>)) {
         ("m-decision", None | Some(Ok(InputKind::Choice))) => InputKind::Choice,
@@ -209,6 +220,7 @@ fn declare(id: &str, e: &Element) -> Result<Declared, Problem> {
     let mut parts = Vec::new();
     own(&e.parts, &mut parts);
     let mut options: Vec<InputOption> = Vec::new();
+    let mut values: HashSet<&str> = HashSet::new();
     for o in parts.iter().filter(|p| p.tag == option_tag) {
         if kind == InputKind::Text {
             return Err(Problem::TextOptions { input: id.to_string() });
@@ -227,7 +239,10 @@ fn declare(id: &str, e: &Element) -> Result<Declared, Problem> {
                 })
             }
         };
-        if options.iter().any(|x| x.value == value) {
+        if options.len() == OPTIONS_MAX {
+            return Err(Problem::TooMuch { why: format!("the input '{id}' holds more than {OPTIONS_MAX} options, and nothing was written") });
+        }
+        if !values.insert(value) {
             return Err(Problem::OptionTwice {
                 input: id.to_string(),
                 value: value.to_string(),
@@ -235,7 +250,7 @@ fn declare(id: &str, e: &Element) -> Result<Declared, Problem> {
         }
         let label = match option_tag {
             "m-option" => name.map(str::to_string),
-            _ => some_text(&o.content),
+            _ => some_text(o.content),
         };
         options.push(InputOption {
             value: value.to_string(),
@@ -243,7 +258,7 @@ fn declare(id: &str, e: &Element) -> Result<Declared, Problem> {
             recommended: o.attr("recommended").is_some(),
         });
     }
-    let first = |tag: &str| parts.iter().find(|p| p.tag == tag).and_then(|p| some_text(&p.content));
+    let first = |tag: &str| parts.iter().find(|p| p.tag == tag).and_then(|p| some_text(p.content));
     let recommendation = first("m-recommendation").or_else(|| options.iter().find(|o| o.recommended).map(|o| o.label.clone()));
     Ok(Declared {
         id: id.to_string(),

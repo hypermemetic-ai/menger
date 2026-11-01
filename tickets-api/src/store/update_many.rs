@@ -183,11 +183,8 @@ impl Store {
                     (Some(u), Some(row)) => u.check(&cache, row, &update)?,
                     _ => return Err(StoreError::Invalid(format!("{}: the write was not given the proof it needs (nothing written)", current.id))),
                 }
-                {
-                    // INPUT-3: a new body's inputs, as `update` reads them.
-                    let declares = update.body.as_deref().map(crate::inputs::read);
-                    plan(&cache, &current, update.clone(), declares, &mut refused)
-                }
+                // No body: an update of many refuses one, above.
+                plan(&cache, &current, update.clone(), None, &mut refused)
             };
             if !refused.is_empty() {
                 refusals.push((String::from(current.id), refused));

@@ -183,7 +183,10 @@ impl Store {
                 refusals.push(e);
             }
         }
-        let declares = update.body.as_deref().map(crate::inputs::read);
+        let declares = match &update.body {
+            Some(b) => Some(inputs::read_off(b.clone()).await.1),
+            None => None,
+        };
         let serial = self.serial().await;
         let current = self.get_unscoped(&id).await?;
         let plan = {

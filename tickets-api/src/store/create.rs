@@ -21,7 +21,7 @@ impl Store {
         self.check_title(None, &new.title)?;
         // INPUT-3: the inputs it declares — refused now, naming the input,
         // when the markup is malformed or two share an id.
-        let (declared, problems) = crate::inputs::read(&new.body);
+        let (_, (declared, problems)) = inputs::read_off(new.body.clone()).await;
         if let Some(problem) = problems.into_iter().next() {
             return Err(StoreError::InputMarkup { id: None, problem });
         }

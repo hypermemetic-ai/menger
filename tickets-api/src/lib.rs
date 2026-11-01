@@ -37,9 +37,8 @@ pub use revisions::{FieldChange, Revision, RevisionDiff, RevisionSource};
 /// [`vocab::FilterText`], …). Wasm-safe.
 #[macro_use]
 pub mod vocab;
-/// V2-20: a body's marked elements, read as text: the small scan the inputs
-/// read with — code, comments and the frontmatter are never markup.
-/// Wasm-safe, like [`inputs`].
+/// V2-20: a body's marked elements, read as the app renders it: v1's reader,
+/// bounded. Wasm-safe, like [`inputs`].
 pub mod marks;
 /// INPUT-3: a body's inputs — `<m-decision id>` and `<m-input id kind>` with
 /// their options, question and recommendation — and an answer's value

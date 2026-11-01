@@ -4114,13 +4114,29 @@ impl Store {
     ///
     /// ACCESS-11: of the ticket `on` is for.
     pub async fn amend(&self, on: Permit<Editor>, title: Option<String>, body: Option<String>) -> Result<Change, StoreError> {
+        // INPUT-3, V2-20: the inputs a new body declares, read before the
+        // lock: a heavy body waits alone.
+        let (body, declares) = match body {
+            Some(b) => {
+                let (b, d) = inputs::read_off(b).await;
+                (Some(b), Some(d))
+            }
+            None => (None, None),
+        };
         let serial = self.serial().await;
-        self.amend_under(serial, on, title, body).await
+        self.amend_under(serial, on, title, body, declares).await
     }
 
     /// [`Store::amend`] with the write-serial lock already held — APP-90's
     /// `ask` reads the body it appends to under it.
-    pub(super) async fn amend_under(&self, serial: OwnedMutexGuard<()>, on: Permit<Editor>, title: Option<String>, body: Option<String>) -> Result<Change, StoreError> {
+    pub(super) async fn amend_under(
+        &self,
+        serial: OwnedMutexGuard<()>,
+        on: Permit<Editor>,
+        title: Option<String>,
+        body: Option<String>,
+        declares: Option<inputs::Read>,
+    ) -> Result<Change, StoreError> {
         // ORG-3: as the store spells it — `get` below resolves it.
         let id = crate::address::folded(on.id());
         if title.as_deref().is_some_and(|t| t.trim().is_empty()) {
@@ -4132,10 +4148,8 @@ impl Store {
         if let Some(body) = &body {
             self.check_body(Some(&id), body)?;
         }
-        // INPUT-3: the inputs a new body declares, read from the body in hand
-        // and refused, if malformed, only once it is known to change the body
-        // (the same body again is still a no-op).
-        let declares = body.as_deref().map(crate::inputs::read);
+        // INPUT-3: `declares` is refused, if malformed, only once it is known
+        // to change the body (the same body again is still a no-op).
         let mut ticket = self.get_unscoped(&id).await?;
         let mut changed = Vec::new();
         if let Some(title) = title.filter(|t| *t != ticket.title) {

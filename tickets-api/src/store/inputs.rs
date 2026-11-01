@@ -49,6 +49,29 @@ use crate::types::{Answer, AnswerSource, Input, InputAction, InputHistoryEntry, 
 use rusqlite::{params, Connection};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+/// What a body declares, and what in it a write refuses.
+pub(crate) type Read = (Vec<Declared>, Vec<Problem>);
+
+/// The largest body read on the caller's thread.
+const READ_INLINE: usize = 64 * 1024;
+
+/// V2-20: [`markup::read`] of a body in hand, off the async workers when it
+/// is large: bounded (`crate::marks`), never free.
+pub(crate) async fn read_off(body: String) -> (String, Read) {
+    if body.len() <= READ_INLINE || !markup::mentions(&body) {
+        let read = markup::read(&body);
+        return (body, read);
+    }
+    let (give, keep) = (body.clone(), body);
+    match tokio::task::spawn_blocking(move || markup::read(&give)).await {
+        Ok(read) => (keep, read),
+        Err(_) => {
+            let why = "the reading of its inputs failed, and nothing was written".to_string();
+            (keep, (Vec::new(), vec![Problem::TooMuch { why }]))
+        }
+    }
+}
+
 /// The two tables, and the history's index by input.
 const TABLES: &str = "
         CREATE TABLE IF NOT EXISTS inputs (
