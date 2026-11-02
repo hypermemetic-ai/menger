@@ -141,23 +141,66 @@ impl UiSetup {
 }
 
 /// V2-24: what the `media` activation and the shell's `/media/<hash>` are
-/// built over — the store on its own file.
+/// built over — the store on its own file, and (EDITOR-10) where its bytes
+/// live, the cap on one upload if the server names one, the links a test
+/// lets through, and the allowance every byte is asked of.
 #[derive(Clone)]
 pub struct MediaSetup {
     pub store: Arc<MediaStore>,
+    pub max_upload: Option<u64>,
+    pub remote: menger_media::Remote,
+    /// V2-31's quota service once it lands; until then everything is allowed.
+    pub allowance: Arc<dyn menger_media::Allowance>,
+}
+
+/// EDITOR-10: the blob store `--media-store` names — `disk` (at
+/// `--media-blob-dir`, or `media/blobs` beside the media file); `s3` is
+/// refused until it is built.
+pub fn media_blobs(kind: &str, dir: Option<&Path>, media_db: &Path) -> anyhow::Result<Arc<dyn menger_media::BlobStore>> {
+    match kind.trim().to_ascii_lowercase().as_str() {
+        "disk" => {
+            let root = dir.map(Path::to_path_buf).unwrap_or_else(|| menger_media::default_blob_dir(media_db));
+            let disk = menger_media::DiskStore::open(&root).map_err(|e| anyhow::anyhow!("--media-blob-dir {}: {e}", root.display()))?;
+            Ok(Arc::new(disk))
+        }
+        "s3" => anyhow::bail!("--media-store s3: not built yet (V2-32); use --media-store disk"),
+        other => anyhow::bail!("--media-store {other}: disk or s3"),
+    }
 }
 
 impl MediaSetup {
-    /// The store at `path` (`--media-db-path`); the directory made if missing.
+    /// The store at `path` (`--media-db-path`), its bytes on the disk beside
+    /// it; the directory made if missing.
     pub fn open(path: &Path) -> anyhow::Result<Self> {
-        let store = MediaStore::open(path).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
-        tracing::info!("media:     {} ({} images)", path.display(), store.count());
-        Ok(Self { store: Arc::new(store) })
+        Self::open_with(path, media_blobs("disk", None, path)?)
+    }
+
+    /// The store at `path`, its bytes in `blobs`.
+    pub fn open_with(path: &Path, blobs: Arc<dyn menger_media::BlobStore>) -> anyhow::Result<Self> {
+        let described = blobs.describe();
+        let store = MediaStore::open_with(path, blobs).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
+        tracing::info!("media:     {} ({} files; bytes on {described})", path.display(), store.count());
+        Ok(Self { store: Arc::new(store), max_upload: None, remote: menger_media::Remote::new(), allowance: Arc::new(menger_media::Unlimited) })
     }
 
     /// The store beside the tickets file ([`default_media_db_path`]).
     pub fn beside(db_path: &Path) -> anyhow::Result<Self> {
         Self::open(&default_media_db_path(db_path))
+    }
+
+    /// The cap on one upload (`--media-max-bytes`); none: the allowance alone.
+    pub fn max_upload(mut self, max: Option<u64>) -> Self {
+        self.max_upload = max;
+        self
+    }
+
+    /// For tests alone: `ip:port` pairs links may be read from although not public.
+    pub fn fetch_allow(mut self, allow: Vec<std::net::SocketAddr>) -> Self {
+        if !allow.is_empty() {
+            tracing::warn!("media:     reading links from {allow:?} although not public (--media-fetch-allow: a test's)");
+            self.remote = menger_media::Remote::allowing(allow);
+        }
+        self
     }
 }
 
@@ -414,7 +457,7 @@ where
     let seam = ui.seam().clone();
     // V2-24: `media` beside them — the images a body shows, over its own
     // file; whose a ticket is, it asks `tickets` through its seam.
-    let media = MediaActivation::new(media.store);
+    let media = MediaActivation::new(media.store).with_max_upload(media.max_upload).with_remote(media.remote).with_allowance(media.allowance);
     let media_seam = media.seam().clone();
     let mut hub = DynamicHub::new("menger")
         .register(tickets)

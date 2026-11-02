@@ -161,26 +161,23 @@ async fn an_image_is_put_for_a_ticket_and_read_back_by_its_hash() {
 }
 
 #[tokio::test]
-async fn an_svg_a_non_image_a_mismatch_and_too_much_are_refused_naming_why() {
+async fn any_file_is_kept_by_its_bytes_and_too_much_for_one_message_is_refused_naming_why() {
     let port = start_server().await;
     let client = connect(port).await;
     one(&client, "tickets.create", json!({"epic": "KILN", "title": "kiln", "kind": "scope"})).await;
     let put = |mime: &str, data: String| json!({"ticket": "KILN-1", "mime": mime, "data": data});
 
+    // EDITOR-10: an SVG is kept — as a file, never as itself.
     let svg = b64(br#"<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>"#);
-    let r = one(&client, "media.put", put("image/svg+xml", svg)).await;
-    assert_eq!((r["type"].as_str(), r["reason"].as_str()), (Some("refused"), Some("not_an_image")), "{r}");
-    assert!(r["message"].as_str().unwrap().contains("an SVG is not kept"), "{r}");
-
-    let r = one(&client, "media.put", put("application/pdf", b64(b"%PDF-1.7 a document"))).await;
-    assert_eq!(r["reason"], "not_an_image", "{r}");
-    assert!(r["message"].as_str().unwrap().contains("image/png, image/jpeg, image/gif, image/webp"), "{r}");
-
+    let r = one(&client, "media.put", json!({"ticket": "KILN-1", "mime": "image/svg+xml", "data": svg, "name": "x.svg"})).await;
+    assert_eq!((r["type"].as_str(), r["mime"].as_str(), r["kind"].as_str(), r["name"].as_str()), (Some("stored"), Some("application/octet-stream"), Some("file"), Some("x.svg")), "{r}");
+    let r = one(&client, "media.put", json!({"ticket": "KILN-1", "data": b64(b"%PDF-1.7 a document"), "name": "deck.pdf"})).await;
+    assert_eq!((r["mime"].as_str(), r["kind"].as_str()), (Some("application/pdf"), Some("pdf")), "{r}");
+    // The bytes decide: a PNG said to be a JPEG is a PNG.
     let r = one(&client, "media.put", put("image/jpeg", PNG_2X1.into())).await;
-    assert_eq!((r["reason"].as_str(), r["message"].as_str()), (Some("type_mismatch"), Some("the bytes are image/png, not image/jpeg as declared (nothing was kept)")), "{r}");
+    assert_eq!((r["mime"].as_str(), r["kind"].as_str(), r["width"].as_u64()), (Some("image/png"), Some("image"), Some(2)), "{r}");
 
-    // Past the cap but within one message (7 MiB + 1 KiB): refused in band,
-    // naming the cap.
+    // Past the cap of one message but within one (7 MiB + 1 KiB): refused in band, naming the cap.
     let over = crate_max() + 1024;
     let r = one(&client, "media.put", put("image/png", b64(&png_of(10, 10, over)))).await;
     assert_eq!((r["reason"].as_str(), r["bytes"].as_u64(), r["max"].as_u64()), (Some("too_large"), Some(over as u64), Some(crate_max() as u64)), "{r}");
@@ -199,12 +196,87 @@ async fn an_svg_a_non_image_a_mismatch_and_too_much_are_refused_naming_why() {
         },
     };
     // jsonrpsee closes the socket ("The message was too large"): so a client
-    // refuses such a file itself, before sending (image::check).
+    // sends such a file in chunks.
     assert!(refused.contains("too large"), "{refused}");
-    // And nothing was kept: the server goes on.
     let fresh = connect(port).await;
     let ok = one(&fresh, "media.put", put("image/png", b64(&png_of(3, 3, 64)))).await;
     assert_eq!(ok["type"], "stored", "the server goes on: {ok}");
+}
+
+/// A file of `n` bytes that is an MP4 by its first ones.
+fn mp4(n: usize) -> Vec<u8> {
+    let mut b = [&[0, 0, 0, 0x20][..], b"ftypisom"].concat();
+    b.extend((0..n - 12).map(|i| (i * 7 % 253) as u8));
+    b
+}
+
+/// EDITOR-10: a file larger than one message goes up in chunks, resumes on
+/// a new connection from what it has, is kept by its hash and drawn as its
+/// kind; `info` says what it is; `get` points past one message to the
+/// route; another's upload is none; `usage` counts it once.
+#[tokio::test]
+async fn a_large_file_goes_up_in_chunks_resumes_and_is_kept() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    one(&client, "tickets.create", json!({"epic": "KILN", "title": "kiln", "kind": "scope"})).await;
+    let file = mp4(9 * 1024 * 1024 + 5);
+    let begun = one(&client, "media.begin", json!({"ticket": "KILN-1", "name": "walk.mp4", "mime": "video/mp4", "size": file.len()})).await;
+    assert_eq!((begun["type"].as_str(), begun["received"].as_u64()), (Some("upload"), Some(0)), "{begun}");
+    let upload = begun["upload"].as_str().unwrap().to_string();
+    let step = begun["chunk"].as_u64().unwrap() as usize;
+    assert_eq!(step, 4 * 1024 * 1024);
+    let c = one(&client, "media.chunk", json!({"upload": upload, "offset": 0, "data": b64(&file[..step])})).await;
+    assert_eq!((c["type"].as_str(), c["received"].as_u64(), c["duplicate"].as_bool()), (Some("chunked"), Some(step as u64), Some(false)), "{c}");
+    let gap = one(&client, "media.chunk", json!({"upload": upload, "offset": 2 * step, "data": b64(&file[..10])})).await;
+    assert_eq!(gap["reason"], "out_of_order", "{gap}");
+    // The connection drops; a new one resumes from what the upload has.
+    drop(client);
+    let client = connect(port).await;
+    let again = one(&client, "media.begin", json!({"upload": upload})).await;
+    assert_eq!((again["received"].as_u64(), again["size"].as_u64()), (Some(step as u64), Some(file.len() as u64)), "{again}");
+    let stranger = connect_key(&STRANGER, port).await;
+    let theirs = one(&stranger, "media.begin", json!({"upload": upload})).await;
+    assert!(theirs["type"] == "not_found" || theirs["error_kind"] == "forbidden", "not theirs: {theirs}");
+    let early = one(&client, "media.finish", json!({"upload": upload})).await;
+    assert_eq!(early["reason"], "incomplete", "{early}");
+    let mut at = step;
+    while at < file.len() {
+        let end = (at + step).min(file.len());
+        let c = one(&client, "media.chunk", json!({"upload": upload, "offset": at, "data": b64(&file[at..end])})).await;
+        assert_eq!(c["type"], "chunked", "{c}");
+        at = end;
+    }
+    let stored = one(&client, "media.finish", json!({"upload": upload})).await;
+    assert_eq!(
+        (stored["type"].as_str(), stored["mime"].as_str(), stored["kind"].as_str(), stored["name"].as_str(), stored["bytes"].as_u64()),
+        (Some("stored"), Some("video/mp4"), Some("video"), Some("walk.mp4"), Some(file.len() as u64)),
+        "{stored}"
+    );
+    let hash = stored["hash"].as_str().unwrap().to_string();
+    let info = one(&client, "media.info", json!({"hash": hash})).await;
+    assert_eq!((info["type"].as_str(), info["kind"].as_str(), info["bytes"].as_u64()), (Some("info"), Some("video"), Some(file.len() as u64)), "{info}");
+    let got = one(&client, "media.get", json!({"hash": hash})).await;
+    assert_eq!(got["reason"], "too_large", "past one message, read by range: {got}");
+    assert!(got["message"].as_str().unwrap().contains(&format!("/media/{hash}")), "{got}");
+    let usage = one(&client, "media.usage", json!({})).await;
+    assert_eq!((usage["type"].as_str(), usage["files"].as_u64(), usage["bytes"].as_u64()), (Some("usage"), Some(1), Some(file.len() as u64)), "{usage}");
+}
+
+/// EDITOR-10: a link the server would read from a private address is
+/// refused over the wire, naming why (the allowed case, against a local
+/// server, is `media/tests/unfurl.rs`'s).
+#[tokio::test]
+async fn an_unfurl_or_fetch_of_a_private_address_is_refused_in_band() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    for url in ["http://127.0.0.1:1/", "http://169.254.169.254/latest/meta-data/", "http://[::1]/", "http://10.0.0.1/x.png", "http://localhost/"] {
+        let r = one(&client, "media.unfurl", json!({"url": url})).await;
+        assert_eq!((r["type"].as_str(), r["reason"].as_str()), (Some("refused"), Some("blocked_address")), "{url}: {r}");
+        let r = one(&client, "media.fetch", json!({"url": url})).await;
+        assert_eq!(r["reason"], "blocked_address", "{url}: {r}");
+    }
+    let bad = one(&client, "media.unfurl", json!({"url": "file:///etc/passwd"})).await;
+    assert!(bad.to_string().contains("web address"), "refused before the method runs: {bad}");
 }
 
 fn crate_max() -> usize {

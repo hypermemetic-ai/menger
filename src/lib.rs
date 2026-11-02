@@ -51,6 +51,8 @@ pub mod wiring {
 }
 
 pub mod shell;
+// EDITOR-10: `GET /media/<hash>` — by kind, by range, or redirected to a signed address.
+pub mod media_route;
 
 /// RUN-8: `--bind`'s address and the names a listener there answers to;
 /// the builder binds it (TRANSPORT-7).
@@ -73,6 +75,6 @@ pub use menger_tickets_api::store;
 pub use menger_tickets_api::{MembersActivation, MembersClient, OrgsActivation, SessionActivation, SessionClient, TicketsActivation, TicketsClient};
 
 pub use builder::{
-    build_rpc, build_rpc_login, build_rpc_offering, build_rpc_seeded, build_rpc_services, build_rpc_ui, build_rpc_ui_over, build_rpc_with, default_db_path, default_media_db_path,
+    build_rpc, build_rpc_login, build_rpc_offering, build_rpc_seeded, build_rpc_services, build_rpc_ui, build_rpc_ui_over, build_rpc_with, default_db_path, default_media_db_path, media_blobs,
     default_ui_channel, default_ui_db_path, sessions_file, MediaSetup, UiSetup, SESSIONS_FILE, SIGNED_IN_GRANTS,
 };

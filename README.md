@@ -184,7 +184,7 @@ where it has one (a list in it is `;`-separated).
 
 | group | flags |
 |---|---|
-| run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path`, `--ui-signer`, `--ui-compiler`, `--ui-author-key`, `--media-db-path` (`media.db` beside the database), `--ui-channel` (UI-15: the live pointer this environment serves in its ui file; default from `--env`: `test`, `prod`, else `default`), `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell` |
+| run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path`, `--ui-signer`, `--ui-compiler`, `--ui-author-key`, `--media-db-path` (`media.db` beside the database), `--media-store` (`disk`), `--media-blob-dir`, `--media-max-bytes`, `--ui-channel` (UI-15: the live pointer this environment serves in its ui file; default from `--env`: `test`, `prod`, else `default`), `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell` |
 | sign-in | `--auth-provider`, `--admin`, `--public-url`, `--login-button`, `--login-email`, `--login-password`, `--login-forgot`, `--identity`, `--workos-api-key-file`, `--allowed-origin`, `--frame-ancestor` (an origin that may frame the shell's pages; none by default), `--live-origin` (an origin the shell's pages may frame), `--allowed-host`, `--trusted-proxy`, `--return-origin`, `--session-hours` (12), `--session-idle-minutes` (120) |
 | maintenance and testing | `--dev-login`, `--dev-password`, `--dev-idp-ws`, `--dev-user` (all `--env test` only), `--verify-derived`, `--seed-synthetic`, `--seed-value`, `--seed-shape` (`flat`, `nested`), `--seed-into-existing` |
 | limits | `--max-body-bytes` (8 MiB), `--max-calls-per-connection` (256), `--idle-timeout-secs` (900), `--max-connections` (1,024), `--max-connections-per-ip` (256), `--max-connections-per-principal` (64), `--max-anonymous-connections` (128), `--max-anonymous-connections-per-ip` (32) |
@@ -276,7 +276,7 @@ behind plexus-core's gate; menger's own are declared on the frame
 | `session` | who a connection is, agents' sessions | `tickets-api/src/session_activation.rs` |
 | `auth` | the AUTH protocol's door and roles | plexus-login, over `src/login_access.rs` |
 | `ui` | the UI's versions, live pointer, previews; child `slots` | the framework's: `../plexus-ui/service` (`plexus-ui-service`, FRAME-5) |
-| `media` | the images a body shows, by sha256, in a file of its own (`media.db`); the ticket's permit asked of `tickets` through the seam | `media/` (`menger-media`, V2-24) |
+| `media` | any file a body shows, by sha256 — its rows in a file of its own (`media.db`), its bytes in a `BlobStore` (the disk); links read into cards; the ticket's permit asked of `tickets` through the seam | `media/` (`menger-media`, V2-24, EDITOR-10) |
 
 **Service to service.** The ui service reaches the tickets service as a
 client, never through its store: its seam (`../plexus-ui/service/src/seam.rs`)
@@ -412,26 +412,62 @@ whole. synapse `-j` prints the `rows` event as one line (SYNAPSE-36).
 | `slots set` | `--layout --slot --component [--version]` | fill a section |
 | `slots clear` | `--layout --slot` | back to the default |
 
-### `media` (V2-24)
+### `media` (V2-24, EDITOR-10)
 
 | method | flags | what it does |
 |---|---|---|
-| `put` | `--mime --data [--ticket]` | keep an image (PNG, JPEG, GIF or WebP by its magic bytes, at most 7 MiB, `data` standard base64) for a ticket you may edit — or, with no ticket, as yours: `stored { hash, mime, bytes, width, height, duplicate }` |
-| `get` | `--hash` | the image's bytes: `media { hash, mime, bytes, width, height, data }` (data base64), or `not_found { hash }` |
+| `put` | `--data [--name] [--ticket] [--mime]` | keep any file in one message (at most 7 MiB, `data` standard base64) for a ticket you may edit — or, with no ticket, as yours: `stored { hash, mime, kind, name, bytes, width, height, duplicate }` |
+| `begin` | `--size [--name] [--ticket]` · `--upload` | start an upload of any size, or resume one of yours: `upload { upload, size, received, chunk }` |
+| `chunk` | `--upload --offset --data` | the next bytes (at most `chunk`, 4 MiB) at `offset` (what the upload has): `chunked { upload, received, size, duplicate }`; a gap `refused { reason: out_of_order }` |
+| `finish` | `--upload` | the upload hashed and kept: `stored { … }`, or `refused { reason: incomplete }` |
+| `get` | `--hash` | a file's bytes up to 7 MiB: `media { …, data }` (data base64); larger, `refused { reason: too_large }` — read it at `/media/<hash>` |
+| `info` | `--hash` | what a file is, without its bytes: `info { hash, mime, kind, name, bytes, width, height }` |
+| `usage` | | what you have put, each file once: `usage { principal, files, bytes }` |
+| `unfurl` | `--url` | a public link read into a card: `unfurled { url, kind, title, description, site, image, provider, embed }` |
+| `fetch` | `--url [--ticket] [--name]` | a remote image or file kept as yours (never hot-linked): `stored { … }` |
 
-An image is named by its SHA-256 (`hash`, 64 hex digits; a `media:` before
-it is read past, any case). A body shows it as `![alt](media:<hash>)`, and
-the ticket page draws it from the shell's **`GET /media/<hash>`** — behind
-the login's session as `/app/` is, the bytes with their type, kept forever
-(content-addressed: `Cache-Control: public, max-age=31536000, immutable`);
-404 for a hash that names nothing or an image the session may not see, one
-answer. The same bytes put twice are one row (`duplicate: true`); put for a
-second ticket, the one image is that ticket's too. A refusal is in band,
-nothing kept: `refused { reason, message, bytes?, max? }` — `too_large`
-(naming the cap), `not_an_image` (an SVG, or bytes none of the kept types),
-`type_mismatch` (the bytes are not the `mime` given), `truncated`,
-`bad_data` (not base64); a ticket that is none, or whose editor permit the
-tickets service does not give you, is `not_found { ticket }`.
+EDITOR-10: **any file.** Its type is read from its own magic bytes, never
+from `mime` or `name`, and drawn by its `kind`: `image` (PNG, JPEG, GIF,
+WebP) inline as `![name](media:<hash>)`; `video` (MP4, QuickTime, WebM) and
+`audio` (MP3, Ogg, WAV, M4A, FLAC) as players, `pdf` in the browser's
+viewer, any other `file` (`application/octet-stream`, an SVG or an HTML
+page among them) as a card with its name, size and a download — each as
+`[name](media:<hash>)`. **`GET /media/<hash>`** serves media inline and
+anything else as an attachment, always `nosniff`, framed by this origin
+alone and (but a PDF) under a sandboxing policy, with one `Range` (`206`)
+so a video seeks. A file larger than one message goes up in chunks and
+resumes after a dropped connection (`begin --upload <id>` answers what it
+has); one untouched for a day is dropped. There is no fixed cap: every
+byte is asked of the uploader's allowance first (`media.bytes`; a link read
+counts `media.fetch.calls` and `media.fetch.bytes`, a byte served
+`media.egress.bytes`) — one call site, `menger_media::Allowance`, allowing
+everything until the quota service (V2-31) is wired in;
+`--media-max-bytes` caps one upload when the operator wants a cap.
+
+**Where the bytes live** is one trait, `menger_media::BlobStore` (put; a
+resumable upload — begin, append at an offset, seal, commit under its
+sha256; a range; stat; delete; orphans; and `presign`). The metadata —
+hash, type, name, size, owners, uploads — stays in `media.db`. One
+implementation ships: the disk, `<root>/<sha256>` (`--media-store disk`,
+the default; `--media-blob-dir` / `MENGER_MEDIA_BLOB_DIR`, by default
+`media/blobs` beside `media.db` — another disk or a network mount works
+unchanged). A store that signs addresses (an object store) makes
+`/media/<hash>` redirect to one after the permit and egress checks; the
+disk signs none and the shell streams. `--media-store s3` is refused until
+V2-32 builds it.
+
+**Links.** `unfurl` and `fetch` read from the public internet alone: http
+and https, no credentials; the host resolved by the server and every
+address it gives checked — never loopback, private, link-local (the
+metadata address `169.254.169.254` and `fd00:ec2::254` among them), CGNAT,
+unspecified, multicast, documentation or reserved space, an IPv4 address
+inside an IPv6 one judged as itself — the connection pinned to the
+addresses checked, no proxy; redirects followed by hand, at most 3, each
+checked again; 5 s and 5 MiB for a page (10 s and 7 MiB for a fetched
+file); the content type checked. YouTube, Vimeo, X, GitHub and Figma are
+read by their oEmbed, and the first four answer an `embed` — a player
+address built by menger on the provider's own host, the only frames the
+page's policy allows besides its own. An unfurl is kept a day.
 
 **Whose it is**: an image is answered to a reader the tickets service says
 sees a ticket it was put for (`tickets.may { id, role: viewer }` through
@@ -444,14 +480,15 @@ viewer's put is the gate's `forbidden`, a stranger's put on a ticket
 
 Kept in the service's own file, `media.db` (`--media-db-path`,
 `MENGER_MEDIA_DB_PATH`; default beside the tickets file, never the tickets
-file and never the ui file): `media` (a row per image, its bytes a BLOB)
-and `media_owners` (a row per ticket, or putter, it is for), made on first
-open. Through synapse the data is a file, never `"$(base64 …)"` (Linux caps
+file and never the ui file): `media` (a row per file; an image kept before
+EDITOR-10 holds its bytes there, every later file's are in the blob
+store), `media_owners` (a row per ticket, or putter, it is for),
+`uploads` and `unfurls`, made on first open. Through synapse the data is a file, never `"$(base64 …)"` (Linux caps
 an argument at 128 KB):
 
 ```sh
 base64 -w0 shot.png > shot.b64
-synapse -P 4460 menger media put --ticket KILN-4 --mime image/png --data @shot.b64     # → stored { hash, … }
+synapse -P 4460 menger media put --ticket KILN-4 --name shot.png --data @shot.b64        # → stored { hash, … }
 synapse -P 4460 menger tickets amend --id KILN-4 --body @body.md                        # body.md says ![shot](media:<hash>)
 synapse -P 4460 -j menger media get --hash <hash> | jq -r 'select(.content.data) | .content.data' | base64 -d > back.png
 ```

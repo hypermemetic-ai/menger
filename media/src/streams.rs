@@ -2,26 +2,44 @@
 //! only the methods — MENGER-29's rule, tickets-api/tests/sizes.rs). Each
 //! takes the [`Caller`] the dispatch resolved; whose a ticket is, is asked
 //! of the tickets service over the [`Seam`] as that caller — never read
-//! from its store.
+//! from its store. EDITOR-10: every byte taken is asked of the allowance
+//! first, for the caller ([`crate::allowance`]), and committed or released
+//! after.
 
+use crate::activation::MediaActivation;
+use crate::allowance::{source, Allowance};
 use crate::caller::Caller;
 use crate::image::MediaEvent;
+use crate::kinds;
 use crate::seam::{Answer, Seam};
-use crate::store::{MediaStore, Owner, StoreError};
-use crate::vocab::{MediaData, MediaHash, MediaType};
+use crate::store::{MediaStore, Owner, StoreError, UPLOAD_TTL};
+use crate::vocab::{FileName, MediaData, MediaHash, UploadId, WebUrl};
 use menger_tickets_api::members::Role;
 use menger_tickets_api::vocab::TicketRef;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock, Weak};
 
 /// `not_found` for the ticket `t` names.
 fn no_ticket(t: &TicketRef) -> MediaEvent {
-    MediaEvent::NotFound { hash: None, ticket: Some(t.to_string()) }
+    MediaEvent::NotFound { hash: None, ticket: Some(t.to_string()), upload: None }
+}
+
+fn no_upload(u: &str) -> MediaEvent {
+    MediaEvent::NotFound { hash: None, ticket: None, upload: Some(u.to_string()) }
+}
+
+/// A store error as the wire says it.
+fn said(e: StoreError, missing: impl FnOnce() -> MediaEvent) -> MediaEvent {
+    match e {
+        StoreError::Refused(problem) => problem.into(),
+        StoreError::NotFound(_) => missing(),
+        e => MediaEvent::Error { message: e.to_string() },
+    }
 }
 
 /// ACCESS-11, over the seam: what a put for `ticket` takes — the caller's
 /// editor permit on it, the tickets service's word (`tickets.may { id,
 /// role: editor }` as the caller); a ticket out of reach, or none, is
-/// answered as one that is not there. With no ticket, the image is the
+/// answered as one that is not there. With no ticket, the file is the
 /// putter's.
 async fn owner(seam: &Seam, user: &Caller, ticket: Option<&TicketRef>) -> Result<Owner, MediaEvent> {
     let Some(t) = ticket else {
@@ -34,27 +52,47 @@ async fn owner(seam: &Seam, user: &Caller, ticket: Option<&TicketRef>) -> Result
     }
 }
 
-/// `media.put`: the image checked and kept by the store, for the ticket the
-/// caller may edit — or, with none, as the caller's own.
-pub(crate) async fn put(store: Arc<MediaStore>, seam: Seam, user: Caller, ticket: Option<TicketRef>, mime: MediaType, data: MediaData) -> MediaEvent {
-    let on = match owner(&seam, &user, ticket.as_ref()).await {
-        Ok(on) => on,
-        Err(ev) => return ev,
-    };
-    match store.put(on, mime.as_str(), data.into_string(), Some(user.principal().to_string())).await {
-        Ok(crate::store::Put { info, duplicate }) => MediaEvent::stored(info, duplicate),
-        Err(StoreError::Refused(problem)) => problem.into(),
-        Err(e) => MediaEvent::Error { message: e.to_string() },
+/// Commits `id` when `ev` kept something new, else releases it.
+async fn settle(allowance: &dyn Allowance, id: &str, ev: &MediaEvent) {
+    match ev {
+        MediaEvent::Stored { duplicate: false, .. } => allowance.commit(id).await,
+        _ => allowance.release(id).await,
     }
 }
 
-/// ACCESS-10, over the seam: whether `user` sees an image kept for `owners`
+/// `media.put`: the file checked and kept by the store, for the ticket the
+/// caller may edit — or, with none, as the caller's own; its bytes asked
+/// of the caller's allowance first.
+pub(crate) async fn put(me: MediaActivation, user: Caller, ticket: Option<TicketRef>, data: MediaData, name: Option<FileName>) -> MediaEvent {
+    let on = match owner(&me.seam, &user, ticket.as_ref()).await {
+        Ok(on) => on,
+        Err(ev) => return ev,
+    };
+    let data = data.into_string();
+    // base64's size, a bound on the bytes: the reservation is for no more.
+    let bound = (data.len() as u64 / 4 + 1) * 3;
+    let allowance = me.allowance();
+    let held = match allowance.reserve(user.principal(), source::BYTES, bound.min(kinds::PUT_MAX as u64)).await {
+        Ok(r) => r,
+        Err(d) => return d.into(),
+    };
+    let ev = match me.store.put(on, data, name.map(FileName::into_string), Some(user.principal().to_string())).await {
+        Ok(crate::store::Put { info, duplicate }) => MediaEvent::stored(info, duplicate),
+        Err(e) => said(e, || MediaEvent::Error { message: "the file vanished".into() }),
+    };
+    settle(allowance.as_ref(), &held.id, &ev).await;
+    ev
+}
+
+/// ACCESS-10, over the seam: whether `user` sees a file kept for `owners`
 /// — a ticket it was put for that the tickets service says the caller sees
 /// (`tickets.may { id, role: viewer }` as the caller), or, put with no
-/// ticket, its putter, and anyone holding `media.get` on `*`.
+/// ticket, its putter, and anyone holding `media.get` on `*`; a public
+/// page's preview, anyone signed in.
 async fn sees(seam: &Seam, user: &Caller, owners: &[Owner]) -> Result<bool, String> {
     for owner in owners {
         let seen = match owner {
+            Owner::Anyone => true,
             Owner::App(p) => p.as_deref() == Some(user.principal()) || seam.held_everywhere(user.context(), "media.get") == Some(true),
             Owner::Ticket(id) => matches!(seam.may(user.context(), id, Role::Viewer).await?, Answer::Held(_)),
         };
@@ -65,28 +103,194 @@ async fn sees(seam: &Seam, user: &Caller, owners: &[Owner]) -> Result<bool, Stri
     Ok(false)
 }
 
-/// `media.get`: the image, to a reader who sees a ticket it is for;
-/// `not_found` alike for none and for one out of reach.
-pub(crate) async fn get(store: Arc<MediaStore>, seam: Seam, user: Caller, hash: MediaHash) -> MediaEvent {
-    use base64::Engine;
-    let not_found = || MediaEvent::NotFound { hash: Some(hash.as_str().to_string()), ticket: None };
+/// The file `hash` names, if `user` may see it — else the one answer for
+/// none and for not theirs.
+async fn visible(store: &Arc<MediaStore>, seam: &Seam, user: &Caller, hash: &MediaHash) -> Result<crate::MediaInfo, MediaEvent> {
+    let not_found = || MediaEvent::no_hash(hash.as_str());
     let kept = match store.kept(hash.as_str()).await {
         Ok(k) => k,
-        Err(StoreError::NotFound(_)) => return not_found(),
-        Err(e) => return MediaEvent::Error { message: e.to_string() },
+        Err(e) => return Err(said(e, not_found)),
     };
-    match sees(&seam, &user, &kept.owners).await {
-        Ok(true) => {}
-        Ok(false) => return not_found(),
-        Err(message) => return MediaEvent::Error { message },
+    match sees(seam, user, &kept.owners).await {
+        Ok(true) => Ok(kept.info),
+        Ok(false) => Err(not_found()),
+        Err(message) => Err(MediaEvent::Error { message }),
     }
-    match store.bytes(hash.as_str()).await {
-        Ok((info, bytes)) => {
+}
+
+/// `media.get`: the file and its bytes, to a reader who sees a ticket it is
+/// for; `not_found` alike for none and for one out of reach; past one
+/// message, `too_large` (read it by range at `/media/<hash>`).
+pub(crate) async fn get(me: MediaActivation, user: Caller, hash: MediaHash) -> MediaEvent {
+    use base64::Engine;
+    let info = match visible(&me.store, &me.seam, &user, &hash).await {
+        Ok(i) => i,
+        Err(ev) => return ev,
+    };
+    if info.bytes > kinds::PUT_MAX as u64 {
+        return MediaEvent::Refused {
+            reason: "too_large".into(),
+            message: format!("the file is {}; get answers at most {} — read it at /media/{}", crate::image::size(info.bytes), crate::image::size(kinds::PUT_MAX as u64), info.hash),
+            bytes: Some(info.bytes),
+            max: Some(kinds::PUT_MAX as u64),
+        };
+    }
+    match me.store.read_at(hash.as_str(), 0, info.bytes as usize).await {
+        Ok(bytes) => {
             let data = base64::engine::general_purpose::STANDARD.encode(bytes);
-            let crate::image::MediaInfo { hash, mime, bytes, width, height } = info;
-            MediaEvent::Media { hash, mime, bytes, width, height, data }
+            let crate::image::MediaInfo { hash, mime, bytes, width, height, kind, name } = info;
+            MediaEvent::Media { hash, mime, bytes, width, height, kind, name, data }
         }
-        Err(StoreError::NotFound(_)) => not_found(),
+        Err(e) => said(e, || MediaEvent::no_hash(hash.as_str())),
+    }
+}
+
+/// `media.info`: what the file is, to a reader who may see it.
+pub(crate) async fn info(me: MediaActivation, user: Caller, hash: MediaHash) -> MediaEvent {
+    match visible(&me.store, &me.seam, &user, &hash).await {
+        Ok(i) => MediaEvent::info(i),
+        Err(ev) => ev,
+    }
+}
+
+/// `media.usage`: what the caller has put.
+pub(crate) async fn usage(me: MediaActivation, user: Caller) -> MediaEvent {
+    match me.store.usage(user.principal()).await {
+        Ok((files, bytes)) => MediaEvent::Usage { principal: user.principal().to_string(), files, bytes },
         Err(e) => MediaEvent::Error { message: e.to_string() },
+    }
+}
+
+/// `media.begin`: a new upload, its size held against the caller's
+/// allowance — or the caller's own upload again, from what it has.
+pub(crate) async fn begin(me: MediaActivation, user: Caller, ticket: Option<TicketRef>, name: Option<FileName>, size: Option<u64>, upload: Option<UploadId>) -> MediaEvent {
+    let answer = |b: crate::store::Begun| MediaEvent::Upload { upload: b.upload, size: b.size, received: b.received, chunk: kinds::CHUNK_MAX as u64 };
+    if let Some(u) = upload {
+        return match me.store.resume(u.as_str(), user.principal()).await {
+            Ok(b) => answer(b),
+            Err(e) => said(e, || no_upload(u.as_str())),
+        };
+    }
+    let Some(size) = size else {
+        return MediaEvent::refused("bad_data", "say the file's size (or the upload to resume)");
+    };
+    let on = match owner(&me.seam, &user, ticket.as_ref()).await {
+        Ok(on) => on,
+        Err(ev) => return ev,
+    };
+    if let Some(max) = me.max_upload.filter(|m| size > *m) {
+        return crate::image::Problem::TooLarge { bytes: size, max }.into();
+    }
+    let allowance = me.allowance();
+    let held = match allowance.reserve(user.principal(), source::BYTES, size).await {
+        Ok(r) => r,
+        Err(d) => return d.into(),
+    };
+    match me.store.begin(on, name.map(FileName::into_string), size, me.max_upload, user.principal().to_string(), Some(held.id.clone())).await {
+        Ok(b) => answer(b),
+        Err(e) => {
+            allowance.release(&held.id).await;
+            said(e, || MediaEvent::Error { message: "the upload could not begin".into() })
+        }
+    }
+}
+
+/// `media.chunk`: the next bytes of the caller's upload.
+pub(crate) async fn chunk(me: MediaActivation, user: Caller, upload: UploadId, offset: u64, data: MediaData) -> MediaEvent {
+    let bytes = match crate::image::decode(data.as_str()) {
+        Ok(b) => b,
+        Err(p) => return p.into(),
+    };
+    if bytes.len() > kinds::CHUNK_MAX {
+        return crate::image::Problem::TooLarge { bytes: bytes.len() as u64, max: kinds::CHUNK_MAX as u64 }.into();
+    }
+    match me.store.chunk(upload.as_str(), user.principal(), offset, bytes).await {
+        Ok(c) => MediaEvent::Chunked { upload: upload.into_string(), received: c.received, size: c.size, duplicate: c.duplicate },
+        Err(e) => said(e, || no_upload(upload.as_str())),
+    }
+}
+
+/// `media.finish`: the caller's upload kept; its reservation committed when
+/// the bytes are new, released when they were kept already or refused.
+pub(crate) async fn finish(me: MediaActivation, user: Caller, upload: UploadId) -> MediaEvent {
+    let allowance = me.allowance();
+    match me.store.finish(upload.as_str(), user.principal()).await {
+        Ok(done) => {
+            let ev = MediaEvent::stored(done.put.info, done.put.duplicate);
+            if let Some(id) = &done.reservation {
+                settle(allowance.as_ref(), id, &ev).await;
+            }
+            ev
+        }
+        // An incomplete upload keeps its reservation; any other refusal
+        // dropped the upload, and so its hold.
+        Err(StoreError::Refused(p @ crate::image::Problem::Incomplete { .. })) => p.into(),
+        Err(e) => said(e, || no_upload(upload.as_str())),
+    }
+}
+
+/// `media.unfurl`: one call of the caller's allowance, then the card.
+pub(crate) async fn unfurl(me: MediaActivation, user: Caller, url: WebUrl) -> MediaEvent {
+    let allowance = me.allowance();
+    let held = match allowance.reserve(user.principal(), source::FETCH_CALLS, 1).await {
+        Ok(r) => r,
+        Err(d) => return d.into(),
+    };
+    let ev = crate::unfurl::unfurl(&me.remote, &me.store, url.as_str()).await;
+    match ev {
+        MediaEvent::Unfurled { .. } => allowance.commit(&held.id).await,
+        _ => allowance.release(&held.id).await,
+    }
+    ev
+}
+
+/// `media.fetch`: one call and the bytes it keeps, of the caller's allowance.
+pub(crate) async fn fetch(me: MediaActivation, user: Caller, url: WebUrl, ticket: Option<TicketRef>, name: Option<FileName>) -> MediaEvent {
+    let on = match owner(&me.seam, &user, ticket.as_ref()).await {
+        Ok(on) => on,
+        Err(ev) => return ev,
+    };
+    let allowance = me.allowance();
+    let call = match allowance.reserve(user.principal(), source::FETCH_CALLS, 1).await {
+        Ok(r) => r,
+        Err(d) => return d.into(),
+    };
+    let bytes = match allowance.reserve(user.principal(), source::FETCH_BYTES, kinds::PUT_MAX as u64).await {
+        Ok(r) => r,
+        Err(d) => {
+            allowance.release(&call.id).await;
+            return d.into();
+        }
+    };
+    let ev = crate::unfurl::fetch(&me.remote, &me.store, url.as_str(), on, name.map(FileName::into_string), user.principal().to_string()).await;
+    match ev {
+        MediaEvent::Refused { .. } | MediaEvent::Error { .. } => allowance.release(&call.id).await,
+        _ => allowance.commit(&call.id).await,
+    }
+    settle(allowance.as_ref(), &bytes.id, &ev).await;
+    ev
+}
+
+/// EDITOR-10: every hour while the store lives, uploads untouched for a day
+/// are dropped and their holds released.
+pub(crate) async fn sweeping(store: Weak<MediaStore>, allowance: Arc<RwLock<Arc<dyn Allowance>>>) {
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(3600));
+    loop {
+        tick.tick().await;
+        let Some(store) = store.upgrade() else { return };
+        match store.sweep(UPLOAD_TTL).await {
+            Ok(gone) => {
+                let allowance = allowance.read().unwrap_or_else(|p| p.into_inner()).clone();
+                for d in &gone {
+                    if let Some(id) = &d.reservation {
+                        allowance.release(id).await;
+                    }
+                }
+                if !gone.is_empty() {
+                    tracing::info!("media:     {} abandoned upload(s) dropped", gone.len());
+                }
+            }
+            Err(e) => tracing::warn!("media: the sweep of abandoned uploads failed: {e}"),
+        }
     }
 }

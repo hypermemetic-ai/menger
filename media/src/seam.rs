@@ -89,36 +89,35 @@ impl Seam {
     }
 }
 
-/// What `GET /media/<hash>` found, asking `media.get` as the session.
+/// What `GET /media/<hash>` found, asking `media.info` as the session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fetched {
-    /// The image: its type and its bytes.
-    Image { mime: String, bytes: Vec<u8> },
-    /// No such image, or none the caller may see — one answer.
+    /// The file the session may see: what it is. Its bytes are read by
+    /// range from the store ([`crate::MediaStore::read_at`]).
+    Found(crate::MediaInfo),
+    /// No such file, or none the caller may see — one answer.
     NotFound,
     /// The call failed or was refused (the gate's word, a broken hash).
     Refused(String),
 }
 
-/// `media.get { hash }` through `service` as `caller` — the shell's route,
+/// `media.info { hash }` through `service` as `caller` — the shell's route,
 /// a client like any other: the gate admits or refuses it, the service
-/// decides whose the image is.
+/// decides whose the file is.
 pub async fn fetch(service: Arc<DynamicHub>, caller: AuthContext, hash: &str) -> Fetched {
-    use base64::Engine;
     let hash: MediaHash = match hash.parse() {
         Ok(h) => h,
         Err(_) => return Fetched::NotFound,
     };
     let media = MediaClient::new(HubTransport::as_(service, caller));
-    match media.get_all(hash).await {
+    match media.info_all(hash).await {
         Ok(events) => match events.as_slice() {
-            [MediaEvent::Media { mime, data, .. }] => match base64::engine::general_purpose::STANDARD.decode(data) {
-                Ok(bytes) => Fetched::Image { mime: mime.clone(), bytes },
-                Err(e) => Fetched::Refused(format!("the image's bytes are not base64: {e}")),
-            },
+            [MediaEvent::Info { hash, mime, bytes, width, height, kind, name }] => {
+                Fetched::Found(crate::MediaInfo { hash: hash.clone(), mime: mime.clone(), bytes: *bytes, width: *width, height: *height, kind: kind.clone(), name: name.clone() })
+            }
             [MediaEvent::NotFound { .. }] => Fetched::NotFound,
             [MediaEvent::Error { message }] => Fetched::Refused(message.clone()),
-            other => Fetched::Refused(format!("media.get answered {}", other.len())),
+            other => Fetched::Refused(format!("media.info answered {}", other.len())),
         },
         Err(e) => Fetched::Refused(e.to_string()),
     }
