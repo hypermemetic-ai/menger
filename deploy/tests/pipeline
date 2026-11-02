@@ -898,9 +898,15 @@ const seed = Buffer.from(String(text).trim(), "base64");
 if (seed.length !== 32) { out({ type: "error", error_kind: "unauthenticated", message: "sign in first" }); process.exit(3); }
 const priv = crypto.createPrivateKey({ key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), seed]), format: "der", type: "pkcs8" });
 const principal = "key:" + crypto.createPublicKey(priv).export({ format: "der", type: "spki" }).subarray(-32).toString("hex");
-const vf = path.join(state, "versions.json"), lf = path.join(state, "live");
+const vf = path.join(state, "versions.json");
 const versions = fs.existsSync(vf) ? JSON.parse(fs.readFileSync(vf, "utf8")) : [];
-const live = fs.existsSync(lf) ? fs.readFileSync(lf, "utf8").trim() : "";
+// UI-15: a live pointer per channel, by the socket dialed — app-test's is `test`, app.menger.sh's `prod`,
+// a local one the default (the plain `live`, as the store keeps the default channel's row)
+const channel = /app-test\./.test(url) ? "test" : /app\.menger\.sh/.test(url) ? "prod" : "default";
+const liveFile = (ch) => path.join(state, ch === "default" ? "live" : `live.${ch}`);
+const liveOf = (ch) => (fs.existsSync(liveFile(ch)) ? fs.readFileSync(liveFile(ch), "utf8").trim() : "");
+const channelsOf = (hash) => ["default", "prod", "test"].filter((ch) => liveOf(ch) === hash);
+const lf = liveFile(channel), live = liveOf(channel);
 const raw = params !== null ? params : (fs.readFileSync(0, "utf8").split("\n").find((l) => l.trim()) || "{}");
 const p = JSON.parse(raw);
 function filesOf(buf) { // a tar's regular files, or null: no tar
@@ -945,7 +951,23 @@ if (method === "ui.push") {
   const contract_matches = m.contract === "unknown" ? null : m.contract === (process.env.STUB_UI_CONTRACT ?? "");
   out({ type: "pushed", version: hash, live: !kept, new: fresh, contract_matches });
 } else if (method === "ui.versions") {
-  if (process.env.STUB_UI_VERSIONS !== "none") for (const v of versions) out({ type: "version", ...v, live: v.hash === live });
+  if (process.env.STUB_UI_VERSIONS !== "none") for (const v of versions) out({ type: "version", ...v, live: v.hash === live, channels: channelsOf(v.hash) });
+} else if (method === "ui.promote") {
+  // UI-15: `to`'s pointer onto `from`'s live version (none: this socket's channel), one write; refused
+  // with nothing live there, onto itself, or when STUB_UI_PROMOTE=refuse
+  fs.appendFileSync(process.env.STUB_ORDER, "promote\n");
+  const to = String(p.to ?? ""), from = String(p.from ?? channel);
+  if (![to, from].every((c) => /^[a-z][a-z0-9-]{0,31}$/.test(c))) { out({ type: "error", error_kind: "invalid_params", message: `not a channel: ${to} / ${from}` }); process.exit(3); }
+  if (to === from) refuse("bad_channel", `promote --to ${to} --from ${from}: a channel is not promoted onto itself`);
+  if (process.env.STUB_UI_PROMOTE === "refuse") refuse("forbidden", "the stand-in refuses every promote today");
+  const source = liveOf(from);
+  if (!source) refuse("unknown_version", `(nothing is live on channel ${from}: nothing to promote to ${to})`);
+  const was = liveOf(to);
+  fs.writeFileSync(liveFile(to), source + "\n");
+  const hf = path.join(state, `history.${to}`);
+  let seq = null;
+  if (was !== source) { fs.appendFileSync(hf, `promote ${source} ${was || "-"}\n`); seq = fs.readFileSync(hf, "utf8").trim().split("\n").length; }
+  out({ type: "promoted", channel: to, from, version: source, label: null, seq });
 } else if (method === "auth.login") {
   if (!p?.flow?.session) { out({ type: "error", message: "the stand-in mints sessions only" }); process.exit(3); }
   const token = "tok-" + crypto.randomBytes(8).toString("hex");
@@ -1012,7 +1034,7 @@ chmod +x "$STUB_PLEXUS_UI"; cp "$STUB_PLEXUS_UI" "$SCRATCH/bin/plexus-ui"
 cp "$SCRATCH/bin/node" "$SCRATCH/bin/node-base"
 stub node 'echo "node $*" >>"$STUB_ARGV"
 case " $* " in
-  *" ui.push "*|*" ui.versions "*|*" ui.rollback "*|*" ui.preview "*|*" auth.login "*) exec "$REALNODE" "$FAKE_UI" "$@" ;;
+  *" ui.push "*|*" ui.versions "*|*" ui.rollback "*|*" ui.preview "*|*" ui.promote "*|*" auth.login "*) exec "$REALNODE" "$FAKE_UI" "$@" ;;
   *menger-call.mjs*" --principal "*) exec "$REALNODE" "$@" ;;
   *menger-call.mjs*" tickets.health "*) echo health >>"$STUB_ORDER"; exec "$(dirname "$0")/node-base" "$@" ;;
   *menger-call.mjs*) exec "$(dirname "$0")/node-base" "$@" ;;
@@ -1055,7 +1077,9 @@ case $p in
       [[ -n $w ]] && printf "%b" "${w//%\{http_code\}/303}"; exit 0
     fi
     echo smoke >>"$STUB_ORDER"
-    live=$(cat "$STUB_UI_STATE/live" 2>/dev/null || true); h=$live
+    # UI-15: the pointer a host serves is the one of its channel (test, prod; a local one the default)
+    case $hostport in app-test.*) lf=live.test ;; app.menger.sh*) lf=live.prod ;; *) lf=live ;; esac
+    live=$(cat "$STUB_UI_STATE/$lf" 2>/dev/null || true); h=$live
     [[ $p == /app/*/index.html ]] && { h=${p#/app/}; h=${h%%/*}; }
     if [[ ${STUB_UI_SERVE:-live} == live && -n $h && -f $STUB_UI_STATE/$h.html ]]; then body=$(sed "s/{{WS_PORT}}/4470/g; s/{{TITLE}}/menger/g" "$STUB_UI_STATE/$h.html")
     else body=$STUB_PLACEHOLDER; fi
@@ -1552,6 +1576,66 @@ has "$T3: remote test: pushed to app-test, as the pipeline" "$(cat "$STUB_UI_STA
 grep -E '^ok +.*/app/' <<<"$err" >/dev/null && ok || bad "$T3: remote test: no ok line for /app/ in: $err"
 in_order "$T3: remote test"
 same "$T3: remote test: started, succeeded" "$(since "$m" .state)" '"started" "succeeded"'
+same "$T3: remote test moved test's pointer" "$(cat "$STUB_UI_STATE/live.test" 2>/dev/null)" "$BUNDLE_SHA"
+[[ ! -f $STUB_UI_STATE/live.prod ]] && ok || bad "$T3: a deploy to test moved prod's pointer"
+
+# ── UI-15 remote_prod_promotes_tests_live_version_and_pushes_nothing ────────
+# Test and prod share one store: `remote prod` (infra's promote.yml, the image) then
+# `ui promote --to prod --from test` as the pipeline key on prod's socket — no ui.push to
+# prod, the hash promoted said and in the log line; the smoke on prod wants that version
+# live and /app/ serving the bundle's page. A refused promote fails the deploy, named and
+# recorded, and moves nothing; a release before v2 (no bundle) promotes nothing.
+T15=remote_prod_promotes_tests_live_version_and_pushes_nothing
+chmod u+w "$D4/releases/$V4"; echo "passed 2026-10-23T06:00:00Z — workspace 3 passed, 0 failed" >"$D4/releases/$V4/SUITE"; chmod a-w "$D4/releases/$V4"
+: >"$STUB_UI_STATE/calls"; : >"$STUB_ORDER"; : >"$SCRATCH/infra.argv"; rm -f "$STUB_UI_STATE/live.prod" "$STUB_UI_STATE/history.prod"
+m=$(mark); v2run remote prod
+same "$T15: remote prod exits 0" "$code" 0
+has "$T15: infra's promote.yml, the image" "$(<"$SCRATCH/infra.argv")" "infra promote.yml -e app_dir="
+[[ $(grep -c '^ui.push wss://app.menger.sh/ws' "$STUB_UI_STATE/calls") == 0 ]] && ok || bad "$T15: a push to prod: $(cat "$STUB_UI_STATE/calls")"
+has "$T15: one promote, as the pipeline key, on prod's socket" "$(cat "$STUB_UI_STATE/calls")" "ui.promote wss://app.menger.sh/ws pipeline argv"
+same "$T15: … once" "$(grep -c '^ui.promote ' "$STUB_UI_STATE/calls")" 1
+same "$T15: prod's pointer is test's live version" "$(cat "$STUB_UI_STATE/live.prod" 2>/dev/null)" "$(cat "$STUB_UI_STATE/live.test")"
+same "$T15: … the release's bundle" "$(cat "$STUB_UI_STATE/live.prod" 2>/dev/null)" "$BUNDLE_SHA"
+same "$T15: one move on prod's history" "$(wc -l <"$STUB_UI_STATE/history.prod")" 1
+has "$T15: said, with the hash" "$err" "ok   promoted test's live version to prod on app.menger.sh: ${BUNDLE_SHA:0:12} ($V4's bundle)"
+same "$T15: the log line names the hash promoted" "$(tail -n 1 "$D4/deployments.log" | cut -f2-5)" $'app-prod\trun\t'"$V4"$'\tok promoted '"${BUNDLE_SHA:0:12}"
+same "$T15: recorded as app-prod from test" "$(since "$m" '[.environment, .state, .from]')" '["app-prod","started","test"] ["app-prod","succeeded","test"]'
+has "$T15: the smoke wants the promoted version live on prod" "$err" "ok   ui versions on wss://app.menger.sh/ws: ${BUNDLE_SHA:0:12} live"
+has "$T15: the smoke reads prod's /app/ signed in" "$(<"$STUB_ARGV")" "https://app.menger.sh/app/"
+grep -E '^ok +https://app.menger.sh/app/' <<<"$err" >/dev/null && ok || bad "$T15: no ok line for prod's /app/ in: $err"
+[[ $err != *FAIL* ]] && ok || bad "$T15: the smoke said FAIL: $err"
+h15=$(grep -n -m1 '^health$' "$STUB_ORDER" | cut -d: -f1); p15=$(grep -n -m1 '^promote$' "$STUB_ORDER" | cut -d: -f1); s15=$(grep -n -m1 '^smoke$' "$STUB_ORDER" | cut -d: -f1)
+[[ -n $h15 && -n $p15 && -n $s15 && $h15 -lt $p15 && $p15 -lt $s15 ]] && ok || bad "$T15: health → promote → smoke, got: $(paste -sd' ' "$STUB_ORDER")"
+same "$T15: url" "$(<"$HF")" "url=https://app.menger.sh/"
+# the same release again: prod points there already — a promote that moves nothing, still ok
+: >"$STUB_UI_STATE/calls"; v2run remote prod
+same "$T15: again: exits 0" "$code" 0
+has "$T15: again: said there already" "$err" "ok   promoted test's live version to prod on app.menger.sh: ${BUNDLE_SHA:0:12} ($V4's bundle, there already)"
+same "$T15: again: no second move on prod's history" "$(wc -l <"$STUB_UI_STATE/history.prod")" 1
+# test has an author's version live since the push (the studio): that is what prod takes, said
+AUTHORED=$(printf 'authored-%s' "$BUNDLE_SHA" | sha256sum | cut -d' ' -f1)
+echo "$AUTHORED" >"$STUB_UI_STATE/live.test"; cp "$STUB_UI_STATE/$BUNDLE_SHA.html" "$STUB_UI_STATE/$AUTHORED.html"
+jq -c --arg h "$AUTHORED" --arg m "$BUNDLE_MANIFEST" '[{hash: $h, commit: null, contract: "c", abi: "engine/1", manifest: $m, pushed_by: "key:editor", pushed_at: 2}] + .' "$STUB_UI_STATE/versions.json" >"$STUB_UI_STATE/v.json" && mv "$STUB_UI_STATE/v.json" "$STUB_UI_STATE/versions.json"
+v2run remote prod
+same "$T15: an author's version live on test: exits 0" "$code" 0
+has "$T15: … promoted, said as not the release's bundle" "$err" "ok   promoted test's live version to prod on app.menger.sh: ${AUTHORED:0:12} (not $V4's bundle ${BUNDLE_SHA:0:12}: what test had live"
+same "$T15: … prod's pointer on it" "$(cat "$STUB_UI_STATE/live.prod")" "$AUTHORED"
+has "$T15: … the log line names it" "$(tail -n 1 "$D4/deployments.log")" "ok promoted ${AUTHORED:0:12}"
+# a promote refused (nothing live on test): the deploy fails, said and recorded; prod's pointer untouched
+rm -f "$STUB_UI_STATE/live.test"; echo "$BUNDLE_SHA" >"$STUB_UI_STATE/live.prod"
+m=$(mark); v2run remote prod
+same "$T15: nothing live on test: exits 1" "$code" 1
+has "$T15: … said" "$err" "ui promote --to prod --from test on app.menger.sh was refused: refused unknown_version"
+same "$T15: … recorded started, failed" "$(since "$m" '[.environment, .state]')" '["app-prod","started"] ["app-prod","failed"]'
+has "$T15: … the log line" "$(tail -n 1 "$D4/deployments.log")" "promote failed: refused unknown_version"
+same "$T15: … prod's pointer where it was" "$(cat "$STUB_UI_STATE/live.prod")" "$BUNDLE_SHA"
+[[ $(cat "$STUB_UI_STATE/calls" "$STUB_ARGV" 2>/dev/null | grep -c 'ui.rollback') == 0 ]] && ok || bad "$T15: the pipeline moved the pointer itself (ui.rollback)"
+# a refusal the gate makes (the pipeline key holds no deployer on prod): the same, naming it
+echo "$BUNDLE_SHA" >"$STUB_UI_STATE/live.test"
+STUB_UI_PROMOTE=refuse v2run remote prod
+same "$T15: the gate refuses: exits 1" "$code" 1
+has "$T15: … said" "$err" "was refused: refused forbidden"
+echo "$BUNDLE_SHA" >"$STUB_UI_STATE/live.test"; rm -f "$STUB_UI_STATE/live.prod"
 
 # ── V2-7 a_push_that_fails_fails_the_deploy ────────────────────────────────
 # The live version is pinned to the first bundle; the release deployed holds
@@ -1561,7 +1645,7 @@ same "$T3: remote test: started, succeeded" "$(since "$m" .state)" '"started" "s
 T4=a_push_that_fails_fails_the_deploy
 PREV=$BUNDLE_SHA; mkdir -p "$STUB_UI_STATE"
 printf '[{"hash":"%s","commit":null,"contract":"unknown","abi":"engine/1","pushed_by":"key:%s","pushed_at":1}]' "$PREV" "$PUB2" >"$STUB_UI_STATE/versions.json"
-echo "$PREV" >"$STUB_UI_STATE/live"; tar -xOf "$UB/dist/ui.tar" index.html >"$STUB_UI_STATE/$PREV.html"
+for f in live live.test; do echo "$PREV" >"$STUB_UI_STATE/$f"; done; tar -xOf "$UB/dist/ui.tar" index.html >"$STUB_UI_STATE/$PREV.html"
 V4B=$(v2release "$D4/releases" 2 1 "$UB2/dist/ui.tar")
 export STUB_UI_SIGNER=$PUBBAD
 m=$(mark); v2run remote test --image "menger:$V4B"
@@ -1570,7 +1654,7 @@ has "$T4: the push refused, said" "$err" "bad_signature"
 same "$T4: recorded started, failed" "$(since "$m" '[.environment, .state]')" '["test","started"] ["test","failed"]'
 tail -n 1 "$D4/deployments.log" | grep -q bad_signature && ok || bad "$T4: the log line names no bad_signature: $(tail -n 1 "$D4/deployments.log")"
 has "$T4: … and it is the test run's" "$(tail -n 1 "$D4/deployments.log" | cut -f2,3,4)" $'test\trun\t'"$V4B"
-same "$T4: the version live before stays live" "$(cat "$STUB_UI_STATE/live")" "$PREV"
+same "$T4: the version live before stays live" "$(cat "$STUB_UI_STATE/live.test")" "$PREV"
 [[ ! -f $D4/releases/$V4B/TESTED ]] && ok || bad "$T4: a release whose push failed is marked TESTED"
 v2run local --image "menger:$V4B"
 same "$T4: local, a bad signer: exits 1" "$code" 1
@@ -1600,7 +1684,7 @@ same "$T9: remote test with a studio: exits 0" "$code" 0
 has "$T9: the studio kept, said" "$err" "ok   the studio kept on wss://app-test.menger.sh/ws: ${STUDIO_SHA:0:12}"
 order=$(paste -sd' ' "$STUB_ORDER")
 [[ $order =~ (^|\ )push\ push-kept\ .*smoke ]] && ok || bad "$T9: the app's push, then the studio's, then the smoke: $order"
-same "$T9: the app live, the studio kept beside" "$(cat "$STUB_UI_STATE/live")" "$BUNDLE_SHA"
+same "$T9: the app live, the studio kept beside" "$(cat "$STUB_UI_STATE/live.test")" "$BUNDLE_SHA"
 same "$T9: the studio among the versions, by its name" "$(uivers '[.[] | select(.name == "studio") | .hash]')" "[\"$STUDIO_SHA\"]"
 has "$T9: pushed --no-live by the release's tool" "$(<"$STUB_ARGV")" "--no-live $D4/releases/$V9/dist/studio.tar"
 same "$T9: recorded started, succeeded" "$(since "$m" '[.environment, .state]')" '["test","started"] ["test","succeeded"]'
@@ -1610,7 +1694,7 @@ same "$T9: the studio refused: the deploy still exits 0" "$code" 0
 has "$T9: the refusal said" "$err" "FAIL the studio's push to wss://app-test.menger.sh/ws"
 has "$T9: recorded as studio, refused, with the reason" "$(grep -P '\tstudio\t' "$D4/deployments.log" | tail -n 1 | cut -f2-5)" $'test\tstudio\t'"$V9"$'\trefused: '
 same "$T9: the run itself succeeded" "$(since "$m" '[.environment, .state]')" '["test","started"] ["test","succeeded"]'
-same "$T9: the app still live" "$(cat "$STUB_UI_STATE/live")" "$BUNDLE_SHA"
+same "$T9: the app still live" "$(cat "$STUB_UI_STATE/live.test")" "$BUNDLE_SHA"
 unset STUB_UI_SIGNER
 
 # ── UI-12 the_smoke_holds_the_push_to_its_contract ─────────────────────────

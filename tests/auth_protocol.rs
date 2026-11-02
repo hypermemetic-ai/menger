@@ -386,9 +386,10 @@ async fn the_roles_are_what_identity_21_asked_method_by_method() {
     // admin is built in, never declared; nothing else is. V2-4: CHAT-16's
     // `chatter` went with chats; DEPLOY-11's `deployer` went with deployments
     // and came back for one method, V2-7's `ui.push` — a deploy pushes the
-    // bundle as a deployer, never as an admin.
+    // bundle as a deployer, never as an admin. UI-15: and `ui.promote` — a
+    // release to prod is a pointer move the pipeline key makes.
     assert_eq!(declared.keys().cloned().collect::<BTreeSet<_>>(), names(&["deployer", "editor", "member", "viewer"]));
-    assert_eq!(declared["deployer"], vec!["ui.push".to_string()], "a deployer holds the push and nothing else");
+    assert_eq!(declared["deployer"].iter().cloned().collect::<BTreeSet<_>>(), names(&["ui.promote", "ui.push"]), "a deployer holds the push and the promote, nothing else");
 }
 
 // ── Over the wire, login on ──────────────────────────────────────────────

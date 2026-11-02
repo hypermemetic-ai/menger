@@ -184,7 +184,7 @@ where it has one (a list in it is `;`-separated).
 
 | group | flags |
 |---|---|
-| run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path`, `--ui-signer`, `--ui-compiler`, `--ui-author-key`, `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell` |
+| run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path`, `--ui-signer`, `--ui-compiler`, `--ui-author-key`, `--ui-channel` (UI-15: the live pointer this environment serves in its ui file; default from `--env`: `test`, `prod`, else `default`), `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell` |
 | sign-in | `--auth-provider`, `--admin`, `--public-url`, `--login-button`, `--login-email`, `--login-password`, `--login-forgot`, `--identity`, `--workos-api-key-file`, `--allowed-origin`, `--frame-ancestor` (an origin that may frame the shell's pages; none by default), `--live-origin` (an origin the shell's pages may frame), `--allowed-host`, `--trusted-proxy`, `--return-origin`, `--session-hours` (12), `--session-idle-minutes` (120) |
 | maintenance and testing | `--dev-login`, `--dev-password`, `--dev-idp-ws`, `--dev-user` (all `--env test` only), `--verify-derived`, `--seed-synthetic`, `--seed-value`, `--seed-shape` (`flat`, `nested`), `--seed-into-existing` |
 | limits | `--max-body-bytes` (8 MiB), `--max-calls-per-connection` (256), `--idle-timeout-secs` (900), `--max-connections` (1,024), `--max-connections-per-ip` (256), `--max-connections-per-principal` (64), `--max-anonymous-connections` (128), `--max-anonymous-connections-per-ip` (32) |
@@ -394,9 +394,10 @@ whole. synapse `-j` prints the `rows` event as one line (SYNAPSE-36).
 
 | method | flags | what it does |
 |---|---|---|
-| `push` | `--bundle --manifest --signature [--commit]` | store a bundle by hash, compiled and checked, and make it live, in one transaction |
-| `rollback` | `--to` | move the live pointer to a kept version |
-| `versions` | | every kept version, newest first, one `live: true` |
+| `push` | `--bundle --manifest --signature [--commit] [--channel]` | store a bundle by hash, compiled and checked, and make it live on this environment's channel, in one transaction |
+| `promote` | `--to [--from]` | UI-15: one channel's live pointer onto the version another has live — a release to prod, no second push |
+| `rollback` | `--to [--channel]` | move the live pointer to a kept version |
+| `versions` | `[--channel]` | every kept version, newest first, one `live: true`; each says which `channels` name it |
 | `preview` | `[--version]` | serve a kept version to the caller's sessions alone; none clears it |
 | `watch` | | `live` on every pointer move, `slot_changed` on every section change |
 | `slots list` | `[--layout]` | every section's assignment and the default it overrides |
@@ -753,6 +754,29 @@ against a tenant that is not menger (`../plexus-ui/service/tests`); menger's
   beside the tickets file, never the same file): `ui_versions`,
   `ui_pointer`, `ui_preview`, `ui_slots`, `ui_routes`, and (FRAME-52)
   `ui_labels`, `ui_tags`, `ui_moves` — made on a file of any form before.
+- **One store for test and prod** (UI-15; owner, 2026-11-01: "ideally we
+  would iterate on the same database and components would be promoted to
+  prod"). The file is opened in WAL with a busy timeout, so two mengers on
+  one host share it — on the box, both containers mount infra's
+  `menger-shared` volume and name `MENGER_UI_DB_PATH=/shared/ui.db` — each
+  on its **channel** (`--ui-channel`, `MENGER_UI_CHANNEL`; the default from
+  `--env`: `test`, `prod`, else `default`): the live pointer it serves and
+  moves is `live:<channel>` (`live` for `default`, so a dev server and every
+  test serve the row they always did). A push on test moves `live:test` and
+  leaves prod's page as it was; **`ui promote --to prod --from test`** (the
+  deployer's, as `push` is: the pipeline key, on prod's socket, so prod's
+  open pages hear `live` and swap) moves `live:prod` onto the version test
+  has live in one write, kept on prod's history as `how: promote` — a
+  release to prod is a pointer move, no second push. A version is one row
+  whatever channels name it (`versions` rows carry `channels`; labels and
+  tags are shared, and so are the sections' and routes' rows today); each
+  channel's `history`, `undo` and `redo` are its own. Every pointer method
+  (`push`, `author`, `rollback`, `undo`, `redo`, `history`, `versions`)
+  takes `--channel`, this environment's when none; a write naming another
+  channel is the admin's (`ui.rollback` on `*`), refused `forbidden` to
+  anyone else. An author on test (the studio) is in the one file, promoted
+  with the rest; `versions` says `authored` by this environment's own author
+  key alone.
 - **`push`** takes the bundle (a tar, base64, at most 16 MiB), its manifest
   and a signature: Ed25519 over the bundle's sha256 by a key named with
   `--ui-signer` (`MENGER_UI_SIGNERS`, `;`-separated 64-hex public keys; none:
@@ -829,9 +853,10 @@ against a tenant that is not menger (`../plexus-ui/service/tests`); menger's
   `routes list`, `here`, `follow`, `history`; editors `routes set`, `routes clear`, `author`,
   `show`, `sessions`, `tag`, `undo`, `redo` (an `author`'s; a push's or a
   rollback's undo is the admin's); a
-  `deployer` `push` (V2-7: a deploy pushes as the pipeline key); `rollback`,
+  `deployer` `push` (V2-7: a deploy pushes as the pipeline key) and
+  `promote` (UI-15: a release to prod); `rollback`,
   `preview`, `slots set`, `slots clear` are the admin's. Every write
-  (`push`, `author`, `rollback`, `preview`, `slots set|clear`, `routes
+  (`push`, `promote`, `author`, `rollback`, `preview`, `slots set|clear`, `routes
   set|clear`, `show`, `tag`, `undo`, `redo`) and `sessions` want their grant held on `*`: the UI
   has no scope, and a grant held on a scope alone is refused `forbidden`
   naming the scope (FRAME-43, FRAME-48).

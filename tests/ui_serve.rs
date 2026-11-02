@@ -9,7 +9,8 @@
 mod support;
 
 use serde_json::json;
-use support::{call, connect, free_port, push_params, sha_hex, spawn_menger, ui_args, UI_SIGNER};
+use std::path::Path;
+use support::{call, connect, connect_as, free_port, push_params, sha_hex, spawn_menger, ui_args, UI_SIGNER};
 
 /// A key that holds a session and no preview.
 const SOMEONE: [u8; 32] = [0x50; 32];
@@ -42,12 +43,19 @@ impl Served {
 }
 
 async fn start() -> Served {
+    start_with(None, &[]).await
+}
+
+/// UI-15: a menger on `ui_db` (none: its own), started with `more` flags
+/// (`--ui-channel`, `--env`).
+async fn start_with(ui_db: Option<&Path>, more: &[&str]) -> Served {
     let (ws, shell) = (free_port().await, free_port().await);
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let empty = dir.path().join("no-dist");
     std::fs::create_dir_all(&empty).unwrap();
     let mut extra = vec!["--shell-port".to_string(), shell.to_string(), "--app-dist".into(), empty.display().to_string()];
-    extra.extend(ui_args(&dir.path().join("ui.db")));
+    extra.extend(ui_args(ui_db.unwrap_or(&dir.path().join("ui.db"))));
+    extra.extend(more.iter().map(|s| s.to_string()));
     let server = spawn_menger(ws, &dir.path().join("t.db"), &extra).await;
     for _ in 0..100 {
         if tokio::net::TcpStream::connect(("127.0.0.1", shell)).await.is_ok() {
@@ -334,4 +342,75 @@ async fn the_studio_is_mounted_for_the_admin_and_editors() {
     assert_eq!(m.get("/studio/", Some(&capped)).await.status(), 403, "the admin capped at editor@KILN-1");
     assert_eq!(m.get("/studio/ui-compiler.wasm", Some(&capped)).await.status(), 403);
     assert_eq!(m.get("/studio/", Some(&mine)).await.status(), 200, "the admin uncapped");
+}
+
+/// UI-15: two mengers on one `ui.db` — one on channel `test`
+/// (`--ui-channel test`), one on `prod` (the default from `--env prod`) —
+/// as the two containers on the box share one store. A push on test leaves
+/// prod's page as it was; `ui promote --to prod --from test`, a deployer's
+/// on prod's socket, changes it in one write; `history` on each channel
+/// shows its own moves; `versions` is one list, each row naming its
+/// channels.
+#[tokio::test]
+async fn two_mengers_on_one_ui_db_serve_their_own_channels() {
+    let shared = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let file = shared.path().join("ui.db");
+    let test = start_with(Some(&file), &["--ui-channel", "test"]).await;
+    let prod = start_with(Some(&file), &["--env", "prod"]).await;
+    let (ta, pa) = (connect(test.ws).await, connect(prod.ws).await);
+    let (tt, pt) = (support::mint_session(test.ws).await, support::mint_session(prod.ws).await);
+    async fn page(m: &Served, tok: String) -> String {
+        m.get("/app/", Some(&tok)).await.text().await.unwrap()
+    }
+
+    // A push on test: test's page, not prod's.
+    let pushed = call(&ta, "ui.push", push_params(1, &UI_SIGNER)).await;
+    assert_eq!(pushed[0]["type"], "pushed", "{pushed:?}");
+    let v1 = sha_hex(&support::bundle(1));
+    assert!(page(&test, tt.clone()).await.contains("version 1 on"), "test serves v1");
+    assert!(page(&prod, pt.clone()).await.contains("No frontend yet"), "prod serves its placeholder still");
+    let listed = call(&pa, "ui.versions", json!({})).await;
+    assert_eq!(listed.len(), 1, "one row, as prod lists it: {listed:?}");
+    assert_eq!((listed[0]["hash"].as_str(), listed[0]["live"].as_bool(), listed[0]["channels"].clone()), (Some(v1.as_str()), Some(false), json!(["test"])), "{listed:?}");
+
+    // The promote, as a deployer on prod's socket (the pipeline key's role).
+    const PIPELINE: [u8; 32] = [0x71; 32];
+    let g = call(&pa, "auth.grant", json!({ "principal": support::principal_of(&PIPELINE), "role": "deployer", "scope": "*" })).await;
+    assert!(g.first().is_some_and(|e| e.get("error_kind").is_none()), "deployer on *: {g:?}");
+    let deployer = connect_as(&PIPELINE, prod.ws).await;
+    let promoted = call(&deployer, "ui.promote", json!({ "to": "prod", "from": "test" })).await;
+    assert_eq!(promoted.len(), 1, "{promoted:?}");
+    assert_eq!((promoted[0]["type"].as_str(), promoted[0]["channel"].as_str(), promoted[0]["from"].as_str(), promoted[0]["version"].as_str()), (Some("promoted"), Some("prod"), Some("test"), Some(v1.as_str())), "{promoted:?}");
+    assert!(promoted[0]["seq"].as_u64().is_some(), "a move: {promoted:?}");
+    assert!(page(&prod, pt.clone()).await.contains("version 1 on"), "prod serves v1 now");
+    assert!(page(&prod, pt.clone()).await.contains(&format!("at {v1}")), "stamped with the version served");
+    let listed = call(&ta, "ui.versions", json!({})).await;
+    assert_eq!((listed.len(), listed[0]["live"].as_bool(), listed[0]["channels"].clone()), (1, Some(true), json!(["prod", "test"])), "one row, named by both: {listed:?}");
+
+    // Another push on test: prod's page as it was.
+    let pushed = call(&ta, "ui.push", push_params(2, &UI_SIGNER)).await;
+    assert_eq!(pushed[0]["type"], "pushed", "{pushed:?}");
+    let v2 = sha_hex(&support::bundle(2));
+    assert!(page(&test, tt.clone()).await.contains("version 2 on"));
+    assert!(page(&prod, pt.clone()).await.contains("version 1 on"), "prod stays on v1");
+    let live_on = |evs: &Vec<serde_json::Value>| evs.iter().find(|v| v["live"] == true).map(|v| v["hash"].as_str().unwrap().to_string());
+    assert_eq!(live_on(&call(&ta, "ui.versions", json!({})).await), Some(v2.clone()), "live on test");
+    assert_eq!(live_on(&call(&pa, "ui.versions", json!({})).await), Some(v1.clone()), "live on prod");
+    assert_eq!(live_on(&call(&pa, "ui.versions", json!({ "channel": "test" })).await), Some(v2.clone()), "test's, asked of prod");
+
+    // Each channel's history is its own.
+    let hows = |evs: &Vec<serde_json::Value>| evs.iter().map(|m| format!("{}:{}", m["channel"].as_str().unwrap(), m["how"].as_str().unwrap())).collect::<Vec<_>>();
+    assert_eq!(hows(&call(&pa, "ui.history", json!({})).await), vec!["prod:promote"]);
+    assert_eq!(hows(&call(&ta, "ui.history", json!({})).await), vec!["test:push", "test:push"]);
+    assert_eq!(hows(&call(&ta, "ui.history", json!({ "channel": "prod" })).await), vec!["prod:promote"], "prod's history, read on test");
+    // The deployer pushes into no other channel, and promotes nothing a second time it would move.
+    let same = call(&deployer, "ui.promote", json!({ "to": "prod", "from": "test" })).await;
+    assert_eq!((same[0]["type"].as_str(), same[0]["version"].as_str()), (Some("promoted"), Some(v2.as_str())), "{same:?}");
+    assert!(page(&prod, pt.clone()).await.contains("version 2 on"), "prod on v2 after the second promote");
+    let again = call(&deployer, "ui.promote", json!({ "to": "prod", "from": "test" })).await;
+    assert!(again[0]["seq"].is_null(), "nothing moved: {again:?}");
+    let mut other = push_params(3, &UI_SIGNER);
+    other["channel"] = json!("test");
+    let refused = call(&deployer, "ui.push", other).await;
+    assert_eq!((refused[0]["type"].as_str(), refused[0]["reason"].as_str()), (Some("refused"), Some("forbidden")), "a deployer on prod pushes into test's channel: {refused:?}");
 }

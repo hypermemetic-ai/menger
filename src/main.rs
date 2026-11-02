@@ -91,6 +91,18 @@ struct Args {
     #[arg(long = "ui-author-key", env = "MENGER_UI_AUTHOR_KEY", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
     ui_author_key: Option<PathBuf>,
 
+    // UI-15: one component store for test and prod — the live pointer this
+    // environment serves in a ui file two environments may share.
+    /// The ui service's channel: the live pointer this environment serves and moves in its ui file (`live:<channel>`; `default` is the plain `live`)
+    ///
+    /// Default from --env: `test` is `test`, `prod` is `prod`, anything else
+    /// `default`. Two mengers on one --ui-db-path, each on its own channel,
+    /// are one component store: a push on test leaves prod's page as it was,
+    /// and `ui promote --to prod --from test` moves prod's pointer onto the
+    /// version test has live, with no second push (UI-15).
+    #[arg(long = "ui-channel", env = "MENGER_UI_CHANNEL", value_name = "NAME", help_heading = RUN, hide_short_help = true)]
+    ui_channel: Option<String>,
+
     // RUN-8: names stay ACCESS-25's: a specific address adds its own literal
     // (and the shell's origin at it may open the socket); any other name is
     // an --allowed-host (and an --allowed-origin).
@@ -532,7 +544,9 @@ async fn run(args: Args) -> anyhow::Result<()> {
     if ui_db_path == db_path {
         anyhow::bail!("--ui-db-path {} is the database file: the ui service keeps a file of its own", ui_db_path.display());
     }
-    let ui = menger::UiSetup::open(&ui_db_path, plexus_ui_service::Signers::parse(&args.ui_signer).map_err(anyhow::Error::msg)?)?;
+    // UI-15: on this environment's channel (--ui-channel, else --env's).
+    let ui_channel = args.ui_channel.clone().unwrap_or_else(|| menger::default_ui_channel(args.env.as_deref()).to_string());
+    let ui = menger::UiSetup::open_on(&ui_db_path, plexus_ui_service::Signers::parse(&args.ui_signer).map_err(anyhow::Error::msg)?, &ui_channel)?;
     // UI-7: refused at start when the module imports anything.
     let compiler = match &args.ui_compiler {
         Some(path) => Some(plexus_ui_service::Compiler::open(path).map_err(|e| anyhow::anyhow!("--ui-compiler {}: {e}", path.display()))?),
