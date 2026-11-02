@@ -331,3 +331,18 @@ async fn a_question_on_a_range_follows_the_text() {
     assert!(matches!(s.ask(&id, 9, 3, "?", None, hand("p")).await, Err(StoreError::BadRange(_))));
     assert!(matches!(s.reply(&id, "zzzzzzzz", "x", hand("p")).await, Err(StoreError::NoThread(_))));
 }
+
+/// V2-31: a snapshot's bytes shared among its authors by what each wrote —
+/// summing to the snapshot, the same every time, the rest to the largest.
+#[test]
+fn a_snapshots_bytes_are_shared_by_what_each_wrote() {
+    use crate::events::{shares, Author};
+    let a = |p: &str, bytes: u64| Author { by: p.into(), principal: p.into(), changes: 1, bytes, first: 0, last: 0 };
+    let s = shares(100, &[a("key:a", 300), a("key:b", 100)]);
+    assert_eq!(s, vec![("key:a".to_string(), 75), ("key:b".to_string(), 25)]);
+    let s = shares(10, &[a("key:a", 1), a("key:b", 1), a("key:c", 1)]);
+    assert_eq!(s.iter().map(|(_, n)| n).sum::<u64>(), 10, "{s:?}");
+    assert_eq!(s, shares(10, &[a("key:a", 1), a("key:b", 1), a("key:c", 1)]), "the same every time");
+    assert_eq!(shares(7, &[a("key:a", 0), a("key:b", 0)]), vec![("key:a".to_string(), 7), ("key:b".to_string(), 0)]);
+    assert!(shares(7, &[]).is_empty());
+}

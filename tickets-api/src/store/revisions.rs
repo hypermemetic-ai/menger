@@ -52,6 +52,18 @@ use rusqlite::{params, OptionalExtension};
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 
+/// V2-31: what a body write adds to what the store keeps
+/// ([`Store::body_charge`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BodyCharge {
+    /// Its content is kept already: another copy costs nothing.
+    pub kept: bool,
+    /// The size of the body it replaces (0 for a new ticket).
+    pub old: u64,
+    /// Who wrote the body it replaces.
+    pub writer: Option<String>,
+}
+
 /// The tables.
 pub(super) const TABLES: &str = "
         CREATE TABLE IF NOT EXISTS revisions (
@@ -732,12 +744,14 @@ impl Store {
         Ok(RevisionPage { revisions, count, latest, next })
     }
 
-    /// V2-31: what each author's writes keep, as the quota service recounts
-    /// it (`tickets.count`, `tickets.bytes`): per actor, the tickets they
-    /// created (their `created` revisions) and the bytes of every body they
-    /// wrote (a revision that created the ticket or changed its body) —
-    /// `principal` alone, or everyone. A baseline or a backup's revision is
-    /// nobody's. Only a reader of everything: anyone else is refused.
+    /// V2-31: what the store keeps of each author's writing, as the quota
+    /// service counts `tickets.bytes` — **what is stored, not every write**:
+    /// every body kept in `revision_bodies` (each content once) is the
+    /// bytes of whoever first kept it, and every live ticket's current body
+    /// the bytes of whoever last wrote it (its latest revision that created
+    /// it or changed its body). `count` is the tickets they created. Per
+    /// actor, `principal` alone or everyone; a baseline's actor is nobody's
+    /// principal. Only a reader of everything: anyone else is refused.
     pub async fn revision_usage(&self, who: &(impl Reader + ?Sized), principal: Option<String>) -> Result<Vec<(String, u64, u64)>, StoreError> {
         if !Seen::of(who)?.all() {
             return Err(StoreError::Invalid("what every author's revisions keep is read by a reader of everything (an admin of *)".into()));
@@ -745,15 +759,45 @@ impl Store {
         self.readers
             .read(move |conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT actor,
-                            sum(CASE WHEN fields LIKE '%\"created\"%' THEN 1 ELSE 0 END),
-                            sum(CASE WHEN fields LIKE '%\"created\"%' OR fields LIKE '%\"body\"%' THEN body_bytes ELSE 0 END)
-                       FROM revisions
-                      WHERE source NOT IN ('baseline', 'backup') AND (?1 IS NULL OR actor = ?1)
-                      GROUP BY actor ORDER BY actor",
+                    "WITH first AS (SELECT body_hash, actor, min(rowid) FROM revisions GROUP BY body_hash),
+                          kept AS (SELECT f.actor AS actor, length(CAST(b.body AS BLOB)) AS bytes FROM first f JOIN revision_bodies b ON b.hash = f.body_hash),
+                          wrote AS (SELECT ticket, actor, max(rev) FROM revisions
+                                     WHERE fields LIKE '%\"body\"%' OR fields LIKE '%\"created\"%' OR source = 'baseline' GROUP BY ticket),
+                          live AS (SELECT w.actor AS actor, length(CAST(t.body AS BLOB)) AS bytes FROM wrote w JOIN tickets t ON t.id = w.ticket),
+                          born AS (SELECT actor, count(*) AS n FROM revisions WHERE fields LIKE '%\"created\"%' AND source NOT IN ('baseline', 'backup') GROUP BY actor),
+                          bytes AS (SELECT actor, sum(bytes) AS b FROM (SELECT * FROM kept UNION ALL SELECT * FROM live) GROUP BY actor),
+                          everyone AS (SELECT actor FROM bytes UNION SELECT actor FROM born)
+                     SELECT e.actor, coalesce(n.n, 0), coalesce(b.b, 0) FROM everyone e
+                       LEFT JOIN born n ON n.actor = e.actor LEFT JOIN bytes b ON b.actor = e.actor
+                      WHERE (?1 IS NULL OR e.actor = ?1) ORDER BY e.actor",
                 )?;
                 let rows = stmt.query_map([principal], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.max(0) as u64, r.get::<_, i64>(2)?.max(0) as u64)))?;
                 Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            })
+            .await
+    }
+
+    /// V2-31: what writing `body` to the ticket `id` (none: a new one) adds
+    /// to what the store keeps, by [`Self::revision_usage`]'s rule: whether
+    /// the body is kept already (its content in `revision_bodies`: a copy
+    /// costs nothing), the size of the body it replaces, and who wrote that
+    /// one (whose current body it stops being). From storage, before the
+    /// write; what moves in between, the recount puts right.
+    pub async fn body_charge(&self, id: Option<&str>, body: &str) -> Result<BodyCharge, StoreError> {
+        let (id, hash) = (id.map(crate::address::folded), hash(body));
+        self.readers
+            .read(move |conn| {
+                let kept = conn.query_row("SELECT 1 FROM revision_bodies WHERE hash = ?1", [&hash], |_| Ok(())).optional()?.is_some();
+                let Some(id) = id else { return Ok(BodyCharge { kept, old: 0, writer: None }) };
+                let old: i64 = conn.query_row("SELECT length(CAST(body AS BLOB)) FROM tickets WHERE id = ?1", [&id], |r| r.get(0)).optional()?.unwrap_or(0);
+                let writer: Option<String> = conn
+                    .query_row(
+                        "SELECT actor FROM revisions WHERE ticket = ?1 AND (fields LIKE '%\"body\"%' OR fields LIKE '%\"created\"%' OR source = 'baseline') ORDER BY rev DESC LIMIT 1",
+                        [&id],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                Ok(BodyCharge { kept, old: old.max(0) as u64, writer })
             })
             .await
     }

@@ -187,7 +187,7 @@ where it has one (a list in it is `;`-separated).
 | run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path`, `--ui-signer`, `--ui-compiler`, `--ui-author-key`, `--media-db-path` (`media.db` beside the database), `--media-store` (`disk`), `--media-blob-dir`, `--media-max-bytes`, `--quota-db-path` (`quota.db` beside the database), `--quota-plan` (the defaults a new quota file starts from; the built-in `free-1k`), `--ui-channel` (UI-15: the live pointer this environment serves in its ui file; default from `--env`: `test`, `prod`, else `default`), `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell` |
 | sign-in | `--auth-provider`, `--admin`, `--public-url`, `--login-button`, `--login-email`, `--login-password`, `--login-forgot`, `--identity`, `--workos-api-key-file`, `--allowed-origin`, `--frame-ancestor` (an origin that may frame the shell's pages; none by default), `--live-origin` (an origin the shell's pages may frame), `--allowed-host`, `--trusted-proxy`, `--return-origin`, `--session-hours` (12), `--session-idle-minutes` (120) |
 | maintenance and testing | `--dev-login`, `--dev-password`, `--dev-idp-ws`, `--dev-user` (all `--env test` only), `--verify-derived`, `--seed-synthetic`, `--seed-value`, `--seed-shape` (`flat`, `nested`), `--seed-into-existing` |
-| limits | `--max-body-bytes` (8 MiB), `--max-calls-per-connection` (256), `--idle-timeout-secs` (900), `--max-connections` (1,024), `--max-connections-per-ip` (256), `--max-connections-per-principal` (4; V2-31), `--max-writes-per-second` (20; V2-31), `--max-anonymous-connections` (128), `--max-anonymous-connections-per-ip` (32) |
+| limits | `--max-body-bytes` (8 MiB), `--max-calls-per-connection` (256), `--idle-timeout-secs` (900), `--max-connections` (1,024), `--max-connections-per-ip` (256), `--max-connections-per-principal` (4; V2-31: a person's), `--max-connections-per-agent` (64; V2-31: a `key:` principal's), `--max-writes-per-second` (20; V2-31), `--max-anonymous-connections` (128), `--max-anonymous-connections-per-ip` (32) |
 
 `--ui-author-key` names the file of the key the ui service signs an
 editor's authored version with (made at first start, 0600; one open to its
@@ -625,9 +625,9 @@ name is refused, so a new input registers one):
 | `media.fetch.bytes` | bytes | day | the server reads a file for you (`media.fetch`) |
 | `media.fetch.calls` | calls | day | the server reads a link for you (`media.unfurl`, `media.fetch`) |
 | `media.egress.bytes` | bytes | day | `/media/<hash>` serves bytes to you |
-| `docs.bytes` | bytes | total | a document's change is kept (`docs.create`, `update`, `save`, `restore`, `rename`): its bytes, as `doc_log` keeps them, against its writer |
+| `docs.bytes` | bytes | total | **the update log as stored**: each change's bytes (`docs.create`, `update`, `save`, `restore`, `rename`) its writer's; a squash's snapshot shared among its authors by what each wrote, so a squash shrinks it and credits each author back |
 | `docs.count` | count | total | a document is made (`docs.create`) |
-| `tickets.bytes` | bytes | total | a ticket's body is written — `create`, and `amend` or `update` when the body changes (each kept as a revision) |
+| `tickets.bytes` | bytes | total | **what the store keeps**, not every write: each body's content the first time it is kept as a revision (a copy of one kept already costs nothing) is its first writer's, and each ticket's current body its last writer's. A write reserves the delta — the new content's bytes, plus the new body less the old when the old was the writer's own (else the old body's writer is credited it back); a write that leaves the body as it was counts nothing |
 | `tickets.count` | count | total | a ticket is created |
 | `questions.count` | count | total | registered; nothing asks it yet |
 
@@ -1010,7 +1010,8 @@ OUGHT"}`. `tests/auth_protocol.rs` runs it over the built binary.
 
 | what | limit (default) | past it |
 |---|---|---|
-| WebSocket connections: in all / per IP / per principal / anonymous / anonymous per IP | the `--max-connections*` flags (1,024 / 256 / 4 / 128 / 32; V2-31: per principal 4, the owner's free tier — the transport's own default is 64) | the upgrade refused 429 |
+| WebSocket connections: in all / per IP / anonymous / anonymous per IP | the `--max-connections*` flags (1,024 / 256 / 128 / 32) | the upgrade refused 429 |
+| connections per principal (V2-31): a person / an agent's key (`key:`) / an admin of `*` | `--max-connections-per-principal` (4) / `--max-connections-per-agent` (64) / none — menger's call layer splits them at a connection's first call (the transport's own per-principal quota is one number for everyone, so main hands it none) | `error_kind: too_many_connections` with `max`, then the connection closes |
 | calls open on one connection (a `watch` for its life) | `--max-calls-per-connection` (256) | `error_kind: too_many_calls` |
 | a connection with no call open | `--idle-timeout-secs` (900) | closed |
 | a browser's sign-in unused | `--session-idle-minutes` (120) | the session ends |

@@ -293,19 +293,38 @@ impl DocsStore {
         self.quota.read().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
-    /// V2-31: what each principal's changes keep, as the quota service
-    /// recounts it — the documents they made (`create` changes) and the
-    /// bytes of every change they wrote (a squash's snapshot is nobody's:
-    /// its bytes are no one's writing): (principal, count, bytes).
+    /// V2-31: what each principal keeps, as the quota service counts it —
+    /// **the update log as stored**: every change's bytes its writer's, and
+    /// a squash's snapshot shared among its authors by what each wrote
+    /// ([`crate::events::shares`]) — so a squash shrinks it; `count` the
+    /// documents they made (a `create` change, or, folded into a snapshot,
+    /// its earliest author's). (principal, count, bytes), by principal.
     pub async fn usage_by_principal(self: &Arc<Self>) -> Result<Vec<(String, u64, u64)>, StoreError> {
         self.blocking(|s| {
             let conn = s.lock();
-            let mut stmt = conn.prepare(
-                "SELECT principal, sum(CASE WHEN kind = 'create' THEN 1 ELSE 0 END), coalesce(sum(bytes), 0)
-                   FROM doc_log WHERE kind != 'snapshot' GROUP BY principal ORDER BY principal",
-            )?;
-            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64, r.get::<_, i64>(2)? as u64)))?;
-            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            let mut stmt = conn.prepare("SELECT kind, principal, bytes, authors FROM doc_log")?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, Option<String>>(3)?)))?;
+            let mut out: std::collections::BTreeMap<String, (u64, u64)> = std::collections::BTreeMap::new();
+            for row in rows {
+                let (kind, principal, bytes, authors) = row?;
+                match (kind.as_str(), authors) {
+                    ("snapshot", Some(a)) => {
+                        let authors: Vec<crate::events::Author> = serde_json::from_str(&a).unwrap_or_default();
+                        if let Some(first) = authors.iter().min_by_key(|a| a.first) {
+                            out.entry(first.principal.clone()).or_default().0 += 1;
+                        }
+                        for (who, n) in crate::events::shares(bytes.max(0) as u64, &authors) {
+                            out.entry(who).or_default().1 += n;
+                        }
+                    }
+                    (k, _) => {
+                        let e = out.entry(principal).or_default();
+                        e.0 += u64::from(k == "create");
+                        e.1 += bytes.max(0) as u64;
+                    }
+                }
+            }
+            Ok(out.into_iter().map(|(p, (n, b))| (p, n, b)).collect())
         })
         .await
     }

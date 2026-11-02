@@ -55,11 +55,18 @@ pub const CALLS_PER_CONNECTION: usize = 256;
 /// fifteen minutes.
 pub const IDLE_SECS: u64 = 900;
 
-/// V2-31: the connections one signed-in principal may hold open (the
-/// owner's free tier: 4 — a browser tab or two and an agent's held socket);
-/// main's `--max-connections-per-principal` default, handed to the
-/// transport's own per-principal quota (AUTH-12), whose default is 64.
+/// V2-31: the connections one signed-in person may hold open (the owner's
+/// free tier: 4 — a browser tab or two), `--max-connections-per-principal`.
 pub const CONNECTIONS_PER_PRINCIPAL: u32 = 4;
+
+/// V2-31: the connections one agent's key (`key:` principal) may hold open —
+/// several agents' sessions share a key (`builder`) —
+/// `--max-connections-per-agent`.
+pub const CONNECTIONS_PER_AGENT: u32 = 64;
+
+/// The error item a connection past its principal's limit gets, before it
+/// is closed.
+pub const TOO_MANY_CONNECTIONS: &str = "too_many_connections";
 
 /// V2-31: the writes one principal may make a second, sustained (the
 /// owner's free tier: about 20); twice that at once after a pause.
@@ -74,11 +81,15 @@ pub struct CallLimits {
     pub idle: Option<Duration>,
     /// V2-31: writes one principal may make a second, sustained (0: no limit).
     pub writes_per_second: u32,
+    /// V2-31: connections one person may hold (0: no limit).
+    pub per_principal: u32,
+    /// V2-31: connections one agent's key may hold (0: no limit).
+    pub per_agent: u32,
 }
 
 impl Default for CallLimits {
     fn default() -> Self {
-        Self { per_connection: CALLS_PER_CONNECTION, idle: Some(Duration::from_secs(IDLE_SECS)), writes_per_second: WRITES_PER_SECOND }
+        Self { per_connection: CALLS_PER_CONNECTION, idle: Some(Duration::from_secs(IDLE_SECS)), writes_per_second: WRITES_PER_SECOND, per_principal: CONNECTIONS_PER_PRINCIPAL, per_agent: CONNECTIONS_PER_AGENT }
     }
 }
 
@@ -135,6 +146,28 @@ pub fn rpc_module(hub: Arc<DynamicHub>, limits: CallLimits) -> anyhow::Result<Rp
                 // ACCESS-13: with login off, the anonymous caller.
                 let anonymous = AuthContext::anonymous();
                 let auth = caller(&hub, ext.get::<Arc<AuthContext>>().map(|a| a.as_ref()), &anonymous);
+                // V2-31: a connection past its principal's limit is answered
+                // and closed — a person's 4, an agent key's 64, an admin of
+                // `*` none (the transport's own per-principal quota is one
+                // number for everyone, so main hands it no limit and the
+                // split is made here, at the connection's first call).
+                if let (Some(conn), Some(a)) = (ext.get::<Arc<Connection>>(), auth) {
+                    if let Some(principal) = a.principal().map(|p| p.to_string()) {
+                        let limit = limit_for(&principal, &open.limits);
+                        if let Err(max) = open.seat(&principal, conn, limit, || admin_everywhere(&hub, a)) {
+                            let sink = pending.accept().await?;
+                            sink.send(serde_json::value::to_raw_value(&crowded(ns, max, &principal))?).await?;
+                            drop(place);
+                            // A moment for the refusal to reach the peer, then the socket goes.
+                            let conn = conn.clone();
+                            tokio::spawn(async move {
+                                tokio::time::sleep(Duration::from_millis(250)).await;
+                                conn.close();
+                            });
+                            return Ok(());
+                        }
+                    }
+                }
                 // V2-31: a write past the principal's rate is answered, not run.
                 if let Some(principal) = auth.and_then(|a| a.principal()).map(|p| p.to_string()) {
                     if writes.get_or_init(|| writes_of(&hub)).contains(&p.method) {
@@ -214,6 +247,33 @@ fn admin_everywhere(hub: &DynamicHub, caller: &AuthContext) -> bool {
     hub.gate().is_none_or(|g| g.held_on(caller, &plexus_auth_core::grants::Grant::new(menger_quota::seam::ADMIN_GRANT)).iter().any(|s| s.is_everywhere()))
 }
 
+/// V2-31: the connections `principal` may hold: an agent's key (a `key:`
+/// principal) the agents' limit, anyone else a person's.
+pub fn limit_for(principal: &str, limits: &CallLimits) -> u32 {
+    if principal.starts_with("key:") {
+        limits.per_agent
+    } else {
+        limits.per_principal
+    }
+}
+
+/// The refusal past a principal's connections, before the connection closes.
+fn crowded(ns: &str, max: u32, principal: &str) -> Value {
+    let item = PlexusStreamItem::Error {
+        metadata: StreamMetadata::new(vec![ns.into()], PlexusContext::hash()),
+        message: format!("too many connections as {principal} (at most {max}): close one; this one closes"),
+        code: Some(TOO_MANY_CONNECTIONS.into()),
+        recoverable: true,
+        fields: Default::default(),
+    };
+    let mut v = serde_json::to_value(&item).unwrap_or(Value::Null);
+    if let Some(o) = v.as_object_mut() {
+        o.insert("error_kind".into(), TOO_MANY_CONNECTIONS.into());
+        o.insert("max".into(), max.into());
+    }
+    v
+}
+
 /// The refusal past the write rate: an error item, typed, with how long to wait.
 fn too_fast(ns: &str, wait: Duration, rate: f64) -> Value {
     let ms = wait.as_millis().max(1) as u64;
@@ -239,6 +299,8 @@ fn too_fast(ns: &str, wait: Duration, rate: f64) -> Value {
 struct Open {
     limits: CallLimits,
     conns: Mutex<HashMap<usize, Entry>>,
+    /// V2-31: each principal's open connections (seated at their first call).
+    seats: Mutex<HashMap<String, Vec<Weak<Connection>>>>,
 }
 
 struct Entry {
@@ -255,7 +317,7 @@ struct Place {
 
 impl Open {
     fn new(limits: CallLimits) -> Arc<Self> {
-        Arc::new(Self { limits, conns: Mutex::new(HashMap::new()) })
+        Arc::new(Self { limits, conns: Mutex::new(HashMap::new()), seats: Mutex::new(HashMap::new()) })
     }
 
     /// A place for a call on `conn`, or the limit it is at.
@@ -273,6 +335,27 @@ impl Open {
         }
         e.open += 1;
         Ok(Place { open: self.clone(), key })
+    }
+
+    /// V2-31: `conn` seated as one of `principal`'s connections — already, or
+    /// now if fewer than `limit` (0: no limit) are open, or `exempt` says so
+    /// (asked only when the limit is reached); else the limit it is at.
+    fn seat(&self, principal: &str, conn: &Arc<Connection>, limit: u32, exempt: impl FnOnce() -> bool) -> Result<(), u32> {
+        let mut seats = self.seats.lock().unwrap_or_else(|p| p.into_inner());
+        let held = seats.entry(principal.to_string()).or_default();
+        held.retain(|w| w.upgrade().is_some_and(|c| !c.is_closed()));
+        let me = Arc::downgrade(conn);
+        if held.iter().any(|w| w.ptr_eq(&me)) {
+            return Ok(());
+        }
+        if limit > 0 && held.len() as u32 >= limit && !exempt() {
+            return Err(limit);
+        }
+        held.push(me);
+        if seats.len() > 4096 {
+            seats.retain(|_, v| v.iter().any(|w| w.upgrade().is_some_and(|c| !c.is_closed())));
+        }
+        Ok(())
     }
 
     /// Closes every connection idle past `idle`, every `idle / 10` (1 s to
@@ -334,6 +417,16 @@ mod tests {
     }
 
     #[test]
+    fn a_person_and_an_agents_key_have_their_own_limits() {
+        let d = CallLimits::default();
+        assert_eq!(limit_for("idp:c952acd3", &d), 4);
+        assert_eq!(limit_for("oidc:workos/user_01", &d), 4);
+        assert_eq!(limit_for("key:54a9677a", &d), 64);
+        let v = crowded("menger", 4, "idp:x");
+        assert_eq!((v["error_kind"].as_str(), v["max"].as_u64()), (Some(TOO_MANY_CONNECTIONS), Some(4)), "{v}");
+    }
+
+    #[test]
     fn a_write_too_fast_is_an_error_item_with_its_wait() {
         let v = too_fast("menger", Duration::from_millis(50), 20.0);
         assert_eq!((v["type"].as_str(), v["error_kind"].as_str(), v["retry_after_ms"].as_u64()), (Some("error"), Some(TOO_MANY_WRITES), Some(50)), "{v}");
@@ -344,6 +437,7 @@ mod tests {
     fn the_defaults_are_the_named_ones() {
         let d = CallLimits::default();
         assert_eq!(d.writes_per_second, WRITES_PER_SECOND);
+        assert_eq!((d.per_principal, d.per_agent), (CONNECTIONS_PER_PRINCIPAL, CONNECTIONS_PER_AGENT));
         assert_eq!((d.per_connection, d.idle), (CALLS_PER_CONNECTION, Some(Duration::from_secs(IDLE_SECS))));
         let open = Open::new(d);
         assert_eq!(open.tracked(), 0);

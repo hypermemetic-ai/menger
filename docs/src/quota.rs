@@ -29,6 +29,10 @@ pub trait Quota: Send + Sync {
     fn reserve_count(&self, author: &str) -> Result<Reserved, String> {
         Ok(Reserved { author: author.to_string(), bytes: 0, hold: None })
     }
+    /// V2-31: a squash moved what `author` keeps by `delta` bytes — less
+    /// (a credit: the log shrank) or, rarely, more (their share of the
+    /// snapshot past what was folded). Never refused: the squash is done.
+    fn moved(&self, _author: &str, _delta: i64) {}
 }
 
 /// Every write allowed — the meter until V2-31's.

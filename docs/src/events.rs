@@ -71,6 +71,36 @@ pub struct Author {
     pub last: i64,
 }
 
+/// V2-31: a snapshot's `bytes` shared among its `authors` by what each
+/// wrote (their `bytes`): each the floor of their part, what is left one
+/// byte apiece to the largest writers first (then by principal) — so the
+/// shares sum to the snapshot's bytes, the same every time it is asked. No
+/// writing at all: the first author holds it. What `docs.bytes` charges
+/// each author of a squash, and what `docs.usage` counts.
+pub fn shares(bytes: u64, authors: &[Author]) -> Vec<(String, u64)> {
+    let total: u128 = authors.iter().map(|a| a.bytes as u128).sum();
+    if authors.is_empty() {
+        return Vec::new();
+    }
+    if total == 0 {
+        let mut out: Vec<(String, u64)> = authors.iter().map(|a| (a.principal.clone(), 0)).collect();
+        out[0].1 = bytes;
+        return out;
+    }
+    let mut out: Vec<(String, u64)> = authors.iter().map(|a| (a.principal.clone(), ((bytes as u128 * a.bytes as u128) / total) as u64)).collect();
+    let mut left = bytes - out.iter().map(|(_, n)| n).sum::<u64>();
+    let mut order: Vec<usize> = (0..authors.len()).collect();
+    order.sort_by(|&a, &b| authors[b].bytes.cmp(&authors[a].bytes).then_with(|| authors[a].principal.cmp(&authors[b].principal)));
+    for i in order.into_iter().cycle() {
+        if left == 0 {
+            break;
+        }
+        out[i].1 += 1;
+        left -= 1;
+    }
+    out
+}
+
 /// Someone on a document: a connection open on it, or a writer while it writes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Present {

@@ -392,10 +392,17 @@ struct Args {
     #[arg(long, env = "MENGER_MAX_CONNECTIONS_PER_IP", default_value_t = ConnectionQuotas::default().max_per_ip, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
     max_connections_per_ip: u32,
 
-    /// Connections one signed-in principal holds.
-    // V2-31: 4, the owner's free tier (the transport's own default is 64).
+    /// Connections one signed-in person holds (an agent's key: --max-connections-per-agent; an admin of *: no limit)
+    // V2-31: 4, the owner's free tier — enforced by menger's call layer
+    // (src/calls.rs), which splits it by principal; the transport's own
+    // per-principal quota is handed no limit.
     #[arg(long, env = "MENGER_MAX_CONNECTIONS_PER_PRINCIPAL", default_value_t = menger::calls::CONNECTIONS_PER_PRINCIPAL, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
     max_connections_per_principal: u32,
+
+    // V2-31: agents' keys share sessions (several agents as `builder`).
+    /// Connections one agent's key (a key: principal) holds
+    #[arg(long, env = "MENGER_MAX_CONNECTIONS_PER_AGENT", default_value_t = menger::calls::CONNECTIONS_PER_AGENT, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
+    max_connections_per_agent: u32,
 
     /// Connections that prove no one, in all (held below --max-connections).
     #[arg(long, env = "MENGER_MAX_ANONYMOUS_CONNECTIONS", default_value_t = ConnectionQuotas::default().max_anonymous, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
@@ -664,6 +671,9 @@ async fn run(args: Args) -> anyhow::Result<()> {
     // and a connection idle with none closed (menger::calls).
     let limits = menger::calls::CallLimits {
         writes_per_second: args.max_writes_per_second,
+        // V2-31: the per-principal split — a person's, an agent key's, an admin's none.
+        per_principal: args.max_connections_per_principal,
+        per_agent: args.max_connections_per_agent,
         per_connection: args.max_calls_per_connection,
         idle: (args.idle_timeout_secs > 0).then(|| std::time::Duration::from_secs(args.idle_timeout_secs)),
     };
@@ -688,7 +698,9 @@ async fn run(args: Args) -> anyhow::Result<()> {
         .with_connection_quotas(ConnectionQuotas {
             max_connections: args.max_connections,
             max_per_ip: args.max_connections_per_ip,
-            max_per_principal: args.max_connections_per_principal,
+            // V2-31: one number for every principal here — menger's call
+            // layer makes the split (CallLimits above); this holds no limit.
+            max_per_principal: u32::MAX,
             max_anonymous: args.max_anonymous_connections,
             max_anonymous_per_ip: args.max_anonymous_connections_per_ip,
             // BIDIR-8: the transport holds the calls a connection has open too.
