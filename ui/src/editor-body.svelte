@@ -15,7 +15,8 @@
      and the scroll through; with the draft dirty it waits for the pause,
      then is merged line by line with ours, ours winning where they overlap,
      and the merge is sent and said — the revision the service kept has
-     theirs. EDITOR-5: a URL pasted over a selection links it; an image pasted,
+     theirs. EDITOR-7: `<m-summary>` and `<m-decision>` / `<m-input>` as cards,
+     their source on a click (other marks stay source). EDITOR-5: a URL pasted over a selection links it; an image pasted,
      dropped or picked goes to `media.put` and lands as `![name](media:<hash>)`,
      an upload card beside the text until it does. CodeMirror comes from ../plexus-ui/package.json (the node_modules
      the svelte/1 build reads), bundled into this module by the tool. -->
@@ -240,9 +241,95 @@
     return null;
   };
 
+  // ── EDITOR-7: the house's two marks as cards ─────────────────────────────
+  // `<m-summary>` and `<m-decision>` / `<m-input>` drawn as one card each while the caret is outside
+  // them; the source where the caret is. Read by pattern from the block's own text (an HTML block in
+  // CommonMark ends at a blank line, and these hold blank lines), never parsed as HTML and never
+  // set as HTML: every word reaches the card as text.
+  const CARDS = ["m-summary", "m-decision", "m-input"];
+  const unescape = (s) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&#96;/g, "`").replace(/&amp;/g, "&");
+  const plain = (s) => unescape(s.replace(/<[^>]*>/g, "")).replace(/\*\*|__|`/g, "").replace(/\s+/g, " ").trim();
+  const attr = (tag, name) => { const m = new RegExp(`\\s${name}="([^"]*)"`).exec(tag); return m ? unescape(m[1]) : null; };
+  const has = (tag, name) => new RegExp(`\\s${name}(\\s|=|>|/|$)`).test(tag);
+  const el = (name, cls, text) => { const e = document.createElement(name); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  class Card extends WidgetType {
+    constructor(mark, src, from) { super(); this.mark = mark; this.src = src; this.from = from; }
+    eq(o) { return o.mark === this.mark && o.src === this.src && o.from === this.from; }
+    toDOM(v) {
+      const s = this.src;
+      const open = /^\s*<[^>]*>/.exec(s)?.[0] ?? "";
+      const d = el("div", `eb-card eb-card-${this.mark}`);
+      d.setAttribute("data-card", this.mark);
+      d.setAttribute("role", "button");
+      d.setAttribute("tabindex", "0");
+      d.setAttribute("aria-label", `${this.mark}: show its source`);
+      const id = attr(open, "id");
+      if (id) d.setAttribute("data-id", id);
+      d.append(el("span", "tag", id ? `${this.mark} · ${id}` : this.mark));
+      if (this.mark === "m-summary") {
+        const standing = /<m-(?:field|answer)[^>]*data-field="(?:standing|answer)"[^>]*>([\s\S]*?)<\/m-(?:field|answer)>/.exec(s);
+        if (standing) d.append(el("p", "standing", plain(standing[1])));
+        const stats = el("div", "stats");
+        for (const m of s.matchAll(/<m-stat([^>]*)>([\s\S]*?)<\/m-stat>/g)) {
+          const tile = el("div", "stat");
+          const tone = attr(m[1], "tone");
+          if (tone) tile.setAttribute("data-tone", tone);
+          tile.append(el("b", null, attr(m[1], "value") ?? ""), el("span", null, plain(m[2])));
+          stats.append(tile);
+        }
+        if (stats.childElementCount) d.append(stats);
+      } else {
+        const q = /<m-question[^>]*>([\s\S]*?)<\/m-question>/.exec(s);
+        d.append(el("p", "q", q ? plain(q[1]) : "(no question)"));
+        const opts = el("div", "opts");
+        for (const m of s.matchAll(/<m-option([^>]*)>/g)) {
+          const o = el("span", "opt", attr(m[1], "name") ?? attr(m[1], "value") ?? "");
+          if (has(m[1], "recommended")) o.setAttribute("data-rec", "");
+          opts.append(o);
+        }
+        for (const m of s.matchAll(/<m-choice([^>]*)>([\s\S]*?)<\/m-choice>/g)) {
+          const o = el("span", "opt", plain(m[2]) || attr(m[1], "value") || "");
+          if (has(m[1], "recommended")) o.setAttribute("data-rec", "");
+          opts.append(o);
+        }
+        if (opts.childElementCount) d.append(opts);
+        else if (attr(open, "kind") === "text") d.append(el("p", "box", "a text answer"));
+        const rec = /<m-recommendation([^>]*)>([\s\S]*?)<\/m-recommendation>/.exec(s);
+        if (rec) d.append(el("p", "rec", `${plain(rec[2])}${attr(rec[1], "by") ? ` — ${attr(rec[1], "by")}` : ""}`));
+        d.append(el("p", "hint", "answer it in the rendered half"));
+      }
+      const enter = (ev) => { ev.preventDefault(); v.dispatch({ selection: { anchor: this.from } }); v.focus(); };
+      d.addEventListener("mousedown", enter);
+      d.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") enter(ev); });
+      return d;
+    }
+    ignoreEvent() { return true; }
+  }
+  /** The house blocks of `state`: each `{ mark, from, to, ok, open }` (ok: closed, its id its own). */
+  function houseBlocks(state, tree) {
+    const out = [], ids = new Set(), doc = state.doc;
+    for (let n = 1; n <= doc.lines; n++) {
+      const line = doc.line(n);
+      const m = /^\s*<(m-summary|m-decision|m-input)[\s>]/.exec(line.text);
+      if (!m) continue;
+      let inside = false;
+      for (let x = tree.resolveInner(line.from, 1); x; x = x.parent) if (x.name === "FencedCode" || x.name === "CodeBlock") inside = true;
+      if (inside) continue;
+      const close = `</${m[1]}>`;
+      let end = null;
+      for (let k = n; k <= doc.lines; k++) if (doc.line(k).text.includes(close)) { end = doc.line(k); break; }
+      const id = attr(line.text, "id");
+      const twice = id != null && ids.has(id);
+      if (id != null) ids.add(id);
+      out.push({ mark: m[1], from: line.from, to: end ? end.to : line.to, ok: end != null && !twice });
+      if (end) n = end.number;
+    }
+    return out;
+  }
+
   /** The decorations of `state`: a class per formed thing, the marks hidden away from the caret. */
   function decorate(state) {
-    const out = [];
+    let out = [];
     const sel = state.selection.main;
     const caretLine = state.doc.lineAt(sel.head).number;
     const touches = (from, to) => sel.from <= to && sel.to >= from;
@@ -321,6 +408,17 @@
         }
       },
     });
+    // EDITOR-7: a card replaces its block's lines while the caret is outside it.
+    const cards = [];
+    for (const k of houseBlocks(state, syntaxTree(state))) {
+      if (!k.ok) { out.push(Decoration.line({ class: "eb-mark-error", attributes: { "data-mark-error": k.mark } }).range(k.from)); continue; }
+      if (sel.head >= k.from && sel.head <= k.to) { out.push(Decoration.line({ class: "eb-card-src", attributes: { "data-card-open": k.mark } }).range(k.from)); continue; }
+      cards.push(k);
+    }
+    if (cards.length) {
+      out = out.filter((r) => !cards.some((k) => r.from >= k.from && r.from <= k.to));
+      for (const k of cards) out.push(Decoration.replace({ widget: new Card(k.mark, state.sliceDoc(k.from, k.to), k.from), block: true }).range(k.from, k.to));
+    }
     return Decoration.set(out, true);
   }
   const formed = StateField.define({
@@ -660,6 +758,22 @@
   .cm :global(.eb-upload) { display: block; margin: 4px 0; padding: 6px 10px; font-family: var(--font-text); font-size: 11px; color: var(--muted); background: var(--card); border: var(--border) dashed var(--line); border-radius: var(--radius-lg); }
   .cm :global(.eb-upload[data-state=refused]) { color: var(--warn); border-color: var(--warn); }
   .cm :global(.eb-img) { padding: 4px 10px 6px; }
+  .cm :global(.eb-card) { position: relative; margin: 6px 8px 10px; padding: 12px 14px 10px; font-family: var(--sans); background: var(--card); border: var(--border) solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--radius-lg); cursor: text; }
+  .cm :global(.eb-card:hover), .cm :global(.eb-card:focus-visible), .cm :global(.eb-card[data-sheet~=hover]), .cm :global(.eb-card[data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .cm :global(.eb-card .tag) { position: absolute; top: 6px; right: 10px; font-family: var(--font-text); font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .cm :global(.eb-card .standing), .cm :global(.eb-card .q) { margin: 0 0 8px; padding-right: 90px; font-family: var(--font-display); font-size: 15px; font-weight: var(--weight-strong); line-height: 1.4; }
+  .cm :global(.eb-card .stats), .cm :global(.eb-card .opts) { display: flex; flex-wrap: wrap; gap: 6px; }
+  .cm :global(.eb-card .stat) { display: flex; flex-direction: column; min-width: 100px; padding: 5px 9px; background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius); }
+  .cm :global(.eb-card .stat b) { font-family: var(--font-display); font-size: 15px; }
+  .cm :global(.eb-card .stat span) { font-family: var(--font-text); font-size: 11px; color: var(--muted); }
+  .cm :global(.eb-card .stat[data-tone=pass] b) { color: var(--live); }
+  .cm :global(.eb-card .stat[data-tone=warn] b) { color: var(--warn); }
+  .cm :global(.eb-card .opt) { padding: 2px 9px; font-size: 13px; background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius-sm); }
+  .cm :global(.eb-card .opt[data-rec]) { border-color: var(--accent); }
+  .cm :global(.eb-card .rec), .cm :global(.eb-card .box) { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
+  .cm :global(.eb-card .hint) { margin: 6px 0 0; font-family: var(--font-text); font-size: 11px; color: var(--accent); }
+  .cm :global(.eb-card-src) { border-left-color: var(--accent); }
+  .cm :global(.eb-mark-error) { border-left-color: var(--warn); }
   .cm :global(.eb-img img) { display: block; max-width: 100%; max-height: 60vh; border: var(--border) solid var(--line); border-radius: var(--radius); }
   @media (prefers-reduced-motion: reduce) {
     .state[data-state=saving]::before, .skel .bone { animation: none; }

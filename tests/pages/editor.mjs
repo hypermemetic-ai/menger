@@ -141,7 +141,7 @@ export default async (ctx) => {
       const said = await state(ed).innerText();
       assert(/twice/.test(said), `the service's words name the input: ${said}`);
       assert(get(id).body === "fine\n", "the store is as it was");
-      assert((await lineText(ed, 2)).includes("twice"), "the draft stays in the editor");
+      assert((await ed.locator(".cm-content").innerText()).includes('id="twice"'), "the draft stays in the editor (the second block as source: one id twice draws no card)");
       if (shots) await page.screenshot({ path: path.join(shots, "editor-body-refused.png") });
     } finally {
       await context.close();
@@ -498,6 +498,77 @@ export default async (ctx) => {
       await ed.locator("[data-action=ask]").click();
       await eventually("the service's words", async () => (await ed.locator("[data-ask][data-state=open] [data-refused]").count()) === 1, 5_000);
       assert(question(id) == null, "nothing asked");
+    } finally {
+      await context.close();
+    }
+  });
+
+  // ── EDITOR-7: the house's two marks as cards ─────────────────────────────
+  const HOUSE = `<m-summary>
+
+<m-field data-field="standing">**The kiln fires twice a week.**</m-field>
+
+<m-stat value="2">firings a week</m-stat>
+<m-stat value="6" tone="pass">cone</m-stat>
+
+</m-summary>
+
+## The glaze
+
+<m-decision data-field="decision" id="cone">
+<m-question data-field="question">Which cone?</m-question>
+<m-option data-field="option" name="Six" value="6" recommended></m-option>
+<m-option data-field="option" name="Five" value="5"></m-option>
+<m-recommendation data-field="recommendation" by="builder">**Six.** It holds.</m-recommendation>
+</m-decision>
+
+<m-cases label="kept as source">
+
+| a | b |
+| -- | -- |
+| 1 | 2 |
+
+</m-cases>
+`;
+
+  await test("the_two_house_marks_are_cards_and_their_source_is_a_click_away", async () => {
+    const id = make("cards", HOUSE);
+    const { context, page, ed } = await open(id);
+    try {
+      await ed.locator(".cm-line").filter({ hasText: "The glaze" }).click();
+      await eventually("two cards", async () => (await ed.locator("[data-card]").count()) === 2, 5_000);
+      const sum = ed.locator("[data-card=m-summary]");
+      assert((await sum.locator(".standing").innerText()) === "The kiln fires twice a week.", "the standing, as text");
+      assert(JSON.stringify(await sum.locator(".stat b").allInnerTexts()) === '["2","6"]', "the stats");
+      const dec = ed.locator("[data-card=m-decision][data-id=cone]");
+      assert((await dec.locator(".q").innerText()) === "Which cone?", "the question");
+      assert(JSON.stringify(await dec.locator(".opt").allInnerTexts()) === '["Six","Five"]' && (await dec.locator(".opt[data-rec]").innerText()) === "Six", "the options, the recommended ringed");
+      assert((await ed.locator(".cm-line").filter({ hasText: "<m-cases" }).count()) === 1 && (await ed.locator("[data-card=m-cases]").count()) === 0, "m-cases stays source");
+      await shoot(page, "editor-cards");
+      await dec.click();
+      await eventually("its source, in place", async () => (await ed.locator("[data-card-open=m-decision]").count()) === 1 && (await ed.locator("[data-card=m-decision]").count()) === 0, 3_000);
+      await ed.locator(".cm-line").filter({ hasText: "The glaze" }).click();
+      await eventually("the card again", async () => (await ed.locator("[data-card]").count()) === 2, 3_000);
+      await sleep(PAUSE + 300);
+      assert(get(id).body === HOUSE, "the source is unchanged by any of it");
+      assert((await amends(page)).length === 0, "nothing written");
+      // The decision is answered in the rendered half, as V2-20 has it.
+      await page.evaluate((id) => (location.hash = `#/edit/${id}`), id);
+      const opt = page.locator("[data-half=rendered] [data-surface=ticket-questions] [data-input=cone] [data-option='6']");
+      await opt.click();
+      await eventually("answered on the right", async () => (await page.locator("[data-half=rendered] [data-input=cone]").getAttribute("data-state")) === "answered", 5_000);
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("a_malformed_mark_draws_no_card", async () => {
+    const id = make("broken", `<m-decision id="x">\n<m-question>open?</m-question>\n\ntext after\n`);
+    const { context, page, ed } = await open(id);
+    try {
+      await ed.locator(".cm-line").filter({ hasText: "text after" }).click();
+      await eventually("marked, not carded", async () => (await ed.locator("[data-mark-error=m-decision]").count()) === 1, 5_000);
+      assert((await ed.locator("[data-card]").count()) === 0, "no card");
     } finally {
       await context.close();
     }
