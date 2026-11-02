@@ -854,10 +854,16 @@ same "suite: no such release" "$code" 1
 
 # ── PERF-6: plexus-bench beside the suite; a red bench marks the release failed ──
 # A stand-in plexus-bench beside the scratch repository: its scripts/gate.sh keeps
-# what it was run with, and is red when STUB_BENCH_RED=1.
+# what it was run with, and is red when STUB_BENCH_RED=1. Its scripts/ci-check.sh below.
 mkdir -p "$SCRATCH/ci6/plexus-bench/scripts"
 printf '#!/usr/bin/env bash\necho "$*|${PLEXUS_BENCH_MENGER:-}|${CARGO_TARGET_DIR:-}" >>"%s"\nif [[ ${STUB_BENCH_RED:-} == 1 ]]; then echo "RED  call.one_item p50_us 63.3 against golden 55.0 (+15.0 %% worse)"; echo "check: red: call.one_item (20 held, 1 red, 2 skipped)"; exit 1; fi\necho "check: every golden holds (21 held, 0 red, 2 skipped)"\n' "$SCRATCH/ci6/bench-args" >"$SCRATCH/ci6/plexus-bench/scripts/gate.sh"
 chmod +x "$SCRATCH/ci6/plexus-bench/scripts/gate.sh"
+# The stand-in's scripts/ci-check.sh prints what the real one prints: the lines of
+# `plexus-bench check --ci`, red with STUB_COUNTS_RED=1. STUB_COUNTS_BROKEN=1 is one
+# that could not run at all (no image, no docker), which says no verdict, and
+# STUB_COUNTS_SILENT=1 one that exits 0 and says none (PLEXUS_BENCH_CI_NO_CHECK=1).
+printf '#!/usr/bin/env bash\necho "$*|${CARGO_TARGET_DIR:-}" >>"%s"\nif [[ ${STUB_COUNTS_BROKEN:-} == 1 ]]; then echo "ci-check: no valgrind here and no docker to run it in" >&2; exit 2; fi\nif [[ ${STUB_COUNTS_SILENT:-} == 1 ]]; then exit 0; fi\nif [[ ${STUB_COUNTS_RED:-} == 1 ]]; then echo "RED  call.one_item instructions_per_op 59,000 against golden 49,442 (+19.3 %% worse)"; echo "check --ci: red: call.one_item (20 held, 1 red, 0 skipped)"; exit 1; fi\necho "check --ci: every golden holds (21 held, 0 red, 0 skipped)"\n' "$SCRATCH/ci6/counts-args" >"$SCRATCH/ci6/plexus-bench/scripts/ci-check.sh"
+chmod +x "$SCRATCH/ci6/plexus-bench/scripts/ci-check.sh"
 : >"$SCRATCH/ci6/bench-args"
 ci6 suite "$SR"
 same "bench: a green bench, the suite exits 0" "$code" 0
@@ -877,11 +883,6 @@ same "bench: MENGER_BENCH_DIR=none, the suite exits 0" "$code" 0
 has "bench: none, said on the SUITE line" "$(<"$D/releases/$SR/SUITE")" "bench not run (MENGER_BENCH_DIR=none)"
 
 # ── PERF.115-29: plexus-bench's count check beside its gate ──────────────
-# The stand-in's scripts/ci-check.sh prints what the real one prints: the lines of
-# `plexus-bench check --ci`, red with STUB_COUNTS_RED=1. STUB_COUNTS_BROKEN=1 is one
-# that could not run at all (no image, no docker), which says no verdict.
-printf '#!/usr/bin/env bash\necho "$*|${CARGO_TARGET_DIR:-}" >>"%s"\nif [[ ${STUB_COUNTS_BROKEN:-} == 1 ]]; then echo "ci-check: no valgrind here and no docker to run it in" >&2; exit 2; fi\nif [[ ${STUB_COUNTS_RED:-} == 1 ]]; then echo "RED  call.one_item instructions_per_op 59,000 against golden 49,442 (+19.3 %% worse)"; echo "check --ci: red: call.one_item (20 held, 1 red, 0 skipped)"; exit 1; fi\necho "check --ci: every golden holds (21 held, 0 red, 0 skipped)"\n' "$SCRATCH/ci6/counts-args" >"$SCRATCH/ci6/plexus-bench/scripts/ci-check.sh"
-chmod +x "$SCRATCH/ci6/plexus-bench/scripts/ci-check.sh"
 : >"$SCRATCH/ci6/counts-args"; : >"$SCRATCH/ci6/bench-args"
 ci6 suite "$SR"
 same "counts: green, the suite exits 0" "$code" 0
@@ -905,11 +906,14 @@ same "counts: a count that is red is not waited on: no wall-clock bench after it
 STUB_COUNTS_BROKEN=1 ci6 suite "$SR"
 same "counts: a check that could not run, the suite exits 1" "$code" 1
 has "counts: …it is no pass" "$(<"$D/releases/$SR/SUITE")" "counts red; log "
+STUB_COUNTS_SILENT=1 ci6 suite "$SR"
+same "counts: exit 0 and no verdict, the suite exits 1" "$code" 1
+has "counts: …no count read, no pass" "$(<"$D/releases/$SR/SUITE")" "counts red; log "
 : >"$SCRATCH/ci6/counts-args"
 mv "$SCRATCH/ci6/plexus-bench/scripts/ci-check.sh" "$SCRATCH/ci6/ci-check.kept"
 ci6 suite "$SR"
 same "counts: a plexus-bench with no ci-check, the suite exits 1" "$code" 1
-has "counts: …no count read, no pass" "$(<"$D/releases/$SR/SUITE")" "counts red; log "
+has "counts: …nor with no ci-check" "$(<"$D/releases/$SR/SUITE")" "counts red; log "
 mv "$SCRATCH/ci6/ci-check.kept" "$SCRATCH/ci6/plexus-bench/scripts/ci-check.sh"
 MENGER_BENCH_DIR=none ci6 suite "$SR"
 same "counts: MENGER_BENCH_DIR=none, the suite exits 0" "$code" 0
