@@ -434,6 +434,21 @@ async fn docs_may_over_the_seam_and_media_put_with_a_doc() {
     // A ticket and a doc at once: one or the other.
     let both = one(&editor, "media.put", json!({"doc": id, "ticket": "B-1", "mime": "image/png", "data": PNG_2X1})).await;
     assert!(both["message"].as_str().unwrap_or_default().contains("not both"), "{both}");
+
+    // EDITOR-10: a file in chunks for the doc, the doc's like any put; a stranger begins none for it,
+    // and fetches none for it either (asked before the server reads anything).
+    let begun = one(&editor, "media.begin", json!({"doc": id, "name": "deck.pdf", "size": 10})).await;
+    assert_eq!(begun["type"], "upload", "{begun}");
+    let upload = begun["upload"].as_str().unwrap();
+    use base64::Engine;
+    let data = base64::engine::general_purpose::STANDARD.encode(b"%PDF-1.4 x");
+    assert_eq!(one(&editor, "media.chunk", json!({"upload": upload, "offset": 0, "data": data})).await["type"], "chunked");
+    let pdf = one(&editor, "media.finish", json!({"upload": upload})).await;
+    assert_eq!((pdf["type"].as_str(), pdf["kind"].as_str()), (Some("stored"), Some("pdf")), "{pdf}");
+    assert_eq!(one(&viewer, "media.info", json!({"hash": pdf["hash"]})).await["kind"], "pdf", "the doc's viewer sees it");
+    assert_eq!(one(&stranger, "media.info", json!({"hash": pdf["hash"]})).await["type"], "not_found");
+    assert_eq!(one(&stranger, "media.begin", json!({"doc": id, "size": 10})).await, json!({"type": "not_found", "doc": id}));
+    assert_eq!(one(&stranger, "media.fetch", json!({"doc": id, "url": "http://169.254.169.254/"})).await, json!({"type": "not_found", "doc": id}));
 }
 
 /// V2-30: a question on a range, asked of an agent: heard live on the

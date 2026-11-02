@@ -237,6 +237,11 @@ async function main() {
   const server = new Throwaway(work, PROFILE);
   const t0 = Date.now();
   server.keep = flag("--keep");
+  // EDITOR-10: a local server standing in for the internet — a page with its
+  // card's tags, its image, a picture and a PDF — let through by the media
+  // service's hidden --media-fetch-allow (tests/pages/editor.mjs's cards).
+  const fake = await fakeInternet();
+  server.fetchAllow = [`127.0.0.1:${fake.port}`];
   const session = path.join(work, "session");
   let browser;
   // FRAME-14: from the start on, a failure anywhere stops the server.
@@ -922,7 +927,7 @@ async function main() {
     const wanted = GROUP && GROUP !== "all" ? groupFiles.filter((f) => f === `${GROUP}.mjs`) : groupFiles;
     if (GROUP && GROUP !== "all" && !wanted.length) throw new Error(`--group ${GROUP}: no tests/pages/${GROUP}.mjs (have: ${groupFiles.join(", ") || "none"})`);
     inGroup = true;
-    const ctx = { test, assert, eventually, sleep, typeBursts, openPage, marked, sameDocument, sy, summaries, extentsNow, groupsNow,
+    const ctx = { fake, test, assert, eventually, sleep, typeBursts, openPage, marked, sameDocument, sy, summaries, extentsNow, groupsNow,
       section, main, nav, palette, rowIds, attrs, boardUp, BOARDS, server, token, session, v1, v2, pages, fs, path };
     for (const f of wanted) {
       console.log(`group ${f.replace(/\.mjs$/, "")}`);
@@ -952,3 +957,24 @@ main().catch((e) => {
   console.error(`setup failed: ${e.stack || e.message}`);
   process.exit(2);
 });
+
+/** EDITOR-10: the internet, on loopback: `/page` (a page with OpenGraph
+ *  tags), `/card.png` and `/picture.png` (a 2×1 PNG), `/doc.pdf`. */
+async function fakeInternet() {
+  const http = await import("node:http");
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEUlEQVR42mP8z8DwnwEJMAIAKQgD/2zM2wkAAAAASUVORK5CYII=", "base64");
+  const srv = http.createServer((req, res) => {
+    const at = req.url.split("?")[0];
+    const send = (type, body) => { res.writeHead(200, { "content-type": type, "content-length": body.length }); res.end(body); };
+    if (at === "/page") return send("text/html; charset=utf-8", Buffer.from(`<!doctype html><html><head><title>fallback</title>
+      <meta property="og:title" content="The local page"><meta property="og:description" content="A card from a fake internet.">
+      <meta property="og:site_name" content="Fake"><meta property="og:image" content="/card.png"></head><body>hi</body></html>`));
+    if (at === "/card.png" || at === "/picture.png") return send("image/png", png);
+    if (at === "/doc.pdf") return send("application/pdf", Buffer.from("%PDF-1.4\n%fake\n"));
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  srv.unref();
+  return { port: srv.address().port, origin: `http://127.0.0.1:${srv.address().port}` };
+}

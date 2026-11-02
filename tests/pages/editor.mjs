@@ -26,7 +26,7 @@ const EPIC = "EDIT";
 const PAUSE = 600;
 
 export default async (ctx) => {
-  const { test, assert, eventually, sleep, openPage, sy, fs, path, session, server } = ctx;
+  const { test, assert, eventually, sleep, openPage, sy, fs, path, session, server, fake } = ctx;
   const created = (out, what) => {
     const c = out.find((e) => e.type === "created");
     if (!c) throw new Error(`create ${what}: ${JSON.stringify(out)}`);
@@ -52,7 +52,9 @@ export default async (ctx) => {
   const modulesLoaded = (page) => page.evaluate(() => {
     const imports = JSON.parse(document.getElementById("plexus-ui-files")?.textContent || "{}").imports || {};
     const back = {};
-    for (const [p, url] of Object.entries(imports)) back[new URL(url, location.href).pathname] ??= p;
+    // A file is named twice — `/app/f/<name>.js` and `/app/<version>/components/<name>.js` — in an order that
+    // follows the version's hash: the components/ name wins whichever comes first.
+    for (const [p, url] of Object.entries(imports)) { const at = new URL(url, location.href).pathname; if (!back[at] || /components\//.test(p)) back[at] = p; }
     return performance.getEntriesByType("resource").map((r) => { const at = new URL(r.name).pathname; return back[at] ?? at; })
       .map((p) => /components\/([a-z0-9-]+)\.js$/.exec(p)?.[1]).filter(Boolean);
   });
@@ -76,13 +78,13 @@ export default async (ctx) => {
   }));
   const shots = process.env.PAGES_SHOTS;
   /** `name`-1440-light … `name`-390-dark: both widths, both themes, the transitions ended; the page left at 1440, light. */
-  const shoot = async (page, name) => {
+  const shoot = async (page, name, fullPage = false) => {
     if (!shots) return;
     for (const [w, h] of [[1440, 900], [390, 844]]) for (const theme of ["light", "dark"]) {
       await page.setViewportSize({ width: w, height: h });
       await page.evaluate((th) => (document.documentElement.dataset.theme = th), theme);
       await sleep(300);
-      await page.screenshot({ path: path.join(shots, `${name}-${w}-${theme}.png`) });
+      await page.screenshot({ path: path.join(shots, `${name}-${w}-${theme}.png`), fullPage });
     }
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.evaluate(() => (document.documentElement.dataset.theme = "light"));
@@ -600,14 +602,14 @@ graph TD
     }
   });
 
-  await test("a_refused_image_is_said_and_leaves_no_line", async () => {
+  await test("a_truncated_image_is_said_and_leaves_no_line", async () => {
     const id = make("no image", "text\n");
     const { context, page, ed } = await open(id);
     try {
       await caretAt(page, 4);
-      // EDITOR-10's media keeps any bytes; the editor itself draws only PNG, JPEG, GIF and WebP.
-      await pasteFile(page, btoa("this is no image"), "image/x-unknown", "fake.xyz");
-      await eventually("the refusal stands where it was pasted", async () => (await ed.locator("[data-upload][data-refused]").count()) === 1, 5_000);
+      // A PNG's signature and no header: the one kind of file the media service refuses.
+      await pasteFile(page, btoa(String.fromCharCode(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48)), "image/png", "cut.png");
+      await eventually("the refusal stands where it was pasted", async () => /truncated/.test((await ed.locator("[data-upload][data-refused]").textContent({ timeout: 500 })) ?? ""), 5_000);
       assert(get(id).body === "text\n", "nothing written");
       await page.keyboard.type("x");
       await eventually("it goes with the next key", async () => (await ed.locator("[data-upload]").count()) === 0, 3_000);
@@ -616,19 +618,204 @@ graph TD
     }
   });
 
-  await test("an_image_too_large_is_refused_before_the_socket", async () => {
-    const id = make("too large", "text\n");
+  // ── EDITOR-10: a doc absorbs anything from outside ────────────────────────
+  /** A paste of several things at once: `items` [{ b64?, bytes?: n, head?, type, name }], and `data` { type: text }. */
+  const pasteAll = (page, items, data = {}) => page.evaluate(({ items, data }) => {
+    const dt = new DataTransfer();
+    for (const it of items) {
+      let bytes;
+      if (it.b64) bytes = Uint8Array.from(atob(it.b64), (c) => c.charCodeAt(0));
+      else {
+        bytes = new Uint8Array(it.bytes);
+        for (let i = 0; i < bytes.length; i += 4096) bytes[i] = (i / 4096) % 251;
+        const head = Uint8Array.from(atob(it.head), (c) => c.charCodeAt(0));
+        bytes.set(head, 0);
+      }
+      dt.items.add(new File([bytes], it.name, { type: it.type }));
+    }
+    for (const [k, v] of Object.entries(data)) dt.setData(k, v);
+    document.querySelector("[data-surface=editor-body] .cm-content").dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+  }, { items, data });
+  const MP4_HEAD = btoa(String.fromCharCode(0, 0, 0, 0x20) + "ftypisom");
+  const away = async (page) => { await page.evaluate((s) => document.querySelector(s).editorView.contentDOM.blur(), BODY); await sleep(50); };
+
+  await test("a_large_video_goes_up_in_chunks_with_progress_and_plays", async () => {
+    const id = make("a video", "above\n");
     const { context, page, ed } = await open(id);
     try {
-      await caretAt(page, 4);
-      const before = (await sentCalls(page)).filter((c) => c.method === "media.put").length;
-      await page.evaluate(() => {
+      await caretAt(page, "above".length);
+      const seen = [];
+      await page.exposeFunction("sawProgress", (p) => seen.push(p));
+      await page.evaluate(() => new MutationObserver(() => { const p = document.querySelector("[data-upload][data-progress]")?.getAttribute("data-progress"); if (p) window.sawProgress(Number(p)); }).observe(document.body, { subtree: true, attributes: true, childList: true }));
+      await pasteAll(page, [{ bytes: 9 * 1024 * 1024 + 7, head: MP4_HEAD, type: "video/mp4", name: "walk through.mp4" }]);
+      await eventually("the source names the file", async () => /^above\n\n\[walk through\.mp4\]\(media:[0-9a-f]{64}\)\n?$/.test(get(id).body), 60_000);
+      const calls = (await sentCalls(page)).map((c) => c.method);
+      assert(calls.includes("media.begin") && calls.filter((m) => m === "media.chunk").length === 3 && calls.includes("media.finish") && !calls.includes("media.put"), `in chunks: ${calls.filter((m) => m.startsWith("media.")).join(" ")}`);
+      assert(seen.some((p) => p > 0 && p < 100), `progress said: ${seen.join(",")}`);
+      const hash = /media:([0-9a-f]{64})/.exec(get(id).body)[1];
+      await away(page);
+      const video = ed.locator(`.blk [data-media=video] video[src$="/media/${hash}"]`);
+      await eventually("drawn as a player", async () => (await video.count()) === 1, 5_000);
+      const meta = await video.evaluate((v) => new Promise((r) => { if (v.readyState >= 1) r(v.readyState); v.onloadedmetadata = () => r(v.readyState); v.onerror = () => r(`error ${v.error?.code}`); setTimeout(() => r(`state ${v.readyState}`), 4000); }));
+      // A synthetic MP4 has no moov: the browser asks for it by range and says so; a real one plays. Either way it asked.
+      assert(meta !== undefined, "the player read it");
+      // The read-only view draws it the same.
+      const ro = await openPage(`#/ticket/${id}`);
+      try {
+        await eventually("the ticket page draws the player", async () => (await ro.page.locator(`[data-surface=ticket-body] video[src$="/media/${hash}"]`).count()) === 1, 10_000);
+        if (shots) await ro.page.screenshot({ path: path.join(shots, "media-video-ticket.png") });
+      } finally {
+        await ro.context.close();
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("a_pdf_and_any_file_pasted_together_draw_as_a_viewer_and_a_card", async () => {
+    const id = make("files", "files:\n");
+    const { context, page, ed } = await open(id);
+    try {
+      await caretAt(page, "files:".length);
+      await pasteAll(page, [{ b64: btoa("%PDF-1.4\n%fake pdf\n"), type: "application/pdf", name: "deck.pdf" }, { b64: btoa("PK\u0003\u0004 not much of a zip"), type: "application/zip", name: "notes.zip" }]);
+      await eventually("both in the source", async () => /\[deck\.pdf\]\(media:[0-9a-f]{64}\)/.test(get(id).body) && /\[notes\.zip\]\(media:[0-9a-f]{64}\)/.test(get(id).body), 10_000);
+      const pdf = /\[deck\.pdf\]\(media:([0-9a-f]{64})\)/.exec(get(id).body)[1];
+      await away(page);
+      await eventually("the PDF in the browser's viewer", async () => (await ed.locator(`.blk [data-media=pdf] iframe[src$="/media/${pdf}"]`).count()) === 1, 5_000);
+      const card = ed.locator(".blk [data-media=file]");
+      await eventually("the file as a card", async () => (await card.count()) === 1, 5_000);
+      assert((await card.locator(".mx-name").textContent()) === "notes.zip" && /bytes/.test(await card.locator(".mx-size").textContent()), "its name and size");
+      const dl = card.locator("a[download]");
+      assert((await dl.getAttribute("download")) === "notes.zip", "a download");
+      const r = await page.request.get(await dl.getAttribute("href"));
+      assert(r.status() === 200 && r.headers()["content-type"] === "application/octet-stream" && /^attachment;/.test(r.headers()["content-disposition"]), `served as an attachment: ${JSON.stringify(r.headers())}`);
+      if (shots) await page.screenshot({ path: path.join(shots, "media-pdf-file.png"), fullPage: true });
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("a_url_pasted_alone_becomes_a_card_and_stays_its_url", async () => {
+    const id = make("a link card", "before\n\n\n\nafter\n");
+    const { context, page, ed } = await open(id);
+    try {
+      const url = `${fake.origin}/page`;
+      await caretAt(page, "before\n\n".length);
+      await pasteAll(page, [], { "text/plain": url });
+      await eventually("the URL alone on its line", async () => get(id).body === `before\n\n${url}\n\nafter\n`, 5_000);
+      await away(page);
+      const card = ed.locator(".blk a.mx-card[data-media=card]");
+      await eventually("drawn as its card", async () => (await card.count()) === 1, 10_000);
+      assert((await card.locator(".mx-title").textContent()) === "The local page" && (await card.locator(".mx-site").textContent()) === "Fake", "its title and site");
+      assert((await card.getAttribute("href")) === url, "it links where it was");
+      const img = card.locator("img");
+      assert(/\/media\/[0-9a-f]{64}$/.test(await img.getAttribute("src")), "its image kept as media, never hot-linked");
+      assert((await img.evaluate((i) => new Promise((r) => (i.complete ? r(i.naturalWidth) : (i.onload = () => r(i.naturalWidth)))))) === 2, "with its pixels");
+      if (shots) await page.screenshot({ path: path.join(shots, "media-link-card.png") });
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("pasted_html_becomes_clean_markdown_its_images_kept", async () => {
+    const id = make("pasted html", "\n");
+    const { context, page } = await open(id);
+    try {
+      await caretAt(page, 0);
+      const dot = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+      const html = `<meta charset="utf-8"><b style="font-weight:normal" id="docs-internal-guid-1"><h2>Release notes</h2>
+        <p>Some <strong>bold</strong>, <em>italic</em> and <span style="font-weight:700">styled</span> words, a <a href="https://example.com/x">link</a> and <code>code</code>.</p>
+        <ul><li>one</li><li>two</li></ul>
+        <table><thead><tr><th>a</th><th>b</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table>
+        <pre><code>let x = 1;</code></pre>
+        <p><img src="${fake.origin}/picture.png" alt="the picture"></p><p><img src="data:image/png;base64,${dot}" alt="dot"></p>
+        <script>alert(1)</script></b>`;
+      await pasteAll(page, [], { "text/html": html, "text/plain": "Release notes Some bold…" });
+      await eventually("the markdown, its images kept", async () => /!\[dot\]\(media:[0-9a-f]{64}\)/.test(get(id).body ?? ""), 10_000);
+      const body = get(id).body;
+      for (const want of ["## Release notes", "**bold**", "_italic_", "**styled**", "[link](https://example.com/x)", "`code`", "- one\n- two", "| a | b |", "| 1 | 2 |", "```\nlet x = 1;\n```"]) {
+        assert(body.includes(want), `says ${JSON.stringify(want)}:\n${body}`);
+      }
+      assert(/!\[the picture\]\(media:[0-9a-f]{64}\)/.test(body), `the remote image kept, not linked:\n${body}`);
+      assert(!body.includes(fake.origin) && !body.includes("alert") && !body.includes("data:"), `nothing hot-linked, no script:\n${body}`);
+      // Plain text stays plain.
+      await caretAt(page, 0);
+      await pasteAll(page, [], { "text/html": "<span>just words</span>", "text/plain": "just *words*" });
+      await eventually("plain", async () => get(id).body.startsWith("just *words*"), 5_000);
+    } finally {
+      await context.close();
+    }
+  });
+
+  /** A one-page PDF that says "deck.pdf" (offsets computed). */
+  const MINI_PDF = (() => {
+    const objs = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+      "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 120] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+      "<< /Length 44 >>\nstream\nBT /F1 24 Tf 40 60 Td (deck.pdf) Tj ET\nendstream", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"];
+    let out = "%PDF-1.4\n";
+    const at = [];
+    objs.forEach((o, i) => { at.push(out.length); out += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+    const xref = out.length;
+    out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${at.map((n) => `${String(n).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+    return out;
+  })();
+
+  await test("every_kind_draws_in_the_editor_and_on_the_ticket_page", async () => {
+    const id = make("every kind", "# Every kind\n\nWhat a doc absorbs, drawn.\n");
+    const { context, page, ed } = await open(id);
+    try {
+      await caretAt(page, (await src(page)).length);
+      await pasteAll(page, [
+        { b64: PNG_2X1, type: "image/png", name: "a picture.png" },
+        { bytes: 64 * 1024, head: MP4_HEAD, type: "video/mp4", name: "clip.mp4" },
+        { bytes: 32 * 1024, head: btoa("ID3\u0004\u0000\u0000\u0000\u0000"), type: "audio/mpeg", name: "voice.mp3" },
+        { b64: btoa(MINI_PDF), type: "application/pdf", name: "deck.pdf" },
+        { b64: btoa("PK\u0003\u0004 a zip"), type: "application/zip", name: "notes.zip" },
+      ]);
+      await eventually("all five in the source", async () => (get(id).body.match(/\(media:[0-9a-f]{64}\)/g) ?? []).length === 5, 15_000);
+      await caretAt(page, (await src(page)).length);
+      await page.keyboard.press("Enter");
+      await page.keyboard.press("Enter");
+      await pasteAll(page, [], { "text/plain": `${fake.origin}/page` });
+      await eventually("and the link", async () => get(id).body.includes(`${fake.origin}/page`), 5_000);
+      await away(page);
+      for (const kind of ["video", "audio", "pdf", "file", "card"]) {
+        await eventually(`the ${kind} drawn in the editor`, async () => (await ed.locator(`.blk [data-media=${kind}]`).count()) === 1, 10_000)
+          .catch((e) => { throw new Error(`${e.message}: ${JSON.stringify(get(id).body)}`); });
+      }
+      assert((await ed.locator(".blk img[src*='/media/']").count()) >= 2, "the picture and the card's image");
+      await shoot(page, "media-editor", true);
+      const ro = await openPage(`#/ticket/${id}`);
+      try {
+        const body = ro.page.locator("[data-surface=ticket-body]");
+        for (const kind of ["video", "audio", "pdf", "file", "card"]) {
+          await eventually(`the ${kind} drawn on the ticket page`, async () => (await body.locator(`[data-media=${kind}]`).count()) === 1, 10_000);
+        }
+        await shoot(ro.page, "media-ticket", true);
+      } finally {
+        await ro.context.close();
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("an_image_dragged_from_another_tab_is_fetched_and_kept", async () => {
+    const id = make("a dragged image", "x\n");
+    const { context, page } = await open(id);
+    try {
+      await caretAt(page, 1);
+      await page.evaluate(({ src }) => {
         const dt = new DataTransfer();
-        dt.items.add(new File([new Uint8Array(7 * 1024 * 1024 + 1)], "huge.png", { type: "image/png" }));
-        document.querySelector("[data-surface=editor-body] .cm-content").dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+        dt.setData("text/html", `<img src="${src}" alt="">`);
+        dt.setData("text/uri-list", src);
+        const c = document.querySelector("[data-surface=editor-body] .cm-content").getBoundingClientRect();
+        document.querySelector("[data-surface=editor-body] .cm-content").dispatchEvent(new DragEvent("drop", { dataTransfer: dt, bubbles: true, cancelable: true, clientX: c.left + 5, clientY: c.top + 5 }));
+      }, { src: `${fake.origin}/picture.png` });
+      await eventually("kept and named", async () => /!\[picture\]\(media:[0-9a-f]{64}\)/.test(get(id).body), 10_000).catch(async (e) => {
+        throw new Error(`${e.message}; body ${JSON.stringify(get(id).body)}; sent ${(await sentCalls(page)).filter((c) => c.method.startsWith("media.")).map((c) => JSON.stringify(c)).join(" ")}; upload ${await page.locator("[data-upload]").allTextContents()}`);
       });
-      await eventually("said in place", async () => /7 MiB/.test((await ed.locator("[data-upload][data-refused]").textContent({ timeout: 500 })) ?? ""), 3_000);
-      assert((await sentCalls(page)).filter((c) => c.method === "media.put").length === before, "no media.put sent");
+      assert(!get(id).body.includes(fake.origin), "never hot-linked");
     } finally {
       await context.close();
     }

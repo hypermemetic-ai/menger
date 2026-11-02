@@ -145,6 +145,8 @@ export class Throwaway {
       "--ui-signer", signerHex,
       "--seed-synthetic", String(seed),
       "--seed-value", "6",
+      // EDITOR-10: the ip:port pairs a test's local server stands in for the internet at.
+      ...(this.fetchAllow ?? []).flatMap((a) => ["--media-fetch-allow", a]),
     ];
     this.child = spawn(path.join(TARGET, this.profile, "menger"), argv, { env, stdio: ["ignore", "ignore", "pipe"] });
     this.child.stderr.on("data", (d) => (this.stderr += d.toString()));

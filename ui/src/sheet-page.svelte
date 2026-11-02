@@ -91,6 +91,8 @@
   import TicketEdit from "plexus-ui:ticket-edit";
   import EditorBody from "plexus-ui:editor-body";
   import DocMargin from "plexus-ui:doc-margin";
+  import MediaDraw from "plexus-ui:media-draw";
+  import MediaIngest from "plexus-ui:media-ingest";
   import EditorScreen from "plexus-ui:editor-screen";
   import PageEditor from "plexus-ui:page-editor";
   import TicketHead from "plexus-ui:ticket-head";
@@ -225,6 +227,9 @@
       ["doc-margin", DocMargin, ID, [], {}],
       // EDITOR-8: the rendering as the editor; hover and focus held on its revisions link (EDITOR-9: a block has no highlight).
       ["editor-body", EditorBody, ID, ["hover", "focus"], { loading: { sheet: "loading" }, ...gone }, false, { hover: [".revs"], focus: [".revs"] }],
+      // EDITOR-10: what a doc absorbed, drawn — a file that is none here stays its link; the ingest draws nothing of its own.
+      ["media-draw", MediaDraw, () => ({ body: `[deck.pdf](media:${"0".repeat(64)})\n\nA doc absorbs anything from outside.` }), [], {}],
+      ["media-ingest", MediaIngest, F, [], {}],
       // EDITOR-8: the writing screen, small; selected held on a document of the list, disabled on *new*.
       ["editor-screen", EditorScreen, ID, ["hover", "focus", "selected", "disabled"], { loading: { sheet: "loading" }, empty: { id: NONE } }, true, { hover: [".doc"], focus: [".id"], selected: [".doc"], disabled: ["[data-action=new]"] }],
       ["ticket-actions", TicketActions, ID, ["hover", "focus", "disabled", "checked"], { loading: { sheet: "loading" } }],

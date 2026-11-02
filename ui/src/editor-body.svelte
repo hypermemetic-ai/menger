@@ -19,9 +19,10 @@
      caret and the scroll through; with the draft dirty it waits for the
      pause, then is merged line by line with ours, ours winning where they
      overlap, and the merge is sent and said — the revision the service kept
-     has theirs. EDITOR-5: a URL pasted over a selection links it; an image
-     pasted, dropped or picked goes to `media.put` and lands as
-     `![name](media:<hash>)`. EDITOR-6: a selection and one line become a
+     has theirs. EDITOR-5, EDITOR-10: what comes from outside is media-ingest's
+     (a file of any kind and size, a URL alone, pasted HTML, an image from
+     another tab), and a drawn block's lone file or URL is drawn by
+     media-draw (a player, a PDF viewer, a file card, a link card). EDITOR-6: a selection and one line become a
      queued request. Keys: mod+b / mod+i bold and italic, mod+k a link,
      mod+z / mod+shift+z undo and redo, mod+s saves now, mod+enter asks an
      agent. CodeMirror comes from ../plexus-ui/package.json (the node_modules
@@ -45,7 +46,7 @@
      range's height, the range underlined in the caret's block, and follows
      the text as it changes (`marginTick`). -->
 <script module>
-  export const uses = ["tickets.get", "tickets.watch", "tickets.amend", "tickets.revisions.list", "media.put", "tickets.inputs.ask", "tickets.queue", "tickets.inputs.close",
+  export const uses = ["tickets.get", "tickets.watch", "tickets.amend", "tickets.revisions.list", "tickets.inputs.ask", "tickets.queue", "tickets.inputs.close",
                        "docs.get", "docs.watch", "docs.state", "docs.update", "docs.rename", "docs.present", "docs.here", "docs.history", "docs.replay", "docs.ask"];
 
   /** V2-29: bytes ↔ standard base64, as the docs service carries a Yjs update. */
@@ -136,6 +137,8 @@
   import { bus, live } from "plexus-ui/host";
   import TicketView, { blocks, pieceClass, refDefs } from "./ticket-view.svelte";
   import Margin, { threadMarks } from "./doc-margin.svelte";
+  import { ingest } from "./media-ingest.svelte";
+  import { drawAll } from "./media-draw.svelte";
   import { Annotation, EditorSelection, EditorState, StateEffect, StateField, Transaction } from "@codemirror/state";
   import { Decoration, EditorView, WidgetType, keymap, placeholder } from "@codemirror/view";
   import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
@@ -289,7 +292,7 @@
 
   // ── the write model ──────────────────────────────────────────────────────
   function edited() {
-    view.dispatch({ effects: upFade.of(null) }); // a refused upload goes with the next key
+    view.dispatch({ effects: media.fade() }); // a refused upload goes with the next key
     if (isDoc) return; // a doc's changes go as the CRDT makes them
     dirty = doc() !== acked;
     if (timer) clearTimeout(timer);
@@ -412,8 +415,12 @@
       if (this.hand) { d.classList.add("eb-hand"); d.setAttribute("data-hand", this.hand); }
       // ticket-view itself, drawing this piece alone: the drawing #/ticket/:id makes of it.
       d.view = mount(TicketView, { target: d, props: { body: this.text, piece: this.piece, defs: this.defs, block: true } });
+      // EDITOR-10: a lone file or URL drawn as its kind — a player, a viewer, a card.
+      drawAll(d, b);
       d.addEventListener("mousedown", (ev) => {
         if (ev.button !== 0) return;
+        // A player, a viewer, a card's download: used where it is, the caret stays out.
+        if (ev.target?.closest?.("[data-media-live] :is(video, audio, iframe, a[download]), [data-media-live] a.mx-src")) return;
         if (ev.target?.closest?.("button, input, select, textarea, summary")) return; // a control drawn in the block is its own (a code card's copy)
         const a = ev.target?.closest?.("a[href]");
         if (a && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); window.open(a.href, "_blank", "noopener"); return; }
@@ -565,19 +572,6 @@
   /** `blocks()` of a document, kept per document (a document is immutable). */
   const blocksOf = (d) => { let b = BLOCKS.get(d); if (!b) { b = blocks(d.toString()); BLOCKS.set(d, b); } return b; };
 
-  class Upload extends WidgetType {
-    constructor(key, name, said) { super(); this.key = key; this.name = name; this.said = said; }
-    eq(o) { return o.key === this.key && o.said === this.said; }
-    toDOM() {
-      const d = document.createElement("span");
-      d.className = "eb-upload";
-      d.setAttribute("data-upload", this.name);
-      d.setAttribute("data-state", this.said == null ? "uploading" : "refused");
-      if (this.said != null) d.setAttribute("data-refused", "");
-      d.textContent = this.said == null ? `uploading ${this.name}…` : `${this.name}: ${this.said}`;
-      return d;
-    }
-  }
   class Bullet extends WidgetType {
     toDOM() { const s = document.createElement("span"); s.className = "eb-bullet"; s.textContent = "•"; return s; }
     eq() { return true; }
@@ -722,88 +716,10 @@
     return true;
   }
 
-  // ── EDITOR-5: links and images ───────────────────────────────────────────
-  // An upload is a widget beside the text, never text in it: the source holds no placeholder, so no
-  // amend can carry one. It rides the changes around it, and its image lands where it ended up.
-  const IMAGES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
-  const CAP = 7 * 1024 * 1024; // media's; past about 7.5 MiB the socket drops the message
-  let uploads = 0;
-  const upAdd = StateEffect.define({ map: (v, m) => ({ ...v, pos: m.mapPos(v.pos) }) });
-  const upDrop = StateEffect.define();
-  const upFade = StateEffect.define();
-  const upRefuse = StateEffect.define();
-  const upWidget = (key, name, said, pos) => Decoration.widget({ widget: new Upload(key, name, said), side: 1 }).range(pos);
-  const pendingUploads = StateField.define({
-    create: () => Decoration.none,
-    update(deco, tr) {
-      deco = deco.map(tr.changes);
-      for (const e of tr.effects) {
-        if (e.is(upAdd)) deco = deco.update({ add: [upWidget(e.value.key, e.value.name, null, e.value.pos)], sort: true });
-        else if (e.is(upDrop)) deco = deco.update({ filter: (_f, _t, d) => d.spec.widget.key !== e.value });
-        else if (e.is(upFade)) deco = deco.update({ filter: (_f, _t, d) => d.spec.widget.said == null });
-        else if (e.is(upRefuse)) {
-          let at = null;
-          deco.between(0, tr.state.doc.length, (f, _t, d) => { if (d.spec.widget.key === e.value.key) at = f; });
-          if (at != null) deco = deco.update({ filter: (_f, _t, d) => d.spec.widget.key !== e.value.key, add: [upWidget(e.value.key, e.value.name, e.value.said, at)] });
-        }
-      }
-      return deco;
-    },
-    provide: (f) => EditorView.decorations.from(f),
-  });
-  const base64 = (file) => new Promise((done, fail) => {
-    const r = new FileReader();
-    r.onload = () => done(String(r.result).replace(/^data:[^,]*,/, ""));
-    r.onerror = () => fail(r.error);
-    r.readAsDataURL(file);
-  });
-  /** One image: its widget at `pos`, `media.put`, then `![name](media:<hash>)` on a line of its own. */
-  async function upload(file, pos) {
-    const key = ++uploads;
-    const name = (file.name || "image").replace(/\.[a-z0-9]+$/i, "").replace(/[[\]\n]/g, " ") || "image";
-    view.dispatch({ effects: upAdd.of({ key, name, pos }) });
-    const refuse = (why) => view?.dispatch({ effects: upRefuse.of({ key, name, said: why }) });
-    if (!IMAGES.includes(file.type)) return refuse("PNG, JPEG, GIF or WebP only");
-    if (file.size > CAP) return refuse("over the 7 MiB an image may be");
-    const data = await base64(file).catch(() => null);
-    if (data == null) return refuse("the file could not be read");
-    const r = isDoc ? await b.call("media.put", { doc: doc_id, mime: file.type, data }) : await b.call("media.put", { ticket: doc_id, mime: file.type, data });
-    if (!view) return;
-    const stored = r.events?.find((e) => e.type === "stored");
-    if (!stored) return refuse(String(r.message ?? r.events?.[0]?.message ?? r.events?.[0]?.type ?? "refused").replace(/^Invalid params: /, ""));
-    let at = null;
-    view.state.field(pendingUploads).between(0, view.state.doc.length, (f, _t, d) => { if (d.spec.widget.key === key) at = f; });
-    if (at == null) return;
-    const line = view.state.doc.lineAt(at);
-    // A paragraph of its own: right after a line it would render inside that line.
-    const above = at > line.from ? "\n\n" : line.number > 1 && view.state.doc.line(line.number - 1).text.trim() !== "" ? "\n" : "";
-    const insert = `${above}![${name}](media:${stored.hash})${at < line.to ? "\n\n" : ""}`;
-    view.dispatch({ changes: { from: at, insert }, effects: upDrop.of(key) });
-  }
-  const images = (list) => [...(list ?? [])].filter((f) => f.type.startsWith("image/"));
-  function pasted(ev, v) {
-    const files = images(ev.clipboardData?.files);
-    if (files.length) {
-      ev.preventDefault();
-      for (const f of files) upload(f, v.state.selection.main.head);
-      return true;
-    }
-    const text = (ev.clipboardData?.getData("text/plain") ?? "").trim();
-    const sel = v.state.selection.main;
-    if (sel.empty || !/^https?:\/\/\S+$/i.test(text)) return false;
-    ev.preventDefault();
-    const label = v.state.sliceDoc(sel.from, sel.to);
-    v.dispatch({ changes: { from: sel.from, to: sel.to, insert: `[${label}](${text})` } });
-    return true;
-  }
-  function dropped(ev, v) {
-    const files = images(ev.dataTransfer?.files);
-    if (!files.length) return false;
-    ev.preventDefault();
-    const pos = v.posAtCoords({ x: ev.clientX, y: ev.clientY }) ?? v.state.selection.main.head;
-    for (const f of files) upload(f, pos);
-    return true;
-  }
+  // ── EDITOR-5, EDITOR-10: anything from outside ───────────────────────────
+  // A file of any kind and size, a URL alone, pasted HTML, an image from another tab: media-ingest's,
+  // kept for the doc (V2-29) or the ticket this surface writes.
+  const media = ingest({ bus: b, owner: isDoc ? { doc: doc_id } : { ticket: doc_id } });
 
   // ── EDITOR-6: write in at the owner's request ────────────────────────────
   // A selection and one line become a question on the ticket, queued now. An outside amend while a
@@ -924,7 +840,7 @@
           focused,
           handed,
           drawn,
-          pendingUploads,
+          media.extension,
           look,
           placeholder("Write here — # a heading, - a list, **bold**; it saves as you type"),
           EditorView.updateListener.of((u) => {
@@ -935,8 +851,6 @@
           }),
           EditorView.domEventHandlers({
             blur: () => { if (dirty || pending !== null) flush(); return false; },
-            paste: pasted,
-            drop: dropped,
             click: (ev) => { if (ev.target?.closest?.(".eb-hand")) accept(); return false; },
           }),
           EditorView.contentAttributes.of({ "data-field": "body-source", "aria-label": "the body" }),
