@@ -46,15 +46,7 @@
     "top": "app-top",
     "palette": "jump-palette-sv"
   },
-  "page-epics": {
-    "top": "app-top",
-    "palette": "jump-palette-sv"
-  },
   "page-orgs": {
-    "top": "app-top",
-    "palette": "jump-palette-sv"
-  },
-  "page-me": {
     "top": "app-top",
     "palette": "jump-palette-sv"
   },

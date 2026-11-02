@@ -1,6 +1,7 @@
-//! ORG-13: the epics vocabulary — what the `epics` activation says.
-//! Wasm-safe, like [`crate::orgs`]: the app reads it through the generated
-//! `EpicsClient` (the nav's epic switcher).
+//! ORG-13: the epics vocabulary — the store's: what an epic is, its archive
+//! mark, a move and the changes the store signals. V2-25: the `epics`
+//! activation that said these on the wire went (owner, 2026-11-01); the
+//! types stay the store's, and nothing narrows a read to a reader's epic.
 //!
 //! An **epic** is a level of the organization that holds shortcodes:
 //! organization → epic → shortcode → ticket (owner, 2026-10-23: *"another
@@ -94,7 +95,8 @@ pub enum EpicChange {
     DefaultMoved,
 }
 
-/// What the `epics` activation's methods yield.
+/// What the store signals of an organization's epics
+/// (`Store::subscribe_epics`); V2-25: no method says these on the wire.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EpicsEvent {
@@ -141,10 +143,3 @@ pub enum EpicsEvent {
     Error { message: String },
 }
 
-/// MACRO-21: the emitted client implements the activation's trait; a client
-/// failure is the in-band error, the last item of its stream.
-impl plexus_client::FromClientError for EpicsEvent {
-    fn from_client_error(error: plexus_client::ClientError) -> Self {
-        EpicsEvent::Error { message: error.to_string() }
-    }
-}

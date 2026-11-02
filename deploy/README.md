@@ -138,7 +138,7 @@ the owner's.
      hash, a refusal (`unknown_method`) or `null` (a bundle naming no
      service: the app's) fails the build, named, as does a bundle whose
      first build left no readable `manifest.json`; the log says each hash and the
-     services it covers (`contract: H over epics, tickets`). A bundle naming
+     services it covers (`contract: H over orgs, tickets`). A bundle naming
      the tickets service alone gets the hash `tickets.schema` answered;
    - `ui-build` — `plexus-ui build ui --engine dist/engine --contract HASH
      --commit menger@<short>`: every component compiled in-process, the

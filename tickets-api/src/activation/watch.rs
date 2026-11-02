@@ -52,7 +52,7 @@ pub(super) fn watch_stream(store: Arc<Store>, access: Access, user: VerifiedUser
         if let Some(why) = &ambiguous {
             return Err(why.clone());
         }
-        let filter = era_scoped(&store, sight.caller(), asked.as_deref())?;
+        let filter = sight.caller().scoped(asked.as_deref())?;
         // MENGER-13: how its filter reads time.
         let clock = clock_of(sight.caller(), tz.as_deref())?;
         Ok((filter, sight, clock))
@@ -112,7 +112,7 @@ pub(super) fn watch_stream(store: Arc<Store>, access: Access, user: VerifiedUser
                         None => moved.was.lens().cloned(),
                     };
                     if let Some(w) = watcher.as_mut() {
-                        match era_scoped(&store, sight.caller(), asked.as_deref()).and_then(|f| watcher_for(&store, f.as_ref(), epic.as_ref(), &clock)) {
+                        match sight.caller().scoped(asked.as_deref()).and_then(|f| watcher_for(&store, f.as_ref(), epic.as_ref(), &clock)) {
                             Ok(again) => *w = again,
                             Err(message) => {
                                 yield TicketsEvent::WatchClosed { reason: crate::types::WatchEnd::Revoked, message };
@@ -179,12 +179,3 @@ pub(super) fn watch_stream(store: Arc<Store>, access: Access, user: VerifiedUser
     }
 }
 
-/// ORG-13: a watch's filter as [`VerifiedUser::scoped`] reads it — and, when
-/// one was asked, held to the epic the caller is in ([`in_era`]).
-fn era_scoped(store: &Store, caller: &VerifiedUser, asked: Option<&str>) -> Result<Option<crate::filter::Filter>, String> {
-    let f = caller.scoped(asked)?;
-    Ok(match asked {
-        Some(_) => f.map(|f| in_era(store, caller, f)),
-        None => f,
-    })
-}

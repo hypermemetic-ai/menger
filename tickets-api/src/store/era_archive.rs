@@ -15,11 +15,12 @@
 //!   notice); the default moves too when it was this epic. The last live
 //!   epic of an organization is refused. `--dry-run` answers the same and
 //!   writes nothing (the app's confirm reads it).
-//! - **The views**: an archived epic is no one's current one, so a reader's
-//!   epic (`Store::era_filter`) never holds it; `epic any` is every live
-//!   epic; a filter that names the epic, or `archived`, still answers its
+//! - **The views**: an archived epic is no one's current one; `epic any` is
+//!   every live epic; a filter that names the epic still answers its
 //!   tickets — the mark is the registry's, kept beside the epic, so no view
 //!   walks the epic's tickets to drop them. `get` says `epic_archived`.
+//!   V2-25: nothing narrows a read to a reader's epic any more, so an
+//!   archived epic's tickets are in every unfiltered view, as the live ones.
 //! - **Restore** clears the mark and moves nobody back.
 //! - **The notice**: each move is kept (`era_moves`) until its principal
 //!   dismisses it (`epics dismiss`); `epics current` carries it, and

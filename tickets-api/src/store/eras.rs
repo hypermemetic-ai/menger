@@ -20,13 +20,16 @@
 //! epic, so every address and id written before keeps its meaning.
 //!
 //! **Which epic a reader is in** ([`Registry::current_era`]): its choice in
-//! each organization (`epics switch`, the `era_choices` table), else the
+//! each organization (the `era_choices` table; `epics switch` wrote it until
+//! V2-25), else the
 //! organization's default (ORG-23, [`super::era_archive`]: never the
 //! newest, so making an epic moves nobody). A short form resolves there first, then as before (pins, then
 //! every match) — read from the call's act ([`Registry::preferred_now`]).
-//! A filtered read answers there unless its filter names `epic`
-//! ([`Store::era_filter`]); while no organization holds two epics nothing
-//! is added, so a file with one epic reads exactly as before.
+//! V2-25 (owner, 2026-11-01: "remove even more … epics"): nothing holds a
+//! read to it any more — the `epics` activation and the board's narrowing
+//! went; every reader reads the organization whole, and a filter naming
+//! `epic` reads that one ([`Registry::in_epic_named`]). The choice steers
+//! only where a bare short form resolves first.
 //!
 //! **Moving in by hand**: `reshortcode --to org:epic:CODE` (ACT-6), and a
 //! `create --epic org:epic:CODE` — the address names the epic.
@@ -36,7 +39,7 @@ use super::*;
 use crate::access::{On, Viewer};
 use crate::address::{EpicName, OrgId};
 use crate::epics::Epic;
-use crate::filter::{Filter, EPIC_ANY, EPIC_MARK};
+use crate::filter::{EPIC_ANY, EPIC_MARK};
 use crate::members::Scope;
 use rusqlite::params;
 
@@ -128,33 +131,6 @@ impl Store {
         let (row, _) = org_row(&cache.shortcodes, org)?;
         let era = cache.shortcodes.current_era(principal, row).ok_or_else(|| StoreError::NotFound(org.to_string()))?;
         card(&cache, era, principal).ok_or_else(|| StoreError::NotFound(org.to_string()))
-    }
-
-    /// ORG-13: what a filtered read by `principal` is held to — the epic it
-    /// is in, in each organization `orgs` names (`None`: every one): `epic
-    /// org:name or …`. `None` while no organization holds two epics, or for
-    /// a filter that names `epic` itself.
-    pub fn era_filter(&self, principal: &str, orgs: Option<&[OrgId]>, asked: &Filter) -> Option<Filter> {
-        if asked.names_epic() {
-            return None;
-        }
-        let cache = self.tickets.read().expect("store lock poisoned");
-        let r = &cache.shortcodes;
-        if !r.several_eras() {
-            return None;
-        }
-        // ORG-23: a filter naming `archived` reads the archived epics too.
-        let archived = asked.names_archived();
-        let mut names: Vec<String> = Vec::new();
-        for (row, o) in r.orgs.iter().filter(|(_, o)| orgs.is_none_or(|held| held.contains(o))) {
-            let mine = r.current_era(principal, *row);
-            let held = r.eras.iter().filter(|(id, e)| e.org == *row && (mine == Some(**id) || (archived && e.archived.is_some())));
-            names.extend(held.map(|(_, e)| format!("epic {o}:{}", e.name)));
-        }
-        match names.is_empty() {
-            true => None,
-            false => Filter::parse(&names.join(" or ")).ok(),
-        }
     }
 
     /// ORG-13: makes the epic `name` in `org`, empty — unique in it. Its
@@ -325,20 +301,6 @@ impl Store {
             move |(), epic, _| epic.ok_or_else(|| StoreError::Invalid("the epic was not kept".into())),
         )
         .await?
-    }
-
-    /// ORG-13: whether shortcode `sc` is in an epic `principal` is in — the
-    /// nav's `groups` and `extents` hold a reader to those (every one while
-    /// no organization holds two).
-    pub fn in_current_era(&self, principal: &str, sc: &ShortcodeId) -> bool {
-        let cache = self.tickets.read().expect("store lock poisoned");
-        let r = &cache.shortcodes;
-        if !r.several_eras() {
-            return true;
-        }
-        let era = r.era_of(sc);
-        let Some(org) = r.eras.get(&era).map(|e| e.org) else { return true };
-        r.current_era(principal, org) == Some(era)
     }
 }
 

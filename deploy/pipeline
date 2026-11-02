@@ -411,7 +411,7 @@ cargo_release() { # LOG — cargo build --release of WS_PKGS; dies red, naming t
 # The bundle names the services it was built against (manifest.contract), and ui.push answers
 # whether the running services are those (contract_matches): its hash over the services the
 # bundle's components' `uses` name (contract_named → contract_over, ../plexus-ui/service/src/push.rs).
-# SURFACE-11: the build stamps that hash, never tickets.schema's alone — a bundle naming epics,
+# SURFACE-11: the build stamps that hash, never tickets.schema's alone — a bundle naming orgs,
 # orgs or ui beside tickets hashes differently. The bundle is built once unstamped, its
 # manifest's components.*.uses read from the tar (bundle_uses), and the menger just built is
 # asked `ui contract --uses` them (ui.contract: the hash a push of them computes). The build reads
@@ -455,7 +455,7 @@ bundle_uses() { # TAR → every method its manifest's components use, once each,
   m=$(tar -xOf "$1" manifest.json 2>/dev/null) && [[ -n $m ]] || return 1
   jq -er '[.components // {} | .[] | .uses // [] | .[]] | unique | join(",")' <<<"$m" 2>/dev/null
 }
-uses_services() { # USES (comma-separated) → the services they name, once each: "epics, tickets"
+uses_services() { # USES (comma-separated) → the services they name, once each: "orgs, tickets"
   jq -rR 'split(",") | map(select(. != "") | split(".")[0]) | unique | join(", ")' <<<"$1"
 }
 contract_read() { # LOG BINARY WHAT USES [WHAT USES…] → CONTRACTS (a hash per USES, ui.contract's over the services they name), or dies naming WHAT and why

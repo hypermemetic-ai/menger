@@ -3,9 +3,9 @@
 // The Svelte board (owner, 2026-10-30: the default, `#/`): board-frame's sections.
 //
 // Marks:
-//   [data-layout=board-frame][data-slot=top] app-top   `[data-surface=app-top]`, `[data-field=epic]` (its name,
-//                       `[data-epic-name]`; a link to #/epics), `[data-field=health]` (`[data-health-count]`, live),
-//                       `[data-form=search] input` (enter → #/search/:q), `[data-link=board|ready|waves|filters|new|me]`,
+//   [data-layout=board-frame][data-slot=top] app-top   `[data-surface=app-top]`, `[data-field=health]` (`[data-health-count]`, live;
+//                       V2-25: no `[data-field=epic]` — the switcher went with the `epics` activation),
+//                       `[data-form=search] input` (enter → #/search/:q), `[data-link=board|queue|ready|waves|filters|new]`,
 //                       `[data-action="palette.open"]` (emits palette.open); STUDIO-11: for an editor
 //                       (auth.requires ui.author, held on *) `[data-action="page.edit"]` — the pencil, ctrl+e —
 //                       to /studio/#/page/<the hash, encodeURIComponent'd>; a viewer has neither
@@ -65,21 +65,20 @@ export default async (ctx) => {
   const hash = (page) => page.evaluate(() => location.hash);
   const top = (page) => section(page, B, "top").locator("[data-surface=app-top]");
 
-  await test("the_top_shows_the_epic_and_the_health", async () => {
-    const [cur] = sy("epics", "current").filter((e) => e.type === "current");
-    assert(cur?.epic?.name, `epics current answers: ${JSON.stringify(cur)}`);
+  await test("the_top_shows_the_health_and_no_epic", async () => {
     const health = () => sy("tickets", "health").find((e) => e.type === "health").ticket_count;
     const { page } = await board();
     const t = top(page);
     await eventually("app-top is drawn in the layout's top section", async () => (await t.count()) === 1, 5_000);
-    await eventually(`the epic says ${cur.epic.name}`, async () => (await t.locator("[data-field=epic] [data-epic-name]").textContent()).trim() === cur.epic.name, 5_000);
-    assert((await t.locator("[data-field=epic]").getAttribute("href")) === "#/epics", "the epic links to #/epics");
+    // V2-25: no epic switcher — the board is the organization's whole set.
+    assert((await t.locator("[data-field=epic]").count()) === 0, "no epic field in the top");
     const n0 = health();
     const shown = async () => Number((await t.locator("[data-field=health] [data-health-count]").textContent()).replace(/[^0-9]/g, ""));
     await eventually(`the health says ${n0}`, async () => (await shown()) === n0, 5_000);
-    for (const [link, href] of [["board", "#/"], ["ready", "#/ready"], ["waves", "#/waves"], ["filters", "#/filters"], ["new", "#/new"], ["me", "#/me"]]) {
+    for (const [link, href] of [["board", "#/"], ["ready", "#/ready"], ["waves", "#/waves"], ["filters", "#/filters"], ["new", "#/new"]]) {
       assert((await t.locator(`[data-link=${link}]`).getAttribute("href")) === href, `the ${link} link is ${href}`);
     }
+    assert((await t.locator("[data-link=me]").count()) === 0, "V2-25: no me link");
     assert((await t.locator("[data-link=board]").getAttribute("aria-current")) === "page", "the board is the current link");
     await t.locator('[data-action="palette.open"]').click();
     await eventually("the palette's button opens the palette (palette.open on the bus)", async () => (await section(page, B, "palette").locator("input[data-palette-input]").count()) === 1, 2_000);

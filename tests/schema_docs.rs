@@ -67,7 +67,7 @@ const MEDIA_WORDS: &[&str] = &["media"];
 
 /// Every service a v2 server registers, and their children, by path.
 const PATHS: &[&str] = &[
-    "auth", "epics", "members", "members.teams", "orgs", "session", "tickets", "tickets.commits", "tickets.filters",
+    "auth", "members", "members.teams", "orgs", "session", "tickets", "tickets.commits", "tickets.filters",
     "tickets.inputs", "tickets.nav", "tickets.revisions", "tickets.subtasks", "tickets.work", "ui", "ui.routes", "ui.slots", "media",
 ];
 
@@ -325,7 +325,7 @@ fn description(m: &Value, name: &str) -> String {
 
 /// V2-11, acceptance 1: the schema, grepped for the gone words, matches
 /// nothing — every description of every service (`tickets` and its
-/// children, `members` and `teams`, `orgs`, `epics`, `session`, `auth`,
+/// children, `members` and `teams`, `orgs`, `session`, `auth`,
 /// `ui` and `slots`), what its methods take and what they yield.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn every_description_says_what_v2_does() {

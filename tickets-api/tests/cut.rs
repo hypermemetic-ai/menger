@@ -102,7 +102,7 @@ const GOES: &[&str] = &[
 ];
 
 /// The activation types of the services that go (`session` stays, with
-/// members, orgs and epics: the browser's sign-in): none is named anywhere in
+/// members and orgs: the browser's sign-in; V2-25: `epics` went too): none is named anywhere in
 /// `tickets-api/src` or `src` — not declared, not registered, not left in a
 /// comment.
 const TYPES: &[&str] = &[
@@ -115,6 +115,8 @@ const TYPES: &[&str] = &[
     "ProfilesActivation",
     "MessageInputsActivation",
     "ComponentsActivation",
+    // V2-25: epics out of v2 (owner, 2026-11-01).
+    "EpicsActivation",
 ];
 
 /// Every `.rs` file under `dir`.

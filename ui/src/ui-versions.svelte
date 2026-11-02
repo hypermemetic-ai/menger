@@ -29,7 +29,7 @@
   let { sheet = null } = $props();
 
   const b = bus();
-  const REACHED = ["tickets.list", "epics.list", "orgs.list", "members.mine", "session.whoami", "auth.whoami", "ui.versions"];
+  const REACHED = ["tickets.list", "orgs.list", "members.mine", "session.whoami", "auth.whoami", "ui.versions"];
 
   // FRAME-37: `bus.call` answers `{ ok, events, message }`; before it, the
   // data events (an array) or a rejection with the refusal's words.
