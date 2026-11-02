@@ -2,7 +2,7 @@
 
 A plan is a program whose leaves are prose. menger is a Plexus RPC
 ticketing service and the seed of a Plexus-native reactive web framework.
-This is **v2**: the tickets service, the ui service and the media service, nothing else.
+This is **v2**: the tickets service, the ui service, the media service and the docs service, nothing else.
 
 v1 is tag `v0.0.1`; v2 cut its chats, comments, deployments, themes, notes, assignees and components, the Leptos app (trunk) and the frames' SDK (sdk-codegen), mockups and the diagrams service — read v1 there, never here. Media came back as a service of its own (V2-24, `media/`).
 
@@ -70,8 +70,11 @@ components in `ui/`, nothing of the framework's.
 **The services registered** (`src/builder.rs`, one process): `tickets`
 (children `commits`, `filters`, `inputs`, `nav`, `revisions`, `subtasks`, `work`),
 `members` (child `teams`), `orgs`, `session`, `auth`, `ui`
-(child `slots`), and `media` (V2-24: `media/`, `menger-media` — images by
-sha256 in `media.db`, `--media-db-path`). A service reaches another as a
+(child `slots`), `media` (V2-24: `media/`, `menger-media` — images by
+sha256 in `media.db`, `--media-db-path`), and `docs` (V2-29: `docs/`,
+`menger-docs` — documents as Yjs CRDTs in `docs.db`, `--docs-db-path`;
+who may is the gate's word on the document's organization, asked through
+its seam; the editor writes it at `#/doc/:id`). A service reaches another as a
 client, through plexus-core's `HubTransport::as_(service, caller)` — the ui
 service's seam (`../plexus-ui/service/src/seam.rs`) asks each service a
 component's `uses` names (`tickets`) as the server's own caller; the media

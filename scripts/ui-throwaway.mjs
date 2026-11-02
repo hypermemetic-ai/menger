@@ -90,8 +90,9 @@ export function build(profile) {
   run(TOOL, ["--help"], quiet);
 }
 
-/** FRAME-14: where the tool finds svelte and esbuild for a svelte/1 build — ../plexus-ui's (`npm ci` there). */
-export const NODE_MODULES = path.join(REPO, "..", "plexus-ui", "node_modules");
+/** FRAME-14: where the tool finds svelte and esbuild for a svelte/1 build — ../plexus-ui's (`npm ci` there);
+ *  V2-29: `PLEXUS_UI_NODE_MODULES` names another (a plexus-ui worktree's, before its dependencies merge). */
+export const NODE_MODULES = process.env.PLEXUS_UI_NODE_MODULES || path.join(REPO, "..", "plexus-ui", "node_modules");
 
 /** The plexus-ui tool (FRAME-8): ../plexus-ui's cli/, built into this checkout's target by scripts/plexus-ui. */
 export const TOOL = path.join(REPO, "scripts", "plexus-ui");
@@ -132,7 +133,7 @@ export class Throwaway {
     this.ws = await freePort();
     this.shell = await freePort();
     const env = { ...process.env, PLEXUS_NO_REGISTRY: "1" };
-    for (const v of ["MENGER_DB_PATH", "MENGER_AUTH_PROVIDERS", "MENGER_ADMINS", "MENGER_UI_DB_PATH", "MENGER_UI_SIGNERS", "MENGER_MEDIA_DB_PATH", "MENGER_APP_DIST", "RUST_LOG"]) delete env[v];
+    for (const v of ["MENGER_DB_PATH", "MENGER_AUTH_PROVIDERS", "MENGER_ADMINS", "MENGER_UI_DB_PATH", "MENGER_UI_SIGNERS", "MENGER_MEDIA_DB_PATH", "MENGER_DOCS_DB_PATH", "MENGER_APP_DIST", "RUST_LOG"]) delete env[v];
     const argv = [
       "--port", String(this.ws),
       "--shell-port", String(this.shell),

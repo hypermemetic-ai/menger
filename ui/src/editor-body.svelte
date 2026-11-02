@@ -25,9 +25,27 @@
      queued request. Keys: mod+b / mod+i bold and italic, mod+k a link,
      mod+z / mod+shift+z undo and redo, mod+s saves now, mod+enter asks an
      agent. CodeMirror comes from ../plexus-ui/package.json (the node_modules
-     the svelte/1 build reads), bundled into this module by the tool. -->
+     the svelte/1 build reads), bundled into this module by the tool.
+     V2-29: the same surface writes a document of the docs service (`kind:
+     "doc"`, `#/doc/:id`) — one component, the store behind a small adapter
+     (`isDoc` below), never a fork. A doc's body is a Yjs CRDT (the owner's
+     `pairing`: live co-editing): the page holds a `Y.Doc` synced by
+     `docs.state`, the editor bound to its text by y-codemirror.next's
+     `yCollab` (its own undo), every local change sent as it happens (batched
+     every 50 ms, `docs.update` with this page's session) and every other
+     hand's arriving on `docs.watch { id, session }` (a gap in the `seq`s asks
+     `docs.state` with this copy's state vector). Carets by Yjs awareness
+     (`docs.here`), and who is here drawn above the canvas
+     (`[data-field=present]`). The title saves by `docs.rename`, an image by
+     `media.put { doc }`; a `history` scrubber replays the doc at any change
+     (`docs.history`, `docs.replay`). The write-in (EDITOR-6) is a ticket's. -->
 <script module>
-  export const uses = ["tickets.get", "tickets.watch", "tickets.amend", "tickets.revisions.list", "media.put", "tickets.inputs.ask", "tickets.queue", "tickets.inputs.close"];
+  export const uses = ["tickets.get", "tickets.watch", "tickets.amend", "tickets.revisions.list", "media.put", "tickets.inputs.ask", "tickets.queue", "tickets.inputs.close",
+                       "docs.get", "docs.watch", "docs.state", "docs.update", "docs.rename", "docs.present", "docs.here", "docs.history", "docs.replay"];
+
+  /** V2-29: bytes ↔ standard base64, as the docs service carries a Yjs update. */
+  export const toB64 = (bytes) => { let s = ""; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)); return btoa(s); };
+  export const fromB64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
 
   /** A line-level diff of `a` → `b`: hunks `{ a0, a1, b0, b1 }`, each "replace a[a0:a1] with b[b0:b1]",
    *  by the common prefix and suffix, then an LCS over what is left (one hunk past 4 M cells). */
@@ -117,21 +135,132 @@
   import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
   import { markdown as markdownSupport, markdownKeymap, markdownLanguage } from "@codemirror/lang-markdown";
   import { syntaxTree } from "@codemirror/language";
+  import * as Y from "yjs";
+  import { yCollab, yUndoManagerKeymap } from "y-codemirror.next";
+  import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate, removeAwarenessStates } from "y-protocols/awareness";
 
-  let { id, sheet = null } = $props();
+  let { id, sheet = null, kind = "ticket" } = $props();
   // The document this instance edits: fixed at mount (editor-screen keys the editor by it), so a
   // write still in hand when the screen moves to another document lands on its own ticket.
   const doc_id = untrack(() => id);
+  // V2-29: the adapter — a ticket (`tickets.*`, a whole body after a pause) or a doc (`docs.*`, a
+  // Yjs CRDT, live). Fixed at mount, as the document is.
+  const isDoc = untrack(() => kind === "doc");
   const b = bus();
   const PAUSE = 600;
 
-  const ticket = live({ snapshot: "tickets.get", params: () => ({ id: doc_id }), changes: "tickets.watch", key: "id",
+  const ticket = live({ snapshot: "tickets.get", params: () => ({ id: doc_id }), changes: "tickets.watch", key: "id", when: () => !isDoc,
                         on: { amended: "upsert:ticket", status_changed: "upsert:ticket", kind_changed: "upsert:ticket", updated: "upsert:ticket",
                               labels_changed: "upsert:ticket", severity_changed: "upsert:ticket", frozen_changed: "upsert:ticket", hidden_changed: "upsert:ticket",
                               blockers_changed: "upsert:ticket", unlocks_changed: "upsert:ticket", unlocks_removed: "upsert:ticket", parent_changed: "upsert:ticket",
                               commits_linked: "upsert:ticket", commits_unlinked: "upsert:ticket", revision_restored: "upsert:ticket", deleted: "upsert:." } });
   // ticket-head's spec word for word: the page holds one `get` and one `watch` of the ticket, shared.
-  const t = $derived(ticket.rows.find((r) => r.title != null && !ticket.rows.some((x) => Array.isArray(x.tombstones))));
+  const tk = $derived(ticket.rows.find((r) => r.title != null && !ticket.rows.some((x) => Array.isArray(x.tombstones))));
+
+  // ── V2-29: a doc — its title and who wrote it (`docs.get`, renames and the delete on its watch),
+  // its CRDT's sync (`docs.state`, then each other hand's update), and who is here ──────────────
+  const SESSION = "s-" + Math.random().toString(36).slice(2, 10);
+  const meta = live({ snapshot: "docs.get", params: () => ({ id: doc_id }), changes: "docs.watch", changes_params: () => ({ id: doc_id }), key: "id", when: () => isDoc,
+                      on: { renamed: "upsert:doc", deleted: "upsert:." } });
+  const sync = live({ snapshot: "docs.state", params: () => ({ id: doc_id }), changes: "docs.watch", changes_params: () => ({ id: doc_id, session: SESSION }), key: "id", when: () => isDoc,
+                      on: { updated: "upsert:.", squashed: "upsert:." } });
+  const here = live({ snapshot: "docs.present", params: () => ({ id: doc_id }), changes: "docs.watch", changes_params: () => ({ id: doc_id }), key: "session", when: () => isDoc,
+                      on: { present: "upsert:present", left: "remove:session" } });
+  const dk = $derived(meta.rows.find((r) => r.id === doc_id && r.title != null));
+  // The document as the surface reads it, whichever store: its title, status and body (a doc's body is its CRDT's).
+  const t = $derived(isDoc ? (dk ? { id: dk.id, title: dk.title, status: null, body: null, kind: "doc", by: dk.by } : undefined) : tk);
+  const present = $derived(isDoc ? here.rows.filter((p) => p.session && p.name) : []);
+
+  // The CRDT, the awareness of carets on it, and what this page has sent and heard.
+  const ydoc = isDoc ? new Y.Doc() : null;
+  const ytext = ydoc?.getText("body") ?? null;
+  const aware = ydoc ? new Awareness(ydoc) : null;
+  const REMOTE = "remote";
+  let synced = $state(false);
+  let known = new Set(); // the seqs this copy holds: answered to its own updates, or heard
+  let outbox = [], sendTimer = null, sending = false;
+  function took(r) {
+    if (!ydoc || r?.update == null) return;
+    if (r.vector != null) {
+      // A state: what this copy lacked; then what the service lacks of this copy, sent back.
+      if (r.update) Y.applyUpdate(ydoc, fromB64(r.update), REMOTE);
+      for (let n = 1; n <= (r.revision ?? 0); n++) known.add(n);
+      const theirs = Y.encodeStateAsUpdate(ydoc, fromB64(r.vector));
+      if (synced && theirs.length > 2) { outbox.push(theirs); sendSoon(); }
+      synced = true;
+      return;
+    }
+    if (r.update) Y.applyUpdate(ydoc, fromB64(r.update), REMOTE);
+    if (r.seq != null) {
+      // A seq this copy never held before this one: something went by unheard — ask for what is missing.
+      if (r.seq > 1 && !known.has(r.seq - 1)) resync();
+      known.add(r.seq);
+    }
+  }
+  async function resync() {
+    const r = await b.call("docs.state", { id: doc_id, vector: toB64(Y.encodeStateVector(ydoc)) });
+    const st = r.events?.find((e) => e.type === "state");
+    if (st) took(st);
+  }
+  function sendSoon() { if (!sendTimer) sendTimer = setTimeout(send, 50); }
+  async function send() {
+    sendTimer = null;
+    if (sending || !outbox.length) return;
+    const update = outbox.length === 1 ? outbox[0] : Y.mergeUpdates(outbox);
+    outbox = [];
+    sending = true;
+    state = { kind: "saving", text: "saving…" };
+    const r = await b.call("docs.update", { id: doc_id, update: toB64(update), session: SESSION });
+    sending = false;
+    const ok = r.events?.find((e) => e.type === "applied");
+    if (r.ok && ok) { known.add(ok.revision); state = { kind: "saved", text: `saved ${hhmm()}` }; }
+    else { outbox.unshift(update); state = { kind: "refused", text: said(r.ok ? { message: r.events?.[0]?.message ?? r.events?.[0]?.type } : r) }; }
+    if (outbox.length) sendSoon();
+  }
+  if (ydoc) ydoc.on("update", (u, origin) => { if (origin !== REMOTE && synced) { outbox.push(u); sendSoon(); } });
+  // Carets: this page's awareness said by `docs.here`; everyone else's applied from their presence.
+  let hereTimer = null;
+  const sayHere = () => { hereTimer = null; if (aware) b.call("docs.here", { id: doc_id, session: SESSION, client: ydoc.clientID, awareness: toB64(encodeAwarenessUpdate(aware, [ydoc.clientID])) }); };
+  if (aware) aware.on("update", (_c, origin) => { if (origin !== REMOTE && !hereTimer) hereTimer = setTimeout(sayHere, 100); });
+  let clients = new Map(); // session → its Yjs client id, to take its caret off when it leaves
+  $effect(() => {
+    const rows = present;
+    untrack(() => {
+      if (!aware) return;
+      const now = new Map();
+      for (const p of rows) {
+        if (p.session === SESSION) { if (!aware.getLocalState()?.user) aware.setLocalStateField("user", { name: p.name, color: p.colour, colorLight: p.colour + "33" }); continue; }
+        if (p.client != null) now.set(p.session, p.client);
+        if (p.awareness) try { applyAwarenessUpdate(aware, fromB64(p.awareness), REMOTE); } catch { /* an old caret */ }
+      }
+      for (const [session, client] of clients) if (!now.has(session)) removeAwarenessStates(aware, [client], REMOTE);
+      clients = now;
+    });
+  });
+  $effect(() => {
+    if (!isDoc) return;
+    const r = sync.rows.find((x) => x.id === doc_id);
+    if (r) untrack(() => took(r));
+  });
+
+  // The scrubber: the doc as it stood at any change kept.
+  let replaying = $state(null); // { seqs, at, doc, said } while open
+  async function openHistory() {
+    if (replaying) { replaying = null; return; }
+    const r = await b.call("docs.history", { id: doc_id, limit: 1000 });
+    const seqs = (r.events ?? []).filter((e) => e.type === "change" && e.change.kind !== "delete").map((e) => e.change).reverse();
+    replaying = { seqs, at: seqs.length - 1, doc: null, said: "" };
+    await scrub(seqs.length - 1);
+  }
+  async function scrub(i) {
+    if (!replaying) return;
+    const c = replaying.seqs[i];
+    replaying.at = i;
+    if (!c) return;
+    const r = await b.call("docs.replay", { id: doc_id, seq: c.seq });
+    const d = r.events?.find((e) => e.type === "doc")?.doc;
+    if (replaying && replaying.at === i) { replaying.doc = d ?? null; replaying.said = d ? "" : said(r); }
+  }
 
   // The line under the canvas: what the last write did, and whose the last outside one was.
   let state = $state({ kind: "idle", text: "" });
@@ -154,6 +283,7 @@
   // ── the write model ──────────────────────────────────────────────────────
   function edited() {
     view.dispatch({ effects: upFade.of(null) }); // a refused upload goes with the next key
+    if (isDoc) return; // a doc's changes go as the CRDT makes them
     dirty = doc() !== acked;
     if (timer) clearTimeout(timer);
     if (dirty || pending !== null) timer = setTimeout(flush, PAUSE);
@@ -238,7 +368,7 @@
     if (!titleDirty) return;
     const title = titleDraft.trim();
     if (!title) return;
-    const r = await b.call("tickets.amend", { id: doc_id, title });
+    const r = isDoc ? await b.call("docs.rename", { id: doc_id, title }) : await b.call("tickets.amend", { id: doc_id, title });
     if (r.ok) { titleDirty = false; state = { kind: "saved", text: `saved ${hhmm()}` }; }
     else state = { kind: "refused", text: said(r) };
   }
@@ -502,7 +632,7 @@
     if (file.size > CAP) return refuse("over the 7 MiB an image may be");
     const data = await base64(file).catch(() => null);
     if (data == null) return refuse("the file could not be read");
-    const r = await b.call("media.put", { ticket: doc_id, mime: file.type, data });
+    const r = isDoc ? await b.call("media.put", { doc: doc_id, mime: file.type, data }) : await b.call("media.put", { ticket: doc_id, mime: file.type, data });
     if (!view) return;
     const stored = r.events?.find((e) => e.type === "stored");
     if (!stored) return refuse(String(r.message ?? r.events?.[0]?.message ?? r.events?.[0]?.type ?? "refused").replace(/^Invalid params: /, ""));
@@ -621,13 +751,14 @@
   }
 
   function init(tk) {
-    acked = tk.body;
+    acked = isDoc ? null : tk.body;
     view = new EditorView({
       parent: host,
       state: EditorState.create({
-        doc: tk.body,
+        doc: isDoc ? ytext.toString() : tk.body,
         extensions: [
-          history(),
+          isDoc ? yCollab(ytext, aware, { undoManager: new Y.UndoManager(ytext) }) : history(),
+          isDoc ? keymap.of(yUndoManagerKeymap) : [],
           keymap.of([
             { key: "Mod-s", run: () => { flush(); return true; } },
             { key: "Mod-Enter", run: openAsk },
@@ -635,7 +766,7 @@
             { key: "Mod-i", run: wrapWith("*") },
             { key: "Mod-k", run: linkKey },
             { key: "Escape", run: (v) => { v.contentDOM.blur(); return true; } },
-            ...markdownKeymap, indentWithTab, ...defaultKeymap, ...historyKeymap,
+            ...markdownKeymap, indentWithTab, ...defaultKeymap, ...(isDoc ? [] : historyKeymap),
           ]),
           markdownSupport({ base: markdownLanguage }),
           EditorView.lineWrapping,
@@ -662,14 +793,16 @@
     });
     host.editorView = view; // the page tests read the document and the caret through it
   }
+  /** Whether the surface can be drawn: the document read — and, for a doc, its CRDT synced. */
+  const ready = () => t && (!isDoc || synced);
   function bodyMount(node) {
     host = node;
-    if (t && !view) init(t);
+    if (ready() && !view) init(t);
     return { destroy() { host = null; } };
   }
 
   $effect(() => {
-    if (!t || view || !host) return;
+    if (!t || (isDoc && !synced) || view || !host) return;
     untrack(() => init(t));
   });
   $effect(() => {
@@ -684,16 +817,38 @@
   });
   $effect(() => () => {
     if (timer) clearTimeout(timer);
-    if (titleTimer) { clearTimeout(titleTimer); if (titleDirty && titleDraft.trim()) b.call("tickets.amend", { id: doc_id, title: titleDraft.trim() }); }
-    if (view) { if (dirty && pending === null) { const text = doc(); if (text !== acked) b.call("tickets.amend", { id: doc_id, body: text }); } view.destroy(); view = null; }
+    if (titleTimer) { clearTimeout(titleTimer); if (titleDirty && titleDraft.trim()) { if (isDoc) b.call("docs.rename", { id: doc_id, title: titleDraft.trim() }); else b.call("tickets.amend", { id: doc_id, title: titleDraft.trim() }); } }
+    if (isDoc) {
+      // What this page typed and has not sent goes now, to its own doc; its caret goes with it.
+      if (sendTimer) clearTimeout(sendTimer);
+      if (outbox.length) b.call("docs.update", { id: doc_id, update: toB64(Y.mergeUpdates(outbox)), session: SESSION });
+      if (hereTimer) clearTimeout(hereTimer);
+      aware?.destroy();
+    }
+    if (view) { if (!isDoc && dirty && pending === null) { const text = doc(); if (text !== acked) b.call("tickets.amend", { id: doc_id, body: text }); } view.destroy(); view = null; }
+    ydoc?.destroy();
   });
 </script>
 
-<section class="editor-body" data-surface="editor-body" data-ticket={doc_id} bind:this={wrap}>
-  {#if sheet === "loading" || (!t && ticket.status === "pending")}
+<section class="editor-body" data-surface="editor-body" data-ticket={doc_id} data-kind={isDoc ? "doc" : "ticket"} bind:this={wrap}>
+  {#if isDoc && present.length}
+    <p class="here" data-field="present" aria-label="who is here">
+      {#each present as p (p.session)}<span class="who" data-present={p.session} data-me={p.session === SESSION ? "" : undefined} data-agent={p.agent ? "" : undefined}><i class="dot" style={`background-color: ${p.colour}`} aria-hidden="true"></i>{p.name}{p.session === SESSION ? " (you)" : ""}</span>{/each}
+    </p>
+  {/if}
+  {#if replaying}
+    <div class="replay" data-field="replay">
+      <input class="scrub" type="range" min="0" max={Math.max(0, replaying.seqs.length - 1)} value={replaying.at} aria-label="the document's changes" data-field="scrubber" oninput={(ev) => scrub(Number(ev.currentTarget.value))}/>
+      <span class="when" data-field="replay-at">{#if replaying.seqs[replaying.at]}change {replaying.seqs[replaying.at].seq} of {replaying.seqs[replaying.seqs.length - 1].seq} · {replaying.seqs[replaying.at].kind} · {replaying.seqs[replaying.at].by} · {new Date(replaying.seqs[replaying.at].at).toLocaleString()}{/if}</span>
+      <button type="button" class="pick" data-action="live" onclick={() => (replaying = null)}>back to live</button>
+      {#if replaying.said}<span class="no" data-refused>{replaying.said}</span>{/if}
+      {#if replaying.doc}<div class="then" data-field="replayed"><TicketView body={replaying.doc.body} title={replaying.doc.title}/></div>{/if}
+    </div>
+  {/if}
+  {#if sheet === "loading" || (!t && (isDoc ? meta.status === "pending" : ticket.status === "pending")) || (isDoc && t && !synced)}
     <div class="skel" data-loading aria-busy="true"><i class="bone title"></i><i class="bone"></i><i class="bone half"></i></div>
-  {:else if !t && ticket.status !== "pending"}
-    <p class="empty" data-empty data-not-found>No ticket {doc_id} here{ticket.message ? ` — ${ticket.message}` : ""}.</p>
+  {:else if !t}
+    <p class="empty" data-empty data-not-found>No {isDoc ? "document" : "ticket"} {doc_id} here{(isDoc ? meta.message : ticket.message) ? ` — ${isDoc ? meta.message : ticket.message}` : ""}.</p>
   {:else}
     <TicketView status={t.status} edit={bodyMount} titleEdit={titleMount}/>
   {/if}
@@ -716,10 +871,11 @@
   {#if t}
     <p class="state" data-field="write-state" data-state={state.kind} data-refused={state.kind === "refused" ? "" : undefined} data-hand={state.who ?? undefined}>
       {#if state.kind === "idle"}<span class="muted">saves as you type</span>{:else}{state.text}{/if}
-      <button type="button" class="pick" data-action="ask-open" disabled={!hasSelection} onmousedown={(ev) => ev.preventDefault()} onclick={openAsk}>ask an agent <kbd>ctrl</kbd><kbd>enter</kbd></button>
+      {#if !isDoc}<button type="button" class="pick" data-action="ask-open" disabled={!hasSelection} onmousedown={(ev) => ev.preventDefault()} onclick={openAsk}>ask an agent <kbd>ctrl</kbd><kbd>enter</kbd></button>{/if}
       <button type="button" class="pick image" data-action="image" onmousedown={(ev) => ev.preventDefault()} onclick={() => picker?.click()}>image</button>
       <input class="file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple aria-label="an image" bind:this={picker} onchange={picked}/>
-      <a class="revs" href={"#/ticket/" + doc_id} data-action="revisions">revisions</a>
+      {#if isDoc}<button type="button" class="pick" data-action="history" aria-pressed={!!replaying} onmousedown={(ev) => ev.preventDefault()} onclick={openHistory}>history</button>
+      {:else}<a class="revs" href={"#/ticket/" + doc_id} data-action="revisions">revisions</a>{/if}
     </p>
   {/if}
 </section>
@@ -736,7 +892,15 @@
   .revs { color: var(--accent); text-decoration: none; }
   .revs:hover, .revs:global([data-sheet~=hover]) { text-decoration: underline; }
   .revs:focus-visible, .revs:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; border-radius: var(--radius-sm); }
-  .pick[data-action=ask-open] { margin-left: auto; }
+  .pick[data-action=ask-open], .editor-body[data-kind=doc] .pick[data-action=image] { margin-left: auto; }
+  .here { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 10px; font-size: 11px; color: var(--muted); }
+  .who { display: inline-flex; gap: 5px; align-items: center; }
+  .who .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+  .who[data-agent] .dot { border-radius: var(--radius-xs); }
+  .replay { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 12px; padding: 8px 10px; font-size: 11px; color: var(--muted); background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius-lg); }
+  .scrub { flex: 1 1 200px; min-width: 0; accent-color: var(--accent); }
+  .when { flex-basis: 100%; order: 3; }
+  .then { flex-basis: 100%; order: 4; padding-top: 8px; border-top: var(--border) solid var(--line); }
   .pick { padding: 0 8px; font: inherit; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; }
   .pick:hover, .pick:global([data-sheet~=hover]) { background: var(--hover); }
   .pick:focus-visible, .pick:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }

@@ -2061,14 +2061,14 @@ fn the_tokens_are_whole() {
 /// repository's. Each page (its name holds a hyphen, as a component's must:
 /// `page-<name>`), the routes that draw it and the Svelte components it
 /// places by their marks (`<ticket-head id={id}/>`, a bound mark the host
-/// fills). The first ten are the app's pages (EDITOR-4: `page-editor` at `#/`, the board at `#/board`) and carry the app's top
+/// fills). The first ten are the app's pages (EDITOR-4: `page-editor` at `#/`, V2-29: a doc at `#/doc/:doc`; the board at `#/board`) and carry the app's top
 /// (`<slot name="top"/>`, app-top by `slots.json`) and the palette its jump
 /// button opens (`<slot name="palette"/>`, jump-palette-sv); the rest draw one
 /// component alone for its browser cases. V2-25: `page-epics` (`#/epics`)
 /// and `page-me` (`#/me`) went with the `epics` activation and the owner's
 /// call on `session`'s page.
 const PAGES: [(&str, &[&str], &[&str]); 16] = [
-    ("page-editor", &["#/", "#/edit/:id"], &["editor-screen"]),
+    ("page-editor", &["#/", "#/edit/:id", "#/doc/:doc"], &["editor-screen"]),
     ("page-ticket", &["#/ticket/:id", "#/sv/ticket/:id"], &["ticket-head", "ticket-body", "ticket-edit", "ticket-relations", "ticket-actions", "ticket-commits", "ticket-history", "ticket-revisions"]),
     ("page-new", &["#/new", "#/new/:parent"], &["ticket-create"]),
     ("page-search", &["#/search", "#/search/:q", "#/search/:q/f/:filter"], &["search-page"]),

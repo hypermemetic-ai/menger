@@ -5,7 +5,10 @@
 // one amend 600 ms after the last key; a refusal on the line under the canvas;
 // an outside amend landing without moving the caret; a dirty draft merged with
 // an outside write at the pause; house marks drawn as cards, kept byte for
-// byte; the documents beside it with + new. Run alone by
+// byte; the documents beside it with + new. V2-29: the documents are the
+// docs service's — + new makes a doc, typing reaches it as Yjs updates
+// (`docs.update`), `#/doc/:id` reloads it, two pages on one doc type together
+// and see each other here, and a ticket still edits at `#/edit/:id`. Run alone by
 // `node tests/pages_browser.mjs --group editor`.
 //
 // Marks: `[data-surface=editor-body]`, `[data-surface=ticket-view][data-editing]`,
@@ -346,31 +349,100 @@ graph TD
     }
   });
 
-  await test("new_makes_a_doc_and_switching_keeps_autosave", async () => {
+  // ── V2-29: documents of the docs service, on the same surface ─────────────
+  const docOf = (id) => sy("docs", "get", "--id", id).find((e) => e.type === "doc")?.doc;
+  const docUpdates = async (page) => (await sentCalls(page)).filter((c) => c.method === "docs.update");
+  const openDoc = async (id, page0) => {
+    const { context, page } = page0 ?? (await openPage(`#/doc/${id}`));
+    const ed = page.locator(`[data-surface=editor-body][data-kind=doc][data-ticket="${id}"]`);
+    await eventually("the doc is drawn", async () => (await ed.locator(".cm-content[data-field=body-source]").count()) === 1, 8_000);
+    return { context, page, ed };
+  };
+
+  await test("new_makes_a_doc_and_typing_reaches_the_docs_service", async () => {
     const first = make("switch from here", "start\n");
-    const { context, page, ed } = await open(first);
+    const { context, page } = await open(first);
     try {
       const screen = page.locator("[data-surface=editor-screen]");
       await eventually("new is ready", async () => !(await screen.locator("[data-field=documents] [data-action=new]").isDisabled()), 5_000);
       await screen.locator("[data-field=documents] [data-action=new]").click();
-      await eventually("the new document opens", async () => /^#\/edit\/EDIT-\d+$/.test(await hash(page)) && (await hash(page)) !== `#/edit/${first}`, 5_000);
-      const made = (await hash(page)).replace("#/edit/", "");
-      const t = get(made);
-      assert(t.kind === "doc" && t.status === "Doc" && t.title === "Untitled", `a doc called Untitled: ${t.kind} ${t.status} ${t.title}`);
-      await eventually("in this shortcode's docs", async () => (await screen.locator(`[data-field=documents] [data-doc=${made}]`).count()) >= 1, 5_000);
-      await eventually("its surface", async () => (await page.locator(`[data-surface=editor-body][data-ticket=${made}] .cm-content`).count()) === 1, 5_000);
+      await eventually("the new doc opens at #/doc/<id>", async () => /^#\/doc\/[0-9a-z]{8}$/.test(await hash(page)), 5_000);
+      const made = (await hash(page)).replace("#/doc/", "");
+      const d = docOf(made);
+      assert(d && d.title === "Untitled" && d.revision === 1, `a doc called Untitled: ${JSON.stringify(d)}`);
+      assert(!sy("tickets", "list", "--filter", "kind doc", "--summary", "true").some((e) => e.summary?.title === "Untitled" && e.summary?.created_unix > Date.now() / 1000 - 60), "no ticket was made");
+      await eventually("in the documents", async () => (await screen.locator(`[data-field=documents] [data-doc="${made}"]`).count()) >= 1, 5_000);
+      const { ed } = await openDoc(made, { context, page });
+      assert((await screen.locator("[data-surface=ticket-questions]").count()) === 0, "a doc has no questions");
       await caretAt(page, 0);
       await page.keyboard.type("a new page");
-      // Straight to the other document, inside the pause: what was typed lands on its own ticket.
+      await eventually("typing reaches the doc", async () => docOf(made).body === "a new page", 5_000);
+      const sent = await docUpdates(page);
+      assert(sent.length >= 1 && sent.every((c) => typeof c.params.update === "string" && c.params.session), `as Yjs updates with the page's session: ${sent.length}`);
+      assert((await amends(page)).length === 0, "and never tickets.amend");
+      await eventually("said under the canvas", async () => (await state(ed).getAttribute("data-state")) === "saved", 5_000);
+      // Straight to the ticket, inside a batch: what was typed lands on its own doc.
+      await caretAt(page, "a new page".length);
+      await page.keyboard.type(" more");
       await screen.locator(`[data-field=documents] [data-doc=${first}]`).first().click();
-      await eventually("the first again", async () => (await hash(page)) === `#/edit/${first}`, 5_000);
-      await eventually("the new one kept what was typed", async () => get(made).body === "a new page", 5_000);
-      assert(get(first).body === "start\n", "and the first is untouched");
-      // The search finds by title.
-      await screen.locator("[data-field=find]").fill("switch from");
-      await eventually("found", async () => (await screen.locator(`[data-field=documents] [data-doc=${first}]`).count()) === 1, 5_000);
+      await eventually("the ticket again, at #/edit", async () => (await hash(page)) === `#/edit/${first}`, 5_000);
+      await eventually("the doc kept what was typed", async () => docOf(made).body === "a new page more", 5_000);
+      assert(get(first).body === "start\n", "and the ticket is untouched");
+      // The search finds docs by title.
+      sy("docs", "rename", "--id", made, "--title", "The kiln, weekly");
+      await screen.locator("[data-field=find]").fill("kiln week");
+      await eventually("found", async () => (await screen.locator(`[data-field=documents] [data-doc="${made}"]`).count()) === 1, 5_000);
+      await shoot(page, "editor-docs");
     } finally {
       await context.close();
+    }
+  });
+
+  await test("a_doc_reloads_at_its_route", async () => {
+    const id = sy("docs", "create", "--title", "Reloaded", "--body", bodyFile("reloaded", "# Kept\n\nas written\n")).find((e) => e.type === "created").doc.id;
+    const { context, page, ed } = await openDoc(id);
+    try {
+      await eventually("drawn as the view draws it", async () => (await ed.locator(".blk h1").count()) === 1, 5_000);
+      await caretAt(page, (await src(page)).length);
+      await page.keyboard.type("more");
+      await eventually("kept", async () => docOf(id).body === "# Kept\n\nas written\nmore", 5_000);
+      await page.reload();
+      await openDoc(id, { context, page });
+      await eventually("the same after a reload", async () => (await src(page)) === "# Kept\n\nas written\nmore", 5_000);
+      // An agent's whole-body save over synapse arrives on the open page, merged.
+      sy("docs", "save", "--id", id, "--body", bodyFile("reloaded-2", "# Kept\n\nas written by an agent\nmore"));
+      await eventually("the agent's words arrive live", async () => (await src(page)).includes("by an agent"), 5_000);
+      // The history scrubber replays it at its first change.
+      await ed.locator("[data-action=history]").click();
+      await eventually("the scrubber", async () => (await ed.locator("[data-field=scrubber]").count()) === 1, 5_000);
+      await ed.locator("[data-field=scrubber]").evaluate((el) => { el.value = "0"; el.dispatchEvent(new Event("input", { bubbles: true })); });
+      await eventually("the doc as it was made", async () => (await ed.locator("[data-field=replayed]").innerText()).includes("as written") && !(await ed.locator("[data-field=replayed]").innerText()).includes("agent"), 5_000);
+      await shoot(page, "editor-doc-history");
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("two_pages_on_one_doc_type_together_and_see_each_other", async () => {
+    const id = sy("docs", "create", "--title", "Paired", "--body", bodyFile("paired", "left right\n")).find((e) => e.type === "created").doc.id;
+    const one = await openDoc(id);
+    const two = await openDoc(id);
+    try {
+      await eventually("each sees two here", async () => (await one.ed.locator("[data-field=present] [data-present]").count()) === 2 && (await two.ed.locator("[data-field=present] [data-present]").count()) === 2, 8_000);
+      // Both type at once, at the two ends.
+      await caretAt(one.page, 0);
+      await caretAt(two.page, "left right".length);
+      await Promise.all([one.page.keyboard.type("ONE "), two.page.keyboard.type(" TWO")]);
+      const want = "ONE left right TWO\n";
+      await eventually("both pages and the service converge", async () => (await src(one.page)) === want && (await src(two.page)) === want && docOf(id).body === want, 8_000);
+      // A caret of the other, in their colour.
+      await eventually("the other's caret", async () => (await one.page.locator(".cm-ySelectionCaret").count()) >= 1, 5_000);
+      await shoot(one.page, "editor-doc-paired");
+      await two.context.close();
+      await eventually("they leave", async () => (await one.ed.locator("[data-field=present] [data-present]").count()) === 1, 8_000);
+    } finally {
+      await one.context.close();
+      await two.context.close().catch(() => {});
     }
   });
 
@@ -447,6 +519,22 @@ graph TD
       const img = ed.locator(".blk img");
       await eventually("drawn as its block, from the shell", async () => (await img.count()) === 1 && (await img.getAttribute("src")).endsWith(`/media/${hash}`), 5_000);
       assert((await img.evaluate((i) => new Promise((r) => (i.complete ? r(i.naturalWidth) : (i.onload = () => r(i.naturalWidth)))))) === 2, "with its pixels");
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("a_pasted_image_in_a_doc_is_the_docs", async () => {
+    const id = sy("docs", "create", "--title", "With a picture", "--body", bodyFile("picture", "above\n")).find((e) => e.type === "created").doc.id;
+    const { context, page, ed } = await openDoc(id);
+    try {
+      await caretAt(page, "above".length);
+      await pasteFile(page, PNG_2X1, "image/png", "the curve.png");
+      await eventually("the doc names the image", async () => /!\[the curve\]\(media:[0-9a-f]{64}\)/.test(docOf(id).body), 8_000);
+      const put = (await sentCalls(page)).find((c) => c.method === "media.put");
+      assert(put.params.doc === id && put.params.ticket === undefined, `put for the doc: ${JSON.stringify(Object.keys(put.params))}`);
+      await caretAt(page, 0);
+      await eventually("drawn from the shell", async () => (await ed.locator(".blk img").count()) === 1, 5_000);
     } finally {
       await context.close();
     }
