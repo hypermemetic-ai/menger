@@ -126,6 +126,7 @@ pub(crate) fn page_words(r: &Route) -> String {
         Route::Members => "members".into(),
         Route::Epics => "epics".into(),
         Route::Pair => "pair a machine".into(),
+        Route::Chats(_) if !crate::chats::ENABLED => page_words(&Route::Board),
         Route::Chats(_) => "chats".into(),
         Route::Deployments(_) => "deployments".into(),
         Route::Deploy(_) => "deploy".into(),
@@ -491,7 +492,7 @@ pub(crate) fn TreeHead(route: RwSignal<Route>) -> impl IntoView {
                     "needs you"{move || needs.count.n().filter(|n| *n > 0).map(|n| view! { <b>{n}</b> })}
                 </button>
                 <a href="#/comments" aria-current=cur(|r| matches!(r, Route::Comments))>"comments"</a>
-                <a href="#/chats" aria-current=cur(|r| matches!(r, Route::Chats(_)))>"chats"</a>
+                {crate::chats::ENABLED.then(|| view! { <a href="#/chats" aria-current=cur(|r| matches!(r, Route::Chats(_)))>"chats"</a> })}
                 <a href="#/deployments" aria-current=cur(|r| matches!(r, Route::Deployments(_)))>"deployments"</a>
                 <a href="#/components" aria-current=cur(|r| matches!(r, Route::Components(_)))>"components"</a>
                 <a href="#/epics" aria-current=cur(|r| matches!(r, Route::Epics))>"epics"</a>

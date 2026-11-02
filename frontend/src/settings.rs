@@ -824,7 +824,7 @@ pub(crate) fn SettingsPage(test_link: RwSignal<String>) -> impl IntoView {
             // APP-25: the tray — the question on hover.
             <QueueGroup />
             // CHAT-7: the chat composer's font.
-            <ChatGroup />
+            {crate::chats::ENABLED.then(|| view! { <ChatGroup /> })}
             // AGS-28: every key and gesture — the table the `?` sheet draws.
             <KeyboardGroup />
         </section>

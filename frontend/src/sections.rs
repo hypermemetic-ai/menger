@@ -811,6 +811,8 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
                         }).collect_view()
                     })}
                 </ol>
+                // APP-116: the chats, only while chat is shown.
+                {crate::chats::ENABLED.then(|| view! {
                 <div class="dsub">"Chats"</div>
                 <ol class="dlist chats">
                     {move || rows.get().into_iter().map(|c| {
@@ -829,6 +831,7 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
                     <li class="cnew"><button type="button" on:click=move |_| chat_pane::open_view(&tid.get_value(), View::Pick)>"+ chat"</button></li>
                 </ol>
                 {move || (!phone.get()).then(|| view! { <chat_pane::Inside ticket=tid.get_value() lit=lit_words back=Callback::new(|_: bool| ()) /> })}
+                })}
                 <div class="dfoot"><span><kbd>"{"</kbd>" "<kbd>"}"</kbd>" sections"</span><span><kbd>"i"</kbd>" next input"</span></div>
             </aside>
             <button
@@ -865,6 +868,7 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
                             view! { <h3>{format!("Inputs · {w} waiting on you")}</h3><div class="ins">{rows}</div> }
                         })
                     })}
+                    {crate::chats::ENABLED.then(|| view! {
                     <h3>"Chats"</h3>
                     <div class="ins chats">
                         {move || rows.get().into_iter().map(|c| {
@@ -878,6 +882,7 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
                         }).collect_view()}
                         <button type="button" class="in cnew" on:click=move |_| chat_pane::open_view(&tid.get_value(), View::Pick)><span></span><span class="q">"+ chat"</span><small></small></button>
                     </div>
+                    })}
                     <h3>"Sections"</h3>
                     <ol class="slist" data-dir=move || went.get()>
                         {move || sections.with(|secs| {
@@ -896,7 +901,7 @@ pub(crate) fn Dock(ticket: String) -> impl IntoView {
                         })}
                     </ol>
                 </div>
-                {move || phone.get().then(|| view! {
+                {move || (crate::chats::ENABLED && phone.get()).then(|| view! {
                     <chat_pane::Inside ticket=tid.get_value() lit=lit_words back=Callback::new(move |x: bool| if x { sheet.set(false) }) />
                 })}
             </div>

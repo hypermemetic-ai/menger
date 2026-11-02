@@ -1785,8 +1785,8 @@ fn ticket_view(
                 // CHAT-4: chat N — the reader's unread here; opens the dock on
                 // a chat (CHAT-10).
                 <div>
-                    <dt>"Chats"</dt>
-                    <dd id="t-chats"><chat_pane::Field ticket=chats_id /></dd>
+                    // APP-116: the Chats field only while chat is shown.
+                    {chats::ENABLED.then(|| view! { <dt>"Chats"</dt><dd id="t-chats"><chat_pane::Field ticket=chats_id /></dd> })}
                 </div>
                 // COMMENT-3: its open comments, linking to them on #/comments.
                 <div>
@@ -2599,7 +2599,7 @@ fn App() -> impl IntoView {
                     </a>
                     // CHAT-14: every chat — direct messages, groups and the
                     // tickets' — and the reader's unread across them.
-                    <chats_page::HeaderLink on=Signal::derive(move || matches!(route.get(), Route::Chats(_))) />
+                    {chats::ENABLED.then(|| view! { <chats_page::HeaderLink on=Signal::derive(move || matches!(route.get(), Route::Chats(_))) /> })}
                     // DEPLOY-13: where work runs — every project's
                     // environments and deploys.
                     <a
@@ -2700,6 +2700,8 @@ fn App() -> impl IntoView {
                                 Route::Members => "members (IDENTITY-22)",
                                 Route::Epics => "epics (ORG-23)",
                                 Route::Pair => "pair a machine (TETHER-11)",
+                                // APP-116: with chat hidden, #/chats is the board.
+                                Route::Chats(_) if !chats::ENABLED => "the live board (MFE-3)",
                                 Route::Chats(_) => "chats (CHAT-14)",
                                 Route::Deployments(_) => "deployments (DEPLOY-13)",
                                 Route::Deploy(_) => "what we're working on (DEPLOY-30)",
@@ -2728,7 +2730,7 @@ fn App() -> impl IntoView {
                         // MENGER-43: Home is the board — Needs you is a
                         // filter on the nav (`g n`, src/needs.rs).
                         // CHAT-16: one granted chats only has them, and nothing of the board.
-                        Route::Board if signin::account().with_untracked(|a| a.chat_only()) => view! { <chats_page::ChatsPage pick=chats_page::Pick::List /> }.into_any(),
+                        Route::Board if chats::ENABLED && signin::account().with_untracked(|a| a.chat_only()) => view! { <chats_page::ChatsPage pick=chats_page::Pick::List /> }.into_any(),
                         Route::Board => view! { <Board board last_error viewport /> }.into_any(),
                         Route::Ticket(id) => {
                             view! { <TicketPage id socket last_error /> }.into_any()
@@ -2747,6 +2749,8 @@ fn App() -> impl IntoView {
                         Route::Members => view! { <members_page::MembersPage /> }.into_any(),
                         Route::Epics => view! { <epics_page::EpicsPage /> }.into_any(),
                         Route::Pair => view! { <pair_page::PairPage /> }.into_any(),
+                        // APP-116: with chat hidden, `#/chats` is the board.
+                        Route::Chats(_) if !chats::ENABLED => view! { <Board board last_error viewport /> }.into_any(),
                         Route::Chats(p) => view! { <chats_page::ChatsPage pick=p /> }.into_any(),
                         Route::Deployments(project) => view! { <deploys_page::DeploymentsPage project /> }.into_any(),
                         Route::Deploy(project) => view! { <deploy_view::DeployPage project /> }.into_any(),
@@ -2765,9 +2769,9 @@ fn App() -> impl IntoView {
             {move || can_view.get().then(|| view! { <phonebar::Bar route overlay tree /> })}
             // CHAT-4: the route and the chat shown, in step — the chat itself
             // is drawn in the section dock (CHAT-10).
-            {move || can_view.get().then(|| view! { <chat_pane::Follow ticket=route_ticket /> })}
+            {move || (chats::ENABLED && can_view.get()).then(|| view! { <chat_pane::Follow ticket=route_ticket /> })}
             // CHAT-7: the dock's chat, full screen (⤢, `g c`, `?chat=ID&full`).
-            {move || can_view.get().then(|| view! { <chat_full::Session ticket=route_ticket /> })}
+            {move || (chats::ENABLED && can_view.get()).then(|| view! { <chat_full::Session ticket=route_ticket /> })}
             // AGS-16: mounted once, outside every ticket element, so a
             // right-click inside the menu itself never re-targets it.
             <menu::TicketMenu last_error />

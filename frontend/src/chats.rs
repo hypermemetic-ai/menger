@@ -548,7 +548,20 @@ pub(crate) fn asks(asked: Option<u32>, round: u32, fetched: bool) -> Ask {
 }
 
 /// A view needs the chats: watch and fetch them now if this is the first ask.
+/// APP-116: whether the app shows chat at all (owner, 2026-11-01: *"remove
+/// all chat options. really I would just like to hide it all together"*).
+/// `false` gates every chat surface — the header link and the tree sheet's,
+/// `#/chats`, a ticket's Chats field and dock lists, the queue sheet's chats
+/// tab, a member's Chat, Settings → Chat, `g c` and the keyboard help's
+/// `chat.*` rows, a deployment's *Ask the builder* — and [`want`] subscribes
+/// nothing, so every count reads 0. The server's `chats` activation is
+/// untouched; `true` brings it all back.
+pub(crate) const ENABLED: bool = false;
+
 pub(crate) fn want() {
+    if !ENABLED {
+        return;
+    }
     if !WANTED.with(|w| w.replace(true)) {
         start();
     }

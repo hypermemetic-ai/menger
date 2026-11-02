@@ -966,7 +966,7 @@ fn global_keydown(ev: &web_sys::KeyboardEvent, overlay: RwSignal<Overlay>, board
         }
         // MENGER-43: `g n` — the nav under Needs you (again: its default).
         // CHAT-7: the chat open on this ticket, full screen.
-        Some("chat.full") => crate::chat_full::expand(),
+        Some("chat.full") => crate::chats::ENABLED && crate::chat_full::expand(),
         Some("go.needs") => {
             crate::needs::go();
             true
@@ -1883,7 +1883,8 @@ fn Cheats(overlay: RwSignal<Overlay>) -> impl IntoView {
 #[component]
 pub(crate) fn KeyTable(#[prop(into)] query: Signal<String>) -> impl IntoView {
     let mac = bindings::is_mac();
-    let table = StoredValue::new(bindings::table());
+    // APP-116: the chat.* rows only while chat is shown.
+    let table = StoredValue::new(bindings::table().into_iter().filter(|e| crate::chats::ENABLED || !e.binding.id.starts_with("chat.")).collect::<Vec<_>>());
     move || {
         let q = query.get();
         table.with_value(|t| {

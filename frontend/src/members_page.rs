@@ -456,7 +456,7 @@ pub(crate) fn MembersPage() -> impl IntoView {
                         let mine = person.as_deref() == Some(me.as_str());
                         let lines = if agent { Vec::new() } else { about(profile.as_ref(), None, None, now) };
                         // CHAT-14: a person (not a team, not the reader) has Chat.
-                        let chat = person.clone().filter(|_| !mine).map(|p| {
+                        let chat = person.clone().filter(|_| crate::chats::ENABLED && !mine).map(|p| {
                             let go = move |_| crate::chats_page::message(p.clone(), move |e| note.set(Some(Err(e))));
                             view! { <button type="button" class="link chatwith" title="a direct message, in #/chats" on:click=go>"Chat"</button> }
                         });
