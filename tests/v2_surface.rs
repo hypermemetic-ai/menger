@@ -2,8 +2,8 @@
 //! registers `tickets` and the addresses, the grants its reach reads and the
 //! browser's sign-in — `members` (with `teams`), `orgs`, `session` (V2-25:
 //! `epics` went; the board is the organization's whole set)
-//! — beside the protocol's `auth`, (UI-3) the `ui` service and (V2-24) the
-//! `media` service, and nothing else; `tickets`' children are
+//! — beside the protocol's `auth`, (UI-3) the `ui` service, (V2-24) the
+//! `media` service and (V2-29) the `docs` service, and nothing else; `tickets`' children are
 //! `commits`, `nav`, `work`, `filters`, `subtasks` and `revisions`, and
 //! nothing else (components and assign went with their services, and so did
 //! their methods and parameters; V2-20: inputs and the queue came back). A body is text: what
@@ -139,7 +139,7 @@ async fn the_service_registers_tickets_members_orgs_session_and_nothing_else() {
     assert_eq!(
         (hub, tickets),
         (
-            set(&["auth", "tickets", "members", "orgs", "session", "ui", "media"]),
+            set(&["auth", "tickets", "members", "orgs", "session", "ui", "media", "docs"]),
             set(&["commits", "inputs", "nav", "work", "filters", "subtasks", "revisions"])
         ),
         "(the hub's activations, tickets' children)"

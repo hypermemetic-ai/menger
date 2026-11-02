@@ -388,6 +388,10 @@ pub enum MediaEvent {
         ticket: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         upload: Option<String>,
+        /// V2-29: `put` for a document that is none, or that the docs
+        /// service says you may not write.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        doc: Option<String>,
     },
     /// Refused, naming why in `reason` — `too_large` (with `bytes` and
     /// `max`), `truncated`, `bad_data`, `out_of_order`, `incomplete`,
@@ -443,7 +447,7 @@ impl MediaEvent {
 
     /// `not_found` naming a hash.
     pub fn no_hash(hash: &str) -> Self {
-        MediaEvent::NotFound { hash: Some(hash.into()), ticket: None, upload: None }
+        MediaEvent::NotFound { hash: Some(hash.into()), ticket: None, upload: None, doc: None }
     }
 }
 

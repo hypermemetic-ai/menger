@@ -235,6 +235,9 @@ by hand, never by a test; prod names none (UI-15: it takes no push).
 V2-24: the media service keeps its file beside the database in the data
 volume by default (`media.db`; `--media-db-path`, `MENGER_MEDIA_DB_PATH`
 to name another) — nothing in the env files or `run-menger` for it.
+V2-29: the docs service alike — `docs.db` beside the database
+(`--docs-db-path`, `MENGER_DOCS_DB_PATH`); a release carries it, so the
+first deploy after it opens an empty `docs.db` in the data volume.
 
 After a deploy is healthy — `remote test`, and `local` — the pipeline
 pushes the release's bundle: `ui.push { bundle, manifest, signature,

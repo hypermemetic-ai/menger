@@ -291,7 +291,7 @@ pub async fn spawn_menger(port: u16, db: &Path, extra: &[String]) -> Spawned {
     cmd.arg("--port").arg(port.to_string()).arg("--db-path").arg(db).args(login_args()).args(extra);
     // Never the default data directory.
     cmd.arg("--data-dir").arg(db.parent().expect("a db in a directory"));
-    for var in ["MENGER_DB_PATH", "MENGER_AUTH_PROVIDERS", "MENGER_ADMINS", "MENGER_UI_DB_PATH", "MENGER_UI_SIGNERS", "MENGER_UI_COMPILER", "MENGER_UI_CHANNEL", "MENGER_ENV", "MENGER_MEDIA_DB_PATH", "RUST_LOG"] {
+    for var in ["MENGER_DB_PATH", "MENGER_AUTH_PROVIDERS", "MENGER_ADMINS", "MENGER_UI_DB_PATH", "MENGER_UI_SIGNERS", "MENGER_UI_COMPILER", "MENGER_UI_CHANNEL", "MENGER_ENV", "MENGER_MEDIA_DB_PATH", "MENGER_DOCS_DB_PATH", "RUST_LOG"] {
         cmd.env_remove(var);
     }
     cmd.env("PLEXUS_NO_REGISTRY", "1").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());

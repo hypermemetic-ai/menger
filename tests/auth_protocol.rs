@@ -333,6 +333,26 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("media.chunk", Today::Editor, None),
     ("media.finish", Today::Editor, None),
     ("media.fetch", Today::Editor, None),
+    // V2-29: the docs service — a viewer reads, follows and is present, an
+    // editor writes (live updates and whole bodies), an admin deletes and
+    // squashes (`docs.squash`, grantable to a role by the role table); no
+    // target: the method asks the gate again on the document's organization.
+    ("docs.get", Today::Viewer, None),
+    ("docs.list", Today::Viewer, None),
+    ("docs.state", Today::Viewer, None),
+    ("docs.history", Today::Viewer, None),
+    ("docs.replay", Today::Viewer, None),
+    ("docs.present", Today::Viewer, None),
+    ("docs.here", Today::Viewer, None),
+    ("docs.watch", Today::Viewer, None),
+    ("docs.may", Today::Viewer, None),
+    ("docs.create", Today::Editor, None),
+    ("docs.update", Today::Editor, None),
+    ("docs.save", Today::Editor, None),
+    ("docs.rename", Today::Editor, None),
+    ("docs.restore", Today::Editor, None),
+    ("docs.delete", Today::Admin, None),
+    ("docs.squash", Today::Admin, None),
 ];
 
 /// AUTH-7's one deliberate narrowing of the table: what an anonymous or
@@ -373,7 +393,7 @@ async fn the_roles_are_what_identity_21_asked_method_by_method() {
         .map(|(path, s)| (format!("tickets.{path}"), s));
     let top = hub.list_plugin_schemas().into_iter().map(|s| (s.namespace.clone(), s));
     for (path, schema) in top.chain(children) {
-        if !["tickets", "members", "session", "media"].contains(&schema.namespace.as_str()) && !path.starts_with("tickets.") {
+        if !["tickets", "members", "session", "media", "docs"].contains(&schema.namespace.as_str()) && !path.starts_with("tickets.") {
             continue;
         }
         for m in &schema.methods {

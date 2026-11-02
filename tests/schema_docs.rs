@@ -68,7 +68,7 @@ const MEDIA_WORDS: &[&str] = &["media"];
 /// Every service a v2 server registers, and their children, by path.
 const PATHS: &[&str] = &[
     "auth", "members", "members.teams", "orgs", "session", "tickets", "tickets.commits", "tickets.filters",
-    "tickets.inputs", "tickets.nav", "tickets.revisions", "tickets.subtasks", "tickets.work", "ui", "ui.routes", "ui.slots", "media",
+    "tickets.inputs", "tickets.nav", "tickets.revisions", "tickets.subtasks", "tickets.work", "ui", "ui.routes", "ui.slots", "media", "docs",
 ];
 
 /// Whether `word` occurs in `text` as an identifier of its own, ignoring

@@ -76,6 +76,14 @@ impl Seam {
         }
     }
 
+    /// V2-29: `docs.may { id: doc, role }` asked as `caller`: whether it
+    /// holds `role` on the document, by the docs service's word. `Err`: the
+    /// seam itself failed, in words — never a document's absence.
+    pub async fn doc_may(&self, caller: &AuthContext, doc: &str, role: Role) -> Result<menger_docs::seam::Answer, String> {
+        let service = self.service().ok_or("the media service is not attached to a running service")?;
+        menger_docs::seam::may(service, caller.clone(), doc, role).await
+    }
+
     /// Whether `caller` holds `grant` (a method's dotted path, `media.get`)
     /// on `*`, as the running service's gate answers it now — what an image
     /// put with no ticket is answered to besides its putter. A service with

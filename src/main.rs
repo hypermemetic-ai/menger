@@ -89,6 +89,11 @@ struct Args {
     #[arg(long = "media-fetch-allow", value_name = "IP:PORT", hide = true)]
     media_fetch_allow: Vec<std::net::SocketAddr>,
 
+    // V2-29: the docs service's own file.
+    /// The docs service's file — the documents (default: docs.db beside the database file)
+    #[arg(long, env = "MENGER_DOCS_DB_PATH", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
+    docs_db_path: Option<PathBuf>,
+
     /// A public key (64 hex digits, Ed25519) a `ui.push` may be signed by
     ///
     /// Repeatable; in the env var, separated by `;`. With none, every push is
@@ -606,7 +611,14 @@ async fn run(args: Args) -> anyhow::Result<()> {
     let blobs = menger::media_blobs(&args.media_store, args.media_blob_dir.as_deref(), &media_db_path)?;
     let media = menger::MediaSetup::open_with(&media_db_path, blobs)?.max_upload(args.media_max_bytes).fetch_allow(args.media_fetch_allow.clone());
     let media_serve = media.clone();
-    let hub = build_rpc_services(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, ui, media, |store, access| {
+    // V2-29: the docs service's file (beside the tickets file unless named):
+    // never the tickets, ui or media file.
+    let docs_db_path = args.docs_db_path.clone().unwrap_or_else(|| menger::default_docs_db_path(&db_path));
+    if let Some(whose) = [(&db_path, "database"), (&ui_db_path, "ui service's"), (&media_db_path, "media service's")].into_iter().find(|(p, _)| **p == docs_db_path).map(|(_, w)| w) {
+        anyhow::bail!("--docs-db-path {} is the {whose} file: the docs service keeps a file of its own", docs_db_path.display());
+    }
+    let docs = menger::DocsSetup::open(&docs_db_path)?;
+    let hub = build_rpc_services(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, ui, media, docs, |store, access| {
         menger::TicketsActivation::with_access(store, access)
     })
     .await?;

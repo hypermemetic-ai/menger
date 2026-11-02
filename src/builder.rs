@@ -7,6 +7,8 @@ use plexus_ui_service::{Compiler, Signers, UiActivation, UiStore, DEFAULT_CHANNE
 // V2-24: the media service — a service of v2's own, its file its own, the
 // ticket's permit asked of `tickets` through the seam.
 use menger_media::{MediaActivation, MediaStore, MEDIA_DB_FILE};
+// V2-29: the docs service — documents on their own API and file.
+use menger_docs::{DocsActivation, DocsStore, DOCS_DB_FILE};
 use menger_tickets_api::store::{OpenPurge, SeedShape, SeedSpec, Store, StoreError, System, PURGE_EVERY};
 use plexus_auth_core::grants::GrantsGeneration;
 use plexus_core::plexus::{Activation, AuthBackend, AuthSetup, ChildRouter, DynamicHub, Provider as AuthProvider, ProviderKind as AuthKind};
@@ -63,6 +65,18 @@ pub fn default_media_db_path(db_path: &Path) -> PathBuf {
         // A tickets file that is itself named media.db: the media file goes beside it under another name.
         same if same == db_path => beside("media-service.db"),
         media => media,
+    }
+}
+
+/// V2-29: the docs service's file when `--docs-db-path` names none —
+/// `docs.db` beside the tickets file `db_path`, never the same file (nor
+/// the ui or media file).
+pub fn default_docs_db_path(db_path: &Path) -> PathBuf {
+    let beside = |name: &str| db_path.parent().map_or_else(|| PathBuf::from(name), |d| d.join(name));
+    match beside(DOCS_DB_FILE) {
+        // A tickets file that is itself named docs.db: the docs file goes beside it under another name.
+        same if same == db_path => beside("docs-service.db"),
+        docs => docs,
     }
 }
 
@@ -201,6 +215,27 @@ impl MediaSetup {
             self.remote = menger_media::Remote::allowing(allow);
         }
         self
+    }
+}
+
+/// V2-29: what the `docs` activation is built over — the store on its own
+/// file.
+#[derive(Clone)]
+pub struct DocsSetup {
+    pub store: Arc<DocsStore>,
+}
+
+impl DocsSetup {
+    /// The store at `path` (`--docs-db-path`); the directory made if missing.
+    pub fn open(path: &Path) -> anyhow::Result<Self> {
+        let store = DocsStore::open(path).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
+        tracing::info!("docs:      {} ({} documents)", path.display(), store.count());
+        Ok(Self { store: Arc::new(store) })
+    }
+
+    /// The store beside the tickets file ([`default_docs_db_path`]).
+    pub fn beside(db_path: &Path) -> anyhow::Result<Self> {
+        Self::open(&default_docs_db_path(db_path))
     }
 }
 
@@ -351,13 +386,17 @@ where
     F: FnOnce(Arc<Store>, Access) -> T,
 {
     let media = MediaSetup::beside(db_path)?;
-    build_rpc_services(db_path, seed, shape, offers, access, backend, resource_metadata, body_max, ui, media, tickets).await
+    let docs = DocsSetup::beside(db_path)?;
+    build_rpc_services(db_path, seed, shape, offers, access, backend, resource_metadata, body_max, ui, media, docs, tickets).await
 }
 
 /// V2-24: [`build_rpc_ui_over`] with the media service over `media` (main's
 /// `--media-db-path`) registered beside `tickets` and `ui` — every service
 /// of v2's, in one process (V2-1): the media service's seam is attached to
 /// the hub built here, so a put asks `tickets.may` through it as the caller.
+/// V2-29: and the docs service over `docs` (`--docs-db-path`), its seam
+/// attached the same way (the gate on a document's organization,
+/// `orgs.list` as the caller).
 #[allow(clippy::too_many_arguments)]
 pub async fn build_rpc_services<T, F>(
     db_path: &Path,
@@ -370,6 +409,7 @@ pub async fn build_rpc_services<T, F>(
     body_max: usize,
     ui: UiSetup,
     media: MediaSetup,
+    docs: DocsSetup,
     tickets: F,
 ) -> anyhow::Result<Arc<DynamicHub>>
 where
@@ -459,10 +499,15 @@ where
     // file; whose a ticket is, it asks `tickets` through its seam.
     let media = MediaActivation::new(media.store).with_max_upload(media.max_upload).with_remote(media.remote).with_allowance(media.allowance);
     let media_seam = media.seam().clone();
+    // V2-29: `docs` beside them — documents, over their own file; who may is
+    // the gate's word on a document's organization, asked through its seam.
+    let docs = DocsActivation::new(docs.store);
+    let docs_seam = docs.seam().clone();
     let mut hub = DynamicHub::new("menger")
         .register(tickets)
         .register(ui)
         .register(media)
+        .register(docs)
         // ORG-4: `orgs` beside `members` — the organizations, and their making.
         .register(OrgsActivation::with_access(Arc::clone(&store), access.clone()))
         .register(MembersActivation::new(store, access.clone()))
@@ -488,6 +533,8 @@ where
     // V2-24: the media service asks `tickets.may` through this service, as
     // the caller it serves (its permit is the tickets service's word).
     media_seam.attach(&hub);
+    // V2-29: the docs service asks the gate and `orgs.list` through it.
+    docs_seam.attach(&hub);
     Ok(hub)
 }
 
@@ -553,6 +600,21 @@ mod tests {
         let media = default_media_db_path(tickets);
         assert_ne!(media, tickets);
         assert_eq!(media.parent(), tickets.parent(), "still beside it");
+    }
+
+    /// V2-29: the docs file is beside the tickets file, never it, nor the ui or media file.
+    #[test]
+    fn the_docs_db_is_beside_the_tickets_file_never_it() {
+        for tickets in ["/var/lib/menger/tickets.db", "/tmp/x/local.db", "/tmp/x/docs.db.d/t.db"] {
+            let tickets = Path::new(tickets);
+            let docs = default_docs_db_path(tickets);
+            assert_eq!(docs, tickets.parent().unwrap().join("docs.db"), "{}", tickets.display());
+            assert!(docs != tickets && docs != default_ui_db_path(tickets) && docs != default_media_db_path(tickets));
+        }
+        let tickets = Path::new("/tmp/x/docs.db");
+        let docs = default_docs_db_path(tickets);
+        assert_ne!(docs, tickets);
+        assert_eq!(docs.parent(), tickets.parent(), "still beside it");
     }
 
     /// UI-3: the ui file is beside the tickets file, never the same file.

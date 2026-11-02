@@ -21,6 +21,7 @@ use crate::seam::Seam;
 use crate::store::MediaStore;
 use crate::vocab::{FileName, MediaData, MediaHash, MediaType, UploadId, WebUrl};
 use futures::Stream;
+use menger_docs::DocId;
 use menger_tickets_api::vocab::TicketRef;
 use std::sync::Arc;
 
@@ -117,7 +118,10 @@ impl MediaActivation {
     /// `refused { reason, message, bytes?, max? }` (`too_large`,
     /// `truncated`, `bad_data`, `over_allowance`), with nothing kept;
     /// `not_found { ticket }` for a ticket that is none, or that the tickets
-    /// service says you may not edit. The bytes count against your
+    /// service says you may not edit. V2-29: with `doc` instead (a document
+    /// of the docs service), your editor permit on it is asked of `docs.may`
+    /// as you, the file answered to whoever reads that document, and
+    /// `not_found { doc }` for one you may not write. The bytes count against your
     /// allowance. Through synapse the data is a file (`--data @shot.b64`)
     /// or stdin, never `"$(base64 …)"`. Editor.
     #[plexus_macros::method(
@@ -127,8 +131,10 @@ impl MediaActivation {
     pub async fn put(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
-        /// The ticket it is for, e.g. KILN-4 (optional: with none, the file is yours).
+        /// The ticket it is for, e.g. KILN-4 (optional: with none and no doc, the file is yours).
         ticket: Option<TicketRef>,
+        /// V2-29: the document it is for, e.g. 7k3mq2xa — instead of a ticket (optional).
+        doc: Option<DocId>,
         /// What the client says it is (optional, a hint only: the bytes decide).
         mime: Option<MediaType>,
         /// The bytes, standard base64 (`base64 -w0 shot.png`); a `data:image/png;base64,` prefix is read past.
@@ -137,7 +143,7 @@ impl MediaActivation {
         name: Option<FileName>,
     ) -> impl Stream<Item = MediaEvent> + Send + 'static {
         let _ = mime;
-        futures::stream::once(crate::streams::put(self.clone(), user, ticket, data, name))
+        futures::stream::once(crate::streams::put(self.clone(), user, ticket, doc, data, name))
     }
 
     /// A file's bytes by its hash, up to 7 MiB; yields media { hash, mime, kind, name, bytes, width, height, data } (data base64), or not_found.
@@ -210,8 +216,10 @@ impl MediaActivation {
     pub async fn begin(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
-        /// The ticket it is for (optional: with none, the file is yours).
+        /// The ticket it is for (optional: with none and no doc, the file is yours).
         ticket: Option<TicketRef>,
+        /// V2-29: the document it is for, e.g. 7k3mq2xa — instead of a ticket (optional).
+        doc: Option<DocId>,
         /// Its name as it came, e.g. walkthrough.mp4 (optional).
         name: Option<FileName>,
         /// What the client says it is (optional, a hint only: the bytes decide).
@@ -222,7 +230,7 @@ impl MediaActivation {
         upload: Option<UploadId>,
     ) -> impl Stream<Item = MediaEvent> + Send + 'static {
         let _ = mime;
-        futures::stream::once(crate::streams::begin(self.clone(), user, ticket, name, size, upload))
+        futures::stream::once(crate::streams::begin(self.clone(), user, ticket, doc, name, size, upload))
     }
 
     /// One chunk of an upload, at its byte offset; yields chunked { upload, received, size, duplicate }.
@@ -300,11 +308,13 @@ impl MediaActivation {
         #[from_auth(self.callers.verify)] user: Caller,
         /// The file's address, http:// or https://.
         url: WebUrl,
-        /// The ticket it is for (optional: with none, the file is yours).
+        /// The ticket it is for (optional: with none and no doc, the file is yours).
         ticket: Option<TicketRef>,
+        /// V2-29: the document it is for, e.g. 7k3mq2xa — instead of a ticket (optional).
+        doc: Option<DocId>,
         /// Its name (optional: the address's last segment).
         name: Option<FileName>,
     ) -> impl Stream<Item = MediaEvent> + Send + 'static {
-        futures::stream::once(crate::streams::fetch(self.clone(), user, url, ticket, name))
+        futures::stream::once(crate::streams::fetch(self.clone(), user, url, ticket, doc, name))
     }
 }
