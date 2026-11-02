@@ -9,7 +9,8 @@
 // refused|merged|outside]`, `[data-refused]`, `[data-hand=NAME]`, `[data-action=revisions]`,
 // `[data-loading]`, `[data-empty]`; a formed line carries `.eb-h1`, `.eb-li`, …
 import { spawn } from "node:child_process";
-import { sentCalls } from "../../scripts/ui-throwaway.mjs";
+import { makeKey, writeSession } from "../../scripts/throwaway-login.mjs";
+import { sentCalls, synapse } from "../../scripts/ui-throwaway.mjs";
 
 const EPIC = "EDIT";
 const PAUSE = 600;
@@ -402,6 +403,101 @@ export default async (ctx) => {
       });
       await eventually("said in place", async () => /7 MiB/.test((await ed.locator("[data-upload][data-refused]").textContent({ timeout: 500 })) ?? ""), 3_000);
       assert((await sentCalls(page)).filter((c) => c.method === "media.put").length === before, "no media.put sent");
+    } finally {
+      await context.close();
+    }
+  });
+
+  // ── EDITOR-6: write in at the owner's request ────────────────────────────
+  // The agent is a key of its own, an editor, so its amend carries its name.
+  const agentKey = path.join(server.work, "agent-writes.key");
+  const agentSession = path.join(server.work, "agent-writes.session");
+  const agentPrincipal = makeKey(agentKey);
+  sy("members", "grant", "--principal", agentPrincipal, "--scope", "*", "--role", "editor");
+  await writeSession(`ws://127.0.0.1:${server.ws}`, agentKey, agentSession, "scribe");
+  const agent = (...a) => synapse(server, agentSession, ...a);
+  const question = (id) => sy("tickets", "inputs", "list", "--ticket", id).flatMap((e) => (e.type === "rows" ? e.items : [e])).map((e) => e.input ?? e).find((i) => i.id === "ask-1");
+  /** Lines 1–2 selected, the request asked. */
+  const request = async (page, ed) => {
+    await ed.locator(".cm-content").click();
+    await page.keyboard.press("Control+Home");
+    await page.keyboard.press("Shift+ArrowDown");
+    await page.keyboard.press("Shift+End");
+    await eventually("the bar's button wakes", async () => !(await ed.locator("[data-action=ask-open]").isDisabled()), 2_000);
+    await page.keyboard.press("Control+Enter");
+    await ed.locator("[data-ask][data-state=open] [data-field=instruction]").fill("tighten these");
+    await ed.locator("[data-action=ask]").click();
+    await eventually("asked", async () => (await ed.locator("[data-ask=ask-1][data-state=asked]").count()) === 1, 5_000);
+  };
+
+  await test("a_selection_and_a_line_become_a_question_queued_now", async () => {
+    const id = make("asked", "first line\nsecond line\nthird line\n");
+    const { context, page, ed } = await open(id);
+    try {
+      await request(page, ed);
+      const q = question(id);
+      assert(q?.state === "open" && q.question === "tighten these — lines 1–2: «first line second line»", `the question: ${JSON.stringify(q)}`);
+      const entry = sy("tickets", "queued", "--id", id).flatMap((e) => (e.type === "rows" ? e.items : [e])).find((e) => e.id === id)?.entry;
+      assert(entry?.urgency === "now" && JSON.stringify(entry).includes("ask-1"), `queued now, naming it: ${JSON.stringify(entry)}`);
+      await sleep(300);
+      assert((await ed.locator("[data-hand]").count()) === 0 || (await state(ed).getAttribute("data-state")) !== "outside", "the owner's own ask is nobody's hand");
+      assert((await ed.locator(".eb-hand").count()) === 0, "no line marked for the ask's own write");
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("an_agents_amend_is_marked_until_a_click_accepts_it", async () => {
+    const id = make("written in", "first line\nsecond line\nthird line\n");
+    const { context, page, ed } = await open(id);
+    try {
+      await request(page, ed);
+      const body = get(id).body.replace("first line\nsecond line", "one tight line");
+      agent("tickets", "amend", "--id", id, "--body", bodyFile("agent", body));
+      await eventually("the agent's line is marked with its name", async () => (await ed.locator('.eb-hand[data-hand=scribe]').count()) === 1, 8_000);
+      assert((await ed.locator(".eb-hand").innerText()).includes("one tight line"), "the changed line");
+      assert((await ed.locator("[data-ask=ask-1][data-state=answered]").count()) === 1, "the request says it was answered");
+      await shoot(page, "editor-hand");
+      await ed.locator(".eb-hand").click();
+      await eventually("accepted", async () => (await ed.locator("[data-ask=ask-1][data-state=accepted]").count()) === 1, 5_000);
+      assert((await ed.locator(".eb-hand").count()) === 0, "the mark is gone");
+      await eventually("the input is closed", async () => question(id)?.state === "closed", 5_000);
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("an_edit_takes_the_mark_off_its_line_and_the_request_stays", async () => {
+    const id = make("edited over", "first line\nsecond line\nthird line\n");
+    const { context, page, ed } = await open(id);
+    try {
+      await request(page, ed);
+      const body = get(id).body.replace("first line", "first, rewritten").replace("third line", "third, rewritten");
+      agent("tickets", "amend", "--id", id, "--body", bodyFile("agent2", body));
+      await eventually("two lines marked", async () => (await ed.locator(".eb-hand").count()) === 2, 8_000);
+      await ed.locator(".cm-content").focus(); // the request's line is gone, and the focus with it
+      await page.keyboard.press("Control+Home");
+      await page.keyboard.press("End");
+      await page.keyboard.type("!");
+      await eventually("one mark left", async () => (await ed.locator(".eb-hand").count()) === 1, 3_000);
+      assert(question(id)?.state === "open", "the request stays open");
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("a_refused_request_is_said_on_its_line", async () => {
+    const id = make("no ask", "text\n\n```\nopen fence\n");
+    const { context, page, ed } = await open(id);
+    try {
+      await ed.locator(".cm-content").click();
+      await page.keyboard.press("Control+Home");
+      await page.keyboard.press("Shift+End");
+      await page.keyboard.press("Control+Enter");
+      await ed.locator("[data-field=instruction]").fill("anything");
+      await ed.locator("[data-action=ask]").click();
+      await eventually("the service's words", async () => (await ed.locator("[data-ask][data-state=open] [data-refused]").count()) === 1, 5_000);
+      assert(question(id) == null, "nothing asked");
     } finally {
       await context.close();
     }

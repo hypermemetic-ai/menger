@@ -20,7 +20,7 @@
      an upload card beside the text until it does. CodeMirror comes from ../plexus-ui/package.json (the node_modules
      the svelte/1 build reads), bundled into this module by the tool. -->
 <script module>
-  export const uses = ["tickets.get", "tickets.watch", "tickets.amend", "tickets.revisions.list", "media.put"];
+  export const uses = ["tickets.get", "tickets.watch", "tickets.amend", "tickets.revisions.list", "media.put", "tickets.inputs.ask", "tickets.queue", "tickets.inputs.close"];
 
   /** A line-level diff of `a` → `b`: hunks `{ a0, a1, b0, b1 }`, each "replace a[a0:a1] with b[b0:b1]",
    *  by the common prefix and suffix, then an LCS over what is left (one hunk past 4 M cells). */
@@ -83,7 +83,7 @@
 </script>
 
 <script>
-  import { untrack } from "svelte";
+  import { tick, untrack } from "svelte";
   import { bus, live } from "plexus-ui/host";
   import { Annotation, EditorState, StateEffect, StateField } from "@codemirror/state";
   import { Decoration, EditorView, WidgetType, keymap } from "@codemirror/view";
@@ -134,6 +134,23 @@
     return row ? row.name || row.actor || "someone" : "someone";
   }
 
+  /** `inputs ask` writes the body too: a change that only appends a question is nobody's hand on the text. */
+  const onlyAsks = (was, now) => now.startsWith(was.trimEnd()) && /^\s*<m-input id="ask-\d+" kind="text">[\s\S]*<\/m-input>\s*$/.test(now.slice(was.trimEnd().length));
+
+  /** The bar says whose an outside change was; with a request open, its lines carry the hand. */
+  async function heardHand(before, after, text) {
+    const who = await whose();
+    state = { kind: text ? "merged" : "outside", text: text ?? `${who} changed the body`, who: text ? (state.who ?? who) : who };
+    if (text) state = { ...state, text: text.replace("@who", who), who };
+    const open = requests.filter((r) => r.state === "asked" || r.state === "answered");
+    if (!open.length || !view) return;
+    const lines = diffLines(before.split("\n"), after.split("\n")).flatMap((h) => Array.from({ length: h.b1 - h.b0 }, (_, i) => h.b0 + i + 1));
+    const max = view.state.doc.lines;
+    view.dispatch({ effects: handAdd.of({ who, at: lines.filter((n) => n <= max).map((n) => view.state.doc.line(n).from) }) });
+    for (const r of open) r.state = "answered";
+    hand = who;
+  }
+
   /** A body from the service, through `get` or the watch. */
   function incoming(body) {
     if (!view || body === acked) return;
@@ -143,7 +160,7 @@
     if (dirty) { pending = body; if (!timer) timer = setTimeout(flush, PAUSE); return; }
     view.dispatch({ changes: changesOf(now.split("\n"), body.split("\n")), annotations: Outside.of(true), scrollIntoView: false });
     acked = body;
-    whose().then((who) => { state = { kind: "outside", text: `${who} changed the body`, who }; });
+    if (!onlyAsks(now, body)) heardHand(now, body, null);
   }
 
   /** The pause: a waiting outside body merged with ours, then ours sent whole. */
@@ -157,9 +174,9 @@
       pending = null;
       const m = merge3(acked ?? "", theirs, text);
       if (m.text !== text) view.dispatch({ changes: changesOf(text.split("\n"), m.text.split("\n")), annotations: Outside.of(true), scrollIntoView: false });
+      merged = { ...m, before: text, only: onlyAsks(acked ?? "", theirs) };
       text = m.text;
       acked = theirs;
-      merged = m;
     }
     if (text === acked) { dirty = false; if (merged) state = { kind: "saved", text: `saved ${hhmm()}` }; return; }
     sent = text;
@@ -169,10 +186,8 @@
       acked = text;
       if (sent === text) sent = null;
       dirty = doc() !== acked;
-      if (merged) {
-        const who = await whose();
-        state = { kind: "merged", text: `merged ${who}'s change${merged.dropped ? `, yours kept where they met (${merged.dropped} of theirs in the revision)` : ""} · saved ${hhmm()}`, who };
-      } else state = { kind: "saved", text: `saved ${hhmm()}` };
+      if (merged && !merged.only) await heardHand(merged.before, text, `merged @who's change${merged.dropped ? `, yours kept where they met (${merged.dropped} of theirs in the revision)` : ""} · saved ${hhmm()}`);
+      else state = { kind: "saved", text: `saved ${hhmm()}` };
     } else {
       sent = null;
       state = { kind: "refused", text: String(r.message ?? "refused").replace(/^Invalid params: /, "") };
@@ -418,6 +433,80 @@
     for (const f of files) upload(f, pos);
     return true;
   }
+  // ── EDITOR-6: write in at the owner's request ────────────────────────────
+  // A selection and one line become a question on the ticket, queued now. An outside amend while a
+  // request is open marks the lines it changed with whose hand it was, until a click accepts them
+  // (which closes the requests) or an edit takes the mark off that line alone.
+  let requests = $state([]);
+  let hand = $state(null);
+  let hasSelection = $state(false);
+  let asking = $state(null); // { a, b, text, top } while the line is open
+  let instruction = $state("");
+  let askRefused = $state("");
+  let askBox = $state(null);
+  const handAdd = StateEffect.define({ map: (v, m) => ({ ...v, at: v.at.map((p) => m.mapPos(p)) }) });
+  const handClear = StateEffect.define();
+  const handed = StateField.define({
+    create: () => Decoration.none,
+    update(deco, tr) {
+      deco = deco.map(tr.changes);
+      if (tr.docChanged && !tr.annotation(Outside)) tr.changes.iterChangedRanges((_a, _b, from, to) => {
+        const a = tr.state.doc.lineAt(from).from, z = tr.state.doc.lineAt(to).from;
+        deco = deco.update({ filter: (f) => f < a || f > z });
+      });
+      for (const e of tr.effects) {
+        if (e.is(handClear)) deco = Decoration.none;
+        else if (e.is(handAdd)) deco = deco.update({ add: e.value.at.map((p) => Decoration.line({ class: "eb-hand", attributes: { "data-hand": e.value.who } }).range(p)), sort: true });
+      }
+      return deco;
+    },
+    provide: (f) => EditorView.decorations.from(f),
+  });
+  function openAsk() {
+    if (!view) return false;
+    const sel = view.state.selection.main;
+    if (sel.empty) return false;
+    const doc = view.state.doc;
+    const coords = view.coordsAtPos(sel.to);
+    const box = host.getBoundingClientRect();
+    asking = { a: doc.lineAt(sel.from).number, b: doc.lineAt(sel.to).number, text: view.state.sliceDoc(sel.from, sel.to), top: (coords?.bottom ?? box.top) - box.top + 4 };
+    instruction = "";
+    askRefused = "";
+    tick().then(() => askBox?.focus());
+    return true;
+  }
+  async function sendAsk() {
+    const what = instruction.trim();
+    if (!asking || !what) return;
+    const { a, b: z, text } = asking;
+    const quoted = text.replace(/\s+/g, " ").trim();
+    const where = a === z ? `line ${a}` : `lines ${a}–${z}`;
+    const question = `${what} — ${where}: «${quoted.length > 200 ? quoted.slice(0, 200) + "…" : quoted}»`;
+    if (dirty) await flush(); // the question lands on the text it is about
+    const asked = await b.call("tickets.inputs.ask", { ticket: id, question });
+    const input = asked.events?.find((e) => e.type === "input_changed")?.input?.id;
+    if (!asked.ok || !input) { askRefused = String(asked.message ?? "refused").replace(/^Invalid params: /, ""); return; }
+    const queued = await b.call("tickets.queue", { id, urgency: "now", reason: "an agent is asked to write in", input: [input] });
+    asking = null;
+    requests.push({ input, where, state: queued.ok ? "asked" : "refused", said: queued.ok ? "" : String(queued.message ?? "refused") });
+  }
+  async function accept() {
+    view?.dispatch({ effects: handClear.of(null) });
+    hand = null;
+    for (const r of requests.filter((x) => x.state === "answered" || x.state === "asked")) {
+      const c = await b.call("tickets.inputs.close", { ticket: id, input: r.input });
+      r.state = c.ok ? "accepted" : "refused";
+      r.said = c.ok ? "" : String(c.message ?? "refused");
+    }
+  }
+  $effect(() => {
+    if (!asking) return;
+    return b.keys({
+      escape: { to: () => { asking = null; view?.focus(); }, label: "close the request", in_inputs: true, only: true },
+      "ctrl+enter": { to: sendAsk, label: "ask an agent", in_inputs: true, only: true },
+    });
+  });
+
   let picker = $state(null);
   function picked(ev) {
     for (const f of ev.currentTarget.files ?? []) if (view) upload(f, view.state.selection.main.head);
@@ -433,14 +522,15 @@
         doc: ticket.body,
         extensions: [
           history(),
-          keymap.of([{ key: "Mod-s", run: () => { flush(); return true; } }, indentWithTab, ...defaultKeymap, ...historyKeymap]),
+          keymap.of([{ key: "Mod-s", run: () => { flush(); return true; } }, { key: "Mod-Enter", run: openAsk }, indentWithTab, ...defaultKeymap, ...historyKeymap]),
           markdownSupport({ base: markdownLanguage }),
           EditorView.lineWrapping,
           formed,
           pendingUploads,
+          handed,
           look,
-          EditorView.updateListener.of((u) => { if (u.docChanged && !u.transactions.some((tr) => tr.annotation(Outside))) edited(); }),
-          EditorView.domEventHandlers({ blur: () => { if (dirty || pending !== null) flush(); return false; }, paste: pasted, drop: dropped }),
+          EditorView.updateListener.of((u) => { if (u.selectionSet) hasSelection = !u.state.selection.main.empty; if (u.docChanged && !u.transactions.some((tr) => tr.annotation(Outside))) edited(); }),
+          EditorView.domEventHandlers({ blur: () => { if (dirty || pending !== null) flush(); return false; }, paste: pasted, drop: dropped, click: (ev) => { if (ev.target?.closest?.(".eb-hand")) accept(); return false; } }),
           EditorView.contentAttributes.of({ "data-field": "body", "aria-label": "the body" }),
         ],
       }),
@@ -476,11 +566,30 @@
   {:else}
     <input class="title" data-field="title" aria-label="the title" spellcheck="false" autocomplete="off" bind:value={titleDraft} oninput={titleEdited} onblur={flushTitle}/>
   {/if}
-  <div class="cm" bind:this={host}></div>
+  <div class="cmwrap">
+    <div class="cm" bind:this={host}></div>
+    {#if asking}
+      <form class="ask" data-ask data-state="open" style={`top: ${asking.top}px`} onsubmit={(ev) => { ev.preventDefault(); sendAsk(); }}>
+        <span class="where">{asking.a === asking.b ? `line ${asking.a}` : `lines ${asking.a}–${asking.b}`}</span>
+        <input class="say" data-field="instruction" aria-label="what an agent should do" placeholder="what should an agent do with it?" autocomplete="off" bind:this={askBox} bind:value={instruction}/>
+        <button class="pick" data-action="ask" disabled={!instruction.trim()}>ask an agent</button>
+        {#if askRefused}<span class="no" data-refused>{askRefused}</span>{/if}
+      </form>
+    {/if}
+  </div>
+  {#each requests as r (r.input)}
+    <p class="asked" data-ask={r.input} data-state={r.state}>
+      {#if r.state === "asked"}asked <b>{r.input}</b> · queued <b>now</b> · waiting for an agent
+      {:else if r.state === "answered"}<b>{hand ?? "an agent"}</b> wrote in · <button class="link" data-action="accept" onclick={accept}>accept</button> or click the marked lines
+      {:else if r.state === "accepted"}accepted · <b>{r.input}</b> closed
+      {:else}<span class="no" data-refused>{r.said}</span>{/if}
+    </p>
+  {/each}
   {#if t}
     <p class="state" data-field="write-state" data-state={state.kind} data-refused={state.kind === "refused" ? "" : undefined} data-hand={state.who ?? undefined}>
       {#if state.kind === "idle"}<span class="muted">every change is written 600 ms after the last key</span>{:else}{state.text}{/if}
-      <button type="button" class="pick" data-action="image" onclick={() => picker?.click()}>image</button>
+      <button type="button" class="pick" data-action="ask-open" disabled={!hasSelection} onclick={openAsk}>ask an agent <kbd>ctrl</kbd><kbd>enter</kbd></button>
+      <button type="button" class="pick image" data-action="image" onclick={() => picker?.click()}>image</button>
       <input class="file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple aria-label="an image" bind:this={picker} onchange={picked}/>
       <a class="revs" href={"#/ticket/" + id} data-action="revisions">revisions</a>
     </p>
@@ -502,10 +611,25 @@
   .revs { margin-left: auto; color: var(--accent); text-decoration: none; }
   .revs:hover, .revs:global([data-sheet~=hover]) { text-decoration: underline; }
   .revs:focus-visible, .revs:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; border-radius: var(--radius-sm); }
-  .pick { margin-left: auto; padding: 0 8px; font: inherit; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; }
+  .pick[data-action=ask-open] { margin-left: auto; }
+  .pick { padding: 0 8px; font: inherit; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; }
   .pick:hover, .pick:global([data-sheet~=hover]) { background: var(--hover); }
   .pick:focus-visible, .pick:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
-  .pick + .file + .revs { margin-left: 0; }
+  .pick:disabled, .pick:global([data-sheet~=disabled]) { color: var(--disabled); cursor: not-allowed; }
+  kbd { display: inline-block; min-width: 14px; padding: 0 3px; font-family: var(--font-text); font-size: 10px; line-height: 14px; text-align: center; background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-sm); }
+  .cmwrap { position: relative; }
+  .ask { position: absolute; left: 10px; right: 10px; z-index: 3; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 8px; background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-lg); box-shadow: 0 6px 18px var(--shadow); }
+  .where { font-size: 11px; color: var(--muted); }
+  .say { flex: 1; min-width: 150px; padding: 2px 6px; font: inherit; color: var(--ink); background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius-sm); }
+  .say:focus-visible, .say:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .no { color: var(--warn); }
+  .asked { margin: 6px 0 0; padding: 0 10px; font-size: 11px; color: var(--muted); }
+  .asked b { font-weight: var(--weight-medium); color: var(--accent); }
+  .link { padding: 0; font: inherit; color: var(--accent); background: none; border: 0; cursor: pointer; text-decoration: underline; }
+  .link:hover, .link:global([data-sheet~=hover]) { color: var(--ink); }
+  .link:focus-visible, .link:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .cm :global(.eb-hand) { cursor: pointer; background: var(--sel); border-left-color: var(--accent); }
+  .cm :global(.eb-hand::after) { content: attr(data-hand); float: right; padding-left: 8px; font-family: var(--font-text); font-size: 10px; color: var(--muted); }
   .file { display: none; }
   .muted { color: var(--muted); }
   .empty { margin: 0; padding: 8px 10px; color: var(--muted); }
