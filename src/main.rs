@@ -71,6 +71,24 @@ struct Args {
     #[arg(long, env = "MENGER_MEDIA_DB_PATH", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
     media_db_path: Option<PathBuf>,
 
+    // EDITOR-10: where the media service's bytes live — one trait
+    // (`menger_media::BlobStore`), chosen here.
+    /// Where kept files' bytes live: disk (default), or s3 once it is built
+    #[arg(long, env = "MENGER_MEDIA_STORE", value_name = "STORE", default_value = "disk", help_heading = RUN, hide_short_help = true)]
+    media_store: String,
+
+    /// The disk store's root — another disk or a network mount is fine (default: media/blobs beside the media file)
+    #[arg(long, env = "MENGER_MEDIA_BLOB_DIR", value_name = "DIR", help_heading = RUN, hide_short_help = true)]
+    media_blob_dir: Option<PathBuf>,
+
+    /// The most one upload may be, in bytes (default: no cap but the uploader's allowance)
+    #[arg(long, env = "MENGER_MEDIA_MAX_BYTES", value_name = "BYTES", help_heading = RUN, hide_short_help = true)]
+    media_max_bytes: Option<u64>,
+
+    /// For tests alone: an ip:port the server may read links from although it is not public (repeatable)
+    #[arg(long = "media-fetch-allow", value_name = "IP:PORT", hide = true)]
+    media_fetch_allow: Vec<std::net::SocketAddr>,
+
     /// A public key (64 hex digits, Ed25519) a `ui.push` may be signed by
     ///
     /// Repeatable; in the env var, separated by `;`. With none, every push is
@@ -585,7 +603,9 @@ async fn run(args: Args) -> anyhow::Result<()> {
     if media_db_path == db_path || media_db_path == ui_db_path {
         anyhow::bail!("--media-db-path {} is the {} file: the media service keeps a file of its own", media_db_path.display(), if media_db_path == db_path { "database" } else { "ui service's" });
     }
-    let media = menger::MediaSetup::open(&media_db_path)?;
+    let blobs = menger::media_blobs(&args.media_store, args.media_blob_dir.as_deref(), &media_db_path)?;
+    let media = menger::MediaSetup::open_with(&media_db_path, blobs)?.max_upload(args.media_max_bytes).fetch_allow(args.media_fetch_allow.clone());
+    let media_serve = media.clone();
     let hub = build_rpc_services(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, ui, media, |store, access| {
         menger::TicketsActivation::with_access(store, access)
     })
@@ -669,7 +689,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
             // STUDIO-2: /studio/ for a session holding ui.author on * (the gate's answer).
             studio: Some(shell::Studio { may: std::sync::Arc::new(move |ctx| studio_may.as_ref().is_some_and(|may| may(ctx))), compiler: studio_module }),
             // V2-24: /media/<hash> — the media service asked as the session.
-            media: Some(hub.clone()),
+            media: Some(menger::media_route::MediaServe { service: hub.clone(), store: media_serve.store.clone(), allowance: media_serve.allowance.clone() }),
             framing: shell::Framing {
                 ancestors: args.frame_ancestor.iter().map(|o| shell::check_origin(o)).collect::<Result<_, _>>().map_err(|e| anyhow::anyhow!("--frame-ancestor: {e}"))?,
                 live: args.live_origin.as_deref().map(shell::check_origin).transpose().map_err(|e| anyhow::anyhow!("--live-origin: {e}"))?,

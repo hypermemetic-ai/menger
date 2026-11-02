@@ -2147,6 +2147,7 @@ dependencies = [
  "plexus-client",
  "plexus-core",
  "plexus-macros",
+ "reqwest",
  "rusqlite",
  "schemars",
  "serde",
@@ -2155,6 +2156,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "url",
  "uuid",
 ]
 

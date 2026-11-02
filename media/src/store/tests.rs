@@ -7,6 +7,7 @@
 //! is the activation's (tests/wire_media.rs), asked of the tickets service.
 
 use super::*;
+use crate::kinds;
 use base64::Engine;
 
 /// A PNG of `w`×`h` as the bytes `sniff` reads — the signature, IHDR, and
@@ -44,7 +45,7 @@ async fn an_image_is_kept_by_its_hash_and_answered_with_its_bytes() {
     let dir = tempfile::tempdir().unwrap();
     let s = open(&dir);
     let bytes = png(640, 480, 1);
-    let put = s.put(on("OPEN-2"), "image/png", b64(&bytes), Some("key:aa".into())).await.unwrap();
+    let put = s.put(on("OPEN-2"), b64(&bytes), None, Some("key:aa".into())).await.unwrap();
     assert!(!put.duplicate);
     assert_eq!(put.info.hash, image::hash(&bytes));
     assert_eq!(put.info.hash.len(), 64);
@@ -53,7 +54,7 @@ async fn an_image_is_kept_by_its_hash_and_answered_with_its_bytes() {
     assert_eq!((info, got), (put.info.clone(), bytes.clone()));
     assert_eq!(s.kept(&put.info.hash).await.unwrap(), Kept { info: put.info.clone(), owners: vec![on("OPEN-2")] });
     // A `data:` URL's prefix, and whitespace, are read past.
-    let again = s.put(on("OPEN-2"), "image/png", format!("data:image/png;base64,{}\n", b64(&bytes)), None).await.unwrap();
+    let again = s.put(on("OPEN-2"), format!("data:image/png;base64,{}\n", b64(&bytes)), None, None).await.unwrap();
     assert_eq!(again.info, put.info);
     assert!(again.duplicate);
     assert!(matches!(s.bytes(&"0".repeat(64)).await, Err(StoreError::NotFound(_))));
@@ -66,10 +67,10 @@ async fn the_same_image_twice_is_one_row_and_each_owners() {
     let path = dir.path().join("media.db");
     let s = open(&dir);
     let bytes = png(2, 2, 7);
-    let first = s.put(on("A-1"), "image/png", b64(&bytes), None).await.unwrap();
-    let same = s.put(on("A-1"), "image/png", b64(&bytes), None).await.unwrap();
-    let other = s.put(on("B-1"), "image/png", b64(&bytes), None).await.unwrap();
-    let app = s.put(Owner::App(Some("key:aa".into())), "image/png", b64(&bytes), Some("key:aa".into())).await.unwrap();
+    let first = s.put(on("A-1"), b64(&bytes), None, None).await.unwrap();
+    let same = s.put(on("A-1"), b64(&bytes), None, None).await.unwrap();
+    let other = s.put(on("B-1"), b64(&bytes), None, None).await.unwrap();
+    let app = s.put(Owner::App(Some("key:aa".into())), b64(&bytes), None, Some("key:aa".into())).await.unwrap();
     assert!(!first.duplicate && same.duplicate && other.duplicate && app.duplicate);
     assert_eq!((same.info.hash.as_str(), other.info.hash.as_str()), (first.info.hash.as_str(), first.info.hash.as_str()));
     let conn = Connection::open(&path).unwrap();
@@ -80,30 +81,116 @@ async fn the_same_image_twice_is_one_row_and_each_owners() {
 }
 
 #[tokio::test]
-async fn a_non_image_an_svg_a_mismatch_and_too_much_keep_nothing() {
+async fn any_file_is_kept_by_its_bytes_and_only_a_broken_image_or_too_much_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let s = open(&dir);
+    // EDITOR-10: an SVG, a page, a note — kept, as files: never served as themselves.
     let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>"#;
-    let p = refused(s.put(on("OPEN-2"), "image/svg+xml", b64(svg), None).await.unwrap_err());
-    assert_eq!(p.reason(), "not_an_image");
-    assert!(p.to_string().contains("SVG"), "{p}");
-    let p = refused(s.put(on("OPEN-2"), "text/plain", b64(b"a note, not a picture"), None).await.unwrap_err());
-    assert!(p.to_string().contains("not an image menger keeps"), "{p}");
-    let p = refused(s.put(on("OPEN-2"), "image/gif", b64(&png(1, 1, 0)), None).await.unwrap_err());
-    assert_eq!(p.reason(), "type_mismatch");
+    let kept = s.put(on("OPEN-2"), b64(svg), Some("x.svg".into()), None).await.unwrap();
+    assert_eq!((kept.info.mime.as_str(), kept.info.kind.as_str(), kept.info.name.as_deref()), (kinds::OCTET_STREAM, "file", Some("x.svg")));
+    let pdf = s.put(on("OPEN-2"), b64(b"%PDF-1.7 a document"), Some("deck.pdf".into()), None).await.unwrap();
+    assert_eq!((pdf.info.mime.as_str(), pdf.info.kind.as_str()), ("application/pdf", "pdf"));
+    // The bytes decide, never the name.
+    let named = s.put(on("OPEN-2"), b64(&png(1, 1, 0)), Some("not-a-gif.gif".into()), None).await.unwrap();
+    assert_eq!(named.info.mime, "image/png");
+    let p = refused(s.put(on("OPEN-2"), b64(&png(1, 1, 0)[..14]), None, None).await.unwrap_err());
+    assert_eq!(p.reason(), "truncated");
     let mut nine = png(1, 1, 0);
     nine.resize(9 * 1024 * 1024, 0);
-    let p = refused(s.put(on("OPEN-2"), "image/png", b64(&nine), None).await.unwrap_err());
-    assert_eq!(p, Problem::TooLarge { bytes: 9 * 1024 * 1024, max: image::MAX_BYTES });
+    let p = refused(s.put(on("OPEN-2"), b64(&nine), None, None).await.unwrap_err());
+    assert_eq!(p, Problem::TooLarge { bytes: 9 * 1024 * 1024, max: image::MAX_BYTES as u64 });
     assert!(p.to_string().contains("at most 7.0 MB"), "{p}");
-    let p = refused(s.put(on("OPEN-2"), "image/png", "not base64 at all!".into(), None).await.unwrap_err());
+    let p = refused(s.put(on("OPEN-2"), "not base64 at all!".into(), None, None).await.unwrap_err());
     assert_eq!(p.reason(), "bad_data");
-    assert_eq!(s.count(), 0, "nothing kept");
+    assert_eq!(s.count(), 3, "the svg, the pdf, the png");
     // At the cap exactly, kept.
     let mut seven = png(1, 1, 0);
     seven.resize(image::MAX_BYTES, 0);
-    assert!(s.put(on("OPEN-2"), "image/png", b64(&seven), None).await.is_ok());
-    assert_eq!(s.count(), 1, "only the one at the cap");
+    assert!(s.put(on("OPEN-2"), b64(&seven), None, None).await.is_ok());
+}
+
+/// A file of `n` bytes that is an MP4 by its first ones.
+fn mp4(n: usize) -> Vec<u8> {
+    let mut b = [&[0, 0, 0, 0x20][..], b"ftypisom"].concat();
+    b.extend((0..n - 12).map(|i| (i % 251) as u8));
+    b
+}
+
+#[tokio::test]
+async fn a_large_file_goes_up_in_chunks_to_disk_resumes_and_reads_by_range() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = open(&dir);
+    let file = mp4(5 * 1024 * 1024 + 17);
+    let begun = s.begin(on("V-1"), Some("walk.mp4".into()), file.len() as u64, None, "key:aa".into(), Some("r1".into())).await.unwrap();
+    assert_eq!((begun.received, begun.new), (0, true));
+    let id = begun.upload.clone();
+    let part = dir.path().join("media/blobs/tmp").join(format!("{id}.part"));
+    assert!(part.is_file(), "the bytes go to a part file");
+    let step = 2 * 1024 * 1024;
+    let c = s.chunk(&id, "key:aa", 0, file[..step].to_vec()).await.unwrap();
+    assert_eq!((c.received, c.duplicate), (step as u64, false));
+    // Another's upload is none; a gap is refused naming the offset expected; a chunk again is a duplicate.
+    assert!(matches!(s.chunk(&id, "key:bb", step as u64, file[step..2 * step].to_vec()).await, Err(StoreError::NotFound(_))));
+    assert_eq!(refused(s.chunk(&id, "key:aa", 3 * step as u64, vec![1]).await.unwrap_err()), Problem::OutOfOrder { expected: step as u64, got: 3 * step as u64 });
+    assert!(s.chunk(&id, "key:aa", 0, file[..step].to_vec()).await.unwrap().duplicate);
+    // Finished too soon: refused, the upload kept.
+    assert_eq!(refused(s.finish(&id, "key:aa").await.unwrap_err()).reason(), "incomplete");
+    // A dropped connection, and a restart: the store reopened, the upload resumed from what it has.
+    drop(s);
+    let s = open(&dir);
+    let again = s.resume(&id, "key:aa").await.unwrap();
+    assert_eq!((again.received, again.size, again.new), (step as u64, file.len() as u64, false));
+    assert!(matches!(s.resume(&id, "key:bb").await, Err(StoreError::NotFound(_))), "not another's");
+    let mut at = step;
+    while at < file.len() {
+        let end = (at + step).min(file.len());
+        s.chunk(&id, "key:aa", at as u64, file[at..end].to_vec()).await.unwrap();
+        at = end;
+    }
+    assert_eq!(refused(s.chunk(&id, "key:aa", file.len() as u64, vec![9]).await.unwrap_err()).reason(), "past_size");
+    let done = s.finish(&id, "key:aa").await.unwrap();
+    assert_eq!(done.reservation.as_deref(), Some("r1"));
+    let info = done.put.info;
+    assert_eq!((info.hash.clone(), info.mime.as_str(), info.kind.as_str(), info.name.as_deref(), info.bytes), (image::hash(&file), "video/mp4", "video", Some("walk.mp4"), file.len() as u64));
+    assert!(dir.path().join("media/blobs").join(&info.hash).is_file(), "kept on disk by its hash");
+    assert!(!part.exists(), "the part file renamed");
+    let conn = Connection::open(dir.path().join("media.db")).unwrap();
+    let (len, disk): (i64, i64) = conn.query_row("SELECT length(data), blob FROM media WHERE hash = ?1", [&info.hash], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    assert_eq!((len, disk), (0, 1), "no bytes in the database");
+    // Read by range, and whole.
+    assert_eq!(s.read_at(&info.hash, 1000, 5000).await.unwrap(), file[1000..6000].to_vec());
+    assert_eq!(s.read_at(&info.hash, file.len() as u64 - 3, 100).await.unwrap(), file[file.len() - 3..].to_vec());
+    assert!(s.read_at(&info.hash, file.len() as u64, 10).await.unwrap().is_empty());
+    assert_eq!(s.bytes(&info.hash).await.unwrap().1, file);
+    // The same bytes again: one file, the part dropped.
+    let twice = s.begin(on("V-2"), None, file.len() as u64, None, "key:aa".into(), None).await.unwrap();
+    s.chunk(&twice.upload, "key:aa", 0, file[..step].to_vec()).await.unwrap();
+    let mut at = step;
+    while at < file.len() {
+        let end = (at + step).min(file.len());
+        s.chunk(&twice.upload, "key:aa", at as u64, file[at..end].to_vec()).await.unwrap();
+        at = end;
+    }
+    let dup = s.finish(&twice.upload, "key:aa").await.unwrap();
+    assert!(dup.put.duplicate);
+    assert_eq!(s.kept(&info.hash).await.unwrap().owners, vec![on("V-1"), on("V-2")]);
+    assert_eq!(s.usage("key:aa").await.unwrap(), (1, file.len() as u64), "each file once");
+    // A cap, when the server names one; nothing empty.
+    assert_eq!(refused(s.begin(on("V-1"), None, 11, Some(10), "key:aa".into(), None).await.unwrap_err()).reason(), "too_large");
+    assert_eq!(refused(s.begin(on("V-1"), None, 0, None, "key:aa".into(), None).await.unwrap_err()).reason(), "bad_data");
+}
+
+#[tokio::test]
+async fn an_abandoned_upload_is_swept_with_its_part_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = open(&dir);
+    let b = s.begin(on("V-1"), None, 100, None, "key:aa".into(), Some("hold".into())).await.unwrap();
+    s.chunk(&b.upload, "key:aa", 0, vec![1; 10]).await.unwrap();
+    assert!(s.sweep(UPLOAD_TTL).await.unwrap().is_empty(), "a fresh upload stays");
+    let gone = s.sweep(-10).await.unwrap();
+    assert_eq!(gone, vec![Dropped { upload: b.upload.clone(), reservation: Some("hold".into()) }]);
+    assert!(!dir.path().join("media/blobs/tmp").join(format!("{}.part", b.upload)).exists());
+    assert!(matches!(s.chunk(&b.upload, "key:aa", 10, vec![1]).await, Err(StoreError::NotFound(_))));
 }
 
 fn has_tables(path: &Path) -> bool {
@@ -118,7 +205,7 @@ async fn images_survive_a_reopen_and_an_older_file_gains_the_tables() {
     let bytes = png(12, 34, 5);
     let hash = {
         let s = open(&dir);
-        s.put(on("K-1"), "image/png", b64(&bytes), Some("key:k".into())).await.unwrap().info.hash
+        s.put(on("K-1"), b64(&bytes), None, Some("key:k".into())).await.unwrap().info.hash
     };
     {
         let s = open(&dir);

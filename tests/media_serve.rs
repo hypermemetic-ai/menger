@@ -54,6 +54,7 @@ async fn start() -> Served {
     let mut extra = vec!["--shell-port".to_string(), shell.to_string(), "--app-dist".into(), empty.display().to_string()];
     extra.extend(ui_args(&dir.path().join("ui.db")));
     extra.extend(["--media-db-path".to_string(), dir.path().join("images/media.db").display().to_string()]);
+    extra.extend(["--media-blob-dir".to_string(), dir.path().join("blobs").display().to_string()]);
     let server = spawn_menger(ws, &dir.path().join("t.db"), &extra).await;
     for _ in 0..100 {
         if tokio::net::TcpStream::connect(("127.0.0.1", shell)).await.is_ok() {
@@ -114,4 +115,54 @@ async fn an_image_is_served_to_a_session_that_sees_its_ticket_and_kept_forever()
     let media = rusqlite::Connection::open(m.dir.path().join("images/media.db")).unwrap();
     let n: i64 = media.query_row("SELECT count(*) FROM media", [], |r| r.get(0)).unwrap();
     assert_eq!(n, 1, "the one image, in the media file");
+}
+
+/// EDITOR-10: each kind served as it is drawn — a video by range (so it
+/// seeks), a PDF inline and framable by this origin, an SVG or a page as an
+/// attachment of no active type, never sniffed; the bytes of a chunked
+/// upload on the disk under `--media-blob-dir`, not in the media file.
+#[tokio::test]
+async fn each_kind_is_served_as_it_is_drawn_and_a_video_seeks() {
+    use base64::Engine;
+    let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let m = start().await;
+    let admin = connect(m.ws).await;
+    let token = support::mint_session(m.ws).await;
+    let mut video = [&[0, 0, 0, 0x20][..], b"ftypisom"].concat();
+    video.extend((0..300_000).map(|i| (i % 251) as u8));
+    let begun = call(&admin, "media.begin", json!({"name": "clip.mp4", "size": video.len()})).await;
+    let upload = begun[0]["upload"].as_str().unwrap().to_string();
+    let c = call(&admin, "media.chunk", json!({"upload": upload, "offset": 0, "data": b64(&video)})).await;
+    assert_eq!(c[0]["type"], "chunked", "{c:?}");
+    let stored = call(&admin, "media.finish", json!({"upload": upload})).await;
+    let hash = stored[0]["hash"].as_str().unwrap().to_string();
+    assert!(m.dir.path().join("blobs").join(&hash).is_file(), "the bytes under --media-blob-dir");
+
+    let r = m.http.get(m.url(&format!("/media/{hash}"))).header("cookie", m.jar(&token)).header("range", "bytes=100-199").send().await.unwrap();
+    assert_eq!(r.status(), 206);
+    assert_eq!(header(&r, "content-range").as_deref(), Some(format!("bytes 100-199/{}", video.len()).as_str()));
+    assert_eq!(header(&r, "accept-ranges").as_deref(), Some("bytes"));
+    assert_eq!(header(&r, "content-type").as_deref(), Some("video/mp4"));
+    assert_eq!(header(&r, "content-disposition").as_deref(), Some("inline; filename=\"clip.mp4\"; filename*=UTF-8''clip.mp4"));
+    assert_eq!(r.bytes().await.unwrap().to_vec(), video[100..200].to_vec());
+    let past = m.http.get(m.url(&format!("/media/{hash}"))).header("cookie", m.jar(&token)).header("range", format!("bytes={}-", video.len())).send().await.unwrap();
+    assert_eq!(past.status(), 416);
+    let whole = m.get(&format!("/media/{hash}"), Some(&token)).await;
+    assert_eq!((whole.status().as_u16(), header(&whole, "content-length")), (200, Some(video.len().to_string())));
+    assert_eq!(whole.bytes().await.unwrap().len(), video.len());
+
+    let pdf = call(&admin, "media.put", json!({"data": b64(b"%PDF-1.7 x"), "name": "deck.pdf"})).await;
+    let r = m.get(&format!("/media/{}", pdf[0]["hash"].as_str().unwrap()), Some(&token)).await;
+    assert_eq!(header(&r, "content-type").as_deref(), Some("application/pdf"));
+    assert_eq!(header(&r, "x-frame-options").as_deref(), Some("SAMEORIGIN"), "the editor's viewer frames it");
+    assert_eq!(header(&r, "content-security-policy").as_deref(), Some("frame-ancestors 'self'"));
+
+    for (name, bytes) in [("x.svg", &br#"<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>"#[..]), ("page.html", &b"<!doctype html><script>alert(1)</script>"[..])] {
+        let put = call(&admin, "media.put", json!({"data": b64(bytes), "name": name})).await;
+        let r = m.get(&format!("/media/{}", put[0]["hash"].as_str().unwrap()), Some(&token)).await;
+        assert_eq!(header(&r, "content-type").as_deref(), Some("application/octet-stream"), "{name}: never as itself");
+        assert!(header(&r, "content-disposition").unwrap_or_default().starts_with("attachment;"), "{name}");
+        assert_eq!(header(&r, "x-content-type-options").as_deref(), Some("nosniff"));
+        assert!(header(&r, "content-security-policy").unwrap_or_default().ends_with("sandbox"), "{name}");
+    }
 }

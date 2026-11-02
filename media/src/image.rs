@@ -38,7 +38,7 @@ pub struct Sniffed {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Problem {
     /// Past [`MAX_BYTES`].
-    TooLarge { bytes: usize, max: usize },
+    TooLarge { bytes: u64, max: u64 },
     /// Nothing at all.
     Empty,
     /// The data is not base64.
@@ -50,6 +50,12 @@ pub enum Problem {
     Mismatch { declared: String, found: &'static str },
     /// The right magic, but no width and height where its header keeps them.
     Truncated { mime: &'static str },
+    /// EDITOR-10: a chunk that is not the next one (`expected`, `got`).
+    OutOfOrder { expected: u64, got: u64 },
+    /// EDITOR-10: `finish` before every byte said at `begin` came.
+    Incomplete { received: u64, size: u64 },
+    /// EDITOR-10: chunks past the size said at `begin`.
+    PastSize { size: u64 },
 }
 
 impl Problem {
@@ -61,6 +67,9 @@ impl Problem {
             Problem::NotAnImage { .. } => "not_an_image",
             Problem::Mismatch { .. } => "type_mismatch",
             Problem::Truncated { .. } => "truncated",
+            Problem::OutOfOrder { .. } => "out_of_order",
+            Problem::Incomplete { .. } => "incomplete",
+            Problem::PastSize { .. } => "past_size",
         }
     }
 }
@@ -69,8 +78,8 @@ impl fmt::Display for Problem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let kept = TYPES.join(", ");
         match self {
-            Problem::TooLarge { bytes, max } => write!(f, "the image is {} ({bytes} bytes); at most {} ({max} bytes)", size(*bytes), size(*max)),
-            Problem::Empty => f.write_str("no image: the data is empty"),
+            Problem::TooLarge { bytes, max } => write!(f, "the file is {} ({bytes} bytes); at most {} ({max} bytes)", size(*bytes), size(*max)),
+            Problem::Empty => f.write_str("no file: the data is empty"),
             Problem::NotBase64(why) => write!(f, "the data is not base64: {why}"),
             Problem::NotAnImage { found: Some(svg), .. } if *svg == "image/svg+xml" => {
                 write!(f, "an SVG is not kept — it is a document and can run script; menger keeps {kept}")
@@ -78,13 +87,17 @@ impl fmt::Display for Problem {
             Problem::NotAnImage { declared, .. } => write!(f, "not an image menger keeps (said to be {declared}; its bytes are none of {kept})"),
             Problem::Mismatch { declared, found } => write!(f, "the bytes are {found}, not {declared} as declared"),
             Problem::Truncated { mime } => write!(f, "a truncated {mime}: its header holds no width and height"),
+            Problem::OutOfOrder { expected, got } => write!(f, "chunk {got} is not the next one; send chunk {expected}"),
+            Problem::Incomplete { received, size } => write!(f, "{received} of {size} bytes came; send the rest before finishing"),
+            Problem::PastSize { size } => write!(f, "the chunks are past the {size} bytes said at the start"),
         }
     }
 }
 
 /// `bytes` in words: `9.0 MB`, `512 KB`, `12 bytes`.
-pub fn size(bytes: usize) -> String {
+pub fn size(bytes: u64) -> String {
     match bytes {
+        b if b >= 1024 * 1024 * 1024 => format!("{:.1} GB", b as f64 / (1024.0 * 1024.0 * 1024.0)),
         b if b >= 1024 * 1024 => format!("{:.1} MB", b as f64 / (1024.0 * 1024.0)),
         b if b >= 1024 => format!("{} KB", b / 1024),
         b => format!("{b} bytes"),
@@ -203,7 +216,7 @@ pub fn check(declared: &str, b: &[u8]) -> Result<Sniffed, Problem> {
         return Err(Problem::Empty);
     }
     if b.len() > MAX_BYTES {
-        return Err(Problem::TooLarge { bytes: b.len(), max: MAX_BYTES });
+        return Err(Problem::TooLarge { bytes: b.len() as u64, max: MAX_BYTES as u64 });
     }
     let declared = essence(declared);
     let found = match sniff(b)? {
@@ -253,12 +266,24 @@ pub fn hash(bytes: &[u8]) -> String {
 pub struct MediaInfo {
     /// Its SHA-256, 64 lower-case hex digits — its name.
     pub hash: String,
-    /// One of `image/png`, `image/jpeg`, `image/gif`, `image/webp`.
+    /// What its bytes are (`image/png`, `video/mp4`, `application/pdf`, …;
+    /// `application/octet-stream` for any other file).
     pub mime: String,
     /// Its size, in bytes.
     pub bytes: u64,
+    /// An image's, from its header; 0 for anything else.
     pub width: u32,
     pub height: u32,
+    /// EDITOR-10: how it is drawn — `image`, `video`, `audio`, `pdf` or `file`.
+    #[serde(default = "image_kind")]
+    pub kind: String,
+    /// EDITOR-10: its name as it came (`clip.mp4`), when one was given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+fn image_kind() -> String {
+    "image".into()
 }
 
 /// What the `media` service streams. Every method returns
@@ -266,42 +291,109 @@ pub struct MediaInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MediaEvent {
-    /// `put`'s answer: the image as kept — new, or the same bytes kept
-    /// already (`duplicate`: no second row).
+    /// `put`'s and `finish`'s answer: the file as kept — new, or the same
+    /// bytes kept already (`duplicate`: no second row).
     Stored {
         hash: String,
         mime: String,
         bytes: u64,
         width: u32,
         height: u32,
+        /// How it is drawn: `image`, `video`, `audio`, `pdf` or `file`.
+        #[serde(default = "image_kind")]
+        kind: String,
+        /// Its name as it came, when one was given.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
         /// The same bytes were kept already (for this ticket or another):
         /// nothing new was stored but, for a new ticket, that it is its too.
         #[serde(default)]
         duplicate: bool,
     },
-    /// `get`'s answer: the image and its bytes, in base64.
+    /// `get`'s answer: the file and its bytes, in base64.
     Media {
         hash: String,
         mime: String,
         bytes: u64,
         width: u32,
         height: u32,
+        #[serde(default = "image_kind")]
+        kind: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
         /// The bytes, standard base64.
         data: String,
     },
-    /// `get` of an image there is none of — or one the caller may not see
+    /// `info`'s answer: what a kept file is, without its bytes.
+    Info {
+        hash: String,
+        mime: String,
+        bytes: u64,
+        width: u32,
+        height: u32,
+        kind: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+    /// `begin`'s answer: the upload's id, its size, the bytes it has
+    /// (`received`: 0 when begun, more when resumed — the next chunk's
+    /// `offset`) and the most one chunk may carry (`chunk`, in bytes before
+    /// base64).
+    Upload { upload: String, size: u64, received: u64, chunk: u64 },
+    /// `chunk`'s answer: the chunk is kept — `received` of `size` bytes so
+    /// far; `duplicate` for a chunk sent again (nothing written twice).
+    Chunked {
+        upload: String,
+        received: u64,
+        size: u64,
+        #[serde(default)]
+        duplicate: bool,
+    },
+    /// `usage`'s answer: what a principal has put — the files (each once)
+    /// and their bytes.
+    Usage { principal: String, files: u64, bytes: u64 },
+    /// `unfurl`'s answer: what a public page is — its title, description,
+    /// site and preview image (kept, by its hash), the kind of card it
+    /// draws as, and for an allow-listed provider the player's address.
+    Unfurled {
+        url: String,
+        /// `link`, `video`, `tweet`, `repo`, `design` or `image`.
+        kind: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        /// The site's name (`YouTube`, `GitHub`), or its host.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        site: Option<String>,
+        /// The preview image, kept: its hash (`/media/<hash>`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        image: Option<String>,
+        /// The provider (`youtube`, `vimeo`, `x`, `github`, `figma`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider: Option<String>,
+        /// The player to frame, for YouTube, Vimeo, X and Figma alone: an
+        /// https address this service built from the link, never one a page gave.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        embed: Option<String>,
+    },
+    /// `get` of a file there is none of — or one the caller may not see
     /// (ACCESS-10: one answer). `put` for a ticket that is none, or out of
-    /// reach, says it of the ticket (`ticket`).
+    /// reach, says it of the ticket (`ticket`); `chunk` or `finish` of an
+    /// upload that is none, or another's, of the upload.
     NotFound {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         hash: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ticket: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        upload: Option<String>,
     },
-    /// `put` refused the image: `reason` is `too_large` (with `bytes` and
-    /// `max`), `not_an_image` (an SVG, or bytes none of the kept types),
-    /// `type_mismatch`, `truncated` or `bad_data`; `message` says it in
-    /// words. Nothing was kept.
+    /// Refused, naming why in `reason` — `too_large` (with `bytes` and
+    /// `max`), `truncated`, `bad_data`, `out_of_order`, `incomplete`,
+    /// `past_size`, `over_allowance` (`max` what is left, when known); for a fetch `bad_url`, `blocked_address`,
+    /// `too_many_redirects`, `timeout`, `bad_type`, `http_status`,
+    /// `unreachable` — and `message` in words. Nothing was kept.
     Refused {
         reason: String,
         message: String,
@@ -324,7 +416,7 @@ impl plexus_client::FromClientError for MediaEvent {
 impl From<Problem> for MediaEvent {
     fn from(p: Problem) -> Self {
         let (bytes, max) = match &p {
-            Problem::TooLarge { bytes, max } => (Some(*bytes as u64), Some(*max as u64)),
+            Problem::TooLarge { bytes, max } => (Some(*bytes), Some(*max)),
             _ => (None, None),
         };
         MediaEvent::Refused { reason: p.reason().to_string(), message: format!("{p} (nothing was kept)"), bytes, max }
@@ -334,8 +426,24 @@ impl From<Problem> for MediaEvent {
 impl MediaEvent {
     /// `put`'s answer as `info`.
     pub fn stored(info: MediaInfo, duplicate: bool) -> Self {
-        let MediaInfo { hash, mime, bytes, width, height } = info;
-        MediaEvent::Stored { hash, mime, bytes, width, height, duplicate }
+        let MediaInfo { hash, mime, bytes, width, height, kind, name } = info;
+        MediaEvent::Stored { hash, mime, bytes, width, height, kind, name, duplicate }
+    }
+
+    /// `info`'s answer.
+    pub fn info(info: MediaInfo) -> Self {
+        let MediaInfo { hash, mime, bytes, width, height, kind, name } = info;
+        MediaEvent::Info { hash, mime, bytes, width, height, kind, name }
+    }
+
+    /// A refusal that is no [`Problem`] of the bytes.
+    pub fn refused(reason: &str, message: impl Into<String>) -> Self {
+        MediaEvent::Refused { reason: reason.into(), message: message.into(), bytes: None, max: None }
+    }
+
+    /// `not_found` naming a hash.
+    pub fn no_hash(hash: &str) -> Self {
+        MediaEvent::NotFound { hash: Some(hash.into()), ticket: None, upload: None }
     }
 }
 
@@ -391,8 +499,8 @@ mod tests {
         let mut big = png(1, 1);
         big.resize(9 * 1000 * 1000, 0);
         let e = check("image/png", &big).unwrap_err();
-        assert_eq!(e, Problem::TooLarge { bytes: 9_000_000, max: MAX_BYTES });
-        assert_eq!(e.to_string(), "the image is 8.6 MB (9000000 bytes); at most 7.0 MB (7340032 bytes)");
+        assert_eq!(e, Problem::TooLarge { bytes: 9_000_000, max: MAX_BYTES as u64 });
+        assert_eq!(e.to_string(), "the file is 8.6 MB (9000000 bytes); at most 7.0 MB (7340032 bytes)");
         assert_eq!(check("image/png", b"").unwrap_err(), Problem::Empty);
         assert_eq!(check("IMAGE/PNG; x=y", &png(4, 4)).map(|s| (s.width, s.height)), Ok((4, 4)));
     }
@@ -412,7 +520,7 @@ mod tests {
         assert_eq!(v["type"], "refused");
         assert_eq!(v["reason"], "too_large");
         assert_eq!((v["bytes"].as_u64(), v["max"].as_u64()), (Some(9), Some(7)));
-        let nf = serde_json::to_value(MediaEvent::NotFound { hash: Some("ab".into()), ticket: None }).unwrap();
+        let nf = serde_json::to_value(MediaEvent::no_hash("ab")).unwrap();
         assert_eq!(nf, serde_json::json!({"type": "not_found", "hash": "ab"}));
     }
 

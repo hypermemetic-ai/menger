@@ -120,6 +120,46 @@ text_type!(
     data
 );
 
+fn file_name(text: &str) -> Result<String, String> {
+    crate::kinds::clean_name(text).ok_or_else(|| not_a(text, "a file's name", "its name as it came, e.g. clip.mp4"))
+}
+
+text_type!(
+    /// EDITOR-10: a file's name as it came (`clip.mp4`): its last path
+    /// segment, no control characters, at most 200 characters.
+    FileName,
+    file_name
+);
+
+fn upload_id(text: &str) -> Result<String, String> {
+    let t = text.trim();
+    match t.len() == 32 && t.bytes().all(|b| b.is_ascii_hexdigit()) {
+        true => Ok(t.to_ascii_lowercase()),
+        false => Err(not_a(t, "an upload's id", "32 hex digits, as `media.begin` answers it")),
+    }
+}
+
+text_type!(
+    /// EDITOR-10: an upload's id, as `media.begin` answers it: 32 hex digits.
+    UploadId,
+    upload_id
+);
+
+fn web_url(text: &str) -> Result<String, String> {
+    let t = text.trim();
+    match t.len() <= 4096 && (t.starts_with("http://") || t.starts_with("https://")) && url::Url::parse(t).is_ok() {
+        true => Ok(t.to_string()),
+        false => Err(not_a(t, "a web address", "http:// or https://, e.g. https://example.com/page")),
+    }
+}
+
+text_type!(
+    /// EDITOR-10: a web address, `http://` or `https://`, at most 4096
+    /// characters. Whether it is public is the fetch's rule.
+    WebUrl,
+    web_url
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,5 +182,9 @@ mod tests {
         assert_eq!("IMAGE/JPEG".parse::<MediaType>().unwrap().as_str(), "image/jpeg");
         holds::<MediaData>(&["", "iVBORw0KGgo="], &[]);
         assert!(serde_json::from_str::<MediaHash>("\"abc\"").is_err(), "deserializing is the check");
+        holds::<FileName>(&["clip.mp4", "a/b/deck.pdf"], &["", "  ", ".."]);
+        assert_eq!("../../x.txt".parse::<FileName>().unwrap().as_str(), "x.txt");
+        holds::<UploadId>(&[&"a".repeat(32)], &["", "../etc", &"a".repeat(31)]);
+        holds::<WebUrl>(&["https://example.com/", "http://x.y/z?q"], &["ftp://x", "javascript:alert(1)", "example.com", "file:///etc/passwd"]);
     }
 }

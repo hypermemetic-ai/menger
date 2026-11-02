@@ -34,7 +34,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = { version = "1.1", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { version = "0.37", features = ["bundled", "blob"] }
+# EDITOR-10: links read by the server (unfurl, fetch) — every SSRF rule in
+# `remote.rs`, the connection pinned to the addresses checked.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+url = "2"
 # An image is named by its SHA-256 and travels as base64.
 sha2 = "0.10"
 base64 = "0.22"

@@ -71,46 +71,15 @@ pub struct ShellConfig {
     /// as `bundle:studio`), beside `/app/` — for a session [`Studio::may`]
     /// admits, with the compiler module it compiles in. None: no studio.
     pub studio: Option<Studio>,
-    /// V2-24: the running service, for `GET /media/<hash>` — the media
-    /// service asked `media.get` as the request's session
-    /// (`menger_media::fetch`, a client through plexus-core's in-memory
-    /// transport: the gate admits or refuses it, the service decides whose
-    /// the image is). None: no route.
-    pub media: Option<Arc<plexus_core::plexus::DynamicHub>>,
+    /// V2-24, EDITOR-10: `GET /media/<hash>` — the media service asked
+    /// `media.info` as the request's session, the bytes from its blob
+    /// store ([`crate::media_route`]). None: no route.
+    pub media: Option<crate::media_route::MediaServe>,
 }
 
 /// V2-24: what `GET /media/<hash>` is served under — the bytes never change
 /// under their hash (the framework's [`IMMUTABLE`]); a miss is never kept.
 pub const MEDIA_ROUTE: &str = "/media/{hash}";
-
-/// V2-24: `/media/<hash>` for a signed-in session: the image's bytes with
-/// their type, kept forever (content-addressed); 404 for a hash that names
-/// no image or one the session may not see (one answer, as `media.get`
-/// gives it), and for a request with no session — the ui routes' session
-/// layer sends one to the sign-in page first.
-async fn media_get(
-    State((service, login)): State<(Arc<plexus_core::plexus::DynamicHub>, Option<Arc<crate::web_login::Login>>)>,
-    axum::extract::Path(hash): axum::extract::Path<String>,
-    headers: header::HeaderMap,
-) -> Response {
-    let miss = |why: &'static str| (StatusCode::NOT_FOUND, [(header::CACHE_CONTROL, NO_STORE)], why).into_response();
-    let Some(caller) = login.as_ref().and_then(|l| l.session(&headers)) else { return miss("no session") };
-    match menger_media::fetch(service, caller, &hash).await {
-        menger_media::Fetched::Image { mime, bytes } => {
-            let mime = header::HeaderValue::from_str(&mime).unwrap_or(header::HeaderValue::from_static("application/octet-stream"));
-            (
-                [(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, header::HeaderValue::from_static(IMMUTABLE)), (header::X_CONTENT_TYPE_OPTIONS, header::HeaderValue::from_static("nosniff"))],
-                bytes,
-            )
-                .into_response()
-        }
-        menger_media::Fetched::NotFound => miss("no such image"),
-        menger_media::Fetched::Refused(why) => {
-            tracing::debug!("V2-24: /media/{hash} refused: {why}");
-            miss("no such image")
-        }
-    }
-}
 
 /// STUDIO-2: who opens `/studio/`, and the module the studio compiles in.
 #[derive(Clone)]
@@ -177,15 +146,22 @@ pub const SERVICE_WORKER: &str = "/sw.js";
 ///   sheet (THEME-3: `@import url("https://…")`);
 /// - images: its own and `data:` — a remote image in a body shown in the
 ///   app is refused, so a body cannot learn who reads it (ACCESS-4 M5);
+///   EDITOR-10: a pasted page's images are fetched and kept, never hot-linked;
+/// - media (video, audio): its own (`/media/<hash>`) and `blob:` alone;
 /// - connections: itself, its service, and a WebSocket on loopback — MFE-21's
 ///   settings point the app at another menger on this machine;
-/// - frames: its own; nothing frames it.
+/// - frames: its own (a PDF from `/media/<hash>` in the browser's viewer)
+///   and, EDITOR-10, the four providers' players a link card draws —
+///   [`menger_media::unfurl::EMBED_ORIGINS`], each by its exact origin;
+///   nothing frames it;
+/// - objects: none (a PDF is framed, never an `<object>`).
 ///
 /// No `form-action`: the sign-out form's answer may go on to a provider's
 /// own sign-out page (IDENTITY-30), which the browser checks against it.
 pub const PAGE_CSP: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' {{SCRIPTS}}; \
 style-src 'self' 'unsafe-inline' https:; font-src 'self' data: https:; img-src 'self' data: blob:; \
-connect-src 'self' {{SERVICE}} ws://127.0.0.1:* ws://localhost:*; frame-src 'self'; \
+media-src 'self' blob:; connect-src 'self' {{SERVICE}} ws://127.0.0.1:* ws://localhost:*; \
+frame-src 'self' https://www.youtube-nocookie.com https://player.vimeo.com https://platform.twitter.com https://www.figma.com; \
 object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
 
 /// APP-110: **the live test app in a ticket.** The tracker draws test's app
@@ -235,7 +211,7 @@ pub fn check_origin(s: &str) -> Result<String, String> {
 pub fn page_csp(framing: &Framing) -> String {
     let mut csp = PAGE_CSP.to_string();
     if let Some(live) = &framing.live {
-        csp = csp.replace("frame-src 'self'", &format!("frame-src 'self' {live}"));
+        csp = csp.replace("frame-src 'self' ", &format!("frame-src 'self' {live} "));
     }
     if !framing.ancestors.is_empty() {
         csp = csp.replace("frame-ancestors 'none'", &format!("frame-ancestors {}", framing.ancestors.join(" ")));
@@ -352,8 +328,8 @@ async fn router(cfg: ShellConfig, at: std::net::SocketAddr) -> Router {
     }
     // V2-24: `/media/<hash>` from the media service, as the session —
     // inside the session check below, like the ui routes.
-    if let Some(service) = cfg.media.clone() {
-        app = app.merge(Router::new().route(MEDIA_ROUTE, get(media_get)).with_state((service, cfg.login.clone())));
+    if let Some(serve) = cfg.media.clone() {
+        app = app.merge(Router::new().route(MEDIA_ROUTE, get(crate::media_route::get)).with_state((serve, cfg.login.clone())));
     }
     if let Some(login) = cfg.login.as_ref().filter(|l| l.require) {
         app = app.route_layer(axum::middleware::from_fn_with_state(login.clone(), require_session));
@@ -541,6 +517,22 @@ mod tests {
         assert!(page.headers().get("access-control-allow-origin").is_none());
     }
 
+    /// EDITOR-10: the page frames its own documents and the four
+    /// providers' players by their exact origins — the ones a card's
+    /// `embed` is built on — and nothing broader; media from itself.
+    #[test]
+    fn the_policy_frames_the_players_by_origin_and_nothing_broader() {
+        let frame = PAGE_CSP.split(';').map(str::trim).find(|d| d.starts_with("frame-src")).unwrap();
+        let mut named: Vec<&str> = frame.split_whitespace().skip(1).collect();
+        named.sort();
+        let mut want = vec!["'self'"];
+        want.extend(menger_media::unfurl::EMBED_ORIGINS);
+        want.sort();
+        assert_eq!(named, want);
+        assert!(!frame.split_whitespace().any(|w| w == "https:" || w == "*" || w.contains('*')), "no scheme-wide source or wildcard in frames");
+        assert!(PAGE_CSP.contains("media-src 'self' blob:;") && PAGE_CSP.contains("object-src 'none'") && PAGE_CSP.contains("img-src 'self' data: blob:;"));
+    }
+
     /// APP-110: unconfigured, the policy is [`PAGE_CSP`] to the byte — frames
     /// only its own, framed by no one. Configured, exactly two directives move,
     /// each by the origins named, and nothing else changes.
@@ -549,12 +541,12 @@ mod tests {
         assert_eq!(page_csp(&Framing::default()), PAGE_CSP);
         assert!(page_csp(&Framing::default()).contains("frame-ancestors 'none'"));
         let tracker = page_csp(&Framing { ancestors: vec![], live: Some("https://app-test.menger.sh".into()) });
-        assert!(tracker.contains("frame-src 'self' https://app-test.menger.sh;") && tracker.contains("frame-ancestors 'none'"), "{tracker}");
+        assert!(tracker.contains("frame-src 'self' https://app-test.menger.sh https://www.youtube-nocookie.com") && tracker.contains("frame-ancestors 'none'"), "{tracker}");
         let test = page_csp(&Framing { ancestors: vec!["https://app.menger.sh".into(), "http://127.0.0.1:4456".into()], live: None });
-        assert!(test.contains("frame-ancestors https://app.menger.sh http://127.0.0.1:4456") && test.contains("frame-src 'self';"), "{test}");
+        assert!(test.contains("frame-ancestors https://app.menger.sh http://127.0.0.1:4456") && test.contains("frame-src 'self' https://www.youtube-nocookie.com"), "{test}");
         // Nothing else moved.
         assert_eq!(test.replace("frame-ancestors https://app.menger.sh http://127.0.0.1:4456", "frame-ancestors 'none'"), PAGE_CSP);
-        assert_eq!(tracker.replace("frame-src 'self' https://app-test.menger.sh", "frame-src 'self'"), PAGE_CSP);
+        assert_eq!(tracker.replace("frame-src 'self' https://app-test.menger.sh ", "frame-src 'self' "), PAGE_CSP);
     }
 
     /// v2: the placeholder is stamped as the app's entrypoint is, and is

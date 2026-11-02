@@ -26,20 +26,41 @@
 //! `media.db` ([`MEDIA_DB_FILE`]; `--media-db-path`), never the tickets
 //! file ([`MediaStore`]).
 //!
+//! **EDITOR-10: any file, of any size, and links.** The service keeps any
+//! file ([`kinds`]: its type and how it draws, read from its bytes), in one
+//! message or in resumable chunks; its bytes live behind one trait,
+//! [`BlobStore`] (the disk today, [`DiskStore`]; an object store later),
+//! and every byte is asked of the uploader's [`Allowance`] first. A public
+//! link is read into a card ([`unfurl`]) and a remote file kept
+//! ([`unfurl::fetch`]), through [`Remote`] and its SSRF rules.
+//!
 //! | module | what |
 //! |---|---|
+//! | [`kinds`] | any file's type and kind by its bytes; the caps; the served-inline rule |
+//! | [`blob`] | [`BlobStore`], the bytes' one trait; [`DiskStore`] |
+//! | [`allowance`] | [`Allowance`], the one call site for the quota service; [`Unlimited`] |
+//! | [`remote`] | [`Remote`]: what the server may fetch, and how |
+//! | [`unfurl`] | a link's card and its providers; `fetch` |
 //! | [`image`] | the vocabulary: the kept types, the cap, `sniff`/`check`, [`MediaEvent`] |
 //! | [`vocab`] | the typed parameters: [`MediaHash`], [`MediaType`], [`MediaData`] |
 //! | [`store`] | the file: `media` and `media_owners`, `put`, `kept`, `bytes` |
 //! | [`seam`] | the tickets service as a client; the shell's [`fetch`] |
 //! | [`activation`] | `media.put` and `media.get`, the one declaration |
 
+pub mod allowance;
+pub mod blob;
+pub use blob::{BlobError, BlobStore, DiskStore};
+pub use allowance::{Allowance, Unlimited};
 pub mod image;
+pub mod kinds;
+pub mod remote;
+pub use remote::Remote;
+pub mod unfurl;
 pub use image::{MediaEvent, MediaInfo};
 pub mod vocab;
-pub use vocab::{MediaData, MediaHash, MediaType};
+pub use vocab::{FileName, MediaData, MediaHash, MediaType, UploadId, WebUrl};
 pub mod store;
-pub use store::{MediaStore, Owner, Put, StoreError};
+pub use store::{default_blob_dir, MediaStore, Owner, Put, StoreError};
 mod caller;
 pub use caller::{Caller, MediaRequest};
 pub mod seam;

@@ -324,6 +324,15 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     // (`tickets.may` over the seam), so a stranger's put is `not_found`.
     ("media.get", Today::Viewer, None),
     ("media.put", Today::Editor, None),
+    // EDITOR-10: what a file is, your usage and a link's card are reads;
+    // an upload in chunks and a remote file kept are an editor's.
+    ("media.info", Today::Viewer, None),
+    ("media.usage", Today::Viewer, None),
+    ("media.unfurl", Today::Viewer, None),
+    ("media.begin", Today::Editor, None),
+    ("media.chunk", Today::Editor, None),
+    ("media.finish", Today::Editor, None),
+    ("media.fetch", Today::Editor, None),
 ];
 
 /// AUTH-7's one deliberate narrowing of the table: what an anonymous or
