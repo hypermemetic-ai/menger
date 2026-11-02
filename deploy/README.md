@@ -132,17 +132,24 @@ Review ("Automatic test", below); prod is the owner's.
    `failed`), and `deployments.log` gets `suite test <release> passed|failed`
    (no deployment). Each gate log is a file of its own (CI-6), as the build's.
    A release built with the gate (every one before DEPLOY-52) counts as
-   passed: its gate was the suite. **Beside it, plexus-bench** (PERF-6): its
-   `scripts/gate.sh` runs every PERF scenario under the perf profile and
-   `plexus-bench check` against the goldens (a red scenario is run once more
-   before it counts; a red taken on a busy machine is said, not failed), with
+   passed: its gate was the suite. **Beside it, plexus-bench** (PERF-6,
+   PERF.115-29). First its `scripts/ci-check.sh`: every scenario's instructions
+   and allocations against `goldens/ci`, under callgrind in the
+   `plexus-bench-ci` image. They read no clock, so a count past its line is not
+   noise, and it marks the release `failed … — counts red; log …` and logs
+   `suite test <release> failed counts`. A check that could not run is red too:
+   a release passes on a count read. Then its `scripts/gate.sh` runs every PERF
+   scenario under the perf profile and `plexus-bench check` against the goldens
+   (a red on a quiet first pass runs again, three times at most, until a quiet
+   read answers it; a red taken on a busy machine is said, not failed), with
    `schema.*` measuring the release's own `bin/menger` — the perf build, as the
    goldens were taken from it (RUN-39). A red bench marks the
    release `failed … — bench red; log …` and logs `suite test <release>
    failed bench`, as a red test does; green, the `SUITE` line ends `; bench
-   <check's verdict>`. `MENGER_BENCH_DIR` names the checkout (default
-   `../plexus-bench`; `none` skips it and the line says `bench not run`),
-   `MENGER_BENCH_TARGET` its cargo target (`~/.cache/cargo-target/plexus-bench`).
+   <check's verdict>; counts <check --ci's verdict>`. `MENGER_BENCH_DIR` names
+   the checkout (default `../plexus-bench`; `none` skips both and the line says
+   `bench not run`), `MENGER_BENCH_TARGET` their cargo target
+   (`~/.cache/cargo-target/plexus-bench`).
 6. **Promote** (`remote prod`). infra's `promote.yml` ships the image test
    runs — the release `deployments.log` last shows test running `ok` — and
    only when that release's suite `passed`: `failed`, `running` or no result
@@ -800,8 +807,9 @@ Tests: `deploy/tests/pipeline` runs the pipeline itself on a throwaway root —
 `deploy/menger-call.mjs` meet them, `synapse`, `docker` and `gh` stand-ins —
 through every row above, the smoke (each check failing on its own), a tracker
 down, hung, refusing and refusing the key, `remote prod`'s suite check, the
-suite green and red in its own checkout, plexus-bench beside it (a stand-in
-`scripts/gate.sh`: green, red, `MENGER_BENCH_DIR=none`), `build --no-gate`, `status`,
+suite green and red in its own checkout, plexus-bench beside it (stand-ins for
+`scripts/gate.sh` and `scripts/ci-check.sh`: green, red, a check that could not
+run, `MENGER_BENCH_DIR=none`), `build --no-gate`, `status`,
 `backfill` and the retired commands; `cargo test` runs it.
 
 ## The deployment record
