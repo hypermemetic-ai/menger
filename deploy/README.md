@@ -28,6 +28,7 @@ a branch's tip → build (no gate) → release → image (GHCR) → remote test 
 | deployed by | `deploy/pipeline remote test --image …` (infra's `app.yml`) | `deploy/pipeline remote prod` (infra's `promote.yml`: what test runs) |
 | recorded as | `test` | `app-prod`, promoting from `test` |
 | its data | its own tracker, in the box's volume | the tracker since RUN-13 |
+| its UI | UI-15: one component store, `menger-shared`'s `/shared/ui.db`, on the channel `test` — a deploy pushes the bundle here | the same file, on the channel `prod` — `remote prod` promotes test's live version onto it, no second push |
 | settings | `deploy/env/app-test.env` | `deploy/env/app-prod.env` |
 
 **What each runs** is what `deploy/pipeline status` says — ask it, never
@@ -195,22 +196,39 @@ the owner's.
 6. **Promote** (`remote prod`). infra's `promote.yml` ships the image test
    runs — the release `deployments.log` last shows test running `ok` — and
    only when that release's suite `passed`: `failed`, `running` or no result
-   is refused before infra is asked, naming why. Then the smoke against
-   app.menger.sh; recorded as `app-prod` (from `test`). A failed smoke is
-   recorded `failed`; `bin/infra rollback.yml -e app_dir=<checkout>` puts
-   prod back on its previous image ("On the Linode"). Before a v2 release
-   is promoted, `deploy/env/app-prod.env` needs its `MENGER_UI_SIGNERS`
-   line, as test's has — without it prod's `ui` service takes no push.
+   is refused before infra is asked, naming why. Then, for a release that
+   carries a bundle, **the UI's promote** (UI-15): once `tickets.health`
+   answers on app.menger.sh, `ui promote --to prod --from test` as the
+   pipeline key on prod's socket — prod's live pointer onto the version
+   test has live, in the one store both environments mount, no second push;
+   the hash promoted is said (`ok   promoted test's live version to prod …`)
+   and ends the log line (`app-prod run <release> ok promoted <hash>`). What
+   test has live is what prod takes: the release's bundle, or an author's
+   version made on test since (the studio's), said as such. A refused
+   promote fails the deploy, named and recorded (`promote failed: …`), and
+   moves nothing; prod's image is still the new one (`bin/infra
+   rollback.yml` returns it). Then the smoke against app.menger.sh, wanting
+   the promoted version live and `/app/` serving the bundle's page; recorded
+   as `app-prod` (from `test`). A failed smoke is recorded `failed`;
+   `bin/infra rollback.yml -e app_dir=<checkout>` puts prod back on its
+   previous image ("On the Linode"). prod takes no push, so
+   `deploy/env/app-prod.env` names no `MENGER_UI_SIGNERS`; it names the
+   store and its channel (`MENGER_UI_DB_PATH=/shared/ui.db`,
+   `MENGER_UI_CHANNEL=prod`), as test's names its (`test`). The pipeline key
+   must hold `deployer` on `*` on prod, as it does on test (the operator
+   grants it once).
 
 ### The bundle's push (V2-7)
 
 The image copies `dist/` to `/opt/menger/dist`, and `run-menger` starts the
 `ui` service with `--ui-db-path` (`MENGER_UI_DB_PATH`, else `ui.db` beside
-the database, in the data volume), one `--ui-signer` per key of
+the database, in the data volume — UI-15: on the box, `/shared/ui.db`, the
+one store both environments mount; the channel is `MENGER_UI_CHANNEL`,
+read by menger itself), one `--ui-signer` per key of
 `MENGER_UI_SIGNERS` (`;`-separated 64-hex public keys) and `--ui-compiler`
 when the module is there. A service names its signers at start: app-test's
 line in `deploy/env/app-test.env` is the pipeline key's public key, written
-by hand, never by a test.
+by hand, never by a test; prod names none (UI-15: it takes no push).
 
 After a deploy is healthy — `remote test`, and `local` — the pipeline
 pushes the release's bundle: `ui.push { bundle, manifest, signature,
@@ -237,6 +255,17 @@ for the bundle's own `index.html`, stamps filled. A refused push fails the
 deploy — recorded `failed`, the reason (`bad_signature`, `no_signer`, …) on
 stderr and in deployments.log — and leaves live the version that was live;
 the pipeline never calls `ui.rollback`.
+
+**Prod is a promote, not a push** (UI-15). The store is one file for both
+environments (infra's `menger-shared` volume, `/shared/ui.db`; `deploy/app.yml`
+`shared`), test on the channel `test`, prod on `prod`: a push on test moves
+`live:test` alone, and `remote prod` calls `ui.promote { to: prod, from:
+test }` as the pipeline key on prod's socket — `deploy/menger-call.mjs`, no
+bundle on the wire — which moves `live:prod` onto test's live version in one
+write; prod's open pages hear `live` and swap. The smoke on prod then wants
+that version live and `/app/` serving the bundle's page. The UI alone goes
+back on prod with `ui rollback --to <version> --channel prod` (an admin's,
+from either socket), or forward again with another promote.
 
 ### The smoke
 
@@ -440,7 +469,10 @@ synapse -P 44104 lforge-v5 hyperforge ci menger-app trigger --run N --stage depl
 host-layer contract: the image `ghcr.io/hypermemetic-ai/menger:<release>`,
 two hosts, the WebSocket (8080) and the shell (8081) inside the container,
 the standard routes (`/ws` and any upgrade → the WebSocket, the rest → the
-shell), a `/data` volume per environment (each its own tracker), 1 GB, and
+shell), a `/data` volume per environment (each its own tracker), UI-15: one
+`shared` volume both environments mount at `/shared` (`menger-shared`, owned
+by the image's uid, made by infra on the next deploy or promote and kept by
+every one after — the ui store, `/shared/ui.db`, lives there), 1 GB, and
 the health checks below. infra makes `/opt/apps/menger-test` (test) and
 `/opt/apps/menger` (prod) on the box, the edge's site per host (Caddy:
 Let's Encrypt, http → https 308), the A record, and sets
@@ -449,8 +481,8 @@ Let's Encrypt, http → https 308), the A record, and sets
 
 | environment | host | settings (copied to the box as `app.env`) |
 |---|---|---|
-| test | `app-test.menger.sh` | `deploy/env/app-test.env` — WorkOS staging, `MENGER_UI_SIGNERS` the pipeline key's |
-| prod | `app.menger.sh` | `deploy/env/app-prod.env` — WorkOS production; the GitHub button through WorkOS's API with the key on the box |
+| test | `app-test.menger.sh` | `deploy/env/app-test.env` — WorkOS staging, `MENGER_UI_SIGNERS` the pipeline key's, `MENGER_UI_DB_PATH=/shared/ui.db`, `MENGER_UI_CHANNEL=test` |
+| prod | `app.menger.sh` | `deploy/env/app-prod.env` — WorkOS production; the GitHub button through WorkOS's API with the key on the box; `MENGER_UI_DB_PATH=/shared/ui.db`, `MENGER_UI_CHANNEL=prod`, no signer |
 
 The settings are menger's own (README "Run"): `MENGER_PUBLIC_URL=https://<host>`,
 `MENGER_BIND=0.0.0.0`, `MENGER_AUTH_PROVIDERS` = WorkOS (AuthKit) and
@@ -492,7 +524,8 @@ deploy/pipeline remote test --image ghcr.io/hypermemetic-ai/menger:<R>
 A deploy that fails its smoke is recorded `failed` and leaves the
 container infra started; the next green deploy carries its commits. The UI
 alone goes back with `ui rollback --to <version>` (an admin's; the
-pipeline never does), which moves the pointer and nothing else.
+pipeline never does), which moves the pointer — test's, `live:test` — and
+nothing else; prod's with `--channel prod` (UI-15).
 
 **The rollback of prod** is infra's: `bin/infra rollback.yml -e
 app_dir=<checkout>` puts prod back on its previous image. Its data is a
@@ -754,7 +787,9 @@ Each runs on a throwaway root and touches nothing real; none runs under
   infra, `synapse`, `docker`, `gh`, `node` and the tracker stand-ins: every
   record, the smoke (each check failing on its own), the push (signed,
   refused, no key), a tracker down, hung or refusing, `remote prod`'s suite
-  check, the suite green and red, `build --branch` on a tree with no
+  check and its promote (UI-15: no push to prod, one `ui.promote` as the
+  pipeline key, the hash in the log line, a refusal failing it with nothing
+  moved), the suite green and red, `build --branch` on a tree with no
   `frontend/`, `local`, `status`, `backfill` and the retired commands.
 - `deploy/tests/run` — `deploy/record`: every input form against
   `deploy/tests/fixtures/`, the schema against the examples above, and the

@@ -30,7 +30,9 @@
 #                                           app-test.menger.sh through infra's app.yml, then the smoke
 #                                           against https://app-test.menger.sh; recorded as `test`
 #                                           (DEPLOY-52: test is app-test); passing marks it TESTED
-#   deploy/pipeline remote prod             app.menger.sh through infra's promote.yml: what test runs,
+#   deploy/pipeline remote prod             app.menger.sh through infra's promote.yml: what test runs, then
+#                                           `ui promote --to prod --from test` (UI-15: one store, prod's pointer
+#                                           onto test's live version, no second push), then the smoke —
 #                                           refused unless that release's suite passed (DEPLOY-52)
 #   deploy/pipeline smoke test|prod         the smoke against app-test / app.menger.sh, on its own
 #   deploy/pipeline local --image IMAGE     RUN-25: IMAGE here as the container menger-app-local
@@ -820,6 +822,25 @@ ui_push() { # WS REL → 0 and UI_PUSHED (the version) and UI_MATCHES (contract_
   UI_WHY=$(tr '\t\n' '  ' <<<"${UI_WHY:-no answer}"); UI_WHY=${UI_WHY% }
   return 1
 }
+# UI-15: a release to prod is a pointer move. Test and prod share one ui store (deploy/app.yml `shared`:
+# /shared/ui.db in both containers), each on its channel (MENGER_UI_CHANNEL: live:test, live:prod), so
+# the bundle test's deploy pushed is already prod's to serve: `ui.promote { to: prod, from: test }` as
+# the pipeline key (a deployer, as the push is), on prod's socket — its pages hear `live` and swap —
+# moves prod's pointer onto whatever test has live, in one write; nothing leaves this machine twice.
+UI_PROMOTED="" UI_MOVED=""
+ui_promote() { # WS FROM TO → 0 and UI_PROMOTED (the version TO's pointer took) and UI_MOVED (true: it moved; false: it pointed there already), or 1 and UI_WHY
+  local ws=$1 from=$2 to=$3 out
+  UI_PROMOTED="" UI_MOVED="" UI_WHY=""
+  [[ -n $DEPLOY_KEY_FILE ]] || { UI_WHY="no pipeline key (MENGER_DEPLOY_KEY_FILE) to promote as"; return 1; }
+  out=$(kcall "$ws" ui.promote --params "$(jq -nc --arg to "$to" --arg from "$from" '{to: $to, from: $from}')" 2>&1) || true
+  UI_PROMOTED=$(jq -rR 'fromjson? | select(.type == "promoted") | .version' <<<"$out" 2>/dev/null | head -n 1)
+  UI_MOVED=$(jq -rR 'fromjson? | select(.type == "promoted") | (.seq != null) | tostring' <<<"$out" 2>/dev/null | head -n 1)
+  [[ -n $UI_PROMOTED ]] && return 0
+  UI_WHY=$(jq -rR 'fromjson? | if .type == "refused" then "refused \(.reason) — \(.message)" elif .type == "error" then "error \(.error_kind // "") \(.message)" else empty end' <<<"$out" 2>/dev/null | head -n 1)
+  [[ -n $UI_WHY ]] || UI_WHY=$(head -c 200 <<<"$out")
+  UI_WHY=$(tr '\t\n' '  ' <<<"${UI_WHY:-no answer}"); UI_WHY=${UI_WHY% }
+  return 1
+}
 studio_push() { # WS REL — STUDIO-2: REL's studio bundle (dist/studio.tar) pushed --no-live as the pipeline key, kept as
   # bundle:studio and served at /studio/; never the app. A release without one pushes nothing; a refusal is said and
   # recorded, never fatal: the app's push already went live, and the studio stays on the version it had.
@@ -844,11 +865,14 @@ page_is() { # BUNDLE-PAGE SERVED — SERVED is the bundle's page, its {{STAMPS}}
   done < <(sed 's/{{[A-Z_]*}}/\n/g' <<<"$1")
   return 0
 }
-ui_smoke() { # WS BASE REL — ui versions lists REL's bundle live; BASE/app/, signed in, serves its page
-  local ws=$1 base=$2 rel=$3 want live tok name hdr out code body fail=0
-  want=$(sha256sum "$RELEASES/$rel/dist/ui.tar" | cut -d' ' -f1)
+ui_smoke() { # WS BASE REL [WANT] — ui versions lists WANT live (REL's bundle; UI-15: on prod the version promoted, or `any`:
+  # some version, a smoke on its own); BASE/app/, signed in, serves REL's page (an author's version keeps its index.html)
+  local ws=$1 base=$2 rel=$3 want=${4:-} live tok name hdr out code body fail=0
+  [[ -n $want ]] || want=$(sha256sum "$RELEASES/$rel/dist/ui.tar" | cut -d' ' -f1)
   live=$(kcall "$ws" ui.versions --params '{}' 2>/dev/null | jq -rR 'fromjson? | select(.type == "version" and .live) | .hash' 2>/dev/null | head -n 1)
-  if [[ $live == "$want" ]]; then say "ok   ui versions on $ws: ${want:0:12} live"
+  if [[ $want == any ]]; then
+    if [[ -n $live ]]; then say "ok   ui versions on $ws: ${live:0:12} live"; else say "FAIL ui versions on $ws: nothing live"; fail=1; fi
+  elif [[ $live == "$want" ]]; then say "ok   ui versions on $ws: ${want:0:12} live"
   else say "FAIL ui versions on $ws: ${live:-nothing} live, not ${want:0:12}"; fail=1; fi
   tok=$(kcall "$ws" auth.login --params '{"flow":{"session":{}}}' 2>/dev/null | jq -rR 'fromjson? | .token // empty' 2>/dev/null | head -n 1)
   if [[ -z $tok ]]; then say "FAIL no session from $ws to read $base/app/ signed in"; return 1; fi
@@ -1066,11 +1090,34 @@ cmd_remote() {
     tell app-prod started "$rel" "$good"
     "$INFRA/bin/infra" promote.yml -e "app_dir=$src" >&2 \
       || { record app-prod run "$rel" "infra failed"; tell app-prod failed "$rel" "$good"; die "infra did not promote to $host (it rolls prod back by itself)"; }
+    # UI-15: the release's bundle is in the store already (test's push: one file both environments
+    # mount), so prod's pointer takes test's live version — ui promote --to prod --from test, as the
+    # pipeline key on prod's socket, no second push. What test has live is what is promoted: the
+    # release's bundle, or an author's version made on test since (the studio's) — said either way.
+    UI_PROMOTED=""
+    if release_bundle "$rel"; then
+      local n="" until=$((SECONDS + SMOKE_WAIT)) want
+      while :; do n=$(health_of "wss://$host/ws"); [[ $n =~ ^[0-9]+$ || $SECONDS -ge $until ]] && break; sleep 2; done
+      if [[ ! $n =~ ^[0-9]+$ ]]; then
+        record app-prod run "$rel" "no health"; tell app-prod failed "$rel" "$good"
+        die "$host answered no tickets.health (${n:-nothing}) — nothing promoted (bin/infra rollback.yml returns prod's image)"
+      fi
+      if ! ui_promote "wss://$host/ws" test prod; then
+        record app-prod run "$rel" "promote failed: $UI_WHY"; tell app-prod failed "$rel" "$good"
+        die "ui promote --to prod --from test on $host was refused: $UI_WHY — prod's UI stays where it was (bin/infra rollback.yml returns its image)"
+      fi
+      want=$(sha256sum "$RELEASES/$rel/dist/ui.tar" | cut -d' ' -f1)
+      if [[ $UI_PROMOTED == "$want" ]]; then
+        say "ok   promoted test's live version to prod on $host: ${UI_PROMOTED:0:12} ($rel's bundle$([[ $UI_MOVED == true ]] || echo ', there already'))"
+      else
+        say "ok   promoted test's live version to prod on $host: ${UI_PROMOTED:0:12} (not $rel's bundle ${want:0:12}: what test had live — an author's version since its push)"
+      fi
+    fi
     if ! smoke_remote prod "$rel"; then
       record app-prod run "$rel" "smoke failed"; tell app-prod failed "$rel" "$good"
       die "$host runs $rel and its smoke FAILED — bin/infra rollback.yml returns it (deploy/README.md \"On the Linode\")"
     fi
-    record app-prod run "$rel" ok
+    record app-prod run "$rel" "ok${UI_PROMOTED:+ promoted ${UI_PROMOTED:0:12}}"
     tell app-prod succeeded "$rel" "$good"
   fi
   hf_output "url=$url"
@@ -1165,8 +1212,12 @@ smoke_remote() {
     elif [[ $(curl -s -o /dev/null -m 10 -w '%{http_code}' "$base/app/$js" || true) == 200 ]]; then say "ok   $host serves $rel's app ($js)"
     else say "FAIL $host does not serve $rel's app ($js)"; fail=1; fi
   fi
-  # V2-7: on test, a v2 release's bundle is what /app/ serves, signed in, and live in ui versions
-  if [[ $env == test ]] && release_bundle "$rel"; then ui_smoke "$wss" "$base" "$rel" || fail=1; fi
+  # V2-7: on test, a v2 release's bundle is what /app/ serves, signed in, and live in ui versions;
+  # UI-15: on prod, the version this run promoted (UI_PROMOTED; a smoke on its own: some version is live)
+  if release_bundle "$rel"; then
+    if [[ $env == test ]]; then ui_smoke "$wss" "$base" "$rel" || fail=1
+    else ui_smoke "$wss" "$base" "$rel" "${UI_PROMOTED:-any}" || fail=1; fi
+  fi
   return $fail
 }
 cmd_smoke() {

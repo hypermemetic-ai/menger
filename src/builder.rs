@@ -2,7 +2,7 @@ use menger_tickets_api::access::Access;
 // V2-4: `tickets`, and the addresses, the grants its reach reads and the
 // browser's sign-in — `members`, `orgs`, `epics`, `session`.
 use menger_tickets_api::{EpicsActivation, MembersActivation, OrgsActivation, ProviderOffer, SessionActivation, TicketsActivation};
-use plexus_ui_service::{Compiler, Signers, UiActivation, UiStore, UI_DB_FILE};
+use plexus_ui_service::{Compiler, Signers, UiActivation, UiStore, DEFAULT_CHANNEL, UI_DB_FILE};
 use menger_tickets_api::store::{OpenPurge, SeedShape, SeedSpec, Store, StoreError, System, PURGE_EVERY};
 use plexus_auth_core::grants::GrantsGeneration;
 use plexus_core::plexus::{Activation, AuthBackend, AuthSetup, ChildRouter, DynamicHub, Provider as AuthProvider, ProviderKind as AuthKind};
@@ -38,6 +38,18 @@ pub fn default_ui_db_path(db_path: &Path) -> PathBuf {
     }
 }
 
+/// UI-15: the ui service's channel when `--ui-channel` names none — the
+/// environment's own name for `test` and `prod` (`--env`), else the default
+/// channel (the plain `live` row), so a dev server and every test from
+/// before serve the pointer they always did.
+pub fn default_ui_channel(env: Option<&str>) -> &'static str {
+    match env {
+        Some("test") => "test",
+        Some("prod") => "prod",
+        _ => DEFAULT_CHANNEL,
+    }
+}
+
 /// FRAME-21: the login's session journal's suffix — `<stem>.sessions.jsonl`
 /// beside the tickets file (`tickets.db` → `tickets.sessions.jsonl`), so a
 /// restart (a deploy) signs no one out.
@@ -69,16 +81,28 @@ pub struct UiSetup {
 
 impl UiSetup {
     /// The store at `path` (`--ui-db-path`), pushes signed by `signers`
-    /// (`--ui-signer`).
+    /// (`--ui-signer`) — on the default channel.
     pub fn open(path: &Path, signers: Signers) -> anyhow::Result<Self> {
+        Self::open_on(path, signers, DEFAULT_CHANNEL)
+    }
+
+    /// UI-15: [`Self::open`] on `channel` (`--ui-channel`): the live pointer
+    /// this environment serves and moves in a file another environment may
+    /// share.
+    pub fn open_on(path: &Path, signers: Signers, channel: &str) -> anyhow::Result<Self> {
         // The data directory may not exist yet on a first start (the
         // tickets store makes it only when it opens, after this): make it.
         if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
             std::fs::create_dir_all(dir).map_err(|e| anyhow::anyhow!("{}: {e}", dir.display()))?;
         }
-        let store = UiStore::open(path).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
-        tracing::info!("ui:        {}", path.display());
+        let store = UiStore::open_channel(path, channel).map_err(|e| anyhow::anyhow!("{} (--ui-channel {channel}): {e}", path.display()))?;
+        tracing::info!("ui:        {} (channel {channel})", path.display());
         Ok(Self { store: Arc::new(store), signers, compiler: None, author: None })
+    }
+
+    /// UI-15: the channel the store is on.
+    pub fn channel(&self) -> &str {
+        self.store.channel()
     }
 
     /// UI-7: pushes compile in `compiler` (`--ui-compiler`).
@@ -415,5 +439,17 @@ mod tests {
         let ui = default_ui_db_path(tickets);
         assert_ne!(ui, tickets);
         assert_eq!(ui.parent(), tickets.parent(), "still beside it");
+    }
+
+    /// UI-15: the channel follows the environment's name for test and prod,
+    /// and is the default — the plain `live` row — anywhere else.
+    #[test]
+    fn the_ui_channel_is_the_environments_or_the_default() {
+        assert_eq!(default_ui_channel(Some("test")), "test");
+        assert_eq!(default_ui_channel(Some("prod")), "prod");
+        assert_eq!(default_ui_channel(Some("staging")), "default");
+        assert_eq!(default_ui_channel(None), "default");
+        assert_eq!(plexus_ui_service::live_pointer(default_ui_channel(None)), "live");
+        assert_eq!(plexus_ui_service::live_pointer(default_ui_channel(Some("prod"))), "live:prod");
     }
 }

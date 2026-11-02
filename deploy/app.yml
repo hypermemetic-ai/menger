@@ -70,6 +70,17 @@ data:
   mount: /data
   per_environment: true
 
+# UI-15: one component store for both environments — the ui service's file
+# (MENGER_UI_DB_PATH=/shared/ui.db in each deploy/env/app-*.env) on one
+# volume every environment's container mounts read-write: infra's Docker
+# volume <app>-shared (menger-shared), its directory owned by the image's
+# uid; promote.yml and rollback.yml keep it. Each environment serves its own
+# live pointer in it (MENGER_UI_CHANNEL: test, prod); a release to prod is
+# `ui promote --to prod --from test`, no second push.
+shared:
+  mount: /shared
+  owner: 10001
+
 # RUN-13: prod's data (local prod peaks near 600 MB with ~975 tickets) on a
 # 3.9 GB box holding both environments; a limit, not a reservation.
 resources:
