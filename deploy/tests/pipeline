@@ -1789,5 +1789,27 @@ printf 'MENGER_RUNNER_MODE=--watch\n' >"$HOME/.config/menger/deploy-runner.env"
 run status
 has "$T5: status, no branch set: main" "$(<"$SCRATCH/out")" "  branch    main"
 
+# ── UI-17 ui_goes_live_on_test_with_no_release ──────────────────────────────
+# deploy/pipeline ui: this checkout's ui/ with the tool and the engine of the release test runs,
+# the contract asked of test, pushed; no cargo, no docker, no infra. --watch again on each change,
+# a refusal said and the watch goes on. ui promote moves prod's pointer and pushes nothing.
+T17=ui_goes_live_on_test_with_no_release
+export MENGER_UI_CACHE=$SCRATCH/ui-cache
+mkdir -p "$MENGER_UI_CACHE/$V4/engine"; echo x >"$MENGER_UI_CACHE/$V4/engine/engine.js"; echo x >"$MENGER_UI_CACHE/$V4/engine/engine.wasm"
+: >"$STUB_UI_STATE/calls"; : >"$SCRATCH/infra.argv"; : >"$STUB_ARGV"
+STUB_UI_SIGNER=$PUB2 v2run ui
+same "$T17: exits 0" "$code" 0
+has "$T17: built with --contract-from test's socket" "$(cat "$STUB_ARGV")" "--contract-from wss://app-test.menger.sh/ws"
+has "$T17: pushed to test" "$(cat "$STUB_UI_STATE/calls")" "ui.push wss://app-test.menger.sh/ws pipeline"
+same "$T17: no infra" "$(wc -c <"$SCRATCH/infra.argv" | tr -d ' ')" 0
+has "$T17: said" "$err" "live on test"
+: >"$STUB_UI_STATE/calls"
+v2run ui promote
+same "$T17: promote exits 0" "$code" 0
+has "$T17: one promote on prod's socket" "$(cat "$STUB_UI_STATE/calls")" "ui.promote wss://app.menger.sh/ws pipeline argv"
+[[ $(grep -c '^ui.push' "$STUB_UI_STATE/calls") == 0 ]] && ok || bad "$T17: promote pushed"
+v2run ui nonsense
+same "$T17: usage exits 1" "$code" 1
+
 printf 'deploy/pipeline records: %d passed, %d failed\n' "$pass" "$fail"
 [[ $fail == 0 ]]

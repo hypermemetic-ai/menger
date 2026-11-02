@@ -88,6 +88,8 @@ deploy/pipeline status                                 # what test and prod run,
 deploy/pipeline releases                               # every release: its suite, tested?, where it runs
 deploy/pipeline backfill                               # deployments.log → the tracker's records (idempotent)
 deploy/pipeline landing [REV] [--check]                # landing/ at REV (default main) → gate → the edge (menger.sh)
+deploy/pipeline ui [--watch]                           # UI-17: ui/ of this checkout, committed or not, live on test: no image, no cargo
+deploy/pipeline ui promote                             # UI-17: what test has live onto prod, a pointer move (the owner's)
 deploy/pipeline remote-secret test|prod                # IDENTITY-45: the WorkOS API key on the box, from a pipe
 ```
 
