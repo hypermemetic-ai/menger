@@ -200,4 +200,31 @@ impl Revisions {
             restore_write(&store, &user, &id, rev, fields, act).await
         })
     }
+
+    /// What each author's writes keep (admin of *): tickets created and body bytes written, per principal — what quota.recount reads; yields usage { principal, count, bytes } each.
+    ///
+    /// V2-31: per actor, from the revisions: `count` the tickets they
+    /// created, `bytes` the bodies they wrote (a revision that created a
+    /// ticket or changed its body; a baseline's is nobody's). `principal`
+    /// narrows to one. The quota service asks it, through the seam, to
+    /// recount `tickets.count` and `tickets.bytes`. Admin of `*`.
+    #[plexus_macros::method(group = "read", example(note = "every author", params = r#"{}"#))]
+    pub async fn usage(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// Only this principal, e.g. key:4b1c… (optional: every author).
+        principal: Option<crate::vocab::Principal>,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let store = self.store.clone();
+        stream! {
+            match store.revision_usage(&user, principal.map(|p| p.to_string())).await {
+                Ok(rows) => {
+                    for (principal, count, bytes) in rows {
+                        yield TicketsEvent::Usage { principal, count, bytes };
+                    }
+                }
+                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
+            }
+        }
+    }
 }

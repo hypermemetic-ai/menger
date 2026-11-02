@@ -663,6 +663,23 @@ impl MediaStore {
         .await
     }
 
+    /// V2-31: every uploader's charge — each file once, against whoever kept
+    /// it first (the quota service committed its bytes to them; a later
+    /// put of the same bytes is a duplicate, released): (principal, files,
+    /// bytes), by principal.
+    pub async fn usage_charged(self: &Arc<Self>) -> Result<Vec<(String, u64, u64)>, StoreError> {
+        self.blocking(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT o.put_by, count(*), coalesce(sum(m.bytes), 0) FROM media m JOIN media_owners o ON o.hash = m.hash
+                  WHERE o.rowid = (SELECT rowid FROM media_owners WHERE hash = m.hash AND put_by IS NOT NULL AND put_by != '' ORDER BY at, rowid LIMIT 1)
+                  GROUP BY o.put_by ORDER BY o.put_by",
+            )?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64, r.get::<_, i64>(2)? as u64)))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+        .await
+    }
+
     /// EDITOR-10: what `url` unfurled to, kept within `max_age` seconds.
     pub async fn unfurl_cached(self: &Arc<Self>, url: &str, max_age: i64) -> Result<Option<String>, StoreError> {
         let url = url.to_string();

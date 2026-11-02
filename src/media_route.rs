@@ -146,7 +146,7 @@ pub async fn answer(serve: &MediaServe, principal: &str, info: MediaInfo, header
     // HEAD sends none).
     if !head {
         match serve.allowance.reserve(principal, source::EGRESS_BYTES, len).await {
-            Ok(r) => serve.allowance.commit(&r.id).await,
+            Ok(r) => serve.allowance.commit(&r.id, None).await,
             Err(d) => return (StatusCode::TOO_MANY_REQUESTS, [(header::CACHE_CONTROL, NO_STORE)], d.message).into_response(),
         }
     }
@@ -268,7 +268,7 @@ mod tests {
         async fn reserve(&self, _: &str, source: &str, _: u64) -> Result<Reservation, Denied> {
             Err(Denied { remaining: Some(0), message: format!("{source}: none left") })
         }
-        async fn commit(&self, _: &str) {}
+        async fn commit(&self, _: &str, _: Option<u64>) {}
         async fn release(&self, _: &str) {}
     }
 

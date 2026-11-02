@@ -69,6 +69,10 @@ menger-media = { path = "media", version = "0.6.2" }
 # V2-29: the docs service — documents on their own API and file (`docs.db`),
 # every write a revision, the organization's roles held by the gate.
 menger-docs = { path = "docs", version = "0.6.2" }
+# V2-31: the quota service — allowances per principal and source, `quota.*`,
+# its own file (`quota.db`); the meter the tickets service's writes reserve
+# through; the write-rate bucket the call layer keeps.
+menger-quota = { path = "quota", version = "0.6.2" }
 # UI-3, FRAME-5: the ui service — the framework's (`../plexus-ui/service`):
 # its activation registered beside `tickets`, its routes mounted on the
 # shell, serving `/`, `/app/` and `/app/<hash>/…` from its store.

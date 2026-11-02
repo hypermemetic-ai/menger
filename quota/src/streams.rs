@@ -226,12 +226,14 @@ pub(crate) async fn set(act: QuotaActivation, user: Caller, who: (Option<String>
     }
 }
 
-/// The stores `recount` asks, and which of their counts is which source:
-/// (method, the source its `count` is, the source its `bytes` is).
-pub const COUNTERS: &[(&str, Option<&str>, Option<&str>)] = &[
-    ("tickets.revisions.usage", Some("tickets.count"), Some("tickets.bytes")),
-    ("media.usage", None, Some("media.bytes")),
-    ("docs.usage", Some("docs.count"), Some("docs.bytes")),
+/// The stores `recount` asks — each for every principal, as the server —
+/// and which of their counts is which source: (method, its params, the
+/// source its `count` is, the source its `bytes` is). Each yields `usage {
+/// principal, count?, files?, bytes? }` per principal.
+pub const COUNTERS: &[(&str, &str, Option<&str>, Option<&str>)] = &[
+    ("tickets.revisions.usage", "{}", Some("tickets.count"), Some("tickets.bytes")),
+    ("media.usage", r#"{"everyone": true}"#, None, Some("media.bytes")),
+    ("docs.usage", "{}", Some("docs.count"), Some("docs.bytes")),
 ];
 
 pub(crate) fn recount(act: QuotaActivation, user: Option<Caller>, principal: Option<String>) -> impl Stream<Item = QuotaEvent> + Send + 'static {
@@ -244,8 +246,8 @@ pub(crate) fn recount(act: QuotaActivation, user: Option<Caller>, principal: Opt
         }
         let (mut counted_sources, mut not_counted) = (Vec::new(), Vec::new());
         let (mut seen, mut drifted) = (std::collections::BTreeSet::new(), 0u32);
-        for (method, count_src, bytes_src) in COUNTERS {
-            let counted = match act.seam.counted(method, principal.as_deref()).await {
+        for (method, params, count_src, bytes_src) in COUNTERS {
+            let counted = match act.seam.counted(method, params).await {
                 Ok(c) => c,
                 Err(why) => {
                     not_counted.push(format!("{method}: {why}"));

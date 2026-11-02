@@ -108,6 +108,9 @@ mod events;
 mod sight;
 #[cfg(feature = "server")]
 mod update;
+// V2-31: a write held against the author's allowance (the quota service's meter).
+#[cfg(feature = "server")]
+mod metered;
 // ACCESS-14: inputs, filled and mounted (`tickets.inputs.<method>`). The
 // module is not gated: its attribute emits `InputsClient` in the client build.
 mod inputs;
@@ -299,15 +302,16 @@ impl TicketsActivation {
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         // ORG-4: the organization first (activation/orgs.rs); ACCESS-11:
         // the proofs a birth takes (activation/writes.rs); MENGER-13: its
-        // first status is a transition, the caller's.
-        // ARCHIVE-2: under an archived parent, its chain comes back after.
+        // first status is a transition, the caller's. ARCHIVE-2: under an
+        // archived parent, its chain comes back after. V2-31: the birth held
+        // against the author's allowance first (metered::born).
+        let access = self.access.clone();
         answered_then!(store = self.store.clone(), user, None, then => {
             let epic = epic_in(&store, &user, epic.into_string(), org, parent.as_deref())?;
             let at = filing(&store, &user, &epic, parent.as_deref(), blocked_by.as_deref())?;
             let (act, chain) = (act_of(&user, None, None)?, chain_under(&store, &user, &epic, parent.as_deref())?);
-            let (title, kind, blocked_by) = (title.into_string(), kind.unwrap_or(Kind::Build), blocked_by.unwrap_or_default());
-            let (parent, path, body) = (parent.map(String::from), path.map(String::from), body.map(String::from).unwrap_or_default());
-            let ticket = store.create_by(at, NewTicket { epic, title, kind, severity, blocked_by, parent, path, body }, act).await?;
+            let new = metered::new_ticket(epic, title, kind, severity, blocked_by, parent, path, body);
+            let ticket = metered::born(&access, &user, &store, at, new, act).await?;
             then = restore_chain(&store, &user, chain, format!("{} was filed under it", ticket.id)).await;
             Ok(TicketsEvent::Created { ticket })
         })
@@ -592,9 +596,17 @@ impl TicketsActivation {
         /// New markdown body, the whole of it (optional).
         body: Option<Body>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        // V2-31: a new body's bytes held against the author's allowance first; counted if it changed.
+        let access = self.access.clone();
         answered!(store = self.store.clone(), user, Some(id.to_string()) => {
             let on = permit::<Editor>(&store, &user, &id)?;
-            Ok(change_event(store.amend(on, title.map(String::from), body.map(String::from)).await?))
+            let body = body.map(String::from);
+            let held = metered::hold(&access, &user, &[("tickets.bytes", body.as_ref().map_or(0, |b| b.len() as u64))]).await?;
+            let changed = |c: &crate::store::Change, _: &str| match c {
+                crate::store::Change::Amended { changed, .. } if changed.contains(&crate::vocab::AmendedField::Body) => None,
+                _ => Some(0),
+            };
+            Ok(change_event(held.settle(store.amend(on, title.map(String::from), body).await, changed).await?))
         })
     }
 
@@ -724,10 +736,14 @@ impl TicketsActivation {
         // blocker beyond it is proved here (`updating`, ACCESS-11).
         let ask = crate::store::Update { hidden, ..update_of(title, body, kind, status, parent, severity, block, unblock) };
         // ARCHIVE-2: moved under an archived parent, its chain comes back after.
+        // V2-31: a new body's bytes held against the author's allowance first; counted if it changed.
+        let access = self.access.clone();
         answered_then!(store = self.store.clone(), user, Some(id.to_string()), then => {
             let at = updating(&store, &user, permit::<Editor>(&store, &user, &id)?, &ask)?;
             let (act, chain) = (act_of(&user, source, message)?, chain_of(&store, &user, ask.parent.as_deref())?);
-            let crate::store::Updated { ticket, changed } = store.update_by(at, ask, act).await?;
+            let held = metered::hold(&access, &user, &[("tickets.bytes", ask.body.as_ref().map_or(0, |b| b.len() as u64))]).await?;
+            let body_moved = |u: &crate::store::Updated, _: &str| (!u.changed.iter().any(|c| c == "body")).then_some(0);
+            let crate::store::Updated { ticket, changed } = held.settle(store.update_by(at, ask, act).await, body_moved).await?;
             then = restore_chain(&store, &user, chain, format!("{} was moved under it", ticket.id)).await;
             Ok(TicketsEvent::Updated { ticket, changed })
         })

@@ -314,7 +314,7 @@ impl Ledger {
 
     /// Reserves `amount` of `source` for `who` at `now` — one transaction:
     /// the expired swept, then refused if the box is full (`box_used`, past
-    /// the full line, for anyone not exempt), if as many reservations of the
+    /// the full line, for anyone not exempt, on a source that stores), if as many reservations of the
     /// source are open as the plan allows at once, or if used + held +
     /// `amount` would pass the cap; else held until `now` + the hold time.
     pub fn reserve(&self, who: &Who, source: &str, amount: u64, now: i64, box_used: Option<f64>) -> Result<Reserved, Refusal> {
@@ -322,7 +322,9 @@ impl Ledger {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate).map_err(LedgerError::from)?;
         tx.execute("DELETE FROM holds WHERE expires <= ?1", [now]).map_err(LedgerError::from)?;
-        if !who.exempt {
+        // The box guard is the disk's: it holds what is stored (a source
+        // counted for good), never a day's fetches or what is served.
+        if !who.exempt && src.window == sources::Window::Total {
             if let Some(u) = box_used.filter(|u| *u >= self.settings.box_lines.full_percent) {
                 return Err(Refusal::BoxFull { used_percent: u, full_percent: self.settings.box_lines.full_percent });
             }

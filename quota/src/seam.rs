@@ -125,7 +125,7 @@ impl Seam {
             }
         }
         let Some((service, system)) = self.service() else { return Vec::new() };
-        let members: Vec<String> = match call(&service, &system, "members.teams.show", json!({ "name": team })).await {
+        let members: Vec<String> = match call(&service, &system, "members.teams.show", json!({ "team": team })).await {
             Ok(items) => items.iter().filter(|v| v["type"] == "team_member").filter_map(|v| v["member"]["principal"].as_str().map(str::to_string)).collect(),
             Err(e) => {
                 tracing::warn!("V2-31: members.teams.show {team} through the seam: {e}");
@@ -136,13 +136,16 @@ impl Seam {
         members
     }
 
-    /// The principals granted a role in organization `org` (`members.list
-    /// { scope: "<org>:" }`), and the members of its teams granted one.
+    /// The principals granted a role in organization `org` — on it or on a
+    /// shortcode in it (`members.list`, a grant's scope `<org>:…`) — and
+    /// the members of its teams granted one.
     pub async fn principals_in(&self, org: &str) -> Result<Vec<String>, String> {
         let (service, system) = self.service().ok_or("the quota service is not attached to a running service")?;
-        let items = call(&service, &system, "members.list", json!({ "scope": format!("{org}:") })).await?;
+        let prefix = format!("{org}:");
+        let items = call(&service, &system, "members.list", json!({})).await?;
+        let items: Vec<&Value> = items.iter().filter(|v| v["type"] != "grant" || v["grant"]["scope"].as_str().is_some_and(|s| s.starts_with(&prefix))).collect();
         let mut out = std::collections::BTreeSet::new();
-        for v in &items {
+        for v in items {
             if let Some(m) = v["message"].as_str().filter(|_| v["type"] == "error") {
                 return Err(m.to_string());
             }
@@ -160,21 +163,18 @@ impl Seam {
     }
 
     /// `method` (a store's usage read: `tickets.revisions.usage`,
-    /// `media.usage`, `docs.usage`) asked as the server, for `principal` or
-    /// everyone: each `usage { principal, count?, bytes? }` it yields.
-    pub async fn counted(&self, method: &str, principal: Option<&str>) -> Result<HashMap<String, Counted>, String> {
+    /// `media.usage`, `docs.usage`) asked as the server with `params` (every
+    /// principal): each `usage { principal, count? | files?, bytes? }` it yields.
+    pub async fn counted(&self, method: &str, params: &str) -> Result<HashMap<String, Counted>, String> {
         let (service, system) = self.service().ok_or("the quota service is not attached to a running service")?;
-        let params = match principal {
-            Some(p) => json!({ "principal": p }),
-            None => json!({}),
-        };
+        let params: Value = serde_json::from_str(params).map_err(|e| e.to_string())?;
         let items = call(&service, &system, method, params).await?;
         let mut out = HashMap::new();
         for v in &items {
             match v["type"].as_str() {
                 Some("usage") => {
                     if let Some(p) = v["principal"].as_str() {
-                        out.insert(p.to_string(), Counted { count: v["count"].as_u64(), bytes: v["bytes"].as_u64() });
+                        out.insert(p.to_string(), Counted { count: v["count"].as_u64().or(v["files"].as_u64()), bytes: v["bytes"].as_u64() });
                     }
                 }
                 Some("error") => return Err(v["message"].as_str().unwrap_or("refused").to_string()),

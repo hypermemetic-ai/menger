@@ -21,6 +21,14 @@
 //!   call open and none begun for that long is closed. An app holds its
 //!   `watch` open, so it is never idle; a script's socket closes itself.
 //!
+//! - **Writes per principal** (V2-31, [`menger_quota::Buckets`],
+//!   `--max-writes-per-second`, 20 by default with a burst of twice that —
+//!   the owner's free tier): a write (a method an editor holds and a viewer
+//!   does not, as the activations declare their roles) past the
+//!   principal's bucket (an admin of `*` has none) is answered with one error item, `error_kind:
+//!   too_many_writes` with `retry_after_ms`, recoverable; nothing is
+//!   written.
+//!
 //! What it cannot see is the transport's (PERF-20, plexus-transport's own
 //! socket loop): a connection that never makes a call is closed by the
 //! transport's idle limit, which `--idle-timeout-secs` sets too (RPC-5); a
@@ -30,8 +38,8 @@
 //! Over stdio or a plain HTTP request there is no connection, and nothing
 //! is counted.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, Weak};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use jsonrpsee::RpcModule;
@@ -47,6 +55,16 @@ pub const CALLS_PER_CONNECTION: usize = 256;
 /// fifteen minutes.
 pub const IDLE_SECS: u64 = 900;
 
+/// V2-31: the connections one signed-in principal may hold open (the
+/// owner's free tier: 4 — a browser tab or two and an agent's held socket);
+/// main's `--max-connections-per-principal` default, handed to the
+/// transport's own per-principal quota (AUTH-12), whose default is 64.
+pub const CONNECTIONS_PER_PRINCIPAL: u32 = 4;
+
+/// V2-31: the writes one principal may make a second, sustained (the
+/// owner's free tier: about 20); twice that at once after a pause.
+pub const WRITES_PER_SECOND: u32 = 20;
+
 /// [`rpc_module`]'s limits (main's flags).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CallLimits {
@@ -54,12 +72,25 @@ pub struct CallLimits {
     pub per_connection: usize,
     /// A connection with no call open for this long is closed; `None`: never.
     pub idle: Option<Duration>,
+    /// V2-31: writes one principal may make a second, sustained (0: no limit).
+    pub writes_per_second: u32,
 }
 
 impl Default for CallLimits {
     fn default() -> Self {
-        Self { per_connection: CALLS_PER_CONNECTION, idle: Some(Duration::from_secs(IDLE_SECS)) }
+        Self { per_connection: CALLS_PER_CONNECTION, idle: Some(Duration::from_secs(IDLE_SECS)), writes_per_second: WRITES_PER_SECOND }
     }
+}
+
+/// The error item a write past the principal's rate gets.
+pub const TOO_MANY_WRITES: &str = "too_many_writes";
+
+/// V2-31: the methods that write — an editor's and not a viewer's, as the
+/// activations declare their roles (children under their whole path).
+fn writes_of(hub: &DynamicHub) -> HashSet<String> {
+    let roles = hub.declared_roles();
+    let viewer: HashSet<&String> = roles.get("viewer").map(|v| v.iter().collect()).unwrap_or_default();
+    roles.get("editor").map(|e| e.iter().filter(|g| !viewer.contains(g)).cloned().collect()).unwrap_or_default()
 }
 
 /// The error item a call past the limit gets (the module docs).
@@ -75,12 +106,17 @@ pub fn rpc_module(hub: Arc<DynamicHub>, limits: CallLimits) -> anyhow::Result<Rp
     module.remove_method(call);
     module.remove_method(unsub);
     let open = Open::new(limits);
+    // V2-31: each principal's write bucket, and which methods write (read
+    // from the roles at the first call: the hub is whole by then).
+    let rate = f64::from(limits.writes_per_second);
+    let buckets = Arc::new(menger_quota::Buckets::new(rate, rate * 2.0));
+    let writes: Arc<OnceLock<HashSet<String>>> = Arc::new(OnceLock::new());
     if let Some(idle) = limits.idle {
         Open::sweep(Arc::downgrade(&open), idle);
     }
     module
         .register_subscription(call, call, unsub, move |params, pending, _ctx, ext| {
-            let (hub, open) = (hub.clone(), open.clone());
+            let (hub, open, buckets, writes) = (hub.clone(), open.clone(), buckets.clone(), writes.clone());
             async move {
                 let place = match ext.get::<Arc<Connection>>() {
                     Some(conn) => match open.admit(conn) {
@@ -99,6 +135,18 @@ pub fn rpc_module(hub: Arc<DynamicHub>, limits: CallLimits) -> anyhow::Result<Rp
                 // ACCESS-13: with login off, the anonymous caller.
                 let anonymous = AuthContext::anonymous();
                 let auth = caller(&hub, ext.get::<Arc<AuthContext>>().map(|a| a.as_ref()), &anonymous);
+                // V2-31: a write past the principal's rate is answered, not run.
+                if let Some(principal) = auth.and_then(|a| a.principal()).map(|p| p.to_string()) {
+                    if writes.get_or_init(|| writes_of(&hub)).contains(&p.method) {
+                        let exempt = || auth.is_some_and(|a| admin_everywhere(&hub, a));
+                        if let Err(wait) = buckets.take(&principal, Instant::now()).or_else(|w| if exempt() { Ok(()) } else { Err(w) }) {
+                            let sink = pending.accept().await?;
+                            sink.send(serde_json::value::to_raw_value(&too_fast(ns, wait, buckets.rate()))?).await?;
+                            drop(place);
+                            return Ok(());
+                        }
+                    }
+                }
                 let result = hub.route(&p.method, p.params.unwrap_or_default(), auth).await;
                 let sink = pending.accept().await?;
                 let piped = match result {
@@ -156,6 +204,30 @@ fn too_many(ns: &str, max: usize) -> Value {
     if let Some(o) = v.as_object_mut() {
         o.insert("error_kind".into(), TOO_MANY_CALLS.into());
         o.insert("max".into(), max.into());
+    }
+    v
+}
+
+/// V2-31: an admin of `*` (the operator among them) writes at any rate, as
+/// it stores past any cap — asked of the gate only once its bucket is empty.
+fn admin_everywhere(hub: &DynamicHub, caller: &AuthContext) -> bool {
+    hub.gate().is_none_or(|g| g.held_on(caller, &plexus_auth_core::grants::Grant::new(menger_quota::seam::ADMIN_GRANT)).iter().any(|s| s.is_everywhere()))
+}
+
+/// The refusal past the write rate: an error item, typed, with how long to wait.
+fn too_fast(ns: &str, wait: Duration, rate: f64) -> Value {
+    let ms = wait.as_millis().max(1) as u64;
+    let item = PlexusStreamItem::Error {
+        metadata: StreamMetadata::new(vec![ns.into()], PlexusContext::hash()),
+        message: format!("too many writes ({rate:.0} a second sustained): try again in {ms} ms; nothing was written"),
+        code: Some(TOO_MANY_WRITES.into()),
+        recoverable: true,
+        fields: Default::default(),
+    };
+    let mut v = serde_json::to_value(&item).unwrap_or(Value::Null);
+    if let Some(o) = v.as_object_mut() {
+        o.insert("error_kind".into(), TOO_MANY_WRITES.into());
+        o.insert("retry_after_ms".into(), ms.into());
     }
     v
 }
@@ -262,8 +334,16 @@ mod tests {
     }
 
     #[test]
+    fn a_write_too_fast_is_an_error_item_with_its_wait() {
+        let v = too_fast("menger", Duration::from_millis(50), 20.0);
+        assert_eq!((v["type"].as_str(), v["error_kind"].as_str(), v["retry_after_ms"].as_u64()), (Some("error"), Some(TOO_MANY_WRITES), Some(50)), "{v}");
+        assert_eq!(v["recoverable"], true);
+    }
+
+    #[test]
     fn the_defaults_are_the_named_ones() {
         let d = CallLimits::default();
+        assert_eq!(d.writes_per_second, WRITES_PER_SECOND);
         assert_eq!((d.per_connection, d.idle), (CALLS_PER_CONNECTION, Some(Duration::from_secs(IDLE_SECS))));
         let open = Open::new(d);
         assert_eq!(open.tracked(), 0);

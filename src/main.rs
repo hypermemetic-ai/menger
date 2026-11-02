@@ -94,6 +94,18 @@ struct Args {
     #[arg(long, env = "MENGER_DOCS_DB_PATH", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
     docs_db_path: Option<PathBuf>,
 
+    // V2-31: the quota service's own file, and the plan a new one starts from.
+    /// The quota service's file — every principal's usage and allowances (default: quota.db beside the database file)
+    #[arg(long, env = "MENGER_QUOTA_DB_PATH", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
+    quota_db_path: Option<PathBuf>,
+
+    /// The plan a new quota file starts from — its default caps, uploads at once, the box lines (JSON; default: the built-in free tier, free-1k)
+    ///
+    /// Read only into a fresh file; after that the file's own rows are the
+    /// truth and `quota.set` moves them.
+    #[arg(long, env = "MENGER_QUOTA_PLAN", value_name = "FILE", help_heading = RUN, hide_short_help = true)]
+    quota_plan: Option<PathBuf>,
+
     /// A public key (64 hex digits, Ed25519) a `ui.push` may be signed by
     ///
     /// Repeatable; in the env var, separated by `;`. With none, every push is
@@ -365,6 +377,11 @@ struct Args {
     #[arg(long, env = "MENGER_IDLE_TIMEOUT_SECS", default_value_t = menger::calls::IDLE_SECS, value_name = "SECS", help_heading = LIMITS, hide_short_help = true)]
     idle_timeout_secs: u64,
 
+    // V2-31: the owner's free tier — about 20 writes a second sustained.
+    /// Writes one principal may make a second, sustained; twice that at once (0: no limit)
+    #[arg(long, env = "MENGER_MAX_WRITES_PER_SECOND", default_value_t = menger::calls::WRITES_PER_SECOND, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
+    max_writes_per_second: u32,
+
     // ACCESS-29 (AUTH-12's quotas).
     /// Connections open in all.
     #[arg(long, env = "MENGER_MAX_CONNECTIONS", default_value_t = ConnectionQuotas::default().max_connections, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
@@ -376,7 +393,8 @@ struct Args {
     max_connections_per_ip: u32,
 
     /// Connections one signed-in principal holds.
-    #[arg(long, env = "MENGER_MAX_CONNECTIONS_PER_PRINCIPAL", default_value_t = ConnectionQuotas::default().max_per_principal, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
+    // V2-31: 4, the owner's free tier (the transport's own default is 64).
+    #[arg(long, env = "MENGER_MAX_CONNECTIONS_PER_PRINCIPAL", default_value_t = menger::calls::CONNECTIONS_PER_PRINCIPAL, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
     max_connections_per_principal: u32,
 
     /// Connections that prove no one, in all (held below --max-connections).
@@ -610,6 +628,8 @@ async fn run(args: Args) -> anyhow::Result<()> {
     }
     let blobs = menger::media_blobs(&args.media_store, args.media_blob_dir.as_deref(), &media_db_path)?;
     let media = menger::MediaSetup::open_with(&media_db_path, blobs)?.max_upload(args.media_max_bytes).fetch_allow(args.media_fetch_allow.clone());
+    // V2-31: metered by the quota service — the route's egress too.
+    let media = media.metered(access.meter());
     let media_serve = media.clone();
     // V2-29: the docs service's file (beside the tickets file unless named):
     // never the tickets, ui or media file.
@@ -618,7 +638,18 @@ async fn run(args: Args) -> anyhow::Result<()> {
         anyhow::bail!("--docs-db-path {} is the {whose} file: the docs service keeps a file of its own", docs_db_path.display());
     }
     let docs = menger::DocsSetup::open(&docs_db_path)?;
-    let hub = build_rpc_services(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, ui, media, docs, |store, access| {
+    // V2-31: the quota service's file (beside the tickets file unless
+    // named): never another service's; a new one starts from the plan.
+    let quota_db_path = args.quota_db_path.clone().unwrap_or_else(|| menger::default_quota_db_path(&db_path));
+    if [&db_path, &ui_db_path, &media_db_path, &docs_db_path].contains(&&quota_db_path) {
+        anyhow::bail!("--quota-db-path {} is another service's file: the quota service keeps a file of its own", quota_db_path.display());
+    }
+    let plan = match &args.quota_plan {
+        Some(f) => menger_quota::Plan::parse(&std::fs::read_to_string(f).map_err(|e| anyhow::anyhow!("--quota-plan {}: {e}", f.display()))?).map_err(|e| anyhow::anyhow!("--quota-plan {}: {e}", f.display()))?,
+        None => menger_quota::Plan::built_in(),
+    };
+    let quota = menger::QuotaSetup::open(&quota_db_path, &plan)?;
+    let hub = build_rpc_services(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, ui, media, docs, quota, |store, access| {
         menger::TicketsActivation::with_access(store, access)
     })
     .await?;
@@ -632,6 +663,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
     // ACCESS-29: `menger.call` held to the calls a connection may have open,
     // and a connection idle with none closed (menger::calls).
     let limits = menger::calls::CallLimits {
+        writes_per_second: args.max_writes_per_second,
         per_connection: args.max_calls_per_connection,
         idle: (args.idle_timeout_secs > 0).then(|| std::time::Duration::from_secs(args.idle_timeout_secs)),
     };

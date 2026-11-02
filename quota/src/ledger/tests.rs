@@ -130,6 +130,7 @@ fn the_box_guard_refuses_the_capped_never_the_exempt() {
     let admin = Who { exempt: true, ..Who::plain("idp:admin") };
     assert!(l.reserve(&admin, "tickets.bytes", 1, T0, Some(99.0)).is_ok(), "an admin of * still writes");
     assert!(l.reserve(&who, "tickets.bytes", 1, T0, None).is_ok(), "a disk that cannot be read refuses nothing");
+    assert!(l.reserve(&who, "media.egress.bytes", 1, T0, Some(99.0)).is_ok(), "what is served stores nothing: never box_full");
 }
 
 #[test]

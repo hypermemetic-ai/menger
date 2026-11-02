@@ -54,8 +54,10 @@ pub struct Denied {
 pub trait Allowance: Send + Sync + std::fmt::Debug {
     /// Holds `amount` of `source` for `principal`, or refuses.
     async fn reserve(&self, principal: &str, source: &str, amount: u64) -> Result<Reservation, Denied>;
-    /// The reservation `id` is used: it counts.
-    async fn commit(&self, id: &str);
+    /// The reservation `id` is used: it counts — `amount` of it, what was
+    /// actually kept (none: all it held). V2-31: a put reserves a bound
+    /// (base64's), a fetch the most one may read; the kept size is what counts.
+    async fn commit(&self, id: &str, amount: Option<u64>);
     /// The reservation `id` is not used: it is given back.
     async fn release(&self, id: &str);
 }
@@ -69,7 +71,7 @@ impl Allowance for Unlimited {
     async fn reserve(&self, principal: &str, source: &str, amount: u64) -> Result<Reservation, Denied> {
         Ok(Reservation { id: uuid::Uuid::new_v4().simple().to_string(), principal: principal.into(), source: source.into(), amount })
     }
-    async fn commit(&self, _id: &str) {}
+    async fn commit(&self, _id: &str, _amount: Option<u64>) {}
     async fn release(&self, _id: &str) {}
 }
 

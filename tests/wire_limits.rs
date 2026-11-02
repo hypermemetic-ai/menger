@@ -69,7 +69,7 @@ async fn first(sub: &mut Subscription<Value>) -> Value {
 
 #[tokio::test]
 async fn a_call_past_the_connection_s_limit_is_refused_typed_and_a_closed_watch_gives_its_place_back() {
-    let port = start(CallLimits { per_connection: 3, idle: None }, ConnectionQuotas::default()).await;
+    let port = start(CallLimits { per_connection: 3, idle: None, ..CallLimits::default() }, ConnectionQuotas::default()).await;
     let c = connect(port).await.unwrap();
     let mut watches = Vec::new();
     for _ in 0..3 {
@@ -107,7 +107,7 @@ async fn a_call_past_the_connection_s_limit_is_refused_typed_and_a_closed_watch_
 
 #[tokio::test]
 async fn a_connection_idle_with_no_call_open_is_closed_and_an_open_watch_keeps_it() {
-    let port = start(CallLimits { per_connection: 16, idle: Some(Duration::from_secs(2)) }, ConnectionQuotas::default()).await;
+    let port = start(CallLimits { per_connection: 16, idle: Some(Duration::from_secs(2)), ..CallLimits::default() }, ConnectionQuotas::default()).await;
     let idle = connect(port).await.unwrap();
     let mut h = call(&idle, "tickets.health", json!({})).await;
     assert_eq!(first(&mut h).await["type"], "data");

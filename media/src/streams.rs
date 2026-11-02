@@ -68,7 +68,7 @@ async fn owner(seam: &Seam, user: &Caller, ticket: Option<&TicketRef>, doc: Opti
 /// Commits `id` when `ev` kept something new, else releases it.
 async fn settle(allowance: &dyn Allowance, id: &str, ev: &MediaEvent) {
     match ev {
-        MediaEvent::Stored { duplicate: false, .. } => allowance.commit(id).await,
+        MediaEvent::Stored { duplicate: false, bytes, .. } => allowance.commit(id, Some(*bytes)).await,
         _ => allowance.release(id).await,
     }
 }
@@ -168,11 +168,24 @@ pub(crate) async fn info(me: MediaActivation, user: Caller, hash: MediaHash) -> 
 }
 
 /// `media.usage`: what the caller has put.
-pub(crate) async fn usage(me: MediaActivation, user: Caller) -> MediaEvent {
-    match me.store.usage(user.principal()).await {
-        Ok((files, bytes)) => MediaEvent::Usage { principal: user.principal().to_string(), files, bytes },
-        Err(e) => MediaEvent::Error { message: e.to_string() },
+pub(crate) async fn usage(me: MediaActivation, user: Caller, (principal, everyone): (Option<String>, bool)) -> Vec<MediaEvent> {
+    // V2-31: another's, or every uploader's, is an admin's of `*` — asked as
+    // a grant no role but admin holds (the quota service's own).
+    let mine = principal.as_deref().is_none_or(|p| p == user.principal()) && !everyone;
+    if !mine && me.seam.held_everywhere(user.context(), "quota.set") != Some(true) {
+        return vec![MediaEvent::Error { message: "another's usage, or every uploader's, is an admin of *'s".into() }];
     }
+    if everyone {
+        return match me.store.usage_charged().await {
+            Ok(rows) => rows.into_iter().map(|(principal, files, bytes)| MediaEvent::Usage { principal, files, bytes }).collect(),
+            Err(e) => vec![MediaEvent::Error { message: e.to_string() }],
+        };
+    }
+    let whose = principal.unwrap_or_else(|| user.principal().to_string());
+    vec![match me.store.usage(&whose).await {
+        Ok((files, bytes)) => MediaEvent::Usage { principal: whose, files, bytes },
+        Err(e) => MediaEvent::Error { message: e.to_string() },
+    }]
 }
 
 /// `media.begin`: a new upload, its size held against the caller's
@@ -252,7 +265,7 @@ pub(crate) async fn unfurl(me: MediaActivation, user: Caller, url: WebUrl) -> Me
     };
     let ev = crate::unfurl::unfurl(&me.remote, &me.store, url.as_str()).await;
     match ev {
-        MediaEvent::Unfurled { .. } => allowance.commit(&held.id).await,
+        MediaEvent::Unfurled { .. } => allowance.commit(&held.id, None).await,
         _ => allowance.release(&held.id).await,
     }
     ev
@@ -279,7 +292,7 @@ pub(crate) async fn fetch(me: MediaActivation, user: Caller, url: WebUrl, ticket
     let ev = crate::unfurl::fetch(&me.remote, &me.store, url.as_str(), on, name.map(FileName::into_string), user.principal().to_string()).await;
     match ev {
         MediaEvent::Refused { .. } | MediaEvent::Error { .. } => allowance.release(&call.id).await,
-        _ => allowance.commit(&call.id).await,
+        _ => allowance.commit(&call.id, None).await,
     }
     settle(allowance.as_ref(), &bytes.id, &ev).await;
     ev

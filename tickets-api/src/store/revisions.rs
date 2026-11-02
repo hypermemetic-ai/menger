@@ -732,6 +732,32 @@ impl Store {
         Ok(RevisionPage { revisions, count, latest, next })
     }
 
+    /// V2-31: what each author's writes keep, as the quota service recounts
+    /// it (`tickets.count`, `tickets.bytes`): per actor, the tickets they
+    /// created (their `created` revisions) and the bytes of every body they
+    /// wrote (a revision that created the ticket or changed its body) —
+    /// `principal` alone, or everyone. A baseline or a backup's revision is
+    /// nobody's. Only a reader of everything: anyone else is refused.
+    pub async fn revision_usage(&self, who: &(impl Reader + ?Sized), principal: Option<String>) -> Result<Vec<(String, u64, u64)>, StoreError> {
+        if !Seen::of(who)?.all() {
+            return Err(StoreError::Invalid("what every author's revisions keep is read by a reader of everything (an admin of *)".into()));
+        }
+        self.readers
+            .read(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT actor,
+                            sum(CASE WHEN fields LIKE '%\"created\"%' THEN 1 ELSE 0 END),
+                            sum(CASE WHEN fields LIKE '%\"created\"%' OR fields LIKE '%\"body\"%' THEN body_bytes ELSE 0 END)
+                       FROM revisions
+                      WHERE source NOT IN ('baseline', 'backup') AND (?1 IS NULL OR actor = ?1)
+                      GROUP BY actor ORDER BY actor",
+                )?;
+                let rows = stmt.query_map([principal], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.max(0) as u64, r.get::<_, i64>(2)?.max(0) as u64)))?;
+                Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            })
+            .await
+    }
+
     /// TICKETS-7: one revision of `id` with its body — the cheap read of an
     /// old body by number (TICKETS-8 reads a mockup's versions with it).
     pub async fn revision_body(&self, who: &(impl Reader + ?Sized), id: &str, rev: u32) -> Result<(Revision, String), StoreError> {
