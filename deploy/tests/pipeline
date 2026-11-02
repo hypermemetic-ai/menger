@@ -693,6 +693,11 @@ has "app.yml: the image is GHCR's" "$(<"$AY")" "name: ghcr.io/hypermemetic-ai/me
 for f in $(sed -n 's/^ *env_file: *//p' "$AY"); do [[ -f $REPO/$f ]] && ok || bad "app.yml: no $f"; done
 has "app-test.env: its public URL" "$(<"$REPO/deploy/env/app-test.env")" "MENGER_PUBLIC_URL=https://app-test.menger.sh"
 has "app-test.env: the edge trusted" "$(<"$REPO/deploy/env/app-test.env")" "MENGER_TRUSTED_PROXIES=172.30.0.2/32"
+# TRANSPORT-24: /mcp names the environment's AuthKit domain, and its tokens are admitted for that /mcp
+has "app-test.env: /mcp names staging's AuthKit" "$(<"$REPO/deploy/env/app-test.env")" "MENGER_MCP_AUTHORIZATION_SERVERS=https://stellar-fruit-82-staging.authkit.app"
+has "app-test.env: AuthKit's tokens admitted for its /mcp" "$(<"$REPO/deploy/env/app-test.env")" "oidc:authkit=https://stellar-fruit-82-staging.authkit.app,https://app-test.menger.sh/mcp"
+has "app-prod.env: /mcp names production's AuthKit" "$(<"$REPO/deploy/env/app-prod.env")" "MENGER_MCP_AUTHORIZATION_SERVERS=https://manageable-editor-54.authkit.app"
+has "app-prod.env: AuthKit's tokens admitted for its /mcp" "$(<"$REPO/deploy/env/app-prod.env")" "oidc:authkit=https://manageable-editor-54.authkit.app,https://app.menger.sh/mcp"
 MENGER_APP_YML=$SCRATCH/app.yml rrun remote prod
 same "remote prod: exits 0" "$code" 0
 has "remote prod: promote.yml only" "$(<"$SCRATCH/infra.argv")" "infra promote.yml -e app_dir="

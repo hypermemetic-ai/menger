@@ -147,8 +147,19 @@ claude mcp add --transport http menger https://app.menger.sh/mcp --header "Autho
 With `--mcp-authorization-server URL` (repeatable; `MENGER_MCP_AUTHORIZATION_SERVERS`),
 `/mcp` is an OAuth 2.1 protected resource: a request with no token is
 answered `401` naming `/.well-known/oauth-protected-resource/mcp`, so an
-MCP client signs in at that server by itself — once one is hosted
-(ACCOUNT-1). `tests/mcp.rs` pins the three callers.
+MCP client signs in at that server by itself. On app.menger.sh that server
+is the environment's WorkOS AuthKit domain (TRANSPORT-19, TRANSPORT-24): the
+same sign-in as the app's, and a third `--auth-provider`, the generic
+`oidc:authkit=<domain>,<public-url>/mcp`, admits the tokens it mints as
+`oidc:authkit/<WorkOS user id>` (one principal with the app's cookie is
+TRANSPORT-20). A person's entry then carries no header — Claude Code's
+`/mcp` shows **Authenticate** and the browser does the rest:
+
+```sh
+claude mcp add --transport http menger https://app.menger.sh/mcp
+```
+
+`tests/mcp.rs` pins the three callers.
 
 `http://127.0.0.1:4456/` is the Leptos app (MFE-4). Until you build the
 frontend it serves the day-one vanilla page instead — the binary alone
