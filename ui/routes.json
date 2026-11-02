@@ -37,5 +37,8 @@
   "#/facets/:filter": "page-facets",
   "#/counts/:filter": "page-counts",
   "#/sheet": "page-sheet",
-  "#/sheet/:id": "page-sheet"
+  "#/sheet/:id": "page-sheet",
+  "#/usage": "page-usage",
+  "#/usage/:principal": "page-usage",
+  "#/quota": "page-quota"
 }

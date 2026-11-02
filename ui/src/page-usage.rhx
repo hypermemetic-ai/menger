@@ -1,0 +1,20 @@
+<script>
+  // V2-31: a person's usage page — #/usage (yours), #/usage/:principal (an
+  // admin's look at another): the app's top in its `top` section, the
+  // palette in its `palette` section (ui/slots.json), quota-usage between.
+  prop("principal");
+</script>
+
+<section class="page page-usage">
+  <slot name="top" here="usage"/>
+  <header class="page-title"><h1>usage</h1></header>
+  <quota-usage principal={principal}/>
+  <slot name="palette"/>
+</section>
+
+<style>
+  :scope { display: block; }
+  .page-usage { min-height: 100vh; min-height: 100dvh; color: var(--ink); background: var(--bg); font-family: var(--font-text); font-size: var(--text-size); }
+  .page-title { max-width: 980px; margin: 0 auto; padding: 16px 24px 0; }
+  .page-title h1 { margin: 0; font-family: var(--font-display); font-size: 20px; font-weight: var(--weight-strong); color: var(--ink); }
+</style>
