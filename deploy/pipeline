@@ -30,6 +30,8 @@
 #                                           app-test.menger.sh through infra's app.yml, then the smoke
 #                                           against https://app-test.menger.sh; recorded as `test`
 #                                           (DEPLOY-52: test is app-test); passing marks it TESTED
+#   deploy/pipeline ui [--watch]            UI-17: ui/ of this checkout live on test, no image, no cargo
+#   deploy/pipeline ui promote              UI-17: what test has live onto prod (a pointer move; the owner's)
 #   deploy/pipeline remote prod             app.menger.sh through infra's promote.yml: what test runs, then
 #                                           `ui promote --to prod --from test` (UI-15: one store, prod's pointer
 #                                           onto test's live version, no second push), then the smoke —
@@ -811,8 +813,13 @@ ui_push() { # WS REL → 0 and UI_PUSHED (the version) and UI_MATCHES (contract_
   # pipeline's status is tar's (the tenth deploy of v2 was refused this way with a whole bundle).
   tar -tf "$r/dist/ui.tar" 2>/dev/null | grep -x manifest.json >/dev/null || { UI_WHY="the bundle holds no manifest.json"; return 1; }
   commit=$(sed -n 's/^commit: *//p' "$r/RELEASE" | head -n 1)
+  ui_push_tar "$ws" "$r/dist/ui.tar" "$tool" "$commit"
+}
+ui_push_tar() { # WS TAR TOOL [COMMIT] — ui_push's answer, for any tar (UI-17: a working tree's)
+  local ws=$1 tar=$2 tool=$3 commit=${4:-} out
+  UI_PUSHED="" UI_WHY="" UI_MATCHES=""
   out=$(env -u MENGER_DEPLOY_KEY timeout 70 "$tool" push --url "$ws" --service menger --key-file "$DEPLOY_KEY_FILE" --as pipeline \
-          --timeout 50 --json ${commit:+--commit "$commit"} "$r/dist/ui.tar" 2>&1) || true
+          --timeout 50 --json ${commit:+--commit "$commit"} "$tar" 2>&1) || true
   UI_PUSHED=$(jq -rR 'fromjson? | select(.type == "pushed") | .version' <<<"$out" 2>/dev/null | head -n 1)
   # UI-11/UI-12: whether the running tickets service is the one the bundle was built against
   UI_MATCHES=$(jq -rR 'fromjson? | select(.type == "pushed") | .contract_matches | tostring' <<<"$out" 2>/dev/null | head -n 1)
@@ -1544,6 +1551,64 @@ cmd_releases() {
   done
 }
 
+# ── UI-17: UI-only iteration ────────────────────────────────────────────────
+# The frontend is a row in ui.db and a pointer, so a UI change needs no image and no cargo: ui/ of the
+# checkout this script runs from, committed or not, built with the tool and the engine of the release
+# test runs (the engine out of that release's bundle, so they match the server), stamped by test's own
+# ui.contract for the methods the components use, pushed as the pipeline key. A method test's server
+# does not have refuses the build: that change needs a release. The next `remote test` replaces it.
+ui_engine() { # REL → a directory holding REL's engine
+  local d=${MENGER_UI_CACHE:-$HOME/.cache/menger-ui}/$1/engine
+  [[ -f $d/engine.wasm ]] && { echo "$d"; return 0; }
+  mkdir -p "$d" && tar -xf "$RELEASES/$1/dist/ui.tar" -C "$d" engine.js engine.wasm host.js && echo "$d"
+}
+ui_once() { # WS TOOL ENGINE TAR — one build and push; says what happened; 1 when nothing moved
+  local ws=$1 tool=$2 engine=$3 tar=$4 commit t0 ms out
+  t0=$(date +%s%3N)
+  commit=menger@$(git -C "$REPO" rev-parse --short HEAD)
+  [[ -n $(git -C "$REPO" status --porcelain -- ui) ]] && commit+=-dirty
+  if ! out=$(env -u MENGER_DEPLOY_KEY "$tool" build "$REPO/ui" --strict-colours --engine "$engine" \
+        --node-modules "$REPO/../plexus-ui/node_modules" --contract-from "$ws" --service menger \
+        --key-file "$DEPLOY_KEY_FILE" --as pipeline --commit "$commit" -o "$tar" 2>&1); then
+    say "red  $commit: the build refused it — nothing moved"; say "$out"
+    grep -q unknown_method <<<"$out" && say "     a method test's server does not have: this change needs a release (deploy/pipeline build)"
+    return 1
+  fi
+  if ! ui_push_tar "$ws" "$tar" "$tool"; then say "red  $commit: the push refused it — $UI_WHY"; return 1; fi
+  ms=$(( $(date +%s%3N) - t0 ))
+  say "ok   $commit live on test: ${UI_PUSHED:0:12} in ${ms} ms, contract_matches: ${UI_MATCHES:-null}"
+  [[ $UI_MATCHES != false ]]
+}
+ui_stamp() { find "$REPO/ui" -type f -printf '%T@ %s %p\n' | sort | sha256sum; }
+cmd_ui() {
+  local watch=0
+  case ${1:-} in
+    promote)
+      local p; p=$(app_url prod); p=wss://${p#https://}; p=${p%/}/ws
+      ui_promote "$p" test prod || die "the promote was refused, nothing moved: $UI_WHY"
+      say "ok   prod has ${UI_PROMOTED:0:12} live$([[ $UI_MOVED == true ]] || echo ' already')"
+      return 0 ;;
+    --watch) watch=1 ;;
+    "") ;;
+    *) die "usage: deploy/pipeline ui [--watch] | ui promote" ;;
+  esac
+  [[ -n $DEPLOY_KEY_FILE ]] || die "no pipeline key (MENGER_DEPLOY_KEY_FILE) to push as"
+  [[ -d $REPO/ui/src ]] || die "$REPO has no ui/src: UI-only pushes are v2's"
+  local rel tool engine ws tar stamp now
+  rel=$(last_good test); [[ -n $rel ]] && release_bundle "$rel" || die "test runs no release with a bundle (${rel:-none}): deploy one first"
+  tool=$(ui_tool "$rel"); [[ -n $tool ]] || die "no plexus-ui (the release carries none; MENGER_PLEXUS_UI, or PATH)"
+  engine=$(ui_engine "$rel") || die "no engine in $rel's bundle"
+  ws=$(app_url test); ws=wss://${ws#https://}; ws=${ws%/}/ws
+  tar=$(mktemp --suffix=.tar); trap "rm -f '$tar'" EXIT
+  if [[ $watch == 0 ]]; then ui_once "$ws" "$tool" "$engine" "$tar"; return; fi
+  say "watching $REPO/ui → $ws (release $rel); Ctrl-C ends it"
+  stamp=$(ui_stamp); ui_once "$ws" "$tool" "$engine" "$tar" || true
+  while sleep "${MENGER_UI_WATCH_SECS:-0.3}"; do
+    now=$(ui_stamp); [[ $now == "$stamp" ]] && continue
+    stamp=$now; ui_once "$ws" "$tool" "$engine" "$tar" || true
+  done
+}
+
 # ── dispatch ────────────────────────────────────────────────────────────────
 cmd=${1:-}; shift || true
 # CI-6: what a long command says is also kept, in a file of its own (build also keeps each gate's).
@@ -1577,5 +1642,6 @@ case $cmd in
   local)    cmd_local "$@" ;;
   remote)   cmd_remote "$@" ;;
   remote-secret) cmd_remote_secret "$@" ;;
+  ui)       cmd_ui "$@" ;;
   *) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 2 ;;
 esac
