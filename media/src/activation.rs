@@ -186,13 +186,25 @@ impl MediaActivation {
         futures::stream::once(crate::streams::info(self.clone(), user, hash))
     }
 
-    /// What you have put: yields usage { principal, files, bytes } — each file once, however many tickets it is for.
+    /// What you have put: yields usage { principal, files, bytes } — each file once, however many tickets it is for; an admin of * names anyone, or every uploader.
     ///
     /// The storage that counts against your allowance: every file you put
-    /// or uploaded, by its bytes. Viewer.
-    #[plexus_macros::method(group = "read", example(note = "my storage", params = r#"{}"#))]
-    pub async fn usage(&self, #[from_auth(self.callers.verify)] user: Caller) -> impl Stream<Item = MediaEvent> + Send + 'static {
-        futures::stream::once(crate::streams::usage(self.clone(), user))
+    /// or uploaded, by its bytes. Viewer. V2-31: an admin of `*` names
+    /// anyone (`principal`), or asks `everyone: true` — one `usage` per
+    /// uploader, each file counted once against whoever kept it first, as
+    /// the quota service charged it (what `quota.recount` reads).
+    #[plexus_macros::method(group = "read", example(note = "my storage", params = r#"{}"#), example(note = "every uploader (admin of *)", params = r#"{"everyone": true}"#))]
+    pub async fn usage(
+        &self,
+        #[from_auth(self.callers.verify)] user: Caller,
+        /// Whose (optional: yours; anyone else's is an admin of *'s).
+        principal: Option<menger_tickets_api::vocab::Principal>,
+        /// true: every uploader, each file against its first (an admin of *'s).
+        everyone: Option<bool>,
+    ) -> impl Stream<Item = MediaEvent> + Send + 'static {
+        use futures::StreamExt;
+        let asked = (principal.map(|p| p.to_string()), everyone.unwrap_or(false));
+        futures::stream::once(crate::streams::usage(self.clone(), user, asked)).flat_map(futures::stream::iter)
     }
 
     /// Start (or resume) an upload of any size in chunks; yields upload { upload, size, received, chunk }.

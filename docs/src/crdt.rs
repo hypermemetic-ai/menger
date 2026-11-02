@@ -181,7 +181,8 @@ impl DocsStore {
         let (org, title, body, by, principal) = (org.to_string(), title.to_string(), body.to_string(), by.to_string(), principal.to_string());
         let doc = self
             .blocking(move |s| {
-                let reserved = s.quota.reserve(&principal, body.len() as u64).map_err(StoreError::Quota)?;
+                let quota = s.quota();
+                let born = quota.reserve_count(&principal).map_err(StoreError::Quota)?;
                 let crdt = fresh();
                 let update = {
                     let text = crdt.get_or_insert_text(BODY);
@@ -189,6 +190,8 @@ impl DocsStore {
                     text.insert(&mut txn, 0, &body);
                     txn.encode_update_v1()
                 };
+                // V2-31: the bytes the change keeps (its update), as every later change counts.
+                let reserved = quota.reserve(&principal, update.len() as u64).map_err(StoreError::Quota)?;
                 let state = crdt.transact().encode_state_as_update_v1(&StateVector::default());
                 let conn = s.lock();
                 let tx = conn.unchecked_transaction()?;
@@ -201,7 +204,8 @@ impl DocsStore {
                 )?;
                 log(&tx, LogRow { id: &doc.id, seq: 1, kind: "create", update: Some(&update), title: Some(&doc.title), at: now_ms(), by: &doc.by, principal: &principal, authors: None })?;
                 tx.commit()?;
-                s.quota.commit(reserved);
+                quota.commit(born);
+                quota.commit(reserved);
                 s.loaded.lock().unwrap_or_else(|p| p.into_inner()).insert(doc.id.clone(), Arc::new(Mutex::new(crdt)));
                 Ok(doc)
             })
@@ -216,7 +220,8 @@ impl DocsStore {
     /// site: the update's size reserved for `principal` before, committed
     /// after.
     fn append(&self, conn: &Connection, id: &str, crdt: &yrs::Doc, bytes: &[u8], kind: &str, by: &str, principal: &str) -> Result<(Doc, u32), StoreError> {
-        let reserved: Reserved = self.quota.reserve(principal, bytes.len() as u64).map_err(StoreError::Quota)?;
+        let quota = self.quota();
+        let reserved: Reserved = quota.reserve(principal, bytes.len() as u64).map_err(StoreError::Quota)?;
         let tx = conn.unchecked_transaction()?;
         let was = live_doc(&tx, id)?;
         let text = text_of(crdt);
@@ -230,7 +235,7 @@ impl DocsStore {
             tx.execute("UPDATE docs SET state = ?2, state_seq = ?3 WHERE id = ?1", params![id, state, seq])?;
         }
         tx.commit()?;
-        self.quota.commit(reserved);
+        quota.commit(reserved);
         Ok((doc, seq))
     }
 

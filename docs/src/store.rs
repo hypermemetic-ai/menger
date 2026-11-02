@@ -175,7 +175,7 @@ pub struct DocsStore {
     /// Who is on which document ([`crate::presence`]).
     pub(crate) presence: crate::presence::Presence,
     /// The meter every byte written is reserved against (V2-31's).
-    pub(crate) quota: Arc<dyn crate::quota::Quota>,
+    pub(crate) quota: std::sync::RwLock<Arc<dyn crate::quota::Quota>>,
 }
 
 impl std::fmt::Debug for DocsStore {
@@ -259,14 +259,42 @@ impl DocsStore {
             changes: broadcast::channel(CHANNEL).0,
             loaded: Mutex::new(HashMap::new()),
             presence: crate::presence::Presence::default(),
-            quota: Arc::new(crate::quota::AllowAll),
+            quota: std::sync::RwLock::new(Arc::new(crate::quota::AllowAll)),
         })
     }
 
     /// The same store, its writes reserved against `quota` (V2-31's meter).
-    pub fn metered(mut self, quota: Arc<dyn crate::quota::Quota>) -> Self {
-        self.quota = quota;
+    pub fn metered(self, quota: Arc<dyn crate::quota::Quota>) -> Self {
+        self.set_quota(quota);
         self
+    }
+
+    /// V2-31: its writes reserved against `quota` from now on — the builder
+    /// sets the quota service's meter on a store already shared.
+    pub fn set_quota(&self, quota: Arc<dyn crate::quota::Quota>) {
+        *self.quota.write().unwrap_or_else(|p| p.into_inner()) = quota;
+    }
+
+    /// The meter now.
+    pub(crate) fn quota(&self) -> Arc<dyn crate::quota::Quota> {
+        self.quota.read().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+
+    /// V2-31: what each principal's changes keep, as the quota service
+    /// recounts it — the documents they made (`create` changes) and the
+    /// bytes of every change they wrote (a squash's snapshot is nobody's:
+    /// its bytes are no one's writing): (principal, count, bytes).
+    pub async fn usage_by_principal(self: &Arc<Self>) -> Result<Vec<(String, u64, u64)>, StoreError> {
+        self.blocking(|s| {
+            let conn = s.lock();
+            let mut stmt = conn.prepare(
+                "SELECT principal, sum(CASE WHEN kind = 'create' THEN 1 ELSE 0 END), coalesce(sum(bytes), 0)
+                   FROM doc_log WHERE kind != 'snapshot' GROUP BY principal ORDER BY principal",
+            )?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64, r.get::<_, i64>(2)? as u64)))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+        .await
     }
 
     /// The file it keeps.

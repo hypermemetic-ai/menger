@@ -2,7 +2,7 @@
 
 A plan is a program whose leaves are prose. menger is a Plexus RPC
 ticketing service and the seed of a Plexus-native reactive web framework.
-This is **v2**: the tickets service, the ui service, the media service and the docs service, nothing else.
+This is **v2**: the tickets service, the ui service, the media service, the docs service and the quota service, nothing else.
 
 v1 is tag `v0.0.1`; v2 cut its chats, comments, deployments, themes, notes, assignees and components, the Leptos app (trunk) and the frames' SDK (sdk-codegen), mockups and the diagrams service — read v1 there, never here. Media came back as a service of its own (V2-24, `media/`).
 
@@ -71,10 +71,12 @@ components in `ui/`, nothing of the framework's.
 (children `commits`, `filters`, `inputs`, `nav`, `revisions`, `subtasks`, `work`),
 `members` (child `teams`), `orgs`, `session`, `auth`, `ui`
 (child `slots`), `media` (V2-24: `media/`, `menger-media` — images by
-sha256 in `media.db`, `--media-db-path`), and `docs` (V2-29: `docs/`,
+sha256 in `media.db`, `--media-db-path`), `docs` (V2-29: `docs/`,
 `menger-docs` — documents as Yjs CRDTs in `docs.db`, `--docs-db-path`;
 who may is the gate's word on the document's organization, asked through
-its seam; the editor writes it at `#/doc/:id`). A service reaches another as a
+its seam; the editor writes it at `#/doc/:id`), and `quota` (V2-31: `quota/`, `menger-quota` —
+every principal's allowance per source in `quota.db`, `--quota-db-path`;
+every storing write reserved through its seam — README "`quota`"). A service reaches another as a
 client, through plexus-core's `HubTransport::as_(service, caller)` — the ui
 service's seam (`../plexus-ui/service/src/seam.rs`) asks each service a
 component's `uses` names (`tickets`) as the server's own caller; the media
@@ -625,7 +627,7 @@ question.
   tether's `../plexus-substrate`; a clone of menger alone does not build
   until those are decided. Every activation is `impl FooActivation` (MACRO-13,
   MACRO-21): the stem names the namespace, the trait and the client.
-- **Workspace members** (`Cargo.toml`): `.`, `tickets-api`;
+- **Workspace members** (`Cargo.toml`): `.`, `tickets-api`, `media`, `quota`;
   `tether/` is its own workspace. Three repositories
   hold what menger lifted out: `plexus-webapp` (FRAME-4; published),
   `../plexus-login` (FRAME-4; by path) and `../plexus-ui`,

@@ -47,6 +47,7 @@ server = [
     "dep:roaring",
     "dep:jiff",
     "dep:base64",
+    "dep:menger-quota",
 ]
 # ACCESS-9: the capabilities' test constructors (`VerifiedUser::for_tests`,
 # `System::for_tests`, …) for tests outside this crate's own `cfg(test)`.
@@ -106,6 +107,10 @@ jiff = { version = "0.2", optional = true }
 # SHA-256, computed alike by tether and by the app's #/pair. Pure Rust.
 sha2 = "0.10"
 base64 = { version = "0.22", optional = true }
+# V2-31: the quota service's meter — a create or an amend reserves its bytes
+# and its count against the author's allowance, through the seam, before it
+# writes. Server-only; the crate depends on nothing of this one's.
+menger-quota = { path = "../quota", version = "0.6.2", optional = true }
 
 [dev-dependencies]
 # ACCESS-24: the integration tests (tests/sdk_manifest.rs) build the

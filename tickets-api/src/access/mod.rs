@@ -444,6 +444,10 @@ pub struct Access {
     /// ACCESS-12: moved by every sign-out through this access layer — what
     /// wakes an open watch to verify its caller again.
     ended: Arc<tokio::sync::watch::Sender<u64>>,
+    /// V2-31: the quota service's meter, once the builder attaches it — what
+    /// a write reserves its bytes and count against; every reserve allowed
+    /// until then (a test's).
+    meter: menger_quota::MeterSlot,
 }
 
 impl Access {
@@ -454,7 +458,7 @@ impl Access {
     pub fn with_login(sessions: Arc<dyn SessionCheck>, admins: Vec<String>) -> Self {
         let book = Arc::new(Book::new(admins));
         let gate = Gate::new(book.clone(), book.clone(), book.clone());
-        Self { sessions, minter: None, book, gate, ended: Arc::new(tokio::sync::watch::channel(0).0) }
+        Self { sessions, minter: None, book, gate, ended: Arc::new(tokio::sync::watch::channel(0).0), meter: menger_quota::MeterSlot::default() }
     }
 
     /// ACCESS-10: for a test in another module (compiled out of the
@@ -624,6 +628,12 @@ impl Access {
     pub fn system_caller(&self) -> AuthContext {
         let p = self.book.service.clone();
         AuthContext::new(p.clone(), "system".into(), vec![], serde_json::json!({ "principal": p, "name": "menger" }))
+    }
+
+    /// V2-31: the quota service's meter — empty (every reserve allowed)
+    /// until the builder attaches the seam ([`menger_quota::MeterSlot::attach`]).
+    pub fn meter(&self) -> &menger_quota::MeterSlot {
+        &self.meter
     }
 
     /// The operator's `--admin` principals.

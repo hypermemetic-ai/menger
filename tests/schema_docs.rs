@@ -69,6 +69,8 @@ const MEDIA_WORDS: &[&str] = &["media"];
 const PATHS: &[&str] = &[
     "auth", "members", "members.teams", "orgs", "session", "tickets", "tickets.commits", "tickets.filters",
     "tickets.inputs", "tickets.nav", "tickets.revisions", "tickets.subtasks", "tickets.work", "ui", "ui.routes", "ui.slots", "media", "docs",
+    // V2-31: the quota service.
+    "quota",
 ];
 
 /// Whether `word` occurs in `text` as an identifier of its own, ignoring
@@ -89,7 +91,8 @@ fn says(text: &str, word: &str) -> bool {
 /// the UI's components allowed).
 fn gone_in(path: &str, text: &str) -> Vec<&'static str> {
     let ui = path == "ui" || path.starts_with("ui.");
-    let media = path == "media" || path.starts_with("media.");
+    // V2-31: and the quota service, whose sources name it (`media.bytes`).
+    let media = path == "media" || path.starts_with("media.") || path == "quota";
     GONE_WORDS.iter().chain(SCHEMA_WORDS).filter(|w| !(ui && UI_WORDS.contains(w)) && !(media && MEDIA_WORDS.contains(w))).filter(|w| says(text, w)).copied().collect()
 }
 

@@ -353,6 +353,21 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("docs.restore", Today::Editor, None),
     ("docs.delete", Today::Admin, None),
     ("docs.squash", Today::Admin, None),
+    // V2-31: the quota service — the seam's four are the server's own (an
+    // admin's of `*`: no role holds them); a person's own usage anyone
+    // signed in reads; the tabulation, the allowances and the recount an
+    // admin's. And the tickets store's own count, which the recount reads.
+    ("quota.reserve", Today::Admin, None),
+    ("quota.commit", Today::Admin, None),
+    ("quota.release", Today::Admin, None),
+    ("quota.credit", Today::Admin, None),
+    ("quota.usage", Today::SignedIn, None),
+    ("quota.table", Today::Admin, None),
+    ("quota.set", Today::Admin, None),
+    ("quota.recount", Today::Admin, None),
+    ("tickets.revisions.usage", Today::Admin, None),
+    // V2-31: and the docs store's own count, which the recount reads.
+    ("docs.usage", Today::Admin, None),
 ];
 
 /// AUTH-7's one deliberate narrowing of the table: what an anonymous or
@@ -393,7 +408,7 @@ async fn the_roles_are_what_identity_21_asked_method_by_method() {
         .map(|(path, s)| (format!("tickets.{path}"), s));
     let top = hub.list_plugin_schemas().into_iter().map(|s| (s.namespace.clone(), s));
     for (path, schema) in top.chain(children) {
-        if !["tickets", "members", "session", "media", "docs"].contains(&schema.namespace.as_str()) && !path.starts_with("tickets.") {
+        if !["tickets", "members", "session", "media", "docs", "quota"].contains(&schema.namespace.as_str()) && !path.starts_with("tickets.") {
             continue;
         }
         for m in &schema.methods {
@@ -489,13 +504,15 @@ async fn a_caller_s_view_lists_only_what_it_holds_and_refusals_are_typed() {
     let boss = as_key(s.port, &BOSS, "boss").await;
     tickets(&boss).await;
 
-    // Nothing held: the signed-in door — whoami, its own grants, sessions.
+    // Nothing held: the signed-in door — whoami, its own grants, sessions;
+    // V2-31: and its own usage.
     let agent = as_key(s.port, &AGENT, "worker-1").await;
     assert_eq!(
         view(&agent).await,
         BTreeMap::from([
             ("auth".to_string(), names(&["providers", "login", "signup", "whoami", "logout", "requires"])),
             ("members".to_string(), names(&["mine"])),
+            ("quota".to_string(), names(&["usage"])),
             ("session".to_string(), names(&["whoami", "login", "logout", "providers"])),
         ])
     );

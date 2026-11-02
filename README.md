@@ -11,7 +11,7 @@ components written in rhx (Rhai in markup, `ui/src/<name>.rhx`, profile
 `rhx/1`; `../plexus-ui/CONTRACT.md`), pushed as signed bundles,
 versioned by content hash and drawn by a small engine.
 
-v1 is tag `v0.0.1`; what v2 cut — the chats, comments, deployments, themes, notes, assignees and components, the Leptos app (trunk) with the frames' SDK (sdk-codegen) and mockups, the diagrams service — lives there. Media came back as a service of its own (V2-24, "The services"), and documents have a service of their own (V2-29, `docs`).
+v1 is tag `v0.0.1`; what v2 cut — the chats, comments, deployments, themes, notes, assignees and components, the Leptos app (trunk) with the frames' SDK (sdk-codegen) and mockups, the diagrams service — lives there. Media came back as a service of its own (V2-24, "The services"), and documents have a service of their own (V2-29, `docs`). Every input is held to a per-user allowance by the quota service (V2-31).
 
 ## Run
 
@@ -184,10 +184,10 @@ where it has one (a list in it is `;`-separated).
 
 | group | flags |
 |---|---|
-| run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path`, `--ui-signer`, `--ui-compiler`, `--ui-author-key`, `--media-db-path` (`media.db` beside the database), `--media-store` (`disk`), `--media-blob-dir`, `--media-max-bytes`, `--ui-channel` (UI-15: the live pointer this environment serves in its ui file; default from `--env`: `test`, `prod`, else `default`), `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell` |
+| run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path`, `--ui-signer`, `--ui-compiler`, `--ui-author-key`, `--media-db-path` (`media.db` beside the database), `--media-store` (`disk`), `--media-blob-dir`, `--media-max-bytes`, `--quota-db-path` (`quota.db` beside the database), `--quota-plan` (the defaults a new quota file starts from; the built-in `free-1k`), `--ui-channel` (UI-15: the live pointer this environment serves in its ui file; default from `--env`: `test`, `prod`, else `default`), `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell` |
 | sign-in | `--auth-provider`, `--admin`, `--public-url`, `--login-button`, `--login-email`, `--login-password`, `--login-forgot`, `--identity`, `--workos-api-key-file`, `--allowed-origin`, `--frame-ancestor` (an origin that may frame the shell's pages; none by default), `--live-origin` (an origin the shell's pages may frame), `--allowed-host`, `--trusted-proxy`, `--return-origin`, `--session-hours` (12), `--session-idle-minutes` (120) |
 | maintenance and testing | `--dev-login`, `--dev-password`, `--dev-idp-ws`, `--dev-user` (all `--env test` only), `--verify-derived`, `--seed-synthetic`, `--seed-value`, `--seed-shape` (`flat`, `nested`), `--seed-into-existing` |
-| limits | `--max-body-bytes` (8 MiB), `--max-calls-per-connection` (256), `--idle-timeout-secs` (900), `--max-connections` (1,024), `--max-connections-per-ip` (256), `--max-connections-per-principal` (64), `--max-anonymous-connections` (128), `--max-anonymous-connections-per-ip` (32) |
+| limits | `--max-body-bytes` (8 MiB), `--max-calls-per-connection` (256), `--idle-timeout-secs` (900), `--max-connections` (1,024), `--max-connections-per-ip` (256), `--max-connections-per-principal` (4; V2-31), `--max-writes-per-second` (20; V2-31), `--max-anonymous-connections` (128), `--max-anonymous-connections-per-ip` (32) |
 
 `--ui-author-key` names the file of the key the ui service signs an
 editor's authored version with (made at first start, 0600; one open to its
@@ -278,6 +278,7 @@ behind plexus-core's gate; menger's own are declared on the frame
 | `ui` | the UI's versions, live pointer, previews; child `slots` | the framework's: `../plexus-ui/service` (`plexus-ui-service`, FRAME-5) |
 | `media` | any file a body shows, by sha256 — its rows in a file of its own (`media.db`), its bytes in a `BlobStore` (the disk); links read into cards; the ticket's (or, V2-29, the doc's) permit asked through the seam | `media/` (`menger-media`, V2-24, EDITOR-10) |
 | `docs` | documents — writing, not work: a title and a markdown body kept as a Yjs CRDT, written live by many hands, every change kept, in a file of its own (`docs.db`); who may is the gate's word on the document's organization | `docs/` (`menger-docs`, V2-29) |
+| `quota` | every principal's allowance per source, its usage counted, tabulated and enforced — its ledger in a file of its own (`quota.db`); every storing write reserved through the seam before it lands | `quota/` (`menger-quota`, V2-31) |
 
 **Service to service.** The ui service reaches the tickets service as a
 client, never through its store: its seam (`../plexus-ui/service/src/seam.rs`)
@@ -303,6 +304,17 @@ asked with the scope as target — and the tickets service, which organizations
 the caller is in (`orgs.list`, as the caller). The media service asks it in
 turn: a `media.put { doc }` asks `docs.may { id, role: editor }` as the
 caller, a `media.get` of a doc's image `docs.may { id, role: viewer }`.
+
+The quota service (V2-31) is reached the other way round: a service that
+stores or fetches for a principal asks `quota.reserve { principal, source,
+amount }` before it writes, then `commit` (what it kept) or `release`,
+through `HubTransport::as_(service, system)` as the server's own caller
+(`menger_quota::QuotaSeam`, the `Meter` a service holds — the tickets
+service in its `Access`, the media service as its `Allowance`). The quota
+service asks back the same way: `members.teams.show` for a team's members,
+`members.list` for an organization's, and each store's own count for a
+recount (`tickets.revisions.usage`, `media.usage { everyone }`,
+`docs.usage`). It never opens another file.
 
 A throwaway's `synapse -P 4460 menger` lists them; `synapse -P 4460 menger
 tickets` lists a service's methods and children; `<method> --help` prints
@@ -431,7 +443,7 @@ whole. synapse `-j` prints the `rows` event as one line (SYNAPSE-36).
 | `finish` | `--upload` | the upload hashed and kept: `stored { … }`, or `refused { reason: incomplete }` |
 | `get` | `--hash` | a file's bytes up to 7 MiB: `media { …, data }` (data base64); larger, `refused { reason: too_large }` — read it at `/media/<hash>` |
 | `info` | `--hash` | what a file is, without its bytes: `info { hash, mime, kind, name, bytes, width, height }` |
-| `usage` | | what you have put, each file once: `usage { principal, files, bytes }` |
+| `usage` | `[--principal] [--everyone true]` | what you have put, each file once: `usage { principal, files, bytes }`; V2-31: an admin of `*` names anyone, or every uploader, each file against its first (what `quota.recount` reads) |
 | `unfurl` | `--url` | a public link read into a card: `unfurled { url, kind, title, description, site, image, provider, embed }` |
 | `fetch` | `--url [--ticket] [--doc] [--name]` | a remote image or file kept as yours (never hot-linked): `stored { … }` |
 
@@ -449,8 +461,9 @@ resumes after a dropped connection (`begin --upload <id>` answers what it
 has); one untouched for a day is dropped. There is no fixed cap: every
 byte is asked of the uploader's allowance first (`media.bytes`; a link read
 counts `media.fetch.calls` and `media.fetch.bytes`, a byte served
-`media.egress.bytes`) — one call site, `menger_media::Allowance`, allowing
-everything until the quota service (V2-31) is wired in;
+`media.egress.bytes`) — one call site, `menger_media::Allowance`, answered
+by the quota service (V2-31, "`quota`"; `src/quota_allowance.rs`), its
+`commit` the amount kept;
 `--media-max-bytes` caps one upload when the operator wants a cap.
 
 **Where the bytes live** is one trait, `menger_media::BlobStore` (put; a
@@ -532,6 +545,7 @@ agents and image references.
 | `here` | `--id --session [--client] [--awareness]` | your caret (a Yjs awareness update, base64), said to everyone on it |
 | `delete` | `--id` | admin's: `deleted { id, at, by }`; its changes stay in the file |
 | `may` | `--id --role` | `may { id, role, held }` — the question the media service asks |
+| `usage` | `--everyone true` | admin of `*` (V2-31): one `usage { principal, count, bytes }` per writer — the documents they made and the bytes their changes keep (a squash's snapshot is nobody's); what `quota.recount` reads |
 | `watch` | `[--id] [--session]` | `watching`, then `created`, `updated { id, seq, update, by, session? }`, `renamed`, `deleted`, `squashed`, and on one document `present` and `left { session, client? }`; with `session` the watch is your presence while open, and your own updates are not said back; held to you by the gate as `ui.watch` is (`watch_closed { reason }`) |
 
 **Who may**: a viewer reads, follows and is present (`get`, `list`,
@@ -552,8 +566,9 @@ Kept in the service's own file, `docs.db` (`--docs-db-path`,
 ui or media file): `docs` (each document now, its derived text, and a
 snapshot of its CRDT every 64 changes so a load applies only what came
 after) and `doc_log` (every change, with who and when). Every byte written
-is reserved against a meter first (`docs/src/quota.rs`, always allowing
-until V2-31's quota service).
+is reserved against a meter first (`docs/src/quota.rs`, answered by the
+quota service, V2-31: `docs.bytes` per change, `docs.count` per document;
+over the cap `refused { reason: quota }` with the numbers).
 
 The tracker's older documents — tickets of kind `doc` — stay tickets
 (V2-29's `existing`, queued to the owner; built as *leave*).
@@ -564,6 +579,83 @@ synapse -P 4460 menger docs save --id 7k3mq2xa --body @kiln.md --base 3         
 synapse -P 4460 menger docs history --id 7k3mq2xa --limit 20
 synapse -P 4460 menger docs replay --id 7k3mq2xa --seq 10
 ```
+
+### `quota` (V2-31)
+
+The owner, 2026-11-02: "we should have per user allowances for just about
+every data source input. and be able to tabulate their total storage usage.
+use that to measure and prevent them from exceeding their cap."
+
+| method | flags | who | what it does |
+|---|---|---|---|
+| `usage` | `[--principal]` | anyone signed in (their own); an admin of `*` names anyone | one `usage { principal, exempt, bytes, sources }`: per source its `unit`, `window`, `used`, `held` (reserved, in flight), `cap` (none: unlimited) and `from` (`own`, `team:<name>`, `default`, `exempt`); `bytes` is what they store |
+| `table` | `[--org] [--sort bytes\|principal\|<source>]` | admin of `*` | the tabulation: `box { used_percent, warn_percent, full_percent, state }`, one `usage` per principal (with `org`, everyone granted a role in it), sorted, then `total { principals, bytes, sources }` |
+| `set` | `--principal \| --team \| --default true`, `--source --cap` | admin of `*` | an allowance: `unlimited`, a number, `2 GB` (powers of 1000; `GiB` of 1024), or `clear`: `allowance { holder, source, cap, cleared }`. A cap below what is used blocks new writes and deletes nothing |
+| `recount` | `[--principal]` | admin of `*` | usage rebuilt from the stores, each through its own read: `drift { principal, source, was, counted }` per total that moved, then `recounted { principals, drifted, sources, not_counted }`; the server runs one nightly and logs the drift |
+| `reserve` | `--principal --source --amount` | the server's own caller (admin of `*`) | the seam's first step: `reserved { ticket, remaining, expires }`, or `over_allowance { source, used, cap, asked }`, `too_many_at_once { source, open, max }`, `box_full { used_percent, full_percent }` — nothing held |
+| `commit` | `--ticket [--amount]` | the server's | the write landed: `amount` (what was kept, at most what was held; none: all) counts — `committed { …, used }` |
+| `release` | `--ticket` | the server's | the write did not land: nothing counts |
+| `credit` | `--principal --source --amount` | the server's | a deletion gives bytes back: `credited { used }` |
+
+**Sources** — a name, a unit, a window (`quota/src/sources.rs`; an unknown
+name is refused, so a new input registers one):
+
+| source | unit | window | counted when |
+|---|---|---|---|
+| `media.bytes` | bytes | total | a file is put or uploaded (`media.put`, `media.begin`): against its first uploader; a duplicate counts nothing |
+| `media.fetch.bytes` | bytes | day | the server reads a file for you (`media.fetch`) |
+| `media.fetch.calls` | calls | day | the server reads a link for you (`media.unfurl`, `media.fetch`) |
+| `media.egress.bytes` | bytes | day | `/media/<hash>` serves bytes to you |
+| `docs.bytes` | bytes | total | a document's change is kept (`docs.create`, `update`, `save`, `restore`, `rename`): its bytes, as `doc_log` keeps them, against its writer |
+| `docs.count` | count | total | a document is made (`docs.create`) |
+| `tickets.bytes` | bytes | total | a ticket's body is written — `create`, and `amend` or `update` when the body changes (each kept as a revision) |
+| `tickets.count` | count | total | a ticket is created |
+| `questions.count` | count | total | registered; nothing asks it yet |
+
+**The effective cap** of a principal on a source: their own allowance, else
+the largest of their teams' (unlimited the largest), else the default for
+the source, else unlimited. Admins of `*` and the operator are **exempt** —
+counted, never capped. An agent's key counts as itself: nothing in
+`members` says whose a key is, so a key has the default of its own.
+
+**Reserve, then commit or release** (`quota/src/ledger.rs`). Each reserve is
+one `IMMEDIATE` transaction that sweeps the expired, then reads what is used
+and what is held and writes the hold, so parallel reserves near the cap pass
+exactly what fits; a commit moves its hold into usage in one transaction. A
+hold not committed within the plan's hold time (an hour) — an abandoned
+upload — is swept, by the next reserve and by the service's minute sweep. A
+day's counter starts at nothing each UTC day.
+
+**The defaults are data** — a plan, read once into a fresh `quota.db`: the
+built-in `quota/plans/free-1k.json` (the owner's answer to `defaults`, "1k
+concurrent free users per day on a decent sized computer": media 2 GB,
+documents 200 MB, tickets 50 MB, 300 fetches and 200 MB fetched a day, 2 GB
+served a day, two uploads at once), or `--quota-plan FILE`. After that the
+file's rows are the truth and `quota.set` moves them.
+
+**The box guard.** Writes that store (a total source) by anyone capped are
+refused `box_full` once the data disk — the one holding `quota.db` — is past
+the plan's full line (85 %); past its warn line (70 %) `quota.table`'s `box`
+says `warn` and the log says so hourly.
+
+**Refusals are in band and typed**, with nothing written: the tickets
+service answers a write over the cap `over_allowance { source, used, cap,
+asked, message }` (or `box_full`); the media service `refused { reason:
+over_allowance, max: <what is left>, message }`, the message naming the
+numbers ("1.9 GB used of 2 GB, and this asks 300 MB more"); `/media/<hash>`
+past the day's egress is a 429.
+
+```sh
+synapse -P 4460 menger quota usage
+synapse -P 4460 menger quota table --sort bytes
+synapse -P 4460 menger quota set --default true --source docs.bytes --cap "200 MB"
+synapse -P 4460 menger quota recount
+```
+
+The pages: `#/usage` (yours: a bar per source, used against the cap;
+`#/usage/:principal` an admin's look at another) and `#/quota` (an admin's
+table of everyone — sortable by stored or a source's use, the cap edited in
+place).
 
 ## Tickets
 
@@ -760,6 +852,15 @@ that is not the caller's.
   tickets service answers from the same `VerifiedUser::permit` a write
   takes, `not_found` for a ticket out of reach. The media service's put is
   the first (`media/src/streams.rs`).
+- **Every storing write is held to an allowance** (V2-31): before it lands,
+  the writing service reserves its bytes (and count) for the caller's
+  principal through the quota service's seam (`Access::meter`, the
+  tickets service's `activation/metered.rs`), and commits or releases after.
+  Who may is still the permit's; how much is the quota service's.
+  `quota.usage` is a signed-in caller's (`SIGNED_IN_GRANTS`), the seam's
+  four (`reserve`, `commit`, `release`, `credit`) the server's own — no
+  role holds them — and `table`, `set`, `recount` and
+  `tickets.revisions.usage` an admin's of `*`.
 
 ### The frame (ACCESS-13)
 
@@ -890,7 +991,7 @@ OUGHT"}`. `tests/auth_protocol.rs` runs it over the built binary.
 
 | what | limit (default) | past it |
 |---|---|---|
-| WebSocket connections: in all / per IP / per principal / anonymous / anonymous per IP | the `--max-connections*` flags (1,024 / 256 / 64 / 128 / 32) | the upgrade refused 429 |
+| WebSocket connections: in all / per IP / per principal / anonymous / anonymous per IP | the `--max-connections*` flags (1,024 / 256 / 4 / 128 / 32; V2-31: per principal 4, the owner's free tier — the transport's own default is 64) | the upgrade refused 429 |
 | calls open on one connection (a `watch` for its life) | `--max-calls-per-connection` (256) | `error_kind: too_many_calls` |
 | a connection with no call open | `--idle-timeout-secs` (900) | closed |
 | a browser's sign-in unused | `--session-idle-minutes` (120) | the session ends |
@@ -898,6 +999,8 @@ OUGHT"}`. `tests/auth_protocol.rs` runs it over the built binary.
 | the waiting list | `WAITING_MAX` 1,000 (`tickets-api/src/access/mod.rs`) | the oldest forgotten |
 | a title / a filter | `TITLE_MAX` 1 KiB / `FILTER_MAX` 4 KiB (`tickets-api/src/limits.rs`) | `invalid_params` |
 | a body | `--max-body-bytes` (8 MiB) | `body_too_large` |
+| writes per principal (an admin of `*` has no bucket; V2-31) | `--max-writes-per-second` (20 sustained, twice that at once) | `error_kind: too_many_writes`, `retry_after_ms` |
+| what a principal stores and fetches, per source (V2-31) | the quota service's allowances ("`quota`") | `over_allowance`, `box_full`, `too_many_at_once` |
 | `tickets.list`'s page | 1,000 unless `--limit`, at most 10,000 | page with `page.next` |
 | a ui bundle | `BUNDLE_MAX` 16 MiB (`../plexus-ui/service/src/vocab.rs`) | `invalid_params` |
 
@@ -1278,6 +1381,8 @@ tickets-api/         menger-tickets-api: the tickets service — vocabulary, sto
                      language, activations (activation/), access (access/)
 media/               menger-media: the media service — images by sha256 in media.db, the
                      ticket's permit asked of tickets through the seam (V2-24)
+quota/               menger-quota: the quota service — allowances per principal and source
+                     in quota.db, every storing write reserved through the seam (V2-31)
 ui/                  the UI's source bundle (compiled and drawn by ../plexus-ui's
                      plexus-ui-compiler and plexus-ui-engine, FRAME-3; stored and
                      served by its plexus-ui-service, FRAME-5)
@@ -1304,7 +1409,13 @@ document a Yjs CRDT written live by many hands, who is on it shown, every
 change kept to replay and squash. V2-25
 (2026-11-01): epics leave v2's surface — the `epics` activation, the header's
 switcher and `#/epics`, and the `me` page — and the board is the
-organization's whole set; `session` stays as the agents' door.
+organization's whole set; `session` stays as the agents' door. V2-31
+(2026-11-02): the quota service — per-user allowances on every data input,
+usage counted per source in `quota.db`, tabulated for each person
+(`#/usage`) and for admins (`#/quota`), and every storing write reserved
+against the cap through the seam and refused over it; the owner's free
+tier (`free-1k`) as the built-in plan, the box guard, 20 writes a second and
+4 connections per principal.
 
 ## License
 

@@ -9,6 +9,9 @@ use plexus_ui_service::{Compiler, Signers, UiActivation, UiStore, DEFAULT_CHANNE
 use menger_media::{MediaActivation, MediaStore, MEDIA_DB_FILE};
 // V2-29: the docs service — documents on their own API and file.
 use menger_docs::{DocsActivation, DocsStore, DOCS_DB_FILE};
+// V2-31: the quota service — allowances per principal and source, its
+// ledger its own file; every write reserved against the cap through the seam.
+use menger_quota::{DiskUsage, Ledger, Plan, QuotaActivation, QuotaSeam, Statvfs, QUOTA_DB_FILE};
 use menger_tickets_api::store::{OpenPurge, SeedShape, SeedSpec, Store, StoreError, System, PURGE_EVERY};
 use plexus_auth_core::grants::GrantsGeneration;
 use plexus_core::plexus::{Activation, AuthBackend, AuthSetup, ChildRouter, DynamicHub, Provider as AuthProvider, ProviderKind as AuthKind};
@@ -20,7 +23,9 @@ use crate::auth_backend::MengerAuth;
 /// `auth.logout`, `auth.requires`): who it is, its own grants (the app asks
 /// before anything, and shows "no access yet" from it), and IDENTITY-42's
 /// sessions (an agent's key holds nothing until an admin grants it).
-pub const SIGNED_IN_GRANTS: [&str; 5] = ["session.whoami", "session.login", "session.logout", "session.providers", "members.mine"];
+/// V2-31: and their own usage (`quota.usage`) — a person with no grant yet
+/// still sees what they store.
+pub const SIGNED_IN_GRANTS: [&str; 6] = ["session.whoami", "session.login", "session.logout", "session.providers", "members.mine", "quota.usage"];
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -77,6 +82,16 @@ pub fn default_docs_db_path(db_path: &Path) -> PathBuf {
         // A tickets file that is itself named docs.db: the docs file goes beside it under another name.
         same if same == db_path => beside("docs-service.db"),
         docs => docs,
+    }
+}
+
+/// V2-31: the quota service's file when `--quota-db-path` names none —
+/// `quota.db` beside the tickets file `db_path`, never the same file.
+pub fn default_quota_db_path(db_path: &Path) -> PathBuf {
+    let beside = |name: &str| db_path.parent().map_or_else(|| PathBuf::from(name), |d| d.join(name));
+    match beside(QUOTA_DB_FILE) {
+        same if same == db_path => beside("quota-service.db"),
+        quota => quota,
     }
 }
 
@@ -163,7 +178,8 @@ pub struct MediaSetup {
     pub store: Arc<MediaStore>,
     pub max_upload: Option<u64>,
     pub remote: menger_media::Remote,
-    /// V2-31's quota service once it lands; until then everything is allowed.
+    /// The allowance every byte is asked of — V2-31: the quota service's
+    /// meter ([`MediaSetup::metered`]; the builder meters it always).
     pub allowance: Arc<dyn menger_media::Allowance>,
 }
 
@@ -208,6 +224,13 @@ impl MediaSetup {
         self
     }
 
+    /// V2-31: every byte asked of the quota service, through `meter` (the
+    /// slot the builder attaches the seam to).
+    pub fn metered(mut self, meter: &menger_quota::MeterSlot) -> Self {
+        self.allowance = Arc::new(crate::quota_allowance::Metered(meter.clone()));
+        self
+    }
+
     /// For tests alone: `ip:port` pairs links may be read from although not public.
     pub fn fetch_allow(mut self, allow: Vec<std::net::SocketAddr>) -> Self {
         if !allow.is_empty() {
@@ -236,6 +259,37 @@ impl DocsSetup {
     /// The store beside the tickets file ([`default_docs_db_path`]).
     pub fn beside(db_path: &Path) -> anyhow::Result<Self> {
         Self::open(&default_docs_db_path(db_path))
+    }
+}
+
+/// V2-31: what the `quota` activation is built over — the ledger on its own
+/// file, from a plan when the file is new, and the disk the box guard reads.
+#[derive(Clone)]
+pub struct QuotaSetup {
+    pub ledger: Arc<Ledger>,
+    pub disk: Arc<dyn DiskUsage>,
+}
+
+impl QuotaSetup {
+    /// The ledger at `path` (`--quota-db-path`), a fresh file taking `plan`
+    /// (`--quota-plan`; the built-in free tier); the box guard reads the disk
+    /// that holds it.
+    pub fn open(path: &Path, plan: &Plan) -> anyhow::Result<Self> {
+        let ledger = Ledger::open(path, plan).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
+        tracing::info!("quota:     {} (plan {}; {} reservation(s) open)", path.display(), ledger.settings().plan, ledger.open_holds());
+        let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        Ok(Self { ledger: Arc::new(ledger), disk: Arc::new(Statvfs::new(dir)) })
+    }
+
+    /// The ledger beside the tickets file ([`default_quota_db_path`]), the built-in plan.
+    pub fn beside(db_path: &Path) -> anyhow::Result<Self> {
+        Self::open(&default_quota_db_path(db_path), &Plan::built_in())
+    }
+
+    /// The box guard reads `disk` instead (a test's fake).
+    pub fn guarding(mut self, disk: Arc<dyn DiskUsage>) -> Self {
+        self.disk = disk;
+        self
     }
 }
 
@@ -387,11 +441,13 @@ where
 {
     let media = MediaSetup::beside(db_path)?;
     let docs = DocsSetup::beside(db_path)?;
-    build_rpc_services(db_path, seed, shape, offers, access, backend, resource_metadata, body_max, ui, media, docs, tickets).await
+    let quota = QuotaSetup::beside(db_path)?;
+    build_rpc_services(db_path, seed, shape, offers, access, backend, resource_metadata, body_max, ui, media, docs, quota, tickets).await
 }
 
 /// V2-24: [`build_rpc_ui_over`] with the media service over `media` (main's
-/// `--media-db-path`) registered beside `tickets` and `ui` — every service
+/// `--media-db-path`) — V2-31: and the quota service over `quota` (main's
+/// `--quota-db-path`, `--quota-plan`) — registered beside `tickets` and `ui` — every service
 /// of v2's, in one process (V2-1): the media service's seam is attached to
 /// the hub built here, so a put asks `tickets.may` through it as the caller.
 /// V2-29: and the docs service over `docs` (`--docs-db-path`), its seam
@@ -410,6 +466,7 @@ pub async fn build_rpc_services<T, F>(
     ui: UiSetup,
     media: MediaSetup,
     docs: DocsSetup,
+    quota: QuotaSetup,
     tickets: F,
 ) -> anyhow::Result<Arc<DynamicHub>>
 where
@@ -497,17 +554,28 @@ where
     let seam = ui.seam().clone();
     // V2-24: `media` beside them — the images a body shows, over its own
     // file; whose a ticket is, it asks `tickets` through its seam.
+    // V2-31: every byte the media service takes, fetches or serves is asked of the quota service.
+    let media = media.metered(access.meter());
     let media = MediaActivation::new(media.store).with_max_upload(media.max_upload).with_remote(media.remote).with_allowance(media.allowance);
     let media_seam = media.seam().clone();
     // V2-29: `docs` beside them — documents, over their own file; who may is
     // the gate's word on a document's organization, asked through its seam.
+    // V2-31: every change a document takes is reserved against its writer's allowance.
+    docs.store.set_quota(Arc::new(crate::quota_allowance::DocsMetered(access.meter().clone())));
     let docs = DocsActivation::new(docs.store);
     let docs_seam = docs.seam().clone();
+    // V2-31: `quota` beside them — every principal's usage per source, over
+    // its own file; what it knows of teams and stores it asks through its
+    // seam, and the tickets service reserves through the meter it is given.
+    let quota = QuotaActivation::new(quota.ledger, quota.disk);
+    let (quota_seam, meter) = (quota.seam().clone(), QuotaSeam::default());
+    menger_quota::upkeep(quota.clone());
     let mut hub = DynamicHub::new("menger")
         .register(tickets)
         .register(ui)
         .register(media)
         .register(docs)
+        .register(quota)
         // ORG-4: `orgs` beside `members` — the organizations, and their making.
         .register(OrgsActivation::with_access(Arc::clone(&store), access.clone()))
         .register(MembersActivation::new(store, access.clone()))
@@ -535,6 +603,12 @@ where
     media_seam.attach(&hub);
     // V2-29: the docs service asks the gate and `orgs.list` through it.
     docs_seam.attach(&hub);
+    // V2-31: the quota service asks `members` and the stores through this
+    // service as the server's own caller; the tickets service's writes
+    // reserve through the meter, asking `quota.*` the same way.
+    quota_seam.attach(&hub, access.system_caller());
+    meter.attach(&hub, access.system_caller());
+    access.meter().attach(Arc::new(meter));
     Ok(hub)
 }
 
@@ -615,6 +689,20 @@ mod tests {
         let docs = default_docs_db_path(tickets);
         assert_ne!(docs, tickets);
         assert_eq!(docs.parent(), tickets.parent(), "still beside it");
+    }
+
+    /// V2-31: the quota file is beside the tickets file, never the same file.
+    #[test]
+    fn the_quota_db_is_beside_the_tickets_file_never_it() {
+        for tickets in ["/var/lib/menger/tickets.db", "/tmp/x/local.db"] {
+            let tickets = Path::new(tickets);
+            let quota = default_quota_db_path(tickets);
+            assert_eq!(quota, tickets.parent().unwrap().join("quota.db"));
+            assert_ne!(quota, default_media_db_path(tickets));
+            assert_ne!(quota, default_ui_db_path(tickets));
+        }
+        let tickets = Path::new("/tmp/x/quota.db");
+        assert_ne!(default_quota_db_path(tickets), tickets);
     }
 
     /// UI-3: the ui file is beside the tickets file, never the same file.

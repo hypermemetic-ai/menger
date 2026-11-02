@@ -1850,6 +1850,21 @@ pub enum TicketsEvent {
     /// say so without reading `message`; `message` says it in words. Nothing
     /// was written.
     BodyTooLarge { id: Option<String>, bytes: u64, max: u64, message: String },
+    /// V2-31: `revisions.usage` — what one author's writes keep: the
+    /// tickets they created (`count`) and the bytes of every body they wrote
+    /// (`bytes`), as the quota service recounts `tickets.count` and
+    /// `tickets.bytes`.
+    Usage { principal: String, count: u64, bytes: u64 },
+    /// V2-31: a `create`, `amend` or `update` refused for the author's
+    /// allowance — `used` of `source` (with what is in flight) and `asked`
+    /// more would pass `cap` (`tickets.bytes`, `tickets.count`). Typed, so
+    /// a client shows the numbers; `message` says it in words, and that an
+    /// admin raises it (`quota.set`). Nothing was written.
+    OverAllowance { source: String, used: u64, cap: u64, asked: u64, message: String },
+    /// V2-31: a write refused because the server's data disk is past the
+    /// full line (`full_percent`, 85 % on the free tier): nothing was
+    /// written; an admin makes room.
+    BoxFull { used_percent: f64, full_percent: f64, message: String },
     /// FILTER-13: one row of `tree` — a parent's child, or a shortcode's top
     /// row, that matches the filter or holds a match below it: `matched`
     /// whether it matches itself, `below` how many matches are strictly

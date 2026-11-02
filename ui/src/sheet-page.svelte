@@ -57,6 +57,11 @@
   import PageFilters from "plexus-ui:page-filters";
   import PageNew from "plexus-ui:page-new";
   import PageOrgs from "plexus-ui:page-orgs";
+  // V2-31: the quota pages.
+  import PageQuota from "plexus-ui:page-quota";
+  import PageUsage from "plexus-ui:page-usage";
+  import QuotaTable from "plexus-ui:quota-table";
+  import QuotaUsage from "plexus-ui:quota-usage";
   import PageReady from "plexus-ui:page-ready";
   import PageReleases from "plexus-ui:page-releases";
   import PageSearch from "plexus-ui:page-search";
@@ -212,6 +217,8 @@
     ]],
     ["the admin pages", [
       ["orgs-list", OrgsList, F, ["hover"], { loading: { sheet: "loading" } }],
+      ["quota-usage", QuotaUsage, F, [], { loading: { sheet: "loading" } }],
+      ["quota-table", QuotaTable, F, ["hover", "focus", "disabled"], { loading: { sheet: "loading" } }],
       ["ui-versions", UiVersions, F, ["hover", "focus", "disabled"], { loading: { sheet: "loading" } }, true],
     ]],
     // STUDIO-12: the pages — each route's rhx page, placing its components by their marks (#/sheet's own, page-sheet, aside: it places this).
@@ -224,6 +231,8 @@
       ["page-waves", PageWaves, ID, [], {}, true],
       ["page-filters", PageFilters, F, [], {}, true],
       ["page-orgs", PageOrgs, F, [], {}, true],
+      ["page-usage", PageUsage, F, [], {}, true],
+      ["page-quota", PageQuota, F, [], {}, true],
       ["page-releases", PageReleases, F, [], {}, true],
       ["page-bulk", PageBulk, (t) => ({ ids: t }), [], {}, true],
       ["page-blockers", PageBlockers, ID, [], {}, true],

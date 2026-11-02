@@ -61,5 +61,13 @@
   "page-editor": {
     "top": "app-top",
     "palette": "jump-palette-sv"
+  },
+  "page-usage": {
+    "top": "app-top",
+    "palette": "jump-palette-sv"
+  },
+  "page-quota": {
+    "top": "app-top",
+    "palette": "jump-palette-sv"
   }
 }
