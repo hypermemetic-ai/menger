@@ -119,6 +119,15 @@ async function eventually(what, fn, ms = 10_000) {
   throw new Error(`assertion failed: ${what} (waited ${ms} ms)${last ? `: ${last.message}` : ""}`);
 }
 
+// UI-19: the page's files map read backwards — each content URL
+// (`/app/f/<sha256>.<ext>`) to the version's path it stands for.
+const versionPaths = (page) =>
+  page.evaluate(() => {
+    const imports = JSON.parse(document.getElementById("plexus-ui-files")?.textContent || "{}").imports || {};
+    const out = {};
+    for (const [path, url] of Object.entries(imports)) if (/^\/app\/[0-9a-f]{64}\//.test(path)) out[url] ??= path;
+    return out;
+  });
 const digits = (text) => Number(String(text ?? "").replace(/[^0-9]/g, ""));
 const trimmed = (text) => String(text ?? "").trim();
 
@@ -306,7 +315,9 @@ async function main() {
           // FRAME-26: the bundle's one svelte/1 runtime, asked once on either
           // board — the entrypoint's modulepreload and the modules' import
           // share one fetch — and on the rhx board no svelte/1 module asked.
-          const asked = seen.requests.map((u) => new URL(u).pathname).filter((p) => /^\/app\/[0-9a-f]{64}\/components\/[^/]+\.js$/.test(p));
+          // UI-19: the page's own version's files are asked by their content URL; read back through its files map.
+          const asPath = await versionPaths(page);
+          const asked = seen.requests.map((u) => new URL(u).pathname).map((p) => asPath[p] ?? p).filter((p) => /^\/app\/[0-9a-f]{64}\/components\/[^/]+\.js$/.test(p));
           const runtimes = asked.filter((p) => p.endsWith("/svelte-runtime.js"));
           assert(runtimes.length === 1, `${B.name} board: the svelte/1 runtime asked once, not ${runtimes.length}× (${asked.join(", ")})`);
           if (!B.tag) assert(asked.length === 1, `the rhx board asks no svelte/1 module: ${asked.join(", ")}`);
@@ -319,8 +330,10 @@ async function main() {
           // served — so a right-click can put one in a section.
           for (const name of B.siblings ?? []) {
             const entry = await page.evaluate(async (name) => {
-              const at = performance.getEntriesByType("resource").map((e) => new URL(e.name).pathname).find((p) => /^\/app\/[^/]+\/manifest\.json$/.test(p));
-              if (!at) return { error: "no manifest.json fetched" };
+              // UI-19: the version's path, which serves every file still.
+              const v = document.querySelector('meta[name="menger-ui-version"]')?.content;
+              if (!v) return { error: "no version stamped" };
+              const at = `/app/${v}/manifest.json`;
               const m = await (await fetch(at)).json();
               const e = m.components?.[name];
               const js = e ? await fetch(at.replace(/manifest\.json$/, `components/${name}.js`)) : null;
@@ -344,7 +357,8 @@ async function main() {
       await onBoard(B, "the_board_wears_its_sheets_on_the_theme", async () => {
         const { page, seen } = await openPage(B.route);
         await boardUp(page, B);
-        const paths = seen.requests.map((u) => new URL(u).pathname);
+        const asPath = await versionPaths(page);
+        const paths = seen.requests.map((u) => new URL(u).pathname).map((p) => asPath[p] ?? p);
         assert(paths.some((p) => /^\/app\/[0-9a-f]{64}\/theme\.css$/.test(p)), `theme.css loaded: ${paths.filter((p) => p.endsWith(".css")).join(", ")}`);
         assert(!paths.some((p) => /\/components\/[^/]+\.css$/.test(p)), `no component's sheet fetched (adopted from components.json and the modules): ${paths.filter((p) => p.endsWith(".css")).join(", ")}`);
         const looks = (theme) => page.evaluate(([sel, theme]) => {
@@ -352,7 +366,13 @@ async function main() {
           const m = document.querySelector(sel);
           const css = (q, k) => { const e = m.querySelector(q); return e ? getComputedStyle(e)[k] : null; };
           return {
-            links: [...document.querySelectorAll("link[rel=stylesheet]")].map((l) => new URL(l.href).pathname.replace(/^\/app\/[0-9a-f]+\//, "")),
+            // UI-19: a link by its content URL read back through the page's files map.
+            links: [...document.querySelectorAll("link[rel=stylesheet]")].map((l) => {
+              const imports = JSON.parse(document.getElementById("plexus-ui-files")?.textContent || "{}").imports || {};
+              const p = new URL(l.href).pathname;
+              const named = Object.entries(imports).find(([k, u]) => u === p && /^\/app\/[0-9a-f]{64}\//.test(k))?.[0] ?? p;
+              return named.replace(/^\/app\/[0-9a-f]+\//, "");
+            }),
             adopted: document.adoptedStyleSheets.length,
             head: css(".board-head", "backgroundColor"),
             row: css(".board-row", "height"),

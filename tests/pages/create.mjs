@@ -81,7 +81,9 @@ export default async (ctx) => {
       assert((await f.locator("[data-field=body]").inputValue()) === "the **kiln** log", "back to writing, the body kept");
       // Both schemes: the tokens on a dark wrapper — a field paints the dark `--bg` the bundle's theme.css declares.
       const seen = await page.evaluate(async () => {
-        const at = performance.getEntriesByType("resource").map((e) => new URL(e.name).pathname).find((p) => p.endsWith("/theme.css"));
+        // UI-19: the theme by its version's path (the page asks it by its content URL).
+        const v = document.querySelector('meta[name="menger-ui-version"]')?.content;
+        const at = v ? `/app/${v}/theme.css` : null;
         const css = at ? await (await fetch(at)).text() : "";
         const block = css.slice(css.indexOf('[data-plexus-theme="dark"]'));
         const want = (block.match(/--bg:\s*([^;]+);/) || [])[1]?.trim();

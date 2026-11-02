@@ -225,6 +225,10 @@ const MODULE_JS: &str = "import { mount as m } from \"./svelte-runtime.js\";\nex
 /// holds svelte/1 components (the bundle here names it in `runtimes`).
 /// FRAME-30: and `<link rel="stylesheet">` of the bundle's `theme.css`, the
 /// tokens every component's sheet paints with — first, before the script.
+/// UI-19: each link by the file's content URL (`/app/f/<sha256>.<ext>`),
+/// the page's own references rewritten by the ui routes, beside the import
+/// map (`plexus-ui-files`) the boot's imports resolve through; the
+/// version's path still serves each.
 #[tokio::test]
 async fn the_entrypoint_preloads_the_boot() {
     let m = start().await;
@@ -262,7 +266,8 @@ async fn the_entrypoint_preloads_the_boot() {
     let token = support::mint_session(m.ws).await;
     let body = m.get("/app/", Some(&token)).await.text().await.unwrap();
 
-    let script = body.find("<script").expect("the entrypoint has its script");
+    // UI-19: the module script — the files map (an import map) is a script too, first.
+    let script = body.find("<script type=\"module\"").expect("the entrypoint has its script");
     let links: Vec<(usize, Vec<(String, String)>)> = body.match_indices("<link").map(|(at, _)| (at, link_attrs(&body[at..at + body[at..].find('>').unwrap() + 1]))).collect();
     let attr = |l: &[(String, String)], k: &str| l.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
     let shown: Vec<String> = links.iter().map(|(_, l)| format!("{l:?}")).collect();
@@ -278,7 +283,9 @@ async fn the_entrypoint_preloads_the_boot() {
         ("stylesheet", None, "theme.css"),
     ];
     for (rel, as_, file) in boot {
-        let href = format!("/app/{hash}/{file}");
+        // UI-19: each by its content URL — the same across versions while its bytes are.
+        let body_of = files.iter().find(|(n, _)| *n == file).map(|(_, b)| *b).expect("a file of the bundle");
+        let href = plexus_ui_service::routes::content_url(file, &sha_hex(body_of.as_bytes()));
         let Some((at, l)) = links.iter().find(|(_, l)| attr(l, "rel").as_deref() == Some(rel) && attr(l, "href").as_deref() == Some(href.as_str())) else {
             panic!("the entrypoint has no <link rel=\"{rel}\" href=\"{href}\">; its links: {shown:?}");
         };
@@ -289,7 +296,13 @@ async fn the_entrypoint_preloads_the_boot() {
         }
         let r = m.get(&href, Some(&token)).await;
         assert_eq!(r.status(), 200, "{href} is a file of the version served");
+        let r = m.get(&format!("/app/{hash}/{file}"), Some(&token)).await;
+        assert_eq!(r.status(), 200, "{file} by the version's path still");
     }
+    // UI-19: the import map of the version's files, before the script.
+    let map = body.find("<script type=\"importmap\" id=\"plexus-ui-files\">").expect("the entrypoint carries its files map");
+    assert!(map < script, "the files map comes before the module script");
+    assert!(body[map..].contains(&format!("\"/app/{hash}/host.js\"")), "the map names host.js by the version's path: {body}");
     let code = &body[script..script + body[script..].find("</script>").expect("the script ends")];
     assert!(code.contains("host.js") && code.contains("start("), "the script boots through host.js's start(version): {code}");
     assert!(!code.contains(".boot("), "not through engine.js's boot: {code}");
