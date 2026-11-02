@@ -1,24 +1,30 @@
-<!-- EDITOR-3: the ticket's body in a CodeMirror 6 editor (svelte/1), the
-     markdown exact — the editor's document is the body byte for byte — and
-     formed in place: a Lezer parse of the markdown decorates headings,
-     emphasis, lists, links, inline and fenced code, quotes, rules and images
-     where they stand, and hides their syntax marks except on the caret's
-     line or inside the caret's span (a live preview: what is typed is what
-     is seen, the source one caret move away). Live on the page's `get` spec
-     (the one ticket-body and ticket-head read: one get, one watch, shared).
-     Writes: 600 ms after the last key, or when the focus leaves, one
-     `tickets.amend { id, body }`, the body whole; the title above it the
-     same way, `{ id, title }`. The bar's line says saving · saved HH:MM ·
-     the service's refusal (`[data-refused]`) · whose hand an outside amend
-     was. An outside amend (one that is not the body this editor last sent):
-     with the draft clean it is applied as changes the editor maps the caret
-     and the scroll through; with the draft dirty it waits for the pause,
-     then is merged line by line with ours, ours winning where they overlap,
-     and the merge is sent and said — the revision the service kept has
-     theirs. EDITOR-7: `<m-summary>` and `<m-decision>` / `<m-input>` as cards,
-     their source on a click (other marks stay source). EDITOR-5: a URL pasted over a selection links it; an image pasted,
-     dropped or picked goes to `media.put` and lands as `![name](media:<hash>)`,
-     an upload card beside the text until it does. CodeMirror comes from ../plexus-ui/package.json (the node_modules
+<!-- EDITOR-8: the rendering is the editor — one surface, Obsidian's live
+     preview. The ticket is drawn by ticket-view (a sibling, inlined), and its
+     body's element holds a CodeMirror 6 editor whose document is the body
+     byte for byte: every block the caret is not in is replaced by a widget
+     that is ticket-view itself mounted on that block (its `blocks()` split and
+     its one `{@html markdown(…)}`, the host's markdown through the engine's sanitizer, the house's marks as
+     cards), so a block away from the caret is drawn exactly as `#/ticket/:id`
+     draws it; the caret's block shows its markdown, formed in place (headings,
+     emphasis, links, lists, fences; a mark hidden off the caret's line). A
+     click on a drawn block puts the caret where it was clicked, in the source.
+     Unfocused, every block is drawn. The title is ticket-view's, editable in
+     place. Live on the page's `get` spec (the one ticket-head reads: one get,
+     one watch, shared). Writes: 600 ms after the last key, or when the focus
+     leaves, one `tickets.amend { id, body }`, the body whole; the title the
+     same way, `{ id, title }`. The line under the canvas says saving · saved
+     HH:MM · the service's refusal (`[data-refused]`) · whose hand an outside
+     amend was. An outside amend (one that is not the body this editor last
+     sent): with the draft clean it is applied as changes the editor maps the
+     caret and the scroll through; with the draft dirty it waits for the
+     pause, then is merged line by line with ours, ours winning where they
+     overlap, and the merge is sent and said — the revision the service kept
+     has theirs. EDITOR-5: a URL pasted over a selection links it; an image
+     pasted, dropped or picked goes to `media.put` and lands as
+     `![name](media:<hash>)`. EDITOR-6: a selection and one line become a
+     queued request. Keys: mod+b / mod+i bold and italic, mod+k a link,
+     mod+z / mod+shift+z undo and redo, mod+s saves now, mod+enter asks an
+     agent. CodeMirror comes from ../plexus-ui/package.json (the node_modules
      the svelte/1 build reads), bundled into this module by the tool. -->
 <script module>
   export const uses = ["tickets.get", "tickets.watch", "tickets.amend", "tickets.revisions.list", "media.put", "tickets.inputs.ask", "tickets.queue", "tickets.inputs.close"];
@@ -81,22 +87,45 @@
     out.push(...B.slice(pos));
     return { text: out.join("\n"), dropped: ht.length - kept.length };
   }
+
+  /** Where in a block's markdown `src` the caret goes for a click after the drawn text `seen`: the
+   *  drawn characters matched in order against the source, past its tags and its marks. */
+  export function sourceOffset(src, seen) {
+    const want = seen.replace(/\s+/g, "");
+    let i = 0;
+    for (const ch of want) {
+      for (;;) {
+        if (i >= src.length) return src.length;
+        if (src[i] === "<") {
+          const tag = /^<\/?[a-zA-Z][^>\n]*>/.exec(src.slice(i));
+          if (tag) { i += tag[0].length; continue; }
+        }
+        if (src[i] === ch) { i++; break; }
+        i++;
+      }
+    }
+    return i;
+  }
 </script>
 
 <script>
-  import { tick, untrack } from "svelte";
+  import { mount, tick, unmount, untrack } from "svelte";
   import { bus, live } from "plexus-ui/host";
-  import { Annotation, EditorState, StateEffect, StateField } from "@codemirror/state";
-  import { Decoration, EditorView, WidgetType, keymap } from "@codemirror/view";
+  import TicketView, { blocks, refDefs } from "./ticket-view.svelte";
+  import { Annotation, EditorSelection, EditorState, StateEffect, StateField } from "@codemirror/state";
+  import { Decoration, EditorView, WidgetType, keymap, placeholder } from "@codemirror/view";
   import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-  import { markdown as markdownSupport, markdownLanguage } from "@codemirror/lang-markdown";
+  import { markdown as markdownSupport, markdownKeymap, markdownLanguage } from "@codemirror/lang-markdown";
   import { syntaxTree } from "@codemirror/language";
 
   let { id, sheet = null } = $props();
+  // The document this instance edits: fixed at mount (editor-screen keys the editor by it), so a
+  // write still in hand when the screen moves to another document lands on its own ticket.
+  const doc_id = untrack(() => id);
   const b = bus();
   const PAUSE = 600;
 
-  const ticket = live({ snapshot: "tickets.get", params: () => ({ id }), changes: "tickets.watch", key: "id",
+  const ticket = live({ snapshot: "tickets.get", params: () => ({ id: doc_id }), changes: "tickets.watch", key: "id",
                         on: { amended: "upsert:ticket", status_changed: "upsert:ticket", kind_changed: "upsert:ticket", updated: "upsert:ticket",
                               labels_changed: "upsert:ticket", severity_changed: "upsert:ticket", frozen_changed: "upsert:ticket", hidden_changed: "upsert:ticket",
                               blockers_changed: "upsert:ticket", unlocks_changed: "upsert:ticket", unlocks_removed: "upsert:ticket", parent_changed: "upsert:ticket",
@@ -104,12 +133,14 @@
   // ticket-head's spec word for word: the page holds one `get` and one `watch` of the ticket, shared.
   const t = $derived(ticket.rows.find((r) => r.title != null && !ticket.rows.some((x) => Array.isArray(x.tombstones))));
 
-  // The bar's line: what the last write did, and whose the last outside one was.
+  // The line under the canvas: what the last write did, and whose the last outside one was.
   let state = $state({ kind: "idle", text: "" });
-  let titleDraft = $state("");
+  let titleDraft = "";
   let titleDirty = false;
   let titleTimer = null;
+  let titleEl = null;
   let host = null;
+  let wrap = $state(null);
   let view = null;
   // The write model, outside Svelte's reactivity: the body the service holds as far as we know
   // (`acked`), the one in flight (`sent`), whether the document differs from `acked` (`dirty`),
@@ -118,6 +149,7 @@
   const Outside = Annotation.define();
   const hhmm = () => { const d = new Date(); return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
   const doc = () => view.state.doc.toString();
+  const said = (r) => String(r.message ?? "refused").replace(/^Invalid params: /, "");
 
   // ── the write model ──────────────────────────────────────────────────────
   function edited() {
@@ -129,7 +161,7 @@
 
   /** Whose hand the newest revision was: its name, else its actor, else nobody known. */
   async function whose() {
-    const r = await b.call("tickets.revisions.list", { id, limit: 1 });
+    const r = await b.call("tickets.revisions.list", { id: doc_id, limit: 1 });
     // Each item is its own `revision { revision }` event (a `rows { items }` page is read the same way).
     const row = (r.events ?? []).flatMap((e) => (e.type === "rows" ? e.items ?? [] : [e])).map((e) => e.revision ?? e).find((e) => e.rev != null) ?? null;
     return row ? row.name || row.actor || "someone" : "someone";
@@ -138,11 +170,10 @@
   /** `inputs ask` writes the body too: a change that only appends a question is nobody's hand on the text. */
   const onlyAsks = (was, now) => now.startsWith(was.trimEnd()) && /^\s*<m-input id="ask-\d+" kind="text">[\s\S]*<\/m-input>\s*$/.test(now.slice(was.trimEnd().length));
 
-  /** The bar says whose an outside change was; with a request open, its lines carry the hand. */
+  /** The line says whose an outside change was; with a request open, its lines carry the hand. */
   async function heardHand(before, after, text) {
     const who = await whose();
-    state = { kind: text ? "merged" : "outside", text: text ?? `${who} changed the body`, who: text ? (state.who ?? who) : who };
-    if (text) state = { ...state, text: text.replace("@who", who), who };
+    state = { kind: text ? "merged" : "outside", text: text ? text.replace("@who", who) : `${who} changed the body`, who };
     const open = requests.filter((r) => r.state === "asked" || r.state === "answered");
     if (!open.length || !view) return;
     const lines = diffLines(before.split("\n"), after.split("\n")).flatMap((h) => Array.from({ length: h.b1 - h.b0 }, (_, i) => h.b0 + i + 1));
@@ -182,164 +213,153 @@
     if (text === acked) { dirty = false; if (merged) state = { kind: "saved", text: `saved ${hhmm()}` }; return; }
     sent = text;
     state = { kind: "saving", text: "saving…" };
-    const r = await b.call("tickets.amend", { id, body: text });
+    const r = await b.call("tickets.amend", { id: doc_id, body: text });
     if (r.ok) {
       acked = text;
       if (sent === text) sent = null;
-      dirty = doc() !== acked;
+      dirty = view ? doc() !== acked : false;
       if (merged && !merged.only) await heardHand(merged.before, text, `merged @who's change${merged.dropped ? `, yours kept where they met (${merged.dropped} of theirs in the revision)` : ""} · saved ${hhmm()}`);
       else state = { kind: "saved", text: `saved ${hhmm()}` };
     } else {
       sent = null;
-      state = { kind: "refused", text: String(r.message ?? "refused").replace(/^Invalid params: /, "") };
+      state = { kind: "refused", text: said(r) };
     }
   }
 
+  // ── the title, ticket-view's heading made editable ───────────────────────
   function titleEdited() {
+    titleDraft = (titleEl?.textContent ?? "").replace(/\s+/g, " ");
     titleDirty = titleDraft !== (t?.title ?? "");
     if (titleTimer) clearTimeout(titleTimer);
     if (titleDirty) titleTimer = setTimeout(flushTitle, PAUSE);
   }
   async function flushTitle() {
     if (titleTimer) { clearTimeout(titleTimer); titleTimer = null; }
-    if (!titleDirty || !t) return;
+    if (!titleDirty) return;
     const title = titleDraft.trim();
     if (!title) return;
-    const r = await b.call("tickets.amend", { id, title });
+    const r = await b.call("tickets.amend", { id: doc_id, title });
     if (r.ok) { titleDirty = false; state = { kind: "saved", text: `saved ${hhmm()}` }; }
-    else state = { kind: "refused", text: String(r.message ?? "refused").replace(/^Invalid params: /, "") };
+    else state = { kind: "refused", text: said(r) };
+  }
+  function titleMount(node) {
+    titleEl = node;
+    try { node.contentEditable = "plaintext-only"; } catch { node.contentEditable = "true"; }
+    if (node.contentEditable !== "plaintext-only") node.contentEditable = "true";
+    node.spellcheck = false;
+    node.setAttribute("role", "textbox");
+    node.setAttribute("aria-label", "the title");
+    node.textContent = t?.title ?? "";
+    const keys = (ev) => { if (ev.key === "Enter") { ev.preventDefault(); flushTitle(); view?.focus(); } };
+    const pasted = (ev) => { ev.preventDefault(); document.execCommand("insertText", false, (ev.clipboardData?.getData("text/plain") ?? "").replace(/\s+/g, " ")); };
+    node.addEventListener("input", titleEdited);
+    node.addEventListener("blur", flushTitle);
+    node.addEventListener("keydown", keys);
+    node.addEventListener("paste", pasted);
+    return { destroy() { titleEl = null; } };
   }
 
-  // ── the live preview ─────────────────────────────────────────────────────
+  // ── the surface: drawn blocks, the caret's block as markdown ─────────────
+  const focusFx = StateEffect.define();
+  const focused = StateField.define({ create: () => false, update(v, tr) { for (const e of tr.effects) if (e.is(focusFx)) v = e.value; return v; } });
+
+  /** A block away from the caret: ticket-view's drawing of it. A click enters it at the clicked place. */
+  class Drawn extends WidgetType {
+    constructor(text, defs, hand) { super(); this.text = text; this.defs = defs; this.hand = hand; }
+    eq(o) { return o.text === this.text && o.defs === this.defs && o.hand === this.hand; }
+    toDOM(v) {
+      const d = document.createElement("div");
+      d.className = "blk";
+      d.setAttribute("data-block", "");
+      if (this.hand) { d.classList.add("eb-hand"); d.setAttribute("data-hand", this.hand); }
+      // ticket-view itself, drawing this block alone: the drawing #/ticket/:id makes of it.
+      d.view = mount(TicketView, { target: d, props: { body: this.text, defs: this.defs, block: true } });
+      d.addEventListener("mousedown", (ev) => {
+        if (ev.button !== 0) return;
+        const a = ev.target?.closest?.("a[href]");
+        if (a && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); window.open(a.href, "_blank", "noopener"); return; }
+        if (this.hand) { accept(); }
+        ev.preventDefault();
+        enter(v, d, this.text, ev);
+      });
+      d.addEventListener("click", (ev) => { if (ev.target?.closest?.("a[href]")) ev.preventDefault(); });
+      return d;
+    }
+    destroy(dom) { if (dom.view) { unmount(dom.view); dom.view = null; } }
+    ignoreEvent() { return true; }
+  }
+  /** The caret into the block drawn as `dom`, where the pointer was. */
+  function enter(v, dom, text, ev) {
+    let base;
+    try { base = v.posAtDOM(dom); } catch { return; }
+    let off = 0;
+    const pt = document.caretPositionFromPoint ? document.caretPositionFromPoint(ev.clientX, ev.clientY)
+      : document.caretRangeFromPoint ? ((r) => r && { offsetNode: r.startContainer, offset: r.startOffset })(document.caretRangeFromPoint(ev.clientX, ev.clientY)) : null;
+    if (pt && dom.contains(pt.offsetNode)) {
+      const r = document.createRange();
+      r.setStart(dom, 0);
+      try { r.setEnd(pt.offsetNode, pt.offset); off = sourceOffset(text, r.toString()); } catch { off = 0; }
+    }
+    v.focus();
+    v.dispatch({ selection: { anchor: Math.min(base + off, v.state.doc.length) }, effects: focusFx.of(true), scrollIntoView: false });
+  }
+
+  class Upload extends WidgetType {
+    constructor(key, name, said) { super(); this.key = key; this.name = name; this.said = said; }
+    eq(o) { return o.key === this.key && o.said === this.said; }
+    toDOM() {
+      const d = document.createElement("span");
+      d.className = "eb-upload";
+      d.setAttribute("data-upload", this.name);
+      d.setAttribute("data-state", this.said == null ? "uploading" : "refused");
+      if (this.said != null) d.setAttribute("data-refused", "");
+      d.textContent = this.said == null ? `uploading ${this.name}…` : `${this.name}: ${this.said}`;
+      return d;
+    }
+  }
   class Bullet extends WidgetType {
     toDOM() { const s = document.createElement("span"); s.className = "eb-bullet"; s.textContent = "•"; return s; }
     eq() { return true; }
     ignoreEvent() { return false; }
   }
-  class Rule extends WidgetType {
-    toDOM() { const s = document.createElement("span"); s.className = "eb-rule"; return s; }
-    eq() { return true; }
-  }
-  class Img extends WidgetType {
-    constructor(src, alt, name) { super(); this.src = src; this.alt = alt; this.name = name; }
-    eq(o) { return o.src === this.src && o.alt === this.alt; }
-    toDOM() {
-      const d = document.createElement("div");
-      d.className = "eb-img";
-      const i = document.createElement("img");
-      i.src = this.src; i.alt = this.alt; i.loading = "lazy";
-      i.setAttribute("data-image", this.name);
-      d.append(i);
-      return d;
-    }
-    ignoreEvent() { return false; }
-  }
-  const srcOf = (url) => {
-    const m = /^media:([0-9a-fA-F]{64})$/.exec(url.trim());
-    if (m) return { src: `${location.origin}/media/${m[1].toLowerCase()}`, name: m[1].toLowerCase() };
-    if (/^https?:\/\//i.test(url.trim())) return { src: url.trim(), name: url.trim() };
-    return null;
-  };
 
-  // ── EDITOR-7: the house's two marks as cards ─────────────────────────────
-  // `<m-summary>` and `<m-decision>` / `<m-input>` drawn as one card each while the caret is outside
-  // them; the source where the caret is. Read by pattern from the block's own text (an HTML block in
-  // CommonMark ends at a blank line, and these hold blank lines), never parsed as HTML and never
-  // set as HTML: every word reaches the card as text.
-  const CARDS = ["m-summary", "m-decision", "m-input"];
-  const unescape = (s) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&#96;/g, "`").replace(/&amp;/g, "&");
-  const plain = (s) => unescape(s.replace(/<[^>]*>/g, "")).replace(/\*\*|__|`/g, "").replace(/\s+/g, " ").trim();
-  const attr = (tag, name) => { const m = new RegExp(`\\s${name}="([^"]*)"`).exec(tag); return m ? unescape(m[1]) : null; };
-  const has = (tag, name) => new RegExp(`\\s${name}(\\s|=|>|/|$)`).test(tag);
-  const el = (name, cls, text) => { const e = document.createElement(name); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
-  class Card extends WidgetType {
-    constructor(mark, src, from) { super(); this.mark = mark; this.src = src; this.from = from; }
-    eq(o) { return o.mark === this.mark && o.src === this.src && o.from === this.from; }
-    toDOM(v) {
-      const s = this.src;
-      const open = /^\s*<[^>]*>/.exec(s)?.[0] ?? "";
-      const d = el("div", `eb-card eb-card-${this.mark}`);
-      d.setAttribute("data-card", this.mark);
-      d.setAttribute("role", "button");
-      d.setAttribute("tabindex", "0");
-      d.setAttribute("aria-label", `${this.mark}: show its source`);
-      const id = attr(open, "id");
-      if (id) d.setAttribute("data-id", id);
-      d.append(el("span", "tag", id ? `${this.mark} · ${id}` : this.mark));
-      if (this.mark === "m-summary") {
-        const standing = /<m-(?:field|answer)[^>]*data-field="(?:standing|answer)"[^>]*>([\s\S]*?)<\/m-(?:field|answer)>/.exec(s);
-        if (standing) d.append(el("p", "standing", plain(standing[1])));
-        const stats = el("div", "stats");
-        for (const m of s.matchAll(/<m-stat([^>]*)>([\s\S]*?)<\/m-stat>/g)) {
-          const tile = el("div", "stat");
-          const tone = attr(m[1], "tone");
-          if (tone) tile.setAttribute("data-tone", tone);
-          tile.append(el("b", null, attr(m[1], "value") ?? ""), el("span", null, plain(m[2])));
-          stats.append(tile);
-        }
-        if (stats.childElementCount) d.append(stats);
-      } else {
-        const q = /<m-question[^>]*>([\s\S]*?)<\/m-question>/.exec(s);
-        d.append(el("p", "q", q ? plain(q[1]) : "(no question)"));
-        const opts = el("div", "opts");
-        for (const m of s.matchAll(/<m-option([^>]*)>/g)) {
-          const o = el("span", "opt", attr(m[1], "name") ?? attr(m[1], "value") ?? "");
-          if (has(m[1], "recommended")) o.setAttribute("data-rec", "");
-          opts.append(o);
-        }
-        for (const m of s.matchAll(/<m-choice([^>]*)>([\s\S]*?)<\/m-choice>/g)) {
-          const o = el("span", "opt", plain(m[2]) || attr(m[1], "value") || "");
-          if (has(m[1], "recommended")) o.setAttribute("data-rec", "");
-          opts.append(o);
-        }
-        if (opts.childElementCount) d.append(opts);
-        else if (attr(open, "kind") === "text") d.append(el("p", "box", "a text answer"));
-        const rec = /<m-recommendation([^>]*)>([\s\S]*?)<\/m-recommendation>/.exec(s);
-        if (rec) d.append(el("p", "rec", `${plain(rec[2])}${attr(rec[1], "by") ? ` — ${attr(rec[1], "by")}` : ""}`));
-        d.append(el("p", "hint", "answer it in the rendered half"));
-      }
-      const enter = (ev) => { ev.preventDefault(); v.dispatch({ selection: { anchor: this.from } }); v.focus(); };
-      d.addEventListener("mousedown", enter);
-      d.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") enter(ev); });
-      return d;
+  /** The decorations of `state`: each block the caret is not in drawn; in the caret's, the markdown formed. */
+  function surface(state) {
+    const src = state.doc.toString();
+    const all = blocks(src);
+    const defs = refDefs(src);
+    const focus = state.field(focused);
+    const ranges = state.selection.ranges;
+    const hands = state.field(handed);
+    const out = [];
+    const shown = [];
+    for (let k = 0; k < all.length; k++) {
+      const blk = all[k];
+      const end = k + 1 < all.length ? all[k + 1].from - 1 : state.doc.length;
+      if (focus && ranges.some((r) => r.from <= end && r.to >= blk.from)) { shown.push([blk.from, end]); continue; }
+      let hand = null;
+      hands.between(blk.from, end, (_f, _t, d) => { hand = d.spec.attributes?.["data-hand"] ?? hand; });
+      out.push(Decoration.replace({ widget: new Drawn(blk.text, defs, hand), block: true }).range(blk.from, end));
     }
-    ignoreEvent() { return true; }
-  }
-  /** The house blocks of `state`: each `{ mark, from, to, ok, open }` (ok: closed, its id its own). */
-  function houseBlocks(state, tree) {
-    const out = [], ids = new Set(), doc = state.doc;
-    for (let n = 1; n <= doc.lines; n++) {
-      const line = doc.line(n);
-      const m = /^\s*<(m-summary|m-decision|m-input)[\s>]/.exec(line.text);
-      if (!m) continue;
-      let inside = false;
-      for (let x = tree.resolveInner(line.from, 1); x; x = x.parent) if (x.name === "FencedCode" || x.name === "CodeBlock") inside = true;
-      if (inside) continue;
-      const close = `</${m[1]}>`;
-      let end = null;
-      for (let k = n; k <= doc.lines; k++) if (doc.line(k).text.includes(close)) { end = doc.line(k); break; }
-      const id = attr(line.text, "id");
-      const twice = id != null && ids.has(id);
-      if (id != null) ids.add(id);
-      out.push({ mark: m[1], from: line.from, to: end ? end.to : line.to, ok: end != null && !twice });
-      if (end) n = end.number;
-    }
-    return out;
+    if (shown.length) out.push(...formed(state, shown));
+    return Decoration.set(out, true);
   }
 
-  /** The decorations of `state`: a class per formed thing, the marks hidden away from the caret. */
-  function decorate(state) {
-    let out = [];
+  /** The markdown of the shown blocks formed in place: a class per formed thing, marks hidden off the caret's line. */
+  function formed(state, shown) {
+    const out = [];
     const sel = state.selection.main;
     const caretLine = state.doc.lineAt(sel.head).number;
+    const inShown = (pos) => shown.some(([a, z]) => pos >= a && pos <= z);
     const touches = (from, to) => sel.from <= to && sel.to >= from;
     const lineOf = (pos) => state.doc.lineAt(pos);
     const hide = (from, to) => { if (to > from) out.push(Decoration.replace({}).range(from, to)); };
     const mark = (from, to, cls, attrs) => { if (to > from) out.push(Decoration.mark({ class: cls, ...(attrs ? { attributes: attrs } : {}) }).range(from, to)); };
     const lines = (from, to, cls) => { for (let l = lineOf(from); ; l = lineOf(l.to + 1)) { out.push(Decoration.line({ class: cls }).range(l.from)); if (l.to >= to || l.to + 1 > state.doc.length) break; } };
-    const hideMarks = (node, names) => { for (const c of node.getChildren(names)) hide(c.from, c.to); for (const n of names) for (const c of node.getChildren(n)) hide(c.from, c.to); };
-    syntaxTree(state).iterate({
+    for (const [a, z] of shown) syntaxTree(state).iterate({
+      from: a, to: z,
       enter(ref) {
+        if (!inShown(ref.from)) return;
         const name = ref.name;
         const h = /^(ATX|Setext)Heading([1-6])$/.exec(name);
         if (h) {
@@ -350,7 +370,6 @@
         }
         switch (name) {
           case "Emphasis": case "StrongEmphasis": case "Strikethrough": case "InlineCode": {
-            // The class on the text between the marks (one span), the marks hidden away from the caret.
             const ms = ref.node.getChildren(name === "Strikethrough" ? "StrikethroughMark" : name === "InlineCode" ? "CodeMark" : "EmphasisMark");
             const cls = name === "Emphasis" ? "eb-em" : name === "StrongEmphasis" ? "eb-strong" : name === "Strikethrough" ? "eb-strike" : "eb-code";
             if (ms.length >= 2) mark(ms[0].to, ms[ms.length - 1].from, cls); else mark(ref.from, ref.to, cls);
@@ -369,10 +388,6 @@
               if (url) hide(url.from, url.to);
               for (const m of node.getChildren("LinkTitle")) hide(m.from, m.to);
             }
-            if (name === "Image") {
-              const at = srcOf(href);
-              if (at) out.push(Decoration.widget({ widget: new Img(at.src, text ? state.doc.sliceString(text[0], text[1]) : "", at.name), block: true, side: 1 }).range(lineOf(ref.to).to));
-            }
             return false;
           }
           case "ListMark": {
@@ -384,7 +399,7 @@
           case "ListItem": lines(ref.from, ref.to, "eb-li"); return;
           case "Blockquote": {
             lines(ref.from, ref.to, "eb-quote");
-            for (const m of ref.node.getChildren("QuoteMark")) { if (lineOf(m.from).number !== caretLine) hide(m.from, Math.min(ref.to, m.to + (state.doc.sliceString(m.to, m.to + 1) === " " ? 1 : 0))); else mark(m.from, m.to, "eb-mk"); }
+            for (const m of ref.node.getChildren("QuoteMark")) mark(m.from, m.to, "eb-mk");
             return;
           }
           case "FencedCode": {
@@ -396,45 +411,51 @@
             for (const m of ref.node.getChildren("CodeInfo")) mark(m.from, m.to, "eb-info");
             return false;
           }
-          case "HorizontalRule": {
-            if (lineOf(ref.from).number !== caretLine) out.push(Decoration.replace({ widget: new Rule() }).range(ref.from, ref.to));
-            else mark(ref.from, ref.to, "eb-mk");
-            return;
-          }
+          case "HorizontalRule": mark(ref.from, ref.to, "eb-mk"); return;
           case "HTMLBlock": lines(ref.from, ref.to, "eb-html"); return false;
+          case "HTMLTag": mark(ref.from, ref.to, "eb-tag"); return;
           case "Table": lines(ref.from, ref.to, "eb-table"); return false;
           case "Escape": mark(ref.from, ref.from + 1, "eb-mk"); return;
           default: return;
         }
       },
     });
-    // EDITOR-7: a card replaces its block's lines while the caret is outside it.
-    const cards = [];
-    for (const k of houseBlocks(state, syntaxTree(state))) {
-      if (!k.ok) { out.push(Decoration.line({ class: "eb-mark-error", attributes: { "data-mark-error": k.mark } }).range(k.from)); continue; }
-      if (sel.head >= k.from && sel.head <= k.to) { out.push(Decoration.line({ class: "eb-card-src", attributes: { "data-card-open": k.mark } }).range(k.from)); continue; }
-      cards.push(k);
-    }
-    if (cards.length) {
-      out = out.filter((r) => !cards.some((k) => r.from >= k.from && r.from <= k.to));
-      for (const k of cards) out.push(Decoration.replace({ widget: new Card(k.mark, state.sliceDoc(k.from, k.to), k.from), block: true }).range(k.from, k.to));
-    }
-    return Decoration.set(out, true);
+    return out;
   }
-  const formed = StateField.define({
-    create: decorate,
-    update(deco, tr) { return tr.docChanged || tr.selection ? decorate(tr.state) : deco; },
+
+  const drawn = StateField.define({
+    create: surface,
+    update(deco, tr) { return tr.docChanged || tr.selection || tr.effects.some((e) => e.is(focusFx) || e.is(handAdd) || e.is(handClear)) ? surface(tr.state) : deco; },
     provide: (f) => EditorView.decorations.from(f),
   });
   const look = EditorView.theme({
     "&": { backgroundColor: "transparent", color: "var(--ink)" },
-    ".cm-content": { padding: "6px 0 24px", caretColor: "var(--ink)", fontFamily: "var(--sans)", fontSize: "14px", lineHeight: "1.6" },
-    ".cm-line": { padding: "1px 8px 1px 10px", borderLeft: "2px solid transparent" },
+    ".cm-content": { padding: "0 0 24px", caretColor: "var(--ink)", fontFamily: "var(--sans)", fontSize: "14px", lineHeight: "1.55", whiteSpace: "pre-wrap" },
+    ".cm-line": { padding: "0" },
     "&.cm-focused": { outline: "none" },
     ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--ink)" },
-    "&.cm-focused .cm-activeLine, .cm-activeLine": { backgroundColor: "var(--sel)", borderLeftColor: "var(--accent)", borderRadius: "0 var(--radius) var(--radius) 0" },
-    ".cm-scroller": { fontFamily: "inherit", overflow: "visible" },
+    ".cm-scroller": { fontFamily: "inherit", overflow: "visible", lineHeight: "inherit" },
+    ".cm-placeholder": { color: "var(--muted)" },
   });
+
+  // ── keys: bold, italic, a link ───────────────────────────────────────────
+  /** Wrap the selection in `mk` (or take it off when it is already wrapped). */
+  const wrapWith = (mk) => (v) => {
+    v.dispatch(v.state.changeByRange((r) => {
+      const n = mk.length;
+      const before = v.state.sliceDoc(r.from - n, r.from), after = v.state.sliceDoc(r.to, r.to + n);
+      if (before === mk && after === mk) return { changes: [{ from: r.from - n, to: r.from }, { from: r.to, to: r.to + n }], range: EditorSelection.range(r.from - n, r.to - n) };
+      return { changes: [{ from: r.from, insert: mk }, { from: r.to, insert: mk }], range: EditorSelection.range(r.from + n, r.to + n) };
+    }));
+    return true;
+  };
+  function linkKey(v) {
+    const r = v.state.selection.main;
+    const label = v.state.sliceDoc(r.from, r.to) || "link";
+    const url = "https://";
+    v.dispatch({ changes: { from: r.from, to: r.to, insert: `[${label}](${url})` }, selection: { anchor: r.from + label.length + 3, head: r.from + label.length + 3 + url.length } });
+    return true;
+  }
 
   // ── EDITOR-5: links and images ───────────────────────────────────────────
   // An upload is a widget beside the text, never text in it: the source holds no placeholder, so no
@@ -442,19 +463,6 @@
   const IMAGES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
   const CAP = 7 * 1024 * 1024; // media's; past about 7.5 MiB the socket drops the message
   let uploads = 0;
-  class Upload extends WidgetType {
-    constructor(key, name, said) { super(); this.key = key; this.name = name; this.said = said; }
-    eq(o) { return o.key === this.key && o.said === this.said; }
-    toDOM() {
-      const d = document.createElement("span");
-      d.className = "eb-upload";
-      d.setAttribute("data-upload", this.name);
-      d.setAttribute("data-state", this.said == null ? "uploading" : "refused");
-      if (this.said != null) d.setAttribute("data-refused", "");
-      d.textContent = this.said == null ? `uploading ${this.name}…` : `${this.name}: ${this.said}`;
-      return d;
-    }
-  }
   const upAdd = StateEffect.define({ map: (v, m) => ({ ...v, pos: m.mapPos(v.pos) }) });
   const upDrop = StateEffect.define();
   const upFade = StateEffect.define();
@@ -489,12 +497,12 @@
     const key = ++uploads;
     const name = (file.name || "image").replace(/\.[a-z0-9]+$/i, "").replace(/[[\]\n]/g, " ") || "image";
     view.dispatch({ effects: upAdd.of({ key, name, pos }) });
-    const refuse = (said) => view?.dispatch({ effects: upRefuse.of({ key, name, said }) });
+    const refuse = (why) => view?.dispatch({ effects: upRefuse.of({ key, name, said: why }) });
     if (!IMAGES.includes(file.type)) return refuse("PNG, JPEG, GIF or WebP only");
     if (file.size > CAP) return refuse("over the 7 MiB an image may be");
     const data = await base64(file).catch(() => null);
     if (data == null) return refuse("the file could not be read");
-    const r = await b.call("media.put", { ticket: id, mime: file.type, data });
+    const r = await b.call("media.put", { ticket: doc_id, mime: file.type, data });
     if (!view) return;
     const stored = r.events?.find((e) => e.type === "stored");
     if (!stored) return refuse(String(r.message ?? r.events?.[0]?.message ?? r.events?.[0]?.type ?? "refused").replace(/^Invalid params: /, ""));
@@ -531,10 +539,11 @@
     for (const f of files) upload(f, pos);
     return true;
   }
+
   // ── EDITOR-6: write in at the owner's request ────────────────────────────
   // A selection and one line become a question on the ticket, queued now. An outside amend while a
-  // request is open marks the lines it changed with whose hand it was, until a click accepts them
-  // (which closes the requests) or an edit takes the mark off that line alone.
+  // request is open marks the lines it changed (a drawn block holding one, the block) with whose hand
+  // it was, until a click accepts them (which closes the requests) or an edit takes the mark off.
   let requests = $state([]);
   let hand = $state(null);
   let hasSelection = $state(false);
@@ -561,13 +570,13 @@
     provide: (f) => EditorView.decorations.from(f),
   });
   function openAsk() {
-    if (!view) return false;
+    if (!view || !wrap) return false;
     const sel = view.state.selection.main;
     if (sel.empty) return false;
-    const doc = view.state.doc;
+    const d = view.state.doc;
     const coords = view.coordsAtPos(sel.to);
-    const box = host.getBoundingClientRect();
-    asking = { a: doc.lineAt(sel.from).number, b: doc.lineAt(sel.to).number, text: view.state.sliceDoc(sel.from, sel.to), top: (coords?.bottom ?? box.top) - box.top + 4 };
+    const box = wrap.getBoundingClientRect();
+    asking = { a: d.lineAt(sel.from).number, b: d.lineAt(sel.to).number, text: view.state.sliceDoc(sel.from, sel.to), top: (coords?.bottom ?? box.top) - box.top + 4 };
     instruction = "";
     askRefused = "";
     tick().then(() => askBox?.focus());
@@ -581,10 +590,10 @@
     const where = a === z ? `line ${a}` : `lines ${a}–${z}`;
     const question = `${what} — ${where}: «${quoted.length > 200 ? quoted.slice(0, 200) + "…" : quoted}»`;
     if (dirty) await flush(); // the question lands on the text it is about
-    const asked = await b.call("tickets.inputs.ask", { ticket: id, question });
+    const asked = await b.call("tickets.inputs.ask", { ticket: doc_id, question });
     const input = asked.events?.find((e) => e.type === "input_changed")?.input?.id;
-    if (!asked.ok || !input) { askRefused = String(asked.message ?? "refused").replace(/^Invalid params: /, ""); return; }
-    const queued = await b.call("tickets.queue", { id, urgency: "now", reason: "an agent is asked to write in", input: [input] });
+    if (!asked.ok || !input) { askRefused = said(asked); return; }
+    const queued = await b.call("tickets.queue", { id: doc_id, urgency: "now", reason: "an agent is asked to write in", input: [input] });
     asking = null;
     requests.push({ input, where, state: queued.ok ? "asked" : "refused", said: queued.ok ? "" : String(queued.message ?? "refused") });
   }
@@ -592,7 +601,7 @@
     view?.dispatch({ effects: handClear.of(null) });
     hand = null;
     for (const r of requests.filter((x) => x.state === "answered" || x.state === "asked")) {
-      const c = await b.call("tickets.inputs.close", { ticket: id, input: r.input });
+      const c = await b.call("tickets.inputs.close", { ticket: doc_id, input: r.input });
       r.state = c.ok ? "accepted" : "refused";
       r.said = c.ok ? "" : String(c.message ?? "refused");
     }
@@ -611,28 +620,52 @@
     ev.currentTarget.value = "";
   }
 
-  function init(ticket) {
-    acked = ticket.body;
-    titleDraft = ticket.title;
+  function init(tk) {
+    acked = tk.body;
     view = new EditorView({
       parent: host,
       state: EditorState.create({
-        doc: ticket.body,
+        doc: tk.body,
         extensions: [
           history(),
-          keymap.of([{ key: "Mod-s", run: () => { flush(); return true; } }, { key: "Mod-Enter", run: openAsk }, indentWithTab, ...defaultKeymap, ...historyKeymap]),
+          keymap.of([
+            { key: "Mod-s", run: () => { flush(); return true; } },
+            { key: "Mod-Enter", run: openAsk },
+            { key: "Mod-b", run: wrapWith("**") },
+            { key: "Mod-i", run: wrapWith("*") },
+            { key: "Mod-k", run: linkKey },
+            { key: "Escape", run: (v) => { v.contentDOM.blur(); return true; } },
+            ...markdownKeymap, indentWithTab, ...defaultKeymap, ...historyKeymap,
+          ]),
           markdownSupport({ base: markdownLanguage }),
           EditorView.lineWrapping,
-          formed,
-          pendingUploads,
+          focused,
           handed,
+          drawn,
+          pendingUploads,
           look,
-          EditorView.updateListener.of((u) => { if (u.selectionSet) hasSelection = !u.state.selection.main.empty; if (u.docChanged && !u.transactions.some((tr) => tr.annotation(Outside))) edited(); }),
-          EditorView.domEventHandlers({ blur: () => { if (dirty || pending !== null) flush(); return false; }, paste: pasted, drop: dropped, click: (ev) => { if (ev.target?.closest?.(".eb-hand")) accept(); return false; } }),
-          EditorView.contentAttributes.of({ "data-field": "body", "aria-label": "the body" }),
+          placeholder("Write here — # a heading, - a list, **bold**; it saves as you type"),
+          EditorView.updateListener.of((u) => {
+            if (u.selectionSet) hasSelection = !u.state.selection.main.empty;
+            if (u.focusChanged && u.view.hasFocus !== u.state.field(focused)) queueMicrotask(() => view?.dispatch({ effects: focusFx.of(view.hasFocus) }));
+            if (u.docChanged && !u.transactions.some((tr) => tr.annotation(Outside))) edited();
+          }),
+          EditorView.domEventHandlers({
+            blur: () => { if (dirty || pending !== null) flush(); return false; },
+            paste: pasted,
+            drop: dropped,
+            click: (ev) => { if (ev.target?.closest?.(".eb-hand")) accept(); return false; },
+          }),
+          EditorView.contentAttributes.of({ "data-field": "body-source", "aria-label": "the body" }),
         ],
       }),
     });
+    host.editorView = view; // the page tests read the document and the caret through it
+  }
+  function bodyMount(node) {
+    host = node;
+    if (t && !view) init(t);
+    return { destroy() { host = null; } };
   }
 
   $effect(() => {
@@ -647,66 +680,60 @@
   $effect(() => {
     const title = t?.title;
     if (title == null) return;
-    untrack(() => { if (!titleDirty) titleDraft = title; });
+    untrack(() => { if (!titleDirty && titleEl && document.activeElement !== titleEl) titleEl.textContent = title; });
   });
   $effect(() => () => {
     if (timer) clearTimeout(timer);
-    if (titleTimer) clearTimeout(titleTimer);
-    if (view) { if (dirty && pending === null) { const text = doc(); if (text !== acked) b.call("tickets.amend", { id, body: text }); } view.destroy(); view = null; }
+    if (titleTimer) { clearTimeout(titleTimer); if (titleDirty && titleDraft.trim()) b.call("tickets.amend", { id: doc_id, title: titleDraft.trim() }); }
+    if (view) { if (dirty && pending === null) { const text = doc(); if (text !== acked) b.call("tickets.amend", { id: doc_id, body: text }); } view.destroy(); view = null; }
   });
 </script>
 
-<section class="editor-body" data-surface="editor-body" data-ticket={id}>
+<section class="editor-body" data-surface="editor-body" data-ticket={doc_id} bind:this={wrap}>
   {#if sheet === "loading" || (!t && ticket.status === "pending")}
     <div class="skel" data-loading aria-busy="true"><i class="bone title"></i><i class="bone"></i><i class="bone half"></i></div>
   {:else if !t && ticket.status !== "pending"}
-    <p class="empty" data-empty data-not-found>No ticket {id} here{ticket.message ? ` — ${ticket.message}` : ""}.</p>
+    <p class="empty" data-empty data-not-found>No ticket {doc_id} here{ticket.message ? ` — ${ticket.message}` : ""}.</p>
   {:else}
-    <input class="title" data-field="title" aria-label="the title" spellcheck="false" autocomplete="off" bind:value={titleDraft} oninput={titleEdited} onblur={flushTitle}/>
+    <TicketView status={t.status} edit={bodyMount} titleEdit={titleMount}/>
   {/if}
-  <div class="cmwrap">
-    <div class="cm" bind:this={host}></div>
-    {#if asking}
-      <form class="ask" data-ask data-state="open" style={`top: ${asking.top}px`} onsubmit={(ev) => { ev.preventDefault(); sendAsk(); }}>
-        <span class="where">{asking.a === asking.b ? `line ${asking.a}` : `lines ${asking.a}–${asking.b}`}</span>
-        <input class="say" data-field="instruction" aria-label="what an agent should do" placeholder="what should an agent do with it?" autocomplete="off" bind:this={askBox} bind:value={instruction}/>
-        <button class="pick" data-action="ask" disabled={!instruction.trim()}>ask an agent</button>
-        {#if askRefused}<span class="no" data-refused>{askRefused}</span>{/if}
-      </form>
-    {/if}
-  </div>
+  {#if asking}
+    <form class="ask" data-ask data-state="open" style={`top: ${asking.top}px`} onsubmit={(ev) => { ev.preventDefault(); sendAsk(); }}>
+      <span class="where">{asking.a === asking.b ? `line ${asking.a}` : `lines ${asking.a}–${asking.b}`}</span>
+      <input class="say" data-field="instruction" aria-label="what an agent should do" placeholder="what should an agent do with it?" autocomplete="off" bind:this={askBox} bind:value={instruction}/>
+      <button class="pick" data-action="ask" disabled={!instruction.trim()}>ask an agent</button>
+      {#if askRefused}<span class="no" data-refused>{askRefused}</span>{/if}
+    </form>
+  {/if}
   {#each requests as r (r.input)}
     <p class="asked" data-ask={r.input} data-state={r.state}>
       {#if r.state === "asked"}asked <b>{r.input}</b> · queued <b>now</b> · waiting for an agent
-      {:else if r.state === "answered"}<b>{hand ?? "an agent"}</b> wrote in · <button class="link" data-action="accept" onclick={accept}>accept</button> or click the marked lines
+      {:else if r.state === "answered"}<b>{hand ?? "an agent"}</b> wrote in · <button class="link" data-action="accept" onclick={accept}>accept</button> or click the marked text
       {:else if r.state === "accepted"}accepted · <b>{r.input}</b> closed
       {:else}<span class="no" data-refused>{r.said}</span>{/if}
     </p>
   {/each}
   {#if t}
     <p class="state" data-field="write-state" data-state={state.kind} data-refused={state.kind === "refused" ? "" : undefined} data-hand={state.who ?? undefined}>
-      {#if state.kind === "idle"}<span class="muted">every change is written 600 ms after the last key</span>{:else}{state.text}{/if}
-      <button type="button" class="pick" data-action="ask-open" disabled={!hasSelection} onclick={openAsk}>ask an agent <kbd>ctrl</kbd><kbd>enter</kbd></button>
-      <button type="button" class="pick image" data-action="image" onclick={() => picker?.click()}>image</button>
+      {#if state.kind === "idle"}<span class="muted">saves as you type</span>{:else}{state.text}{/if}
+      <button type="button" class="pick" data-action="ask-open" disabled={!hasSelection} onmousedown={(ev) => ev.preventDefault()} onclick={openAsk}>ask an agent <kbd>ctrl</kbd><kbd>enter</kbd></button>
+      <button type="button" class="pick image" data-action="image" onmousedown={(ev) => ev.preventDefault()} onclick={() => picker?.click()}>image</button>
       <input class="file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple aria-label="an image" bind:this={picker} onchange={picked}/>
-      <a class="revs" href={"#/ticket/" + id} data-action="revisions">revisions</a>
+      <a class="revs" href={"#/ticket/" + doc_id} data-action="revisions">revisions</a>
     </p>
   {/if}
 </section>
 
 <style>
-  .editor-body { display: block; color: var(--ink); font-family: var(--font-text); font-size: var(--text-size); }
-  .title { display: block; width: 100%; margin: 0 0 6px; padding: 4px 10px; font-family: var(--font-display); font-size: 18px; line-height: 1.3; font-weight: var(--weight-strong); color: var(--ink); background: transparent; border: var(--border) solid transparent; border-radius: var(--radius); }
-  .title:hover, .title:global([data-sheet~=hover]) { border-color: var(--line); }
-  .title:focus, .title:global([data-sheet~=focus]) { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px var(--sel); }
-  .state { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0 0; padding: 0 10px; font-size: 11px; color: var(--muted); }
+  .editor-body { position: relative; display: block; color: var(--ink); font-family: var(--font-text); font-size: var(--text-size); }
+  .state { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 14px 0 0; padding-top: 8px; font-size: 11px; color: var(--muted); border-top: var(--border) solid var(--line); }
   .state[data-state=saved]::before { content: "\2713"; color: var(--live); }
   .state[data-state=saving]::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: breathe var(--motion-pulse) var(--ease) infinite alternate; }
   .state[data-state=refused] { color: var(--warn); }
   .state[data-state=refused]::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
   .state[data-state=merged], .state[data-state=outside] { color: var(--ink); }
   .state[data-state=merged]::before, .state[data-state=outside]::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
-  .revs { margin-left: auto; color: var(--accent); text-decoration: none; }
+  .revs { color: var(--accent); text-decoration: none; }
   .revs:hover, .revs:global([data-sheet~=hover]) { text-decoration: underline; }
   .revs:focus-visible, .revs:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; border-radius: var(--radius-sm); }
   .pick[data-action=ask-open] { margin-left: auto; }
@@ -715,66 +742,53 @@
   .pick:focus-visible, .pick:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
   .pick:disabled, .pick:global([data-sheet~=disabled]) { color: var(--disabled); cursor: not-allowed; }
   kbd { display: inline-block; min-width: 14px; padding: 0 3px; font-family: var(--font-text); font-size: 10px; line-height: 14px; text-align: center; background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-sm); }
-  .cmwrap { position: relative; }
-  .ask { position: absolute; left: 10px; right: 10px; z-index: 3; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 8px; background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-lg); box-shadow: 0 6px 18px var(--shadow); }
+  .ask { position: absolute; left: 0; right: 0; z-index: 3; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 8px; background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-lg); box-shadow: 0 6px 18px var(--shadow); }
   .where { font-size: 11px; color: var(--muted); }
   .say { flex: 1; min-width: 150px; padding: 2px 6px; font: inherit; color: var(--ink); background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius-sm); }
   .say:focus-visible, .say:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
   .no { color: var(--warn); }
-  .asked { margin: 6px 0 0; padding: 0 10px; font-size: 11px; color: var(--muted); }
+  .asked { margin: 6px 0 0; font-size: 11px; color: var(--muted); }
   .asked b { font-weight: var(--weight-medium); color: var(--accent); }
   .link { padding: 0; font: inherit; color: var(--accent); background: none; border: 0; cursor: pointer; text-decoration: underline; }
   .link:hover, .link:global([data-sheet~=hover]) { color: var(--ink); }
   .link:focus-visible, .link:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
-  .cm :global(.eb-hand) { cursor: pointer; background: var(--sel); border-left-color: var(--accent); }
-  .cm :global(.eb-hand::after) { content: attr(data-hand); float: right; padding-left: 8px; font-family: var(--font-text); font-size: 10px; color: var(--muted); }
   .file { display: none; }
   .muted { color: var(--muted); }
-  .empty { margin: 0; padding: 8px 10px; color: var(--muted); }
-  .skel .bone { display: block; width: 100%; height: 10px; margin: 8px 10px; background: var(--skeleton); border-radius: var(--radius-sm); animation: breathe var(--motion-pulse) var(--ease) infinite alternate; }
+  .empty { margin: 0; padding: 8px 0; color: var(--muted); }
+  .skel .bone { display: block; width: 100%; height: 10px; margin: 8px 0; background: var(--skeleton); border-radius: var(--radius-sm); animation: breathe var(--motion-pulse) var(--ease) infinite alternate; }
   .skel .bone.title { width: 55%; height: 22px; }
   .skel .bone.half { width: 50%; }
   @keyframes breathe { from { opacity: 1; } to { opacity: .5; } }
-  /* The formed source: CodeMirror draws the lines, these classes form them (the sheet's tokens, no literal). */
-  .cm :global(.cm-content ::selection) { background: var(--row-sel); }
-  .cm :global(.eb-h) { font-family: var(--font-display); font-weight: var(--weight-strong); }
-  .cm :global(.eb-h1) { font-size: 22px; line-height: 1.3; padding-top: 8px; }
-  .cm :global(.eb-h2) { font-size: 17px; line-height: 1.35; padding-top: 10px; }
-  .cm :global(.eb-h3), .cm :global(.eb-h4), .cm :global(.eb-h5), .cm :global(.eb-h6) { font-size: 14px; padding-top: 8px; }
-  .cm :global(.eb-em) { font-style: italic; }
-  .cm :global(.eb-strong) { font-weight: var(--weight-strong); }
-  .cm :global(.eb-strike) { text-decoration: line-through; color: var(--muted); }
-  .cm :global(.eb-code) { padding: 0 3px; font-family: var(--font-text); font-size: 12px; background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius-sm); }
-  .cm :global(.eb-link) { color: var(--accent); text-decoration: underline; }
-  .cm :global(.eb-alt) { color: var(--muted); font-size: 12px; }
-  .cm :global(.eb-mk), .cm :global(.eb-info) { color: var(--muted); opacity: .7; font-family: var(--font-text); font-size: 12px; }
-  .cm :global(.eb-bullet) { display: inline-block; width: 1em; color: var(--muted); }
-  .cm :global(.eb-quote) { color: var(--muted); border-left-color: var(--line); }
-  .cm :global(.eb-fence) { font-family: var(--font-text); font-size: 12.5px; line-height: 1.55; background: var(--panel); border-left-color: var(--line); }
-  .cm :global(.eb-fence-first) { margin-top: 6px; border-radius: var(--radius) var(--radius) 0 0; }
-  .cm :global(.eb-fence-last) { margin-bottom: 6px; border-radius: 0 0 var(--radius) var(--radius); }
-  .cm :global(.eb-html), .cm :global(.eb-table) { font-family: var(--font-text); font-size: 12px; color: var(--muted); }
-  .cm :global(.eb-rule) { display: inline-block; width: 100%; height: 0; vertical-align: middle; border-top: var(--border) solid var(--line); }
-  .cm :global(.eb-upload) { display: block; margin: 4px 0; padding: 6px 10px; font-family: var(--font-text); font-size: 11px; color: var(--muted); background: var(--card); border: var(--border) dashed var(--line); border-radius: var(--radius-lg); }
-  .cm :global(.eb-upload[data-state=refused]) { color: var(--warn); border-color: var(--warn); }
-  .cm :global(.eb-img) { padding: 4px 10px 6px; }
-  .cm :global(.eb-card) { position: relative; margin: 6px 8px 10px; padding: 12px 14px 10px; font-family: var(--sans); background: var(--card); border: var(--border) solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--radius-lg); cursor: text; }
-  .cm :global(.eb-card:hover), .cm :global(.eb-card:focus-visible), .cm :global(.eb-card[data-sheet~=hover]), .cm :global(.eb-card[data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
-  .cm :global(.eb-card .tag) { position: absolute; top: 6px; right: 10px; font-family: var(--font-text); font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
-  .cm :global(.eb-card .standing), .cm :global(.eb-card .q) { margin: 0 0 8px; padding-right: 90px; font-family: var(--font-display); font-size: 15px; font-weight: var(--weight-strong); line-height: 1.4; }
-  .cm :global(.eb-card .stats), .cm :global(.eb-card .opts) { display: flex; flex-wrap: wrap; gap: 6px; }
-  .cm :global(.eb-card .stat) { display: flex; flex-direction: column; min-width: 100px; padding: 5px 9px; background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius); }
-  .cm :global(.eb-card .stat b) { font-family: var(--font-display); font-size: 15px; }
-  .cm :global(.eb-card .stat span) { font-family: var(--font-text); font-size: 11px; color: var(--muted); }
-  .cm :global(.eb-card .stat[data-tone=pass] b) { color: var(--live); }
-  .cm :global(.eb-card .stat[data-tone=warn] b) { color: var(--warn); }
-  .cm :global(.eb-card .opt) { padding: 2px 9px; font-size: 13px; background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius-sm); }
-  .cm :global(.eb-card .opt[data-rec]) { border-color: var(--accent); }
-  .cm :global(.eb-card .rec), .cm :global(.eb-card .box) { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
-  .cm :global(.eb-card .hint) { margin: 6px 0 0; font-family: var(--font-text); font-size: 11px; color: var(--accent); }
-  .cm :global(.eb-card-src) { border-left-color: var(--accent); }
-  .cm :global(.eb-mark-error) { border-left-color: var(--warn); }
-  .cm :global(.eb-img img) { display: block; max-width: 100%; max-height: 60vh; border: var(--border) solid var(--line); border-radius: var(--radius); }
+  /* The surface: a drawn block is ticket-view's (its rules reach in); the caret's block is the
+     markdown, formed on the same sizes. */
+  .editor-body :global(.cm-editor) { font: inherit; max-width: 100%; }
+  .editor-body :global(.cm-scroller) { min-width: 0; }
+  .editor-body :global(.cm-content) { flex: 1 1 0; min-width: 0; max-width: 100%; }
+  .editor-body :global(.blk) { min-width: 0; max-width: 100%; }
+  .editor-body :global(.cm-content ::selection) { background: var(--row-sel); }
+  .editor-body :global(.blk) { cursor: text; }
+  .editor-body :global(.blk:hover), .editor-body :global(.blk[data-sheet~=hover]) { background: var(--hover); box-shadow: 0 0 0 4px var(--hover); border-radius: var(--radius-sm); }
+  .editor-body :global(.eb-h) { font-family: var(--font-display); font-weight: var(--weight-strong); line-height: 1.3; }
+  .editor-body :global(.eb-h1) { font-size: 20px; }
+  .editor-body :global(.eb-h2) { font-size: 16px; }
+  .editor-body :global(.eb-em) { font-style: italic; }
+  .editor-body :global(.eb-strong) { font-weight: var(--weight-strong); }
+  .editor-body :global(.eb-strike) { text-decoration: line-through; color: var(--muted); }
+  .editor-body :global(.eb-code) { padding: 0 3px; font-family: var(--font-text); font-size: 12px; background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius-sm); }
+  .editor-body :global(.eb-link) { color: var(--accent); text-decoration: underline; }
+  .editor-body :global(.eb-alt) { color: var(--muted); font-size: 12px; }
+  .editor-body :global(.eb-mk), .editor-body :global(.eb-info) { color: var(--muted); font-family: var(--font-text); font-size: 12px; }
+  .editor-body :global(.eb-bullet) { display: inline-block; width: 1em; color: var(--muted); }
+  .editor-body :global(.eb-li) { padding-left: 4px; }
+  .editor-body :global(.eb-quote) { padding-left: 12px; color: var(--muted); border-left: 3px solid var(--line); }
+  .editor-body :global(.eb-fence) { padding: 0 10px; font-family: var(--font-text); font-size: 12.5px; background: var(--panel); border-left: var(--border) solid var(--line); border-right: var(--border) solid var(--line); }
+  .editor-body :global(.eb-fence-first) { padding-top: 6px; border-top: var(--border) solid var(--line); border-radius: var(--radius) var(--radius) 0 0; }
+  .editor-body :global(.eb-fence-last) { padding-bottom: 6px; border-bottom: var(--border) solid var(--line); border-radius: 0 0 var(--radius) var(--radius); }
+  .editor-body :global(.eb-html), .editor-body :global(.eb-table), .editor-body :global(.eb-tag) { font-family: var(--font-text); font-size: 12px; color: var(--muted); }
+  .editor-body :global(.eb-upload) { display: block; margin: 4px 0; padding: 6px 10px; font-family: var(--font-text); font-size: 11px; color: var(--muted); background: var(--card); border: var(--border) dashed var(--line); border-radius: var(--radius-lg); }
+  .editor-body :global(.eb-upload[data-state=refused]) { color: var(--warn); border-color: var(--warn); }
+  .editor-body :global(.eb-hand) { cursor: pointer; background: var(--sel); box-shadow: inset 2px 0 0 var(--accent); }
+  .editor-body :global(.eb-hand::after) { content: attr(data-hand); float: right; padding-left: 8px; font-family: var(--font-text); font-size: 10px; color: var(--muted); }
   @media (prefers-reduced-motion: reduce) {
     .state[data-state=saving]::before, .skel .bone { animation: none; }
   }

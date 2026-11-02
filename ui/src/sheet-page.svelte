@@ -182,17 +182,17 @@
       ["ticket-page", TicketPage, ID, ["hover", "focus"], gone, true],
       ["ticket-head", TicketHead, ID, ["hover", "focus"], gone],
       ["ticket-body", TicketBody, ID, [], gone],
-      ["ticket-view", TicketView, (t) => ({ title: t, status: "Ready", body: "## A ticket\n\nDrawn from its **props**, no call.\n\n- a list\n- of two\n" }), [], { empty: { body: "" } }],
+      ["ticket-view", TicketView, (t) => ({ title: t, status: "Ready", body: "## A ticket\n\nDrawn from its **props**, no call.\n\n- a list\n- of two\n\n<m-summary>\n\n<m-field data-field=\"standing\">**A house card**, drawn as the editor draws it.</m-field>\n\n<m-stat value=\"2\" tone=\"pass\">blocks</m-stat>\n\n</m-summary>\n" }), [], { empty: { body: "" } }],
       ["ticket-relations", TicketRelations, ID, ["hover", "focus"], { loading: { sheet: "loading" } }],
       ["ticket-subtasks", TicketSubtasks, ID, ["hover", "focus"], { loading: { sheet: "loading" } }],
       ["ticket-commits", TicketCommits, ID, ["hover", "focus"], {}],
       ["ticket-history", TicketHistory, ID, ["hover"], { loading: { sheet: "loading" }, ...gone }],
       ["ticket-revisions", TicketRevisions, ID, ["hover", "focus", "selected"], { loading: { sheet: "loading" }, ...gone }],
       ["ticket-edit", TicketEdit, ID, ["hover", "focus", "disabled", "checked"], { checked: { sheet: "open" }, loading: { sheet: "loading" } }, false, { checked: ["[role=radio][aria-checked=false]"] }],
-      // EDITOR-3: the body in CodeMirror; focus held on its title, hover on its revisions link.
-      ["editor-body", EditorBody, ID, ["hover", "focus"], { loading: { sheet: "loading" }, ...gone }, false, { hover: [".revs"], focus: [".title"] }],
-      // EDITOR-4: the first screen, small; selected held on the phone switch, disabled on *new*.
-      ["editor-screen", EditorScreen, ID, ["hover", "focus", "selected", "disabled"], { loading: { sheet: "loading" }, empty: { id: NONE } }, true, { hover: [".id"], focus: [".id"], selected: [".switch button"], disabled: ["[data-action=new]"] }],
+      // EDITOR-8: the rendering as the editor; hover held on a drawn block, focus on its revisions link.
+      ["editor-body", EditorBody, ID, ["hover", "focus"], { loading: { sheet: "loading" }, ...gone }, false, { hover: [".blk"], focus: [".revs"] }],
+      // EDITOR-8: the writing screen, small; selected held on a document of the list, disabled on *new*.
+      ["editor-screen", EditorScreen, ID, ["hover", "focus", "selected", "disabled"], { loading: { sheet: "loading" }, empty: { id: NONE } }, true, { hover: [".doc"], focus: [".id"], selected: [".doc"], disabled: ["[data-action=new]"] }],
       ["ticket-actions", TicketActions, ID, ["hover", "focus", "disabled", "checked"], { loading: { sheet: "loading" } }],
       ["work-blockers", WorkBlockers, ID, [], { loading: { sheet: "loading" } }],
       ["work-blocker", WorkBlocker, (t) => ({ id: t, side: "blocker" }), ["hover", "focus"], { loading: { sheet: "loading" } }],
