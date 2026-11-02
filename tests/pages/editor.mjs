@@ -539,6 +539,51 @@ graph TD
     }
   });
 
+  await test("a_selection_on_a_doc_is_asked_in_the_margin_and_answered_live", async () => {
+    const id = sy("docs", "create", "--title", "Asked", "--body", bodyFile("asked", "The kiln fires twice a week.\n\nAnother paragraph.\n")).find((e) => e.type === "created").doc.id;
+    const { context, page, ed } = await openDoc(id);
+    try {
+      // Select "twice a week" and ask an agent about it.
+      await page.evaluate(({ s }) => { const v = document.querySelector(s).editorView; v.focus(); v.dispatch({ selection: { anchor: 15, head: 27 } }); }, { s: BODY });
+      await ed.locator("[data-action=ask-open]").click();
+      await ed.locator("[data-ask] [data-field=instruction]").fill("Still twice?");
+      await ed.locator("[data-ask] [data-field=to-whom]").selectOption("agent");
+      await ed.locator("[data-ask] [data-action=ask]").click();
+      const card = ed.locator("[data-field=margin] [data-thread]");
+      await eventually("a card in the margin", async () => (await card.count()) === 1 && (await card.innerText()).includes("twice a week"), 5_000);
+      const thread = await card.getAttribute("data-thread");
+      const waiting = sy("docs", "waiting", "--to", "agent").filter((e) => e.type === "thread");
+      assert(waiting.some((e) => e.thread.thread === thread && e.thread.quote === "twice a week"), "in the agents' queue");
+      // The card stands beside its range.
+      const [cardTop, rangeTop] = await page.evaluate(({ s, t }) => {
+        const v = document.querySelector(s).editorView;
+        return [document.querySelector(`[data-thread="${t}"]`).getBoundingClientRect().top, v.coordsAtPos(15).top];
+      }, { s: BODY, t: thread });
+      assert(Math.abs(cardTop - rangeTop) < 40, `beside its text: card ${cardTop}, range ${rangeTop}`);
+      // An agent answers over synapse: it arrives live.
+      sy("docs", "reply", "--id", id, "--thread", thread, "--body", "Yes, until the spring.");
+      await eventually("the answer, live", async () => (await card.innerText()).includes("until the spring"), 5_000);
+      // Someone types before the range: the range follows the words.
+      await caretAt(page, 0);
+      await page.keyboard.type("Note: ");
+      await eventually("the range moved with the text", async () => {
+        const t = sy("docs", "threads", "--id", id).find((e) => e.type === "thread")?.thread;
+        return t && t.from === 21 && t.to === 33;
+      }, 5_000);
+      await caretAt(page, 25);
+      await eventually("underlined in the caret's block", async () => (await ed.locator(`.dm-range[data-thread="${thread}"]`).innerText().catch(() => "")) === "twice a week", 5_000);
+      // Answered here too, then resolved: it folds, counted.
+      await card.locator("[data-field=reply]").fill("Thanks.");
+      await card.locator("[data-action=reply]").click();
+      await eventually("two answers", async () => (await card.locator("[data-reply]").count()) === 2, 5_000);
+      await shoot(page, "editor-doc-margin");
+      await card.locator("[data-action=resolve]").click();
+      await eventually("folded and counted", async () => (await ed.locator("[data-field=margin] [data-thread]").count()) === 0 && (await ed.locator("[data-field=resolved-count]").innerText()).includes("1 resolved"), 5_000);
+    } finally {
+      await context.close();
+    }
+  });
+
   await test("a_pasted_image_in_a_doc_is_the_docs", async () => {
     const id = sy("docs", "create", "--title", "With a picture", "--body", bodyFile("picture", "above\n")).find((e) => e.type === "created").doc.id;
     const { context, page, ed } = await openDoc(id);

@@ -1,7 +1,9 @@
 //! `docs.watch` as its stream — every write the store says, to a caller
 //! that reads the document's organization: `created`, `updated` (every
 //! change of the body: the Yjs update to apply), `renamed`, `deleted`,
-//! `squashed`; one document's with `id`, every one's without. On one
+//! `squashed`, and (V2-30) `asked`, `replied`, `resolved` — a thread whole
+//! each; one document's with `id`, every one's without (so an agent
+//! following every document hears a question asked of it). On one
 //! document, who is on it too: `present` and `left` — and with `session`,
 //! the watch is itself a presence on it for as long as it is open
 //! ([`crate::presence::Held`]); an update that came from that session is
@@ -84,6 +86,9 @@ fn said(change: Change, one: bool) -> Option<DocsEvent> {
         Change::Present { present, .. } if one => DocsEvent::Present { present },
         Change::Left { id, session, client, .. } if one => DocsEvent::Left { id, session, client },
         Change::Present { .. } | Change::Left { .. } => return None,
+        Change::Asked { thread, .. } => DocsEvent::Asked { thread },
+        Change::Replied { thread, .. } => DocsEvent::Replied { thread },
+        Change::Resolved { thread, .. } => DocsEvent::Resolved { thread },
     })
 }
 

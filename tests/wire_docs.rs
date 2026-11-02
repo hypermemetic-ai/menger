@@ -9,7 +9,9 @@
 //! with the connection, a replay at a midpoint is the document then, a
 //! squash is refused without its grant and folds the history with who wrote
 //! what kept; the list newest first and searched, `watch` hearing a change,
-//! `docs.may` over the seam, and `media.put` with `doc` asking it.
+//! `docs.may` over the seam, and `media.put` with `doc` asking it. V2-30: a
+//! question asked on a range is heard live, waits in an agent's queue, is
+//! answered and resolved, and its anchor follows a live edit.
 
 use base64::Engine;
 use jsonrpsee::core::client::{Subscription, SubscriptionClientT};
@@ -432,4 +434,43 @@ async fn docs_may_over_the_seam_and_media_put_with_a_doc() {
     // A ticket and a doc at once: one or the other.
     let both = one(&editor, "media.put", json!({"doc": id, "ticket": "B-1", "mime": "image/png", "data": PNG_2X1})).await;
     assert!(both["message"].as_str().unwrap_or_default().contains("not both"), "{both}");
+}
+
+/// V2-30: a question on a range, asked of an agent: heard live on the
+/// document's watch, waiting in the agent's queue, answered, resolved; its
+/// range follows a live edit made before it; a viewer cannot ask, a
+/// stranger finds no thread.
+#[tokio::test]
+async fn a_question_on_a_range_is_answered_live() {
+    let (_dir, _port, _admin, editor, viewer, stranger, _org) = people().await;
+    let id = one(&editor, "docs.create", json!({"title": "Asked", "body": "The kiln fires twice a week.\n"})).await["doc"]["id"].as_str().unwrap().to_string();
+    let mut w = call(&viewer, "docs.watch", json!({"id": id})).await;
+    assert_eq!(next(&mut w).await["type"], "watching");
+    let asked = one(&editor, "docs.ask", json!({"id": id, "from": 15, "to": 27, "text": "Still twice?", "to_whom": "agent"})).await;
+    assert_eq!(asked["type"], "asked", "{asked}");
+    let t = asked["thread"]["thread"].as_str().unwrap().to_string();
+    assert_eq!((asked["thread"]["quote"].as_str(), asked["thread"]["from"].as_u64()), (Some("twice a week"), Some(15)));
+    let heard = next_of(&mut w, "asked").await;
+    assert_eq!(heard["thread"]["thread"], t.as_str(), "heard live");
+    // The agent's queue holds it.
+    let waiting = all(&viewer, "docs.waiting", json!({"to": "agent"})).await;
+    assert_eq!(waiting.len(), 1, "{waiting:?}");
+    assert_eq!(waiting[0]["thread"]["thread"], t.as_str());
+    // A live edit before the range: the range follows.
+    let page = copy(&editor, &id).await;
+    one(&editor, "docs.update", json!({"id": id, "update": typed(&page, 0, "Note: ")})).await;
+    let now = all(&viewer, "docs.threads", json!({"id": id})).await;
+    assert_eq!((now[0]["thread"]["from"].as_u64(), now[0]["thread"]["to"].as_u64()), (Some(21), Some(33)), "{:?}", now[0]);
+    // Answered, with an image and a link; then resolved.
+    let r = one(&editor, "docs.reply", json!({"id": id, "thread": t, "body": "Yes — [the plan](https://example.com) ![chart](media:00)"})).await;
+    assert_eq!(r["thread"]["replies"][0]["n"], 1, "{r}");
+    assert_eq!(next_of(&mut w, "replied").await["thread"]["replies"].as_array().unwrap().len(), 1);
+    let done = one(&editor, "docs.resolve", json!({"id": id, "thread": t})).await;
+    assert!(done["thread"]["resolved"]["by"].is_string(), "{done}");
+    assert!(next_of(&mut w, "resolved").await["thread"]["resolved"].is_object());
+    assert!(all(&viewer, "docs.waiting", json!({})).await.is_empty(), "no longer waiting");
+    // A viewer cannot ask; a stranger finds nothing; a thread that is none.
+    assert!(gate_refused(&one(&viewer, "docs.ask", json!({"id": id, "from": 0, "to": 3, "text": "?"})).await, "docs.ask"));
+    assert_eq!(one(&stranger, "docs.threads", json!({"id": id})).await, json!({"type": "not_found", "id": id}));
+    assert_eq!(one(&editor, "docs.reply", json!({"id": id, "thread": "zzzzzzzz", "body": "x"})).await, json!({"type": "not_found", "thread": "zzzzzzzz"}));
 }

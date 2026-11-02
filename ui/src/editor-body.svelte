@@ -38,10 +38,15 @@
      (`docs.here`), and who is here drawn above the canvas
      (`[data-field=present]`). The title saves by `docs.rename`, an image by
      `media.put { doc }`; a `history` scrubber replays the doc at any change
-     (`docs.history`, `docs.replay`). The write-in (EDITOR-6) is a ticket's. -->
+     (`docs.history`, `docs.replay`). The write-in (EDITOR-6) is a ticket's.
+     V2-30: on a doc, a selection and `ask` (mod+enter, or the button) keep a
+     question on that range (`docs.ask`, to anyone or to an agent); the
+     margin beside the text (doc-margin, a sibling) holds each thread at its
+     range's height, the range underlined in the caret's block, and follows
+     the text as it changes (`marginTick`). -->
 <script module>
   export const uses = ["tickets.get", "tickets.watch", "tickets.amend", "tickets.revisions.list", "media.put", "tickets.inputs.ask", "tickets.queue", "tickets.inputs.close",
-                       "docs.get", "docs.watch", "docs.state", "docs.update", "docs.rename", "docs.present", "docs.here", "docs.history", "docs.replay"];
+                       "docs.get", "docs.watch", "docs.state", "docs.update", "docs.rename", "docs.present", "docs.here", "docs.history", "docs.replay", "docs.ask"];
 
   /** V2-29: bytes ↔ standard base64, as the docs service carries a Yjs update. */
   export const toB64 = (bytes) => { let s = ""; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)); return btoa(s); };
@@ -130,6 +135,7 @@
   import { mount, tick, unmount, untrack } from "svelte";
   import { bus, live } from "plexus-ui/host";
   import TicketView, { blocks, pieceClass, refDefs } from "./ticket-view.svelte";
+  import Margin, { threadMarks } from "./doc-margin.svelte";
   import { Annotation, EditorSelection, EditorState, StateEffect, StateField, Transaction } from "@codemirror/state";
   import { Decoration, EditorView, WidgetType, keymap, placeholder } from "@codemirror/view";
   import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
@@ -807,6 +813,10 @@
   let hand = $state(null);
   let hasSelection = $state(false);
   let asking = $state(null); // { a, b, text, top } while the line is open
+  let askTo = $state(""); // V2-30: a doc's question to anyone (""), or to an agent ("agent")
+  let marginTick = $state(0); // V2-30: bumped when the text or its layout moved, for the margin
+  let marginFrame = null;
+  const moved = () => { if (!marginFrame) marginFrame = requestAnimationFrame(() => { marginFrame = null; marginTick++; }); };
   let instruction = $state("");
   let askRefused = $state("");
   let askBox = $state(null);
@@ -835,7 +845,7 @@
     const d = view.state.doc;
     const coords = view.coordsAtPos(sel.to);
     const box = wrap.getBoundingClientRect();
-    asking = { a: d.lineAt(sel.from).number, b: d.lineAt(sel.to).number, text: view.state.sliceDoc(sel.from, sel.to), top: (coords?.bottom ?? box.top) - box.top + 4 };
+    asking = { a: d.lineAt(sel.from).number, b: d.lineAt(sel.to).number, from: sel.from, to: sel.to, text: view.state.sliceDoc(sel.from, sel.to), top: (coords?.bottom ?? box.top) - box.top + 4 };
     instruction = "";
     askRefused = "";
     tick().then(() => askBox?.focus());
@@ -847,6 +857,14 @@
     const { a, b: z, text } = asking;
     const quoted = text.replace(/\s+/g, " ").trim();
     const where = a === z ? `line ${a}` : `lines ${a}–${z}`;
+    if (isDoc) {
+      // V2-30: kept on the doc's range, in characters of its text.
+      const chars = (pos) => [...view.state.sliceDoc(0, pos)].length;
+      const r = await b.call("docs.ask", { id: doc_id, from: chars(asking.from), to: chars(asking.to), text: what, to_whom: askTo || undefined });
+      if (r.ok && r.events?.some((e) => e.type === "asked")) { asking = null; view?.focus(); }
+      else askRefused = said(r.ok ? { message: r.events?.[0]?.message ?? r.events?.[0]?.type } : r);
+      return;
+    }
     const question = `${what} — ${where}: «${quoted.length > 200 ? quoted.slice(0, 200) + "…" : quoted}»`;
     if (dirty) await flush(); // the question lands on the text it is about
     const asked = await b.call("tickets.inputs.ask", { ticket: doc_id, question });
@@ -889,6 +907,7 @@
         extensions: [
           isDoc ? yCollab(ytext, aware, { undoManager: new Y.UndoManager(ytext) }) : history(),
           isDoc ? keymap.of(yUndoManagerKeymap) : [],
+          isDoc ? threadMarks : [],
           keymap.of([
             { key: "Mod-s", run: () => { flush(); return true; } },
             { key: "Mod-Enter", run: openAsk },
@@ -912,6 +931,7 @@
             if (u.selectionSet) hasSelection = !u.state.selection.main.empty;
             if (u.focusChanged && u.view.hasFocus !== u.state.field(focused)) queueMicrotask(() => view?.dispatch({ effects: focusFx.of(view.hasFocus) }));
             if (u.docChanged && !u.transactions.some((tr) => tr.annotation(Outside))) edited();
+            if (isDoc && (u.docChanged || u.geometryChanged || u.viewportChanged)) moved();
           }),
           EditorView.domEventHandlers({
             blur: () => { if (dirty || pending !== null) flush(); return false; },
@@ -924,6 +944,7 @@
       }),
     });
     host.editorView = view; // the page tests read the document and the caret through it
+    if (isDoc) moved();
   }
   /** Whether the surface can be drawn: the document read — and, for a doc, its CRDT synced. */
   const ready = () => t && (!isDoc || synced);
@@ -975,6 +996,7 @@
       if (outbox.length) b.call("docs.update", { id: doc_id, update: toB64(Y.mergeUpdates(outbox)), session: SESSION });
       if (hereTimer) clearTimeout(hereTimer);
       aware?.destroy();
+      if (marginFrame) cancelAnimationFrame(marginFrame);
     }
     if (view) { if (!isDoc && dirty && pending === null) { const text = doc(); if (text !== acked) b.call("tickets.amend", { id: doc_id, body: text }); } view.destroy(); view = null; }
     ydoc?.destroy();
@@ -1003,11 +1025,13 @@
   {:else}
     <TicketView status={t.status} edit={bodyMount} titleEdit={titleMount}/>
   {/if}
+  {#if isDoc && t && synced}<Margin id={doc_id} {ydoc} view={() => view} tick={marginTick}/>{/if}
   {#if asking}
     <form class="ask" data-ask data-state="open" style={`top: ${asking.top}px`} onsubmit={(ev) => { ev.preventDefault(); sendAsk(); }}>
       <span class="where">{asking.a === asking.b ? `line ${asking.a}` : `lines ${asking.a}–${asking.b}`}</span>
-      <input class="say" data-field="instruction" aria-label="what an agent should do" placeholder="what should an agent do with it?" autocomplete="off" bind:this={askBox} bind:value={instruction}/>
-      <button class="pick" data-action="ask" disabled={!instruction.trim()}>ask an agent</button>
+      <input class="say" data-field="instruction" aria-label={isDoc ? "your question" : "what an agent should do"} placeholder={isDoc ? "ask a question about it…" : "what should an agent do with it?"} autocomplete="off" bind:this={askBox} bind:value={instruction}/>
+      {#if isDoc}<select class="pick" data-field="to-whom" aria-label="asked of" bind:value={askTo}><option value="">anyone</option><option value="agent">an agent</option></select>{/if}
+      <button class="pick" data-action="ask" disabled={!instruction.trim()}>{isDoc ? "ask" : "ask an agent"}</button>
       {#if askRefused}<span class="no" data-refused>{askRefused}</span>{/if}
     </form>
   {/if}
@@ -1022,7 +1046,7 @@
   {#if t}
     <p class="state" data-field="write-state" data-state={state.kind} data-refused={state.kind === "refused" ? "" : undefined} data-hand={state.who ?? undefined}>
       {#if state.kind === "idle"}<span class="muted">saves as you type</span>{:else}{state.text}{/if}
-      {#if !isDoc}<button type="button" class="pick" data-action="ask-open" disabled={!hasSelection} onmousedown={(ev) => ev.preventDefault()} onclick={openAsk}>ask an agent <kbd>ctrl</kbd><kbd>enter</kbd></button>{/if}
+      <button type="button" class="pick" data-action="ask-open" disabled={!hasSelection} onmousedown={(ev) => ev.preventDefault()} onclick={openAsk}>{isDoc ? "ask" : "ask an agent"} <kbd>ctrl</kbd><kbd>enter</kbd></button>
       <button type="button" class="pick image" data-action="image" onmousedown={(ev) => ev.preventDefault()} onclick={() => picker?.click()}>image</button>
       <input class="file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple aria-label="an image" bind:this={picker} onchange={picked}/>
       {#if isDoc}<button type="button" class="pick" data-action="history" aria-pressed={!!replaying} onmousedown={(ev) => ev.preventDefault()} onclick={openHistory}>history</button>
@@ -1043,7 +1067,8 @@
   .revs { color: var(--accent); text-decoration: none; }
   .revs:hover, .revs:global([data-sheet~=hover]) { text-decoration: underline; }
   .revs:focus-visible, .revs:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; border-radius: var(--radius-sm); }
-  .pick[data-action=ask-open], .editor-body[data-kind=doc] .pick[data-action=image] { margin-left: auto; }
+  .pick[data-action=ask-open] { margin-left: auto; }
+  .editor-body :global(.dm-range) { background: var(--hover); text-decoration: underline dotted var(--accent); text-underline-offset: 3px; }
   .here { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 10px; font-size: 11px; color: var(--muted); }
   .who { display: inline-flex; gap: 5px; align-items: center; }
   .who .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }

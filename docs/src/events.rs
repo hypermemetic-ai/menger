@@ -95,6 +95,67 @@ pub struct Present {
     pub at: i64,
 }
 
+/// V2-30: a question on a range of a document, and its thread.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Thread {
+    /// Its id, 8 characters as a document's.
+    pub thread: String,
+    /// The document it is on.
+    pub id: String,
+    /// The range as the document's CRDT holds it: two Yjs relative positions (base64), which follow the text.
+    pub anchor: Anchor,
+    /// The range now, in characters of the text — absent when it is detached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<u32>,
+    /// The text it was on was deleted whole: the thread is kept, listed at the end.
+    pub detached: bool,
+    /// The text the range held when it was asked.
+    pub quote: String,
+    /// The question, markdown.
+    pub question: String,
+    /// Whom it is asked of — an agent's name, `agent` for any (absent: anyone reading).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_whom: Option<String>,
+    pub by: String,
+    pub principal: String,
+    /// When, unix milliseconds.
+    pub at: i64,
+    /// When it was resolved and by whom — absent while it is open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved: Option<Resolution>,
+    /// The answers, in order.
+    pub replies: Vec<Reply>,
+}
+
+/// A thread's range as two Yjs relative positions, base64 (`Y.decodeRelativePosition`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Anchor {
+    pub from: String,
+    pub to: String,
+}
+
+/// An answer in a thread.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Reply {
+    /// Its place in the thread, from 1.
+    pub n: u32,
+    /// Markdown: words, links, images (as a body shows them).
+    pub body: String,
+    pub by: String,
+    pub principal: String,
+    /// When, unix milliseconds.
+    pub at: i64,
+}
+
+/// When a thread was resolved, and by whom.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Resolution {
+    pub at: i64,
+    pub by: String,
+}
+
 /// Why an open `watch` ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -181,6 +242,14 @@ pub enum DocsEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         client: Option<u64>,
     },
+    /// V2-30: `threads`' and `waiting`'s rows, a thread whole.
+    Thread { thread: Thread },
+    /// V2-30: `ask`'s answer, and a watch's: a question asked on a range.
+    Asked { thread: Thread },
+    /// V2-30: `reply`'s answer, and a watch's: the thread with its new answer.
+    Replied { thread: Thread },
+    /// V2-30: `resolve`'s answer, and a watch's: the thread folded (or opened again: `resolved` absent).
+    Resolved { thread: Thread },
     /// `may`'s answer: whether the caller holds `role` on the document `id`.
     May { id: String, role: menger_tickets_api::members::Role, held: bool },
     /// A watch is open: what it hears follows (`id` when it watches one document).
@@ -202,6 +271,9 @@ pub enum DocsEvent {
         revision: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         org: Option<String>,
+        /// V2-30: no such thread on the document.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thread: Option<String>,
     },
     /// The caller reads the document but may not do this to it (`forbidden`,
     /// `message` naming the grant and role it takes), or the meter refused the
@@ -223,6 +295,6 @@ impl plexus_client::FromClientError for DocsEvent {
 impl DocsEvent {
     /// `not_found` for the document `id`.
     pub fn no_doc(id: &str) -> Self {
-        DocsEvent::NotFound { id: Some(id.to_string()), revision: None, org: None }
+        DocsEvent::NotFound { id: Some(id.to_string()), revision: None, org: None, thread: None }
     }
 }

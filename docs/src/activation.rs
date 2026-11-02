@@ -4,8 +4,9 @@
 //! (the media service's `docs.may`, a test).
 //!
 //! **Under login**: a viewer reads (`get`, `list`, `state`, `history`,
-//! `replay`, `present`, `watch`, `may`) and is present (`here`), an editor
-//! writes (`create`, `update`, `save`, `rename`, `restore`), an admin
+//! `replay`, `present`, `watch`, `may`, `threads`, `waiting`) and is present
+//! (`here`), an editor writes (`create`, `update`, `save`, `rename`,
+//! `restore`) and asks and answers on a range (`ask`, `reply`, `resolve`), an admin
 //! deletes and squashes (`delete`, `squash`: unlisted — admin holds every
 //! grant; `docs.squash` is grantable to another role by the role table). The gate
 //! admits a call when its grant is held somewhere; the method asks it again
@@ -17,7 +18,7 @@ use crate::caller::{Caller, Callers, DocsRequest};
 use crate::events::DocsEvent;
 use crate::seam::Seam;
 use crate::store::DocsStore;
-use crate::vocab::{DocAwareness, DocBody, DocId, DocQuery, DocSession, DocTitle, DocUpdate, DocVector};
+use crate::vocab::{AgentName, ThreadId, ThreadText, DocAwareness, DocBody, DocId, DocQuery, DocSession, DocTitle, DocUpdate, DocVector};
 use futures::Stream;
 use menger_tickets_api::address::OrgId;
 use menger_tickets_api::members::Role;
@@ -78,8 +79,8 @@ fn many(evs: impl std::future::Future<Output = Vec<DocsEvent>> + Send + 'static)
     request = DocsRequest,
     typed_params,
     roles(
-        viewer = ["get", "list", "state", "history", "replay", "present", "here", "watch", "may"],
-        editor = [viewer, "create", "update", "save", "rename", "restore"],
+        viewer = ["get", "list", "state", "history", "replay", "present", "here", "watch", "may", "threads", "waiting"],
+        editor = [viewer, "create", "update", "save", "rename", "restore", "ask", "reply", "resolve"],
     )
 )]
 impl DocsActivation {
@@ -367,7 +368,101 @@ impl DocsActivation {
         once(crate::streams::may(store, seam, user, id.into_string(), role))
     }
 
-    /// Follow documents: watching { id? } first, then created, updated { id, seq, update, by }, renamed, deleted, squashed — and, on one document, present and left — as they happen; open-ended, ends with watch_closed { reason, message }.
+    /// Ask a question on a range of a document — it stays beside that text as the text changes; yields asked { thread }, said on watch.
+    ///
+    /// `from` and `to` are the range in characters of the text now (as
+    /// `get`'s body counts them). The range is anchored in the document's
+    /// CRDT, so it follows the text through every edit (`thread.from`,
+    /// `thread.to` where it stands now; deleted whole, the thread is
+    /// `detached`). `text` is the question (markdown: links, images).
+    /// `to_whom` asks it of an agent (`builder`, or `agent` for any); such
+    /// a question is listed by `waiting` and said to every watch of the
+    /// organization's documents, so an agent picks it up, and may answer
+    /// with `reply` or edit the document itself. Editor.
+    #[plexus_macros::method(group = "write", example(note = "a question on characters 10 to 42", params = r#"{"id": "7k3mq2xa", "from": 10, "to": 42, "text": "Is this still true after the move?", "to_whom": "agent"}"#))]
+    pub async fn ask(
+        &self,
+        #[from_auth(self.callers.verify)] user: Caller,
+        /// Its id, e.g. 7k3mq2xa.
+        id: DocId,
+        /// Where the range starts, in characters, e.g. 10.
+        from: u32,
+        /// Where it ends, e.g. 42.
+        to: u32,
+        /// The question, markdown.
+        text: ThreadText,
+        /// Whom it is asked of: an agent's name, or agent for any (optional: anyone reading).
+        to_whom: Option<AgentName>,
+    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
+        let (store, seam) = (self.store.clone(), self.seam.clone());
+        once(crate::streams::ask(store, seam, user, id.into_string(), from, to, text.into_string(), to_whom.map(AgentName::into_string)))
+    }
+
+    /// Answer in a thread — words, links, images; yields replied { thread }, said on watch. Editor.
+    #[plexus_macros::method(group = "write", example(note = "an answer", params = r#"{"id": "7k3mq2xa", "thread": "q4k9m2xa", "body": "Yes — see [the move](https://example.com)."}"#))]
+    pub async fn reply(
+        &self,
+        #[from_auth(self.callers.verify)] user: Caller,
+        /// The document's id, e.g. 7k3mq2xa.
+        id: DocId,
+        /// The thread's id, as ask answered it.
+        thread: ThreadId,
+        /// The answer, markdown.
+        body: ThreadText,
+    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
+        let (store, seam) = (self.store.clone(), self.seam.clone());
+        once(crate::streams::reply(store, seam, user, id.into_string(), thread.into_string(), body.into_string()))
+    }
+
+    /// Resolve a thread (it folds in the margin), or open it again; yields resolved { thread }, said on watch. Editor.
+    #[plexus_macros::method(group = "write", example(note = "done", params = r#"{"id": "7k3mq2xa", "thread": "q4k9m2xa"}"#))]
+    pub async fn resolve(
+        &self,
+        #[from_auth(self.callers.verify)] user: Caller,
+        /// The document's id, e.g. 7k3mq2xa.
+        id: DocId,
+        /// The thread's id.
+        thread: ThreadId,
+        /// Open it again instead (optional: false).
+        open: Option<bool>,
+    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
+        let (store, seam) = (self.store.clone(), self.seam.clone());
+        once(crate::streams::resolve(store, seam, user, id.into_string(), thread.into_string(), open.unwrap_or(false)))
+    }
+
+    /// A document's threads, in the order their ranges stand in the text, the detached ones last; yields thread { thread } each.
+    ///
+    /// Each thread is whole: its anchor (two Yjs relative positions, for a
+    /// page to resolve in its own copy), its range now in characters, the
+    /// text it quoted, the question, whom it was asked of, its answers, and
+    /// whether it is resolved. Viewer.
+    #[plexus_macros::method(group = "read", example(note = "the threads", params = r#"{"id": "7k3mq2xa"}"#))]
+    pub async fn threads(
+        &self,
+        #[from_auth(self.callers.verify)] user: Caller,
+        /// Its id, e.g. 7k3mq2xa.
+        id: DocId,
+    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
+        let (store, seam) = (self.store.clone(), self.seam.clone());
+        many(crate::streams::threads(store, seam, user, id.into_string()))
+    }
+
+    /// The open questions asked of someone, in the documents you read, oldest first; yields thread { thread } each — an agent's queue.
+    ///
+    /// `to` keeps those asked of that name (`builder`, or `agent` for the
+    /// ones asked of any agent). Viewer.
+    #[plexus_macros::method(group = "read", example(note = "what any agent is asked", params = r#"{"to": "agent"}"#))]
+    pub async fn waiting(
+        &self,
+        #[from_auth(self.callers.verify)] user: Caller,
+        /// Asked of this name only, e.g. agent (optional: of anyone named).
+        to: Option<AgentName>,
+    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
+        let (store, seam) = (self.store.clone(), self.seam.clone());
+        many(crate::streams::waiting(store, seam, user, to.map(AgentName::into_string)))
+    }
+
+    /// Follow documents: watching { id? } first, then created, updated { id, seq, update, by }, renamed, deleted, squashed, asked, replied, resolved — and, on one document, present and left — as they happen; open-ended, ends with watch_closed { reason, message }.
     ///
     /// With `id`, one document's: each `updated` carries the Yjs update to
     /// apply (the stream ends after its `deleted`), and who comes and goes
