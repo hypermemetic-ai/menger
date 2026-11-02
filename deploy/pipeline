@@ -869,7 +869,9 @@ page_is() { # BUNDLE-PAGE SERVED — SERVED is the bundle's page, its {{STAMPS}}
     [[ -z $piece ]] && continue
     [[ $rest == *"$piece"* ]] || return 1
     rest=${rest#*"$piece"}
-  done < <(sed 's/{{[A-Z_]*}}/\n/g' <<<"$1")
+  # UI-19: the service serves the page's file links by content (`/app/f/<sha256>…`), so a link to the
+  # version's own files is a stamp too: each `/app/{{UI_VERSION}}/<path>` splits the page as {{…}} does
+  done < <(sed -E 's#/app/\{\{UI_VERSION\}\}/[^"'"'"' )`]*#\n#g; s/\{\{[A-Z_]*\}\}/\n/g' <<<"$1")
   return 0
 }
 ui_smoke() { # WS BASE REL [WANT] — ui versions lists WANT live (REL's bundle; UI-15: on prod the version promoted, or `any`:
