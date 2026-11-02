@@ -1,0 +1,38 @@
+# V2-31: menger's quota service — per-principal allowances on every data
+# input. What each person and agent stores and fetches is counted per source
+# in a file of its own (`quota.db`), shown to them and to admins, and every
+# write is reserved against the cap before it lands (`quota.reserve`, then
+# `commit` or `release`), refused typed over it. A service of v2's own beside
+# `tickets`, `ui` and `media` (V2-1), reached by the others through the
+# client seam; it reads the other stores only through their own methods.
+[package]
+name = "menger-quota"
+version = "0.6.2"
+edition = "2021"
+license = "MIT"
+description = "menger's quota service — per-principal allowances per source, usage counted and tabulated, every write reserved against the cap over the client seam"
+repository = "https://github.com/hypermemetic-ai/menger"
+
+[dependencies]
+# The 0.7 line, by published version (PLEXUS-16), as the server takes it.
+plexus-core = "0.7.0"
+plexus-macros = "0.7.0"
+plexus-client = { version = "0.7.0", default-features = false }
+plexus-auth-core = "0.2.2"
+async-trait = "0.1"
+async-stream = "0.3"
+futures = "0.3"
+jsonrpsee = { version = "0.26", features = ["server", "macros"] }
+uuid = { version = "1.6", features = ["v4", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = { version = "1.1", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+anyhow = "1"
+tracing = "0.1"
+# The box guard: the data disk's use, by statvfs(3).
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

@@ -18,7 +18,10 @@
 # beside `tickets` and `ui`, its images in a file of its own (`media.db`).
 # V2-29: `docs/` is the docs service — menger-docs, documents on their own
 # API and file (`docs.db`), the editor's surface writing to it.
-members = [".", "tickets-api", "media", "docs"]
+
+# V2-31: `quota/` is the quota service — menger-quota, allowances per
+# principal and source, its ledger in a file of its own (`quota.db`).
+members = [".", "tickets-api", "media", "docs", "quota"]
 # TETHER-7: `tether/` is a workspace of its own — substrate's sqlx and this
 # workspace's rusqlite link two libsqlite3-sys, which one resolve refuses.
 exclude = ["tether"]

@@ -1,0 +1,23 @@
+{
+  "name": "free-1k",
+  "said": "The owner, 2026-11-02 (V2-31 `defaults`): \"I want sensible defaults that would allow me to support 1k concurrent free users per day on a decent sized computer\" — sized for one box of 8 vCPU, 32 GB RAM and 4 TB disk.",
+  "default": {
+    "media.bytes": "2 GB",
+    "media.fetch.bytes": "200 MB",
+    "media.fetch.calls": 300,
+    "media.egress.bytes": "2 GB",
+    "docs.bytes": "200 MB",
+    "docs.count": "unlimited",
+    "tickets.bytes": "50 MB",
+    "tickets.count": "unlimited",
+    "questions.count": "unlimited"
+  },
+  "concurrent": {
+    "media.bytes": 2
+  },
+  "box": {
+    "warn_percent": 70,
+    "full_percent": 85
+  },
+  "hold_secs": 3600
+}

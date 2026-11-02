@@ -2260,6 +2260,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "menger-quota"
+version = "0.6.2"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "async-trait",
+ "futures",
+ "jsonrpsee",
+ "libc",
+ "plexus-auth-core",
+ "plexus-client",
+ "plexus-core",
+ "plexus-macros",
+ "rusqlite",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "menger-tickets-api"
 version = "0.6.2"
 dependencies = [
