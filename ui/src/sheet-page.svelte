@@ -72,6 +72,8 @@
   import TicketCommits from "plexus-ui:ticket-commits";
   import TicketCreate from "plexus-ui:ticket-create";
   import TicketEdit from "plexus-ui:ticket-edit";
+  import EditorBody from "plexus-ui:editor-body";
+  import PageEditor from "plexus-ui:page-editor";
   import TicketHead from "plexus-ui:ticket-head";
   import TicketHistory from "plexus-ui:ticket-history";
   import TicketPage from "plexus-ui:ticket-page";
@@ -186,6 +188,8 @@
       ["ticket-history", TicketHistory, ID, ["hover"], { loading: { sheet: "loading" }, ...gone }],
       ["ticket-revisions", TicketRevisions, ID, ["hover", "focus", "selected"], { loading: { sheet: "loading" }, ...gone }],
       ["ticket-edit", TicketEdit, ID, ["hover", "focus", "disabled", "checked"], { checked: { sheet: "open" }, loading: { sheet: "loading" } }, false, { checked: ["[role=radio][aria-checked=false]"] }],
+      // EDITOR-3: the body in CodeMirror; focus held on its title, hover on its revisions link.
+      ["editor-body", EditorBody, ID, ["hover", "focus"], { loading: { sheet: "loading" }, ...gone }, false, { hover: [".revs"], focus: [".title"] }],
       ["ticket-actions", TicketActions, ID, ["hover", "focus", "disabled", "checked"], { loading: { sheet: "loading" } }],
       ["work-blockers", WorkBlockers, ID, [], { loading: { sheet: "loading" } }],
       ["work-blocker", WorkBlocker, (t) => ({ id: t, side: "blocker" }), ["hover", "focus"], { loading: { sheet: "loading" } }],
@@ -221,6 +225,7 @@
       ["page-bulk", PageBulk, (t) => ({ ids: t }), [], {}, true],
       ["page-blockers", PageBlockers, ID, [], {}, true],
       ["page-edit", PageEdit, ID, [], {}, true],
+      ["page-editor", PageEditor, ID, [], {}, true],
       ["page-actions", PageActions, ID, [], {}, true],
       ["page-facets", PageFacets, (t) => ({ filter: "status Ready" }), [], fil, true],
       ["page-counts", PageCounts, (t) => ({ filter: "status Ready" }), [], fil, true],
