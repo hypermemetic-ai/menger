@@ -1,32 +1,38 @@
-<!-- EDITOR-4: the first screen (svelte/1) — editor-body on the left, the
-     ticket as everyone else sees it on the right: ticket-head, ticket-body
-     (SURFACE-16's view, live on the shared `get`) and ticket-questions with
-     its queue line (V2-20), each a bound mark. `#/` opens the ticket last
-     opened in this browser (`menger.editor.last`, written here and by the
-     ticket page's body); `#/edit/:id` a given one, which becomes the last.
-     With none, the screen offers *new*: `tickets.create { epic, title }` in
-     the shortcode of the last ticket, else the first `nav groups` lists, and
-     `#/edit/<id>` opens. At 1024 and wider the halves sit side by side;
-     narrower, one pane at a time and a switch below it, padded by the
-     safe-area inset. Keys: `escape` (in the editor too) and the header's
-     *board* go to `#/board`; `n` is *new*. -->
+<!-- EDITOR-8: the writing screen (svelte/1) — one document on one surface,
+     and the documents beside it. A document is a ticket. The surface is
+     editor-body (the ticket drawn as ticket-view draws it, edited in place),
+     ticket-questions (V2-20) under it; nothing is drawn twice. The list, a
+     narrow column (a drawer under 1024 px, `docs` in the bar): a search
+     (`tickets.find`, id or title), the documents opened here lately
+     (`menger.editor.recent`, this browser's), and this shortcode's docs
+     (`tickets.list { filter: "in S and kind doc" }`, live by the watch).
+     `+ new` makes a ticket of kind `doc` in the current shortcode
+     (`tickets.create { epic, title: "Untitled", kind: "doc" }` — a doc is
+     born `Doc`, SDLC-11) and opens it at `#/edit/<id>`. Switching documents
+     keeps autosave: the editor is keyed by the document, and the one left
+     sends what it holds as it goes. `#/` opens the document last opened in
+     this browser (`menger.editor.last`, written here and by the ticket
+     page's body); `#/edit/:id` a given one. Keys: `escape` (outside the
+     text) and the bar's *board* go to `#/board`; `n` is *new*; `/` the
+     search. -->
 <script module>
-  export const uses = ["tickets.get", "tickets.watch", "tickets.create", "tickets.nav.groups"];
+  export const uses = ["tickets.get", "tickets.watch", "tickets.create", "tickets.nav.groups", "tickets.list", "tickets.find"];
   export const LAST = "menger.editor.last";
+  export const RECENT = "menger.editor.recent";
 </script>
 
 <script>
   import { bus, live } from "plexus-ui/host";
   import Editor from "plexus-ui:editor-body";
-  import Head from "plexus-ui:ticket-head";
-  import Body from "plexus-ui:ticket-body";
   import Questions from "plexus-ui:ticket-questions";
 
   let { id = null, sheet = null } = $props();
   const b = bus();
+  const FIELDS = ["id", "title", "kind", "status"];
   const remembered = () => { try { return localStorage.getItem(LAST) || null; } catch { return null; } };
   const remember = (v) => { try { localStorage.setItem(LAST, v); } catch { /* a private window */ } };
-  // The ticket on screen: the route's, else the last opened here.
+  const readRecent = () => { try { const r = JSON.parse(localStorage.getItem(RECENT) || "[]"); return Array.isArray(r) ? r.filter((x) => x && typeof x.id === "string") : []; } catch { return []; } };
+  // The document on screen: the route's, else the last opened here.
   let last = $state(remembered());
   const current = $derived(id ?? last);
   $effect(() => { if (id) { remember(id); last = id; } });
@@ -42,59 +48,104 @@
   const groups = live({ snapshot: "tickets.nav.groups", params: {}, key: "shortcode", when: () => current == null, on: {} });
   const shortcode = $derived(t?.epic ?? groups.rows.find((g) => g.shortcode)?.shortcode ?? null);
 
-  let pane = $state("editor");
+  // ── the documents ────────────────────────────────────────────────────────
+  let recent = $state(readRecent());
+  $effect(() => {
+    if (!t) return;
+    const row = { id: t.id, title: t.title };
+    const next = [row, ...recent.filter((r) => r.id !== row.id)].slice(0, 12);
+    if (JSON.stringify(next) === JSON.stringify(recent)) return;
+    recent = next;
+    try { localStorage.setItem(RECENT, JSON.stringify(next)); } catch { /* a private window */ }
+  });
+  const docs = live({ snapshot: "tickets.list", params: () => ({ filter: `in ${shortcode} and kind doc`, summary: true, limit: 200, fields: FIELDS }),
+                      changes: "tickets.watch", changes_params: () => ({ filter: `in ${shortcode} and kind doc` }), key: "id", when: () => shortcode != null,
+                      on: { created: "upsert:ticket", amended: "upsert:ticket", updated: "upsert:ticket", kind_changed: "upsert:ticket", deleted: "remove:ids" } });
+  const theirs = $derived(docs.rows.filter((r) => r.id && r.title != null && r.kind === "doc").slice().reverse());
+  let q = $state("");
+  const found = live({ snapshot: "tickets.find", params: () => ({ query: q.trim(), limit: 20, fields: FIELDS }), key: "id", when: () => q.trim().length > 0, debounce_ms: 150 });
+  const hits = $derived(q.trim() ? found.rows.filter((r) => r.id && r.title != null) : []);
+  let drawer = $state(false);
+  let searchBox = $state(null);
+  const open = (to) => { drawer = false; q = ""; if (to !== current) b.navigate("#/edit/" + to); };
+
   let making = $state(false);
   let refused = $state("");
   async function create() {
     if (making || !shortcode) return;
     making = true;
     refused = "";
-    const r = await b.call("tickets.create", { epic: shortcode, title: "Untitled" });
+    const r = await b.call("tickets.create", { epic: shortcode, title: "Untitled", kind: "doc" });
     making = false;
     const made = r.events?.find((e) => e.type === "created")?.ticket;
-    if (r.ok && made) { remember(made.id); b.navigate("#/edit/" + made.id); }
+    if (r.ok && made) { remember(made.id); drawer = false; b.navigate("#/edit/" + made.id); }
     else refused = String(r.message ?? "refused").replace(/^Invalid params: /, "");
   }
   b.keys({
-    escape: { to: () => b.navigate("#/board"), label: "the board", in_inputs: true },
-    n: { to: create, label: "a new ticket" },
+    escape: { to: () => (drawer ? (drawer = false) : b.navigate("#/board")), label: "the board" },
+    n: { to: create, label: "a new document" },
+    "/": { to: () => { drawer = true; searchBox?.focus(); }, label: "find a document" },
   });
 </script>
 
-<div class="editor-screen" data-surface="editor-screen" data-ticket={current ?? undefined} data-pane={pane}>
+<div class="editor-screen" data-surface="editor-screen" data-ticket={current ?? undefined} data-drawer={drawer ? "open" : undefined}>
   <div class="bar">
+    <button type="button" class="btn docs" data-action="docs" aria-expanded={drawer} onclick={() => (drawer = !drawer)}>docs</button>
     {#if current}
       <a class="id" href={"#/ticket/" + current} data-field="current">{current}</a>
       {#if t}<span class="kind" data-field="kind"><i class="kmark" data-kind={t.kind} aria-hidden="true"></i>{t.kind}</span>{/if}
     {:else}
-      <span class="none" data-empty>no ticket open yet</span>
+      <span class="none" data-empty>no document open yet</span>
     {/if}
     <span class="right">
-      <span class="keys"><kbd>esc</kbd> board</span>
-      <button type="button" class="btn" data-action="new" disabled={making || !shortcode || sheet === "loading"} onclick={create}>{shortcode ? `new in ${shortcode}` : "new"} <kbd>n</kbd></button>
+      <a class="board" href="#/board" data-action="board"><kbd>esc</kbd> board</a>
     </span>
     {#if refused}<p class="refused" data-refused role="alert">{refused}</p>{/if}
   </div>
-  {#if current}
-    <div class="halves">
-      <section class="half editor" data-half="editor"><Editor id={current} {sheet}/></section>
-      <section class="half rendered" data-half="rendered">
-        <Head id={current}/>
-        <Body id={current}/>
-        <Questions id={current}/>
-      </section>
+  <div class="main">
+    <nav class="list" data-field="documents" aria-label="documents">
+      <button type="button" class="btn primary new" data-action="new" disabled={making || !shortcode || sheet === "loading"} onclick={create}>+ new{shortcode ? ` in ${shortcode}` : ""} <kbd>n</kbd></button>
+      <input class="find" data-field="find" type="search" placeholder="find a ticket…" aria-label="find a ticket" autocomplete="off" spellcheck="false" bind:value={q} bind:this={searchBox}/>
+      {#if q.trim()}
+        <p class="head">found</p>
+        {#each hits as r (r.id)}
+          <button type="button" class="doc" data-doc={r.id} data-current={r.id === current ? "" : undefined} onclick={() => open(r.id)}><span class="did">{r.id}</span>{r.title}</button>
+        {:else}
+          <p class="none">{found.status === "pending" ? "finding…" : "nothing found"}</p>
+        {/each}
+      {:else}
+        {#if recent.length}
+          <p class="head">recent</p>
+          {#each recent as r (r.id)}
+            <button type="button" class="doc" data-doc={r.id} data-recent data-current={r.id === current ? "" : undefined} onclick={() => open(r.id)}><span class="did">{r.id}</span>{r.title}</button>
+          {/each}
+        {/if}
+        {#if shortcode}
+          <p class="head">docs in {shortcode}</p>
+          {#each theirs as r (r.id)}
+            <button type="button" class="doc" data-doc={r.id} data-current={r.id === current ? "" : undefined} onclick={() => open(r.id)}><span class="did">{r.id}</span>{r.title}</button>
+          {:else}
+            <p class="none">{docs.status === "pending" ? "…" : "none yet"}</p>
+          {/each}
+        {/if}
+      {/if}
+    </nav>
+    <button type="button" class="scrim" aria-label="close the documents" tabindex="-1" onclick={() => (drawer = false)}></button>
+    <div class="page">
+      {#if current}
+        <div class="sheet">
+          {#key current}<Editor id={current} {sheet}/>{/key}
+          {#key current}<Questions id={current}/>{/key}
+        </div>
+      {:else}
+        <div class="welcome" data-welcome>
+          <p class="lead">Write a document here. It saves as you type.</p>
+          <p class="muted">Open one from the list or the <a href="#/board">board</a>, or make a new one{#if shortcode} in {shortcode}{/if}.</p>
+          <button type="button" class="btn primary" data-action="new" disabled={making || !shortcode} onclick={create}>+ new document <kbd>n</kbd></button>
+        </div>
+      {/if}
     </div>
-    <div class="switch" role="tablist" aria-label="pane">
-      <button type="button" role="tab" data-action="pane" data-to="editor" aria-selected={pane === "editor"} onclick={() => (pane = "editor")}>editor</button>
-      <button type="button" role="tab" data-action="pane" data-to="rendered" aria-selected={pane === "rendered"} onclick={() => (pane = "rendered")}>rendered</button>
-    </div>
-  {:else}
-    <div class="welcome" data-welcome>
-      <p class="lead">Write a ticket here. It lands as you type.</p>
-      <p class="muted">Open one from the <a href="#/board">board</a>, or make a new one{#if shortcode} in {shortcode}{/if}.</p>
-      <button type="button" class="btn primary" data-action="new" disabled={making || !shortcode} onclick={create}>new ticket <kbd>n</kbd></button>
-    </div>
-  {/if}
+  </div>
 </div>
 
 <style>
@@ -111,33 +162,47 @@
   .kmark[data-kind="execution"] { background: var(--kind-execution); border-radius: var(--radius-xs); }
   .kmark[data-kind="doc"] { width: 7px; height: 9px; background: none; border: var(--border) solid var(--kind-doc); border-radius: var(--radius-xs); }
   .right { margin-left: auto; display: flex; gap: 10px; align-items: center; }
-  .keys { display: inline-flex; gap: 5px; align-items: center; }
+  .board { display: inline-flex; gap: 5px; align-items: center; color: var(--muted); text-decoration: none; }
+  .board:hover, .board:global([data-sheet~=hover]) { color: var(--ink); }
+  .board:focus-visible, .board:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; border-radius: var(--radius-sm); }
   .btn { display: inline-flex; gap: 5px; align-items: center; padding: 1px 10px; font-size: 12px; line-height: 20px; white-space: nowrap; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; transition: background-color var(--motion-fast) var(--ease); }
   .btn:hover, .btn:global([data-sheet~=hover]) { background: var(--hover); border-color: var(--muted); }
   .btn:focus-visible, .btn:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
   .btn:disabled, .btn:global([data-sheet~=disabled]) { color: var(--disabled); background: var(--card); border-color: var(--line); cursor: not-allowed; }
   .btn.primary { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+  .btn.primary:disabled, .btn.primary:global([data-sheet~=disabled]) { color: var(--disabled); background: var(--card); border-color: var(--line); }
+  .docs { display: none; }
   .refused { flex-basis: 100%; margin: 0; color: var(--warn); }
-  .halves { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-  .half { min-width: 0; min-height: 0; overflow: auto; padding: 14px 20px 40px; }
-  .half.rendered { background: var(--panel); border-left: var(--border) solid var(--line); }
-  .switch { display: none; }
+  .main { position: relative; flex: 1; min-height: 0; display: grid; grid-template-columns: 232px minmax(0, 1fr); }
+  .list { display: flex; flex-direction: column; gap: 2px; min-height: 0; overflow: auto; padding: 12px 10px 24px; background: var(--panel); border-right: var(--border) solid var(--line); }
+  .new { justify-content: center; margin-bottom: 8px; }
+  .find { margin-bottom: 6px; padding: 4px 8px; font: inherit; font-size: 12px; color: var(--ink); background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius); }
+  .find:focus-visible, .find:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 0; }
+  .head { margin: 10px 4px 2px; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  .doc { display: block; width: 100%; padding: 4px 6px; overflow: hidden; font: inherit; font-size: 12px; line-height: 1.35; text-align: left; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); background: none; border: 0; border-radius: var(--radius-sm); cursor: pointer; }
+  .doc:hover, .doc:global([data-sheet~=hover]) { background: var(--hover); }
+  .doc:focus-visible, .doc:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: -2px; }
+  .doc[data-current], .doc:global([data-sheet~=selected]) { background: var(--row-sel); }
+  .did { margin-right: 6px; font-size: 11px; color: var(--muted); }
+  .scrim { display: none; }
+  .page { min-width: 0; min-height: 0; overflow: auto; }
+  .sheet { max-width: 760px; margin: 0 auto; padding: 24px 28px 64px; }
   .welcome { padding: 40px 20px; text-align: center; }
   .lead { margin: 0 0 6px; font: var(--weight-strong) 18px var(--font-display); }
   .muted { margin: 0 0 14px; color: var(--muted); }
   .muted a { color: var(--accent); }
-  .none { color: var(--muted); }
+  .none { margin: 2px 6px; font-size: 12px; color: var(--muted); }
   kbd { display: inline-block; min-width: 16px; padding: 0 4px; font-family: var(--font-text); font-size: 10px; line-height: 15px; text-align: center; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-bottom-width: 2px; border-radius: var(--radius-sm); }
   @media (max-width: 1023px) {
-    .halves { grid-template-columns: minmax(0, 1fr); }
-    .half.rendered { border-left: 0; }
-    .editor-screen[data-pane="editor"] .half.rendered, .editor-screen[data-pane="rendered"] .half.editor { display: none; }
-    .switch { display: flex; gap: 6px; flex: none; padding: 6px 14px calc(6px + env(safe-area-inset-bottom)); background: var(--panel); border-top: var(--border) solid var(--line); }
-    .switch button { flex: 1; padding: 6px 0; font: inherit; font-size: 12px; color: var(--muted); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; }
-    .switch button[aria-selected="true"], .switch button:global([data-sheet~=selected]) { color: var(--accent); background: var(--sel); border-color: var(--accent); }
-    .keys { display: none; }
+    .docs { display: inline-flex; }
+    .main { grid-template-columns: minmax(0, 1fr); }
+    .list { position: absolute; z-index: 4; top: 0; bottom: 0; left: 0; width: min(280px, 82vw); transform: translateX(-100%); transition: transform var(--motion-fast) var(--ease); box-shadow: 0 6px 18px var(--shadow); padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+    .editor-screen[data-drawer=open] .list { transform: none; }
+    .editor-screen[data-drawer=open] .scrim { display: block; position: absolute; inset: 0; z-index: 3; padding: 0; background: var(--shadow); border: 0; }
+    .sheet { padding: 16px 16px calc(48px + env(safe-area-inset-bottom)); }
+    .board kbd { display: none; }
   }
   @media (prefers-reduced-motion: reduce) {
-    .btn { transition: none; }
+    .btn, .list { transition: none; }
   }
 </style>

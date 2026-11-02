@@ -1060,8 +1060,11 @@ is its real Svelte twin, `src/<name>-sv.svelte` (`svelte/1`:
 compiled at build in Node, `--node-modules ../plexus-ui/node_modules`), with
 the same calls and the same DOM marks. SURFACE-2 (owner, 2026-10-30: "I want
 svelte components"): the real Svelte board is the default, at `#/board`
-(EDITOR-4: `#/` and `#/edit/:id` are the editor, `page-editor` placing
-`editor-screen`: `editor-body` beside the rendered ticket),
+(EDITOR-4, EDITOR-8: `#/` and `#/edit/:id` are the editor, `page-editor` placing
+`editor-screen`: one surface — `editor-body`, the ticket drawn by
+`ticket-view` and edited where it is drawn, a block away from the caret drawn
+as `#/ticket/:id` draws it, the caret's block its markdown — and the documents
+beside it, with `+ new`),
 `#/f/:filter` and `#/ticket/:id` (`#/sv/…` its alias), and the rhx board the
 comparison at `#/rhx/`, `#/rhx/f/:filter` and `#/rhx/ticket/:id`. The Svelte
 board is drawn in `board-frame.rhx`, an rhx layout that only places its
