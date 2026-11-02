@@ -37,6 +37,7 @@
   const HOUSE_OPEN = /^<(m-[a-z0-9-]+)(?:\s[^>]*)?>\s*$/;
   const LIST = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:\s|$)/;
   const REF = /^ {0,3}\[[^\]]+\]:\s*\S/;
+  const ELEMENT_LINE = /^\s*<(m-[a-z0-9-]+)(?:\s[^>]*)?>.*<\/\1>\s*$/;
   const blank = (l) => l.trim() === "";
 
   /** The line after the fence opened at `i` closes (or the end). */
@@ -61,7 +62,7 @@
     return -1;
   }
 
-  /** `src` as its blocks: `[{ from, to, text }]`, offsets into `src`, `to` the end of the block's last
+  /** `src` as its blocks: `[{ from, to, text, part }]`, offsets into `src`, `to` the end of the block's last
    *  line (the blank lines between blocks belong to none). A block is what a blank line ends, but a fence
    *  is whole, a house mark is whole from its open line to its close, a comment to its `-->`, and a line
    *  indented, or a list's next item, after blank lines joins the block before it — merging never
@@ -72,43 +73,106 @@
     const at = [0];
     for (const l of lines) at.push(at[at.length - 1] + l.length + 1);
     const out = [];
-    let i = 0;
-    while (i < lines.length) {
+    scan(lines, at, text, 0, lines.length, null, out);
+    return out;
+  }
+
+  /** The pieces of lines [lo, hi) into `out`; `wrap` the house mark around them, when they are inside one
+   *  (EDITOR-9: a house mark is its open line, its inner pieces and its close line, each its own piece —
+   *  `h: "open" | "mid" | "close"`, the mark's lines as `wrap` — so the caret reveals one line of it and
+   *  the rest stays drawn as one card). */
+  function scan(lines, at, text, lo, hi, wrap, out) {
+    const piece = (a, z, extra) => {
+      while (z > a + 1 && blank(lines[z - 1])) z--;
+      out.push({ from: at[a], to: at[z] - 1, text: text.slice(at[a], at[z] - 1), part: false, ...(wrap ? { h: "mid", wrap } : {}), ...extra });
+    };
+    let i = lo;
+    while (i < hi) {
       if (blank(lines[i])) { i++; continue; }
       const start = i;
       let end;
       const house = HOUSE_OPEN.exec(lines[i]);
-      if (FENCE.test(lines[i])) end = fenceEnd(lines, i);
-      else if (house && houseEnd(lines, i, house[1]) > 0) end = houseEnd(lines, i, house[1]);
-      else if (/^ {0,3}<!--/.test(lines[i]) && !lines[i].includes("-->")) {
+      const closes = house ? houseEnd(lines, i, house[1]) : -1;
+      if (FENCE.test(lines[i])) { piece(i, Math.min(fenceEnd(lines, i), hi)); i = fenceEnd(lines, i); continue; }
+      if (house && closes > 0 && closes <= hi) {
+        const own = { open: lines[i], close: lines[closes - 1], tag: house[1] };
+        if (wrap) { piece(i, closes); i = closes; continue; } // a mark inside a mark: one piece, drawn whole inside its parent
+        out.push({ from: at[i], to: at[i + 1] - 1, text: lines[i], part: false, h: "open", wrap: own });
+        scan(lines, at, text, i + 1, closes - 1, own, out);
+        out.push({ from: at[closes - 1], to: at[closes] - 1, text: lines[closes - 1], part: false, h: "close", wrap: own });
+        i = closes;
+        continue;
+      }
+      if (/^ {0,3}<!--/.test(lines[i]) && !lines[i].includes("-->")) {
         end = i + 1;
-        while (end < lines.length && !lines[end - 1].includes("-->")) end++;
-      } else {
-        end = i;
-        while (end < lines.length && !blank(lines[end])) {
-          if (end > i && FENCE.test(lines[end])) { end = fenceEnd(lines, end); continue; }
-          end++;
-        }
+        while (end < hi && !lines[end - 1].includes("-->")) end++;
+        piece(i, end);
+        i = end;
+        continue;
+      }
+      end = i;
+      while (end < hi && !blank(lines[end])) {
+        if (end > i && FENCE.test(lines[end])) { end = Math.min(fenceEnd(lines, end), hi); continue; }
+        end++;
       }
       // A continuation after blank lines: an indented line, or the next item of a list this block began.
       for (;;) {
         let k = end;
-        while (k < lines.length && blank(lines[k])) k++;
-        if (k === end || k >= lines.length) break;
+        while (k < hi && blank(lines[k])) k++;
+        if (k === end || k >= hi) break;
         const indented = /^(?: {2,}|\t)\S/.test(lines[k]);
-        const item = LIST.test(lines[start]) && LIST.test(lines[k]) && !house;
+        const item = LIST.test(lines[start]) && LIST.test(lines[k]);
         if (!indented && !item) break;
         end = k;
-        while (end < lines.length && !blank(lines[end])) {
-          if (FENCE.test(lines[end].trimStart()) && end > k) { end = fenceEnd(lines, end); continue; }
+        while (end < hi && !blank(lines[end])) {
+          if (FENCE.test(lines[end].trimStart()) && end > k) { end = Math.min(fenceEnd(lines, end), hi); continue; }
           end++;
         }
       }
-      out.push({ from: at[start], to: at[end] - 1, text: text.slice(at[start], at[end] - 1) });
+      // EDITOR-9: a list is drawn item by item — the smallest unit the caret reveals — each item its own
+      // piece (the first `part: false`, the rest `part: true`, drawn without the gap between blocks).
+      // EDITOR-9: and lines that are each one whole mark (`<m-option …></m-option>`, a stat, a step) are each
+      // their own piece, the caret's line revealed and its neighbours drawn.
+      const own = (l) => ELEMENT_LINE.exec(l);
+      // (Stats stay one piece: a row of tiles side by side.)
+      const lineByLine = end - start > 1 && lines.slice(start, end).every((l) => blank(l) || (own(l) && own(l)[1] !== "m-stat"));
+      const items = lineByLine ? lines.slice(start, end).map((_, k) => [start + k, start + k + 1]).filter(([a]) => !blank(lines[a]))
+        : LIST.test(lines[start]) ? listItems(lines, start, end) : [[start, end]];
+      items.forEach(([a, z], n) => piece(a, z, { part: n > 0 }));
       i = end;
     }
+  }
+
+  /** The items of the list on lines [start, end): each `[from, to)` line range, an item from a line
+   *  with a marker at the list's own indent to the next such line. */
+  function listItems(lines, start, end) {
+    const indent = /^ */.exec(lines[start])[0].length;
+    const marker = new RegExp(`^ {${indent}}(?:[-*+]|\\d{1,9}[.)])(?:\\s|$)`);
+    const out = [];
+    let a = start;
+    for (let k = start + 1; k < end; k++) {
+      if (FENCE.test(lines[k])) { k = fenceEnd(lines, k) - 1; continue; }
+      if (marker.test(lines[k])) { out.push([a, k]); a = k; }
+    }
+    out.push([a, end]);
     return out;
   }
+
+  /** The markdown a piece is drawn from: a house mark's open or close line its empty mark (the card's
+   *  top or bottom), a piece inside one wrapped in the mark's own lines (the card's middle). */
+  export function pieceSource(p) {
+    if (!p.wrap) return p.text;
+    if (p.h === "open" || p.h === "close") return `${p.wrap.open}\n\n${p.wrap.close}`;
+    return `${p.wrap.open}\n\n${p.text}\n\n${p.wrap.close}`;
+  }
+  /** A piece's box: `blk`, `part` (a list's next item), `h-open | h-mid | h-close` (a card's piece). */
+  export const pieceClass = (p) => ["blk", p.part ? "part" : "", p.h ? `h-${p.h}` : ""].filter(Boolean).join(" ");
+
+  /** The house's marks that draw as cards, and the ones that draw inline; any other mark (and a custom
+   *  tag, kept as `m-el`) draws its words in a neutral box, captioned by the attribute that reads as words. */
+  const CARDS = new Set(["m-summary", "m-decision", "m-input", "m-cases", "m-beat", "m-status", "m-diagram", "m-mockup", "m-results", "m-walk", "m-code", "m-compare", "m-callout", "m-acceptance", "m-cards", "m-card", "m-dag", "m-details", "m-provides", "m-consumes"]);
+  const INLINE = new Set(["m-field", "m-answer", "m-question", "m-recommendation", "m-option", "m-choice", "m-step", "m-stat", "m-ticket", "m-badge", "m-cite", "m-commit", "m-chip"]);
+  const caption = (e) => e.getAttribute("label") || e.getAttribute("name") || e.getAttribute("title") || e.getAttribute("data-field") || "";
 
   /** The link reference definitions of `src` (`[name]: url`), outside fences: each block is drawn with them. */
   export function refDefs(src) {
@@ -122,16 +186,65 @@
 </script>
 
 <script>
+  import { mount, unmount } from "svelte";
   import { markdown } from "plexus-ui/host";
+  import Diagram from "plexus-ui:mermaid-diagram";
+  import CodeCard from "./code-card.svelte";
 
-  let { body = "", title = null, status = null, edit = null, titleEdit = null, block = false, defs: given = null } = $props();
+  // EDITOR-9: what the markdown drew, finished. Each ```mermaid fence (a bare one, or one inside a
+  // house mark) gets the diagram's bound mark before it — its own module, fetched the first time one is
+  // on screen; the fence stays under it, hidden by the rules below once the diagram is drawn. And a mark
+  // with no card of its own (an unknown `m-*`, a custom tag kept as `m-el`, a known inline mark used as
+  // a box) is marked `any`: its words drawn in a neutral box, captioned by its label, name, title or
+  // field — the tag's own name when it holds no words at all; inline among words, a caption beside them.
+  function enhance(node) {
+    let placed = [];
+    const clear = () => { for (const p of placed) { unmount(p.app); p.at.remove(); } placed = []; };
+    const place = () => {
+      clear();
+      const top = !node.parentElement?.matches?.(".h-mid, .h-close"); // a card's caption once, on its top piece
+      for (const e of node.querySelectorAll("*")) {
+        const tag = e.localName;
+        if (!tag.startsWith("m-") || CARDS.has(tag)) continue;
+        const parent = e.parentElement;
+        const alone = parent === node || parent?.localName?.startsWith("m-") || (parent?.localName === "p" && parent.textContent.trim() === e.textContent.trim());
+        if (INLINE.has(tag) && parent !== node) continue; // a known inline mark keeps its look, unless it is the piece's box
+        e.classList.add("any");
+        if (!alone) e.classList.add("any-inline");
+        const words = !top && parent === node ? "" : caption(e) || (e.textContent.trim() ? "" : (e.getAttribute("data-tag") || tag.replace(/^m-/, "")));
+        if (words) e.setAttribute("data-caption", words); else e.removeAttribute("data-caption");
+      }
+      for (const code of node.querySelectorAll("pre > code.language-mermaid")) {
+        const at = document.createElement("div");
+        at.className = "diagram";
+        code.parentElement.before(at);
+        placed.push({ at, app: mount(Diagram, { target: at, props: { source: code.textContent } }) });
+      }
+      // Every other fence (and an indented block) is a code card: its language from the fence, else
+      // the <m-code> around it, which gives its `path` and `why` too.
+      for (const code of node.querySelectorAll("pre > code:not(.language-mermaid)")) {
+        const pre = code.parentElement;
+        const mc = pre.closest("m-code");
+        const info = [...code.classList].find((c) => c.startsWith("language-"))?.slice("language-".length) || mc?.getAttribute("lang") || "";
+        const at = document.createElement("div");
+        at.className = "code";
+        pre.before(at);
+        const props = { code: code.textContent.replace(/\n$/, ""), info, path: mc?.getAttribute("path") || "", why: mc?.getAttribute("why") || "" };
+        placed.push({ at, app: mount(CodeCard, { target: at, props }) });
+      }
+    };
+    place();
+    return { update: place, destroy: clear };
+  }
+
+  let { body = "", title = null, status = null, edit = null, titleEdit = null, block = false, piece = null, defs: given = null } = $props();
   const parts = $derived(edit || block ? [] : blocks(body));
   const defs = $derived(block ? given ?? "" : edit ? "" : refDefs(body));
 </script>
 
-{#snippet drawn(text)}{@html markdown(mediaLinks(text) + defs)}{/snippet}
+{#snippet drawn(p)}<div class="blk-in" use:enhance={p.text}>{@html markdown(mediaLinks(pieceSource(p)) + defs)}</div>{/snippet}
 
-{#if block}{@render drawn(body)}{:else}
+{#if block}{@render drawn(piece ?? { text: body })}{:else}
 <article class="ticket-view" data-surface="ticket-view" data-editing={edit ? "" : undefined}>
   {#if title != null || status != null || titleEdit}
     <header class="head">
@@ -145,7 +258,7 @@
   {:else if !body}
     <p class="empty" data-field="body" data-empty>No body yet.</p>
   {:else}
-    <div class="md" data-field="body" data-ticket-body>{#each parts as p (p.from)}<div class="blk" data-block>{@render drawn(p.text)}</div>{/each}</div>
+    <div class="md" data-field="body" data-ticket-body>{#each parts as p (p.from)}<div class={pieceClass(p)} data-block data-tag={p.wrap?.tag}>{@render drawn(p)}</div>{/each}</div>
   {/if}
 </article>{/if}
 
@@ -169,75 +282,83 @@
   .status[data-status=Canceled] { background: var(--st-canceled-bg); color: var(--st-canceled-fg); }
   .status[data-status=Epic] { background: var(--st-epic-bg); color: var(--st-epic-fg); }
   .status[data-status=Doc] { background: var(--st-doc-bg); color: var(--st-doc-fg); }
-  /* The body: each block one box, drawn the same here and in the editor (where these rules reach
-     inside the editor's own lines and widgets). */
-  .md { font-family: var(--sans); line-height: 1.55; overflow-wrap: anywhere; }
-  .md :global(.blk) { display: flow-root; }
-  .md :global(.blk > :first-child) { margin-top: 0; }
-  .md :global(.blk > :last-child) { margin-bottom: 0; }
-  .md :global(.blk + .blk), .md :global(.cm-line + .blk), .md :global(.blk + .cm-line) { padding-top: 10px; }
-  .md :global(.blk) { white-space: normal; }
-  .md :global(h1), .md :global(h2), .md :global(h3), .md :global(h4) { margin: 16px 0 4px; font-family: var(--font-display); font-weight: var(--weight-strong); line-height: 1.3; }
+  /* The body: one continuous page, the same here and in the editor (where these rules reach inside the
+     editor's own lines and widgets). EDITOR-9 (owner: "I want one smooth surface"): a block is a piece
+     of the flow, never a box — no border, background, shadow or container around a house mark, and no
+     gap but the type's own rhythm; a mark reads as typography, its labels small and muted. Only code
+     keeps a tint. */
+  .md { font-family: var(--sans); line-height: 1.6; overflow-wrap: anywhere; }
+  .md :global(.blk) { display: flow-root; white-space: normal; }
+  .md :global(.blk-in) { display: contents; }
+  .md :global(.blk-in > :first-child), .md :global(.blk-in > :first-child > :first-child) { margin-top: 0; }
+  .md :global(.blk-in > :last-child), .md :global(.blk-in > :last-child > :last-child) { margin-bottom: 0; }
+  .md :global(.blk + .blk), .md :global(.cm-line + .blk), .md :global(.blk + .cm-line) { padding-top: 12px; }
+  .md :global(.blk + .blk.part), .md :global(.cm-line + .blk.part) { padding-top: 2px; }
+  .md :global(.blk + .blk:has(> .blk-in > :is(h1, h2, h3, h4))), .md :global(.cm-line + .blk:has(> .blk-in > :is(h1, h2, h3, h4))) { padding-top: 22px; }
+  /* A house mark's own lines take no room (a caption aside, on its open line); the pieces between read as the flow. */
+  .md :global(.blk.h-close) { padding-top: 0; }
+  .md :global(.blk.h-open + .blk), .md :global(.blk.h-open + .cm-line) { padding-top: 0; }
+  .md :global(.blk:is(.h-mid, .h-close) > .blk-in > :first-child)::before { display: none; }
+  .md :global(h1), .md :global(h2), .md :global(h3), .md :global(h4) { margin: 0 0 4px; font-family: var(--font-display); font-weight: var(--weight-strong); line-height: 1.3; }
   .md :global(h1) { font-size: 20px; }
   .md :global(h2) { font-size: 16px; }
   .md :global(h3), .md :global(h4), .md :global(h5), .md :global(h6) { font-size: 14px; }
-  .md :global(p) { margin: 8px 0; }
-  .md :global(ul), .md :global(ol) { margin: 6px 0; padding-left: 20px; }
+  .md :global(p) { margin: 6px 0; }
+  .md :global(ul), .md :global(ol) { margin: 4px 0; padding-left: 20px; }
   .md :global(a) { color: var(--accent); text-decoration: underline; }
-  .md :global(code) { padding: 0 3px; font-family: var(--font-text); font-size: 12px; background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius-sm); }
-  .md :global(pre) { overflow: auto; padding: 8px 10px; font-family: var(--font-text); background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius); }
-  .md :global(pre code) { padding: 0; border: 0; background: none; }
-  .md :global(pre:has(> code.language-mermaid)) { border-left: 3px solid var(--kind-scope); }
-  .md :global(pre:has(> code.language-mermaid))::before { content: "mermaid"; display: block; margin-bottom: 4px; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
-  .md :global(table) { border-collapse: collapse; }
-  .md :global(th), .md :global(td) { padding: 3px 8px; border: var(--border) solid var(--line); }
-  .md :global(blockquote) { margin: 0; padding-left: 12px; color: var(--muted); border-left: 3px solid var(--line); }
-  .md :global(img) { max-width: 100%; height: auto; border-radius: var(--radius); }
-  .md :global(hr) { border: 0; border-top: var(--border) solid var(--line); }
-  /* EDITOR-8: the house's marks, as cards. A container mark (summary, decision, input, cases, beat,
-     status, diagram, mockup, field with a body, …) is a card with its kind in the corner; a line mark
-     (stat, option, step, question, answer, …) a row inside it. Every name is the mark's own text. */
-  .md :global(:is(m-summary, m-decision, m-input, m-cases, m-beat, m-status, m-diagram, m-mockup, m-results, m-walk, m-code, m-compare, m-callout, m-acceptance, m-cards, m-card, m-dag, m-details, m-provides, m-consumes)) { position: relative; display: block; margin: 8px 0; padding: 12px 14px 10px; background: var(--card); border: var(--border) solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--radius-lg); }
-  .md :global(:is(m-summary, m-decision, m-input, m-cases, m-beat, m-status, m-diagram, m-mockup, m-results, m-walk, m-code, m-compare, m-callout, m-acceptance, m-cards, m-card, m-dag, m-details, m-provides, m-consumes))::before { position: absolute; top: 5px; right: 10px; font-family: var(--font-text); font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
-  .md :global(m-summary)::before { content: "summary"; }
-  .md :global(m-decision)::before { content: "decision " attr(data-id); }
-  .md :global(m-input)::before { content: "input " attr(data-id); }
-  .md :global(m-cases)::before { content: attr(label); }
-  .md :global(m-beat)::before { content: attr(kicker); }
-  .md :global(m-status)::before { content: "status"; }
-  .md :global(m-diagram)::before { content: "diagram " attr(label); }
-  .md :global(m-mockup)::before { content: "mockup " attr(title); }
-  .md :global(m-results)::before { content: attr(label); }
-  .md :global(m-walk)::before { content: attr(kicker); }
-  .md :global(m-code)::before { content: attr(lang) " " attr(path); }
-  .md :global(m-callout)::before { content: "note"; }
-  .md :global(m-acceptance)::before { content: "acceptance"; }
-  .md :global(m-decision) { border-left-color: var(--kind-spike); }
-  .md :global(m-input) { border-left-color: var(--kind-spike); }
-  .md :global(m-status) { border-left-color: var(--kind-build); }
-  .md :global(m-diagram), .md :global(m-mockup) { border-left-color: var(--kind-scope); }
-  .md :global(m-cases), .md :global(m-results) { border-left-color: var(--kind-execution); }
-  .md :global(m-summary p:has(> m-field[data-field=standing])), .md :global(m-summary > m-field[data-field=standing]) { margin: 0 0 8px; padding-right: 70px; font-family: var(--font-display); font-size: 15px; line-height: 1.4; }
+  .md :global(code) { padding: 0 3px; font-family: var(--font-text); font-size: 12.5px; background: var(--panel); border-radius: var(--radius-sm); }
+  .md :global(pre:not(.plain, .painted)) { overflow-x: auto; margin: 6px 0; padding: 10px 12px; font-family: var(--font-text); font-size: 12.5px; line-height: 1.55; white-space: pre; background: var(--panel); border-radius: var(--radius); }
+  .md :global(pre code) { padding: 0; font-size: inherit; background: none; }
+  .md :global(.code-card code) { padding: 0; background: none; }
+  .md :global(pre:has(> code.language-mermaid))::before { content: "mermaid"; display: block; margin-bottom: 4px; font-size: 11px; color: var(--muted); }
+  .md :global(table) { border-collapse: collapse; margin: 6px 0; }
+  .md :global(th), .md :global(td) { padding: 4px 14px 4px 0; text-align: left; vertical-align: top; border-bottom: var(--border) solid var(--line); }
+  .md :global(th) { font-weight: var(--weight-strong); }
+  .md :global(blockquote) { margin: 6px 0; padding-left: 14px; color: var(--muted); border-left: 2px solid var(--line); }
+  .md :global(img) { max-width: 100%; height: auto; }
+  .md :global(hr) { margin: 12px 0; border: 0; border-top: var(--border) solid var(--line); }
+  /* The house's marks as typography in the flow. Every mark is a plain block or a run of text; what it says
+     beside its words (a label, a kicker, a status, who and when) is small muted text. */
+  .md :global(:is(m-summary, m-decision, m-input, m-cases, m-beat, m-status, m-diagram, m-mockup, m-results, m-walk, m-code, m-compare, m-callout, m-acceptance, m-cards, m-card, m-dag, m-details, m-provides, m-consumes)) { display: block; }
+  .md :global(:is(m-cases, m-results, m-diagram, m-mockup, m-compare)[label])::before,
+  .md :global(:is(m-beat, m-walk)[kicker])::before,
+  .md :global(m-field[label])::before,
+  .md :global(.any[data-caption])::before { display: block; margin: 0 0 2px; font-family: var(--font-text); font-size: 11px; color: var(--muted); }
+  .md :global(:is(m-cases, m-results, m-diagram, m-mockup, m-compare)[label])::before, .md :global(m-field[label])::before { content: attr(label); }
+  .md :global(:is(m-beat, m-walk)[kicker])::before { content: attr(kicker); }
+  .md :global(.any[data-caption])::before { content: attr(data-caption); }
   .md :global(:is(m-field, m-answer, m-question, m-recommendation, m-option, m-choice, m-step, m-stat, m-ticket, m-badge, m-cite, m-commit, m-chip)) { display: inline; }
-  .md :global(m-field[label])::before { content: attr(label); display: block; font-family: var(--font-text); font-size: 11px; color: var(--muted); }
-  .md :global(m-field:not([label]))::before { content: none; }
-  .md :global(m-stat) { display: inline-flex; flex-direction: column; min-width: 100px; margin: 2px 6px 2px 0; padding: 5px 9px; vertical-align: top; font-family: var(--font-text); font-size: 11px; color: var(--muted); background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius); }
-  .md :global(m-stat)::before { content: attr(value); font-family: var(--font-display); font-size: 15px; font-weight: var(--weight-strong); color: var(--ink); }
+  /* A summary: its standing a lead paragraph, its stats an inline row of figures. */
+  .md :global(m-summary :is(m-field, m-answer):is([data-field=standing], [data-field=answer])) { display: block; font-size: 16px; line-height: 1.5; font-weight: var(--weight-medium); }
+  .md :global(m-stat) { display: inline-flex; flex-direction: column; margin: 4px 22px 4px 0; vertical-align: top; font-family: var(--font-text); font-size: 11px; color: var(--muted); }
+  .md :global(m-stat)::before { content: attr(value); font-family: var(--font-display); font-size: 18px; font-weight: var(--weight-strong); line-height: 1.2; color: var(--ink); }
   .md :global(m-stat[tone=pass])::before { color: var(--live); }
   .md :global(m-stat[tone=warn])::before, .md :global(m-stat[tone=fail])::before { color: var(--warn); }
-  .md :global(m-question) { display: block; margin: 0 0 8px; padding-right: 90px; font-family: var(--font-display); font-size: 15px; font-weight: var(--weight-strong); line-height: 1.4; }
-  .md :global(m-option), .md :global(m-choice) { display: block; margin: 4px 0; padding: 4px 10px; font-size: 13px; background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius); }
-  .md :global(m-option)::before { content: attr(name); font-weight: var(--weight-strong); color: var(--ink); }
-  .md :global(m-option[cost])::after { content: "cost: " attr(cost) " · benefit: " attr(benefit); display: block; font-size: 11px; color: var(--muted); }
-  .md :global(:is(m-option, m-choice)[recommended]), .md :global(:is(m-option, m-choice)[picked]) { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
-  .md :global(m-recommendation), .md :global(m-answer) { display: block; margin: 8px 0 0; font-size: 13px; }
-  .md :global(m-recommendation)::before { content: "recommended" " · " attr(by) " "; font-size: 11px; color: var(--accent); }
-  .md :global(m-answer[by])::before { content: "answer · " attr(by) " "; font-size: 11px; color: var(--live); }
-  .md :global(m-step) { display: block; margin: 6px 0; padding: 4px 0 4px 12px; font-size: 13px; border-left: 2px solid var(--line); }
-  .md :global(m-step)::before { content: attr(status) " · " attr(by) " · " attr(date); display: block; font-family: var(--font-text); font-size: 11px; color: var(--muted); }
-  .md :global(m-step[status=Complete]) { border-left-color: var(--live); }
-  .md :global(m-step[status="In Review"]), .md :global(m-step[status=Coding]) { border-left-color: var(--accent); }
-  .md :global(m-ticket)::before { content: attr(ref); padding: 0 5px; font-family: var(--font-text); font-size: 12px; color: var(--chip-fg); background: var(--chip-bg); border: var(--border) solid var(--chip-line); border-radius: var(--radius-sm); }
-  .md :global(m-badge) { padding: 0 6px; font-size: 11px; color: var(--chip-fg); background: var(--chip-bg); border-radius: var(--radius-pill); }
+  /* A decision: its question, its options a simple list, the recommended (or picked) one by weight. */
+  .md :global(m-question) { display: block; font-weight: var(--weight-strong); }
+  .md :global(:is(m-option, m-choice)) { display: list-item; margin: 2px 0 2px 20px; list-style: disc; }
+  .md :global(m-option)::before { content: attr(name); }
+  .md :global(m-option[cost])::after { content: " — cost: " attr(cost) "; benefit: " attr(benefit); font-size: 12px; color: var(--muted); }
+  .md :global(:is(m-option, m-choice):is([recommended], [picked])) { font-weight: var(--weight-strong); }
+  .md :global(:is(m-option, m-choice):is([recommended], [picked]))::after { font-weight: normal; }
+  .md :global(:is(m-recommendation, m-answer)) { display: block; margin: 6px 0 0; }
+  .md :global(m-recommendation)::before { content: "recommended" " · " attr(by) "  "; font-family: var(--font-text); font-size: 11px; color: var(--muted); }
+  .md :global(m-answer[by])::before { content: "answered · " attr(by) "  "; font-family: var(--font-text); font-size: 11px; color: var(--muted); }
+  /* A step: a dated line. */
+  .md :global(m-step) { display: block; margin: 2px 0; }
+  .md :global(m-step)::before { content: attr(date) " · " attr(status) " · " attr(by) "  "; font-family: var(--font-text); font-size: 11px; color: var(--muted); }
+  .md :global(m-ticket)::before { content: attr(ref); font-family: var(--font-text); font-size: 12.5px; color: var(--accent); }
+  .md :global(m-badge) { font-family: var(--font-text); font-size: 11px; color: var(--muted); }
+  /* A mark with no look of its own (unknown, a custom tag, a known inline one standing alone): its words in
+     the flow, captioned (above) by the attribute that reads as words. */
+  .md :global(.any) { display: block; }
+  .md :global(.any-inline) { display: inline; }
+  .md :global(.any-inline[data-caption])::before { display: inline; margin: 0 4px 0 0; }
+  /* EDITOR-9: a diagram drawn over its fence (no frame); the fence shows while there is none (loading, refused). */
+  .md :global(.diagram) { margin: 6px 0; }
+  .md :global(.diagram:empty) { display: none; }
+  .md :global(.diagram:has([data-state=drawn]) + pre) { display: none; }
+  /* EDITOR-9: a fence drawn as its code card (code-card); the fence it was drawn from goes. */
+  .md :global(.code + pre) { display: none; }
   .empty { margin: 0; color: var(--muted); font-family: var(--font-text); font-size: 12px; }
 </style>

@@ -47,6 +47,15 @@ export default async (ctx) => {
     child.on("exit", (code) => (code === 0 ? done() : fail(new Error(`outside amend failed (${code}): ${err}`))));
   });
   const BODY = "[data-surface=editor-body] [data-field=body]";
+  /** The component modules the page fetched, by name (UI-19: a file is asked by its content URL, read back
+   *  through the page's files map to its version's path). */
+  const modulesLoaded = (page) => page.evaluate(() => {
+    const imports = JSON.parse(document.getElementById("plexus-ui-files")?.textContent || "{}").imports || {};
+    const back = {};
+    for (const [p, url] of Object.entries(imports)) back[new URL(url, location.href).pathname] ??= p;
+    return performance.getEntriesByType("resource").map((r) => { const at = new URL(r.name).pathname; return back[at] ?? at; })
+      .map((p) => /components\/([a-z0-9-]+)\.js$/.exec(p)?.[1]).filter(Boolean);
+  });
   const open = async (id, route = `#/edit/${id}`) => {
     const { context, page } = await openPage(route);
     const ed = page.locator("[data-surface=editor-body]");
@@ -60,7 +69,11 @@ export default async (ctx) => {
   const caretAt = (page, pos) => page.evaluate(({ s, pos }) => { const v = document.querySelector(s).editorView; v.focus(); v.dispatch({ selection: { anchor: pos } }); }, { s: BODY, pos });
   const state = (ed) => ed.locator("[data-field=write-state]");
   /** Each drawn block's HTML, Svelte's anchors (comments) aside. */
-  const drawnHtml = (page, scope) => page.locator(`${scope} .blk`).evaluateAll((els) => els.map((e) => e.innerHTML.replace(/<!--[^]*?-->/g, "")));
+  const drawnHtml = (page, scope) => page.locator(`${scope} .blk`).evaluateAll((els) => els.map((e) => {
+    const c = e.cloneNode(true);
+    for (const m of c.querySelectorAll("[data-component]")) { m.removeAttribute("data-layout"); m.replaceChildren(); } // a bound mark's fill is its own
+    return c.innerHTML.replace(/<!--[^]*?-->/g, "");
+  }));
   const shots = process.env.PAGES_SHOTS;
   /** `name`-1440-light … `name`-390-dark: both widths, both themes, the transitions ended; the page left at 1440, light. */
   const shoot = async (page, name) => {
@@ -119,19 +132,20 @@ graph TD
     const id = make("the same drawing", HOUSE);
     const { context, page, ed } = await open(id);
     try {
-      await eventually("every block drawn while the focus is elsewhere", async () => (await ed.locator(".blk").count()) === 7 && (await ed.locator(".cm-line").count()) === 0, 5_000);
+      await eventually("every block drawn while the focus is elsewhere", async () => (await ed.locator(".blk").count()) > 7 && (await ed.locator(".cm-line").count()) === 0, 5_000);
+      const pieces = await ed.locator(".blk").count();
       // The cards: the house's marks, kept by the sanitizer, drawn by ticket-view's sheet.
-      for (const sel of ["m-summary m-field[data-field=standing] strong", "m-summary m-stat[value='6'][tone=pass]", "m-decision[data-id=cone] m-option[name=Six][recommended]", "m-cases table", "m-status m-step[status=Ready][by=owner]", "pre code.language-mermaid"]) {
-        assert((await ed.locator(`.blk ${sel}`).count()) === 1, `drawn: ${sel}`);
+      for (const sel of ["m-summary m-field[data-field=standing] strong", "m-summary m-stat[value='6'][tone=pass]", "m-decision[data-id=cone] m-option[name=Six][recommended]", "m-cases table", "m-status m-step[status=Ready][by=owner]", "pre code.language-mermaid", "[data-surface=mermaid-diagram][data-state=drawn] svg"]) {
+        await eventually(`drawn: ${sel}`, async () => (await ed.locator(`.blk ${sel}`).count()) === 1, 10_000);
       }
-      assert((await ed.locator(".blk [onclick], .blk script, .blk [data-slot]").count()) === 0, "nothing live in a drawn block");
-      const card = await ed.locator("m-summary").evaluate((e) => getComputedStyle(e).borderLeftStyle);
-      assert(card === "solid", "a summary is a card");
+      assert((await ed.locator(".blk [onclick], .blk script, .blk [data-slot]:not([data-component=mermaid-diagram])").count()) === 0, "nothing live in a drawn block (a diagram's bound mark aside: EDITOR-9)");
+      const card = await ed.locator("m-summary").first().evaluate((e) => getComputedStyle(e).borderLeftStyle);
+      assert(card === "none", "a summary is typography, no box (EDITOR-9)");
       const mine = await drawnHtml(page, "[data-surface=editor-body]");
       await shoot(page, "editor-surface");
       // The ticket page draws the same blocks, byte for byte.
       await page.evaluate((id) => (location.hash = `#/ticket/${id}`), id);
-      await eventually("the view", async () => (await page.locator("[data-surface=ticket-body] .blk").count()) === 7, 5_000);
+      await eventually("the view", async () => (await page.locator("[data-surface=ticket-body] .blk").count()) === pieces, 5_000);
       const theirs = await drawnHtml(page, "[data-surface=ticket-body]");
       assert(JSON.stringify(mine) === JSON.stringify(theirs), `the editor draws what the view draws:\n${JSON.stringify(mine).slice(0, 400)}\n${JSON.stringify(theirs).slice(0, 400)}`);
       await sleep(PAUSE + 200);
@@ -306,7 +320,8 @@ graph TD
       // Into a house mark: its source when the caret is in it, its tag and attributes untouched by an edit of its words.
       const q = HOUSE.indexOf("Which cone?") + "Which cone".length;
       await caretAt(page, q + "really ".length);
-      await eventually("the decision as its source", async () => (await ed.locator(".cm-line").filter({ hasText: '<m-decision data-field="decision" id="cone">' }).count()) === 1, 3_000);
+      await eventually("the question's line as its source, alone", async () => (await ed.locator(".cm-line").filter({ hasText: "<m-question" }).count()) === 1, 3_000);
+      assert((await ed.locator(".cm-line").filter({ hasText: "<m-decision" }).count()) === 0 && (await ed.locator(".cm-line").filter({ hasText: "<m-option" }).count()) === 0, "the mark's other lines stay drawn");
       await page.keyboard.type(", in the end");
       const want2 = want.replace("Which cone?", "Which cone, in the end?");
       await eventually("saved again", async () => get(id).body === want2, 5_000);
@@ -545,7 +560,8 @@ graph TD
     const { context, page, ed } = await open(id);
     try {
       await caretAt(page, 4);
-      await pasteFile(page, btoa("this is no image"), "image/png", "fake.png");
+      // EDITOR-10's media keeps any bytes; the editor itself draws only PNG, JPEG, GIF and WebP.
+      await pasteFile(page, btoa("this is no image"), "image/x-unknown", "fake.xyz");
       await eventually("the refusal stands where it was pasted", async () => (await ed.locator("[data-upload][data-refused]").count()) === 1, 5_000);
       assert(get(id).body === "text\n", "nothing written");
       await page.keyboard.type("x");
@@ -671,6 +687,242 @@ graph TD
       const opt = page.locator("[data-surface=editor-screen] [data-surface=ticket-questions] [data-input=cone] [data-option='6']");
       await opt.click();
       await eventually("answered", async () => (await page.locator("[data-surface=ticket-questions] [data-input=cone]").getAttribute("data-state")) === "answered", 5_000);
+    } finally {
+      await context.close();
+    }
+  });
+
+  // ── EDITOR-9: a click lands where it is clicked, the page stays put ─────
+  const LONG = Array.from({ length: 60 }, (_, k) => `Paragraph ${k} holds the word${k} among others, written plainly so the line is long enough to wrap once or twice in the column.`).join("\n\n") + "\n";
+  /** The screen box of the `at`-th character of `word` in the drawn block holding it. */
+  const charBox = (page, word, at) => page.evaluate(({ word, at }) => {
+    for (const blk of document.querySelectorAll("[data-surface=editor-body] .blk")) {
+      const w = document.createTreeWalker(blk, NodeFilter.SHOW_TEXT);
+      for (let n = w.nextNode(); n; n = w.nextNode()) {
+        const i = n.data.indexOf(word);
+        if (i < 0) continue;
+        const r = document.createRange();
+        r.setStart(n, i + at); r.setEnd(n, i + at + 1);
+        const b = r.getBoundingClientRect();
+        return { x: b.left + b.width * 0.25, y: b.top + b.height / 2, top: b.top };
+      }
+    }
+    return null;
+  }, { word, at });
+  /** The page scrolled so `word`'s block sits 200 px below the scroller's top (CodeMirror draws only what is near the view). */
+  const reveal = async (page, word) => {
+    await page.evaluate(({ s, word }) => {
+      const v = document.querySelector(s).editorView;
+      const sc = document.querySelector("[data-surface=editor-screen] .page");
+      const b = v.lineBlockAt(v.state.doc.toString().indexOf(word));
+      sc.scrollTop += v.documentTop + b.top - sc.getBoundingClientRect().top - 200;
+    }, { s: BODY, word });
+    await eventually(`${word} drawn`, async () => (await charBox(page, word, 0)) != null, 3_000);
+    await sleep(300); // CodeMirror measures what it drew
+  };
+  const caretTop = (page) => page.evaluate((s) => { const v = document.querySelector(s).editorView; return v.coordsAtPos(v.state.selection.main.head, 1)?.top ?? null; }, BODY);
+
+  await test("a_click_far_down_lands_on_its_character_and_the_page_stays", async () => {
+    const id = make("a long body", LONG);
+    const { context, page, ed } = await open(id);
+    try {
+      await eventually("drawn", async () => (await ed.locator(".blk").count()) > 5, 5_000);
+      await reveal(page, "word40");
+      for (const [word, n] of [["word40", 40], ["word44", 44], ["word38", 38]]) {
+        if (!(await charBox(page, word, 2))) await reveal(page, word);
+        const box = await charBox(page, word, 2);
+        assert(box, `the drawn ${word}`);
+        // The page as the reader sees it: the drawn block above the clicked one, on screen.
+        const above = `word${n - 1}`;
+        const aboveBefore = await charBox(page, above, 0);
+        await page.mouse.click(box.x, box.y);
+        const want = LONG.indexOf(word) + 2;
+        await eventually(`the caret at ${word}'s third character`, async () => (await caret(page)) === want, 2_000);
+        await sleep(150); // a frame or two for the measure
+        const top = await caretTop(page);
+        assert(Math.abs(top - box.top) <= 2, `${word}: the clicked character stays where it was on screen: ${box.top} → ${top}`);
+        const aboveAfter = await charBox(page, above, 0);
+        if (aboveBefore && aboveAfter) assert(Math.abs(aboveAfter.top - aboveBefore.top) <= 2, `${word}: the text above stays where it was on screen (the page did not move): ${aboveBefore.top} → ${aboveAfter.top}`);
+      }
+      assert((await amends(page)).length === 0, "clicks write nothing");
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("arrows_cross_blocks_without_a_jump", async () => {
+    const id = make("arrows", LONG);
+    const { context, page, ed } = await open(id);
+    try {
+      await eventually("drawn", async () => (await ed.locator(".blk").count()) > 5, 5_000);
+      await reveal(page, "word30");
+      const box = await charBox(page, "word30", 0);
+      await page.mouse.click(box.x, box.y);
+      for (let k = 0; k < 6; k++) {
+        const was = await caretTop(page);
+        await page.keyboard.press("ArrowDown");
+        await sleep(120);
+        const now = await caretTop(page);
+        assert(now - was >= -2 && now - was <= 60, `ArrowDown ${k}: the caret moves a line or a block's gap, never a jump: ${was} → ${now}`);
+      }
+      for (let k = 0; k < 6; k++) {
+        const was = await caretTop(page);
+        await page.keyboard.press("ArrowUp");
+        await sleep(120);
+        const now = await caretTop(page);
+        assert(was - now >= -2 && was - now <= 60, `ArrowUp ${k}: ${was} → ${now}`);
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("no_highlight_where_the_caret_is", async () => {
+    const id = make("no highlight", "# Head\n\nA plain paragraph to sit in.\n\n" + HOUSE);
+    const { context, page, ed } = await open(id);
+    try {
+      await eventually("drawn", async () => (await ed.locator(".blk").count()) > 5, 5_000);
+      const at = "# Head\n\nA plain".length;
+      await caretAt(page, at);
+      await eventually("the paragraph's line as markdown", async () => (await ed.locator(".cm-line").filter({ hasText: "A plain paragraph" }).count()) === 1, 3_000);
+      const looks = await page.evaluate(() => [...document.querySelectorAll("[data-surface=editor-body] .cm-line")].map((l) => {
+        const c = getComputedStyle(l);
+        return { bg: c.backgroundColor, border: [c.borderTopWidth, c.borderRightWidth, c.borderBottomWidth, c.borderLeftWidth].join(" "), outline: c.outlineStyle, shadow: c.boxShadow, cls: l.className };
+      }));
+      for (const l of looks) {
+        assert(l.bg === "rgba(0, 0, 0, 0)" && l.border === "0px 0px 0px 0px" && l.outline === "none" && l.shadow === "none", `no tint, border, outline or shadow on the caret's line: ${JSON.stringify(l)}`);
+        assert(!/active|highlight|card-src|selected/.test(l.cls), `no highlight class: ${l.cls}`);
+      }
+      const drawnBefore = await drawnHtml(page, "[data-surface=editor-body]");
+      assert(drawnBefore.length > 5 && (await ed.locator(".blk:is(.eb-active, .active, [data-active])").count()) === 0, "the drawn blocks carry no mark of the caret");
+      // In a house mark: the caret's line is a plain line, as every other.
+      const q = (await src(page)).indexOf("Which cone") + 3;
+      await caretAt(page, q);
+      await eventually("the question's line", async () => (await ed.locator(".cm-line").filter({ hasText: "<m-question" }).count()) === 1, 3_000);
+      const [line, card] = await page.evaluate(() => {
+        const l = [...document.querySelectorAll("[data-surface=editor-body] .cm-line")].find((x) => x.textContent.includes("<m-question"));
+        const c = document.querySelector("[data-surface=editor-body] .blk m-summary");
+        const s = (e) => { const k = getComputedStyle(e); return { bg: k.backgroundColor, outline: k.outlineStyle, shadow: k.boxShadow }; };
+        return [s(l), s(c)];
+      });
+      assert(line.bg === "rgba(0, 0, 0, 0)" && card.bg === "rgba(0, 0, 0, 0)" && line.outline === "none" && line.shadow === "none", `no frame, no tint: ${JSON.stringify(line)} / ${JSON.stringify(card)}`);
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("an_unknown_mark_draws_its_words_with_a_caption", async () => {
+    const BODY_UNKNOWN = 'Before.\n\n<m-foo label="X">**bold**</m-foo>\n\n<m-bar data-field="notes">\n\nInside *the* bar.\n\n</m-bar>\n\n<volt-poll name="Poll"></volt-poll>\n\n```zz-unknown\ncode in no known language\n```\n';
+    const id = make("unknown marks", BODY_UNKNOWN);
+    const { context, page, ed } = await open(id);
+    try {
+      for (const [scope, where] of [["[data-surface=editor-body]", "the editor"], ["[data-surface=ticket-body]", "the view"]]) {
+        if (where === "the view") await page.evaluate((id) => (location.hash = `#/ticket/${id}`), id);
+        const foo = page.locator(`${scope} .blk m-foo`);
+        await eventually(`${where}: m-foo drawn`, async () => (await foo.count()) === 1, 5_000);
+        assert((await foo.locator("strong").innerText()) === "bold", `${where}: its words as markdown, bold`);
+        assert((await foo.getAttribute("data-caption")) === "X", `${where}: captioned X`);
+        const before = await foo.evaluate((e) => getComputedStyle(e, "::before").content);
+        assert(before === '"X"', `${where}: the caption drawn: ${before}`);
+        const bar = page.locator(`${scope} .blk m-bar`).first();
+        assert((await bar.getAttribute("data-caption")) === "notes" && (await page.locator(`${scope} .blk m-bar em`).innerText()) === "the", `${where}: a box of markdown, captioned by its field`);
+        const poll = page.locator(`${scope} .blk m-el[data-tag=volt-poll]`);
+        assert((await poll.count()) === 1 && (await poll.getAttribute("data-caption")) === "Poll", `${where}: a custom tag kept inert, captioned`);
+        assert((await page.locator(`${scope} .blk pre code.language-zz-unknown`).innerText()).includes("code in no known language"), `${where}: an unknown language is a code block`);
+        const look = await foo.evaluate((e) => { const c = getComputedStyle(e); return c.color + " " + c.borderTopColor; });
+        assert(!/rgb\(2[0-9]{2}, [0-9]{1,2}, [0-9]{1,2}\)/.test(look), `${where}: no warning colour: ${look}`);
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("mermaid_is_drawn_by_pele_and_a_refusal_shows_its_source", async () => {
+    const id = make("diagrams", "```mermaid\nflowchart TD\n  A[one] --> B[two]\n```\n\n```mermaid\nflowchart TD\n  A[one --> \n```\n");
+    const { context, page, ed, } = await open(id);
+    try {
+      const drawn = ed.locator(".blk [data-surface=mermaid-diagram][data-state=drawn] svg");
+      await eventually("Pele drew the first", async () => (await drawn.count()) === 1, 10_000);
+      assert(/one/.test(await drawn.textContent()) && /two/.test(await drawn.textContent()), "its labels in the SVG");
+      const refused = ed.locator(".blk [data-surface=mermaid-diagram][data-state=refused]");
+      await eventually("the second refused, said", async () => (await refused.count()) === 1, 10_000);
+      assert(/mermaid/.test(await refused.locator("[data-refused]").innerText()), "labelled");
+      assert(await ed.locator(".blk").nth(1).locator("pre code.language-mermaid").isVisible(), "its source shown under it");
+      assert(!(await ed.locator(".blk").nth(0).locator("pre code.language-mermaid").isVisible()), "the drawn one's source hidden");
+      const loaded = await modulesLoaded(page);
+      assert(loaded.includes("mermaid-diagram"), `Pele its own module: ${JSON.stringify(loaded)}`);
+    } finally {
+      await context.close();
+    }
+  });
+
+  // ── EDITOR-9: one smooth surface; code as a card ─────────────────────────
+  const CODE = 'Some code:\n\n```rust\nfn main() {\n    let answer: u32 = 42; // the answer\n    println!("{}", answer);\n}\n```\n\n```nonsense\nplain <words> & "quotes"\n```\n\n<m-code lang="python" path="tools/run.py" why="how it runs">\n\n```\ndef run(x):\n    return x + 1\n```\n\n</m-code>\n';
+
+  await test("no_house_mark_draws_a_box", async () => {
+    const id = make("one smooth surface", HOUSE + "\n" + CODE);
+    const { context, page } = await open(id);
+    try {
+      for (const [scope, where] of [["[data-surface=editor-body]", "the editor"], ["[data-surface=ticket-body]", "the view"]]) {
+        if (where === "the view") await page.evaluate((id) => (location.hash = `#/ticket/${id}`), id);
+        await eventually(`${where}: drawn`, async () => (await page.locator(`${scope} .blk m-summary`).count()) > 0, 5_000);
+        const boxed = await page.evaluate((scope) => [...document.querySelectorAll(`${scope} .blk, ${scope} .blk *`)].filter((e) => {
+          if (e.closest(".code-card, pre, code, table")) return false; // code keeps its tint; a table its rules
+          const c = getComputedStyle(e);
+          const border = ["Top", "Right", "Bottom", "Left"].some((k) => c[`border${k}Style`] !== "none" && parseFloat(c[`border${k}Width`]) > 0);
+          const bg = c.backgroundColor !== "rgba(0, 0, 0, 0)" && c.backgroundColor !== "transparent";
+          return border || bg || c.boxShadow !== "none" || (e.localName.startsWith("m-") && parseFloat(c.borderRadius) > 0 && bg);
+        }).map((e) => `${e.localName}.${e.className}`), scope);
+        const marks = boxed.filter((x) => !x.startsWith("blockquote") && !x.startsWith("hr") && !x.startsWith("a."));
+        assert(marks.length === 0, `${where}: no house mark (or block) draws a border, a background or a shadow: ${JSON.stringify(marks.slice(0, 8))}`);
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("code_draws_as_one_card_highlighted_and_copyable", async () => {
+    const id = make("code", CODE);
+    const { context, page, ed } = await open(id);
+    try {
+      await page.evaluate(() => { window.__copied = []; navigator.clipboard.writeText = async (t) => { window.__copied.push(t); }; });
+      const cards = ed.locator(".blk [data-surface=code-card]");
+      await eventually("three code cards", async () => (await cards.count()) === 3, 5_000);
+      const rust = cards.nth(0);
+      assert((await rust.getAttribute("data-lang")) === "rust" && (await rust.locator("[data-field=lang]").innerText()) === "rust", "labelled rust");
+      await eventually("rust painted, as its own module", async () => (await rust.locator("[data-surface=code-paint][data-state=painted] .tok-keyword").count()) > 0, 10_000);
+      const kw = await rust.locator(".tok-keyword").allInnerTexts();
+      assert(kw.includes("fn") && kw.includes("let"), `keywords painted: ${JSON.stringify(kw)}`);
+      assert((await rust.locator(".tok-comment").innerText()).includes("the answer"), "the comment painted");
+      const colour = await rust.locator(".tok-keyword").first().evaluate((e) => getComputedStyle(e).color);
+      assert(colour !== (await rust.evaluate((e) => getComputedStyle(e).color)), `a keyword's colour is its token's: ${colour}`);
+      const loaded = await modulesLoaded(page);
+      assert(loaded.includes("code-rust") && loaded.includes("code-python") && !loaded.includes("code-go"), `each language its own module, fetched when used: ${JSON.stringify(loaded)}`);
+      const nonsense = cards.nth(1);
+      assert((await nonsense.getAttribute("data-lang")) === "plain" && (await nonsense.locator("[data-field=lang]").innerText()) === "nonsense", "an unknown language: plain, labelled as written");
+      assert((await nonsense.locator("pre.plain").innerText()) === 'plain <words> & "quotes"' && (await nonsense.locator("[data-surface=code-paint]").count()) === 0, "plain monospace in the same card");
+      const py = cards.nth(2);
+      assert((await py.getAttribute("data-lang")) === "python" && (await py.locator("[data-field=path]").innerText()) === "tools/run.py" && (await py.locator("[data-field=why]").innerText()) === "how it runs", "<m-code>'s language, path and why");
+      const wraps = await rust.locator(".scroll").evaluate((e) => getComputedStyle(e.querySelector("pre")).whiteSpace);
+      assert(wraps === "pre", `code never wraps: ${wraps}`);
+      await rust.locator("[data-action=copy]").click();
+      await eventually("copied", async () => (await page.evaluate(() => window.__copied.length)) === 1, 2_000);
+      const copied = await page.evaluate(() => window.__copied[0]);
+      assert(copied === 'fn main() {\n    let answer: u32 = 42; // the answer\n    println!("{}", answer);\n}', `the exact code: ${JSON.stringify(copied)}`);
+      // The caret in the fence: its source, painted by the same parser.
+      const at = (await src(page)).indexOf("let answer");
+      await caretAt(page, at);
+      await eventually("the fence's source, highlighted", async () => (await ed.locator(".cm-line.eb-fence .tok-keyword").count()) > 0, 5_000);
+      await page.keyboard.press("Escape");
+      // Drawn again (painting runs in idle time), then compared.
+      await eventually("the editor's cards painted again", async () => (await ed.locator("[data-surface=code-card] [data-surface=code-paint][data-state=painted]").count()) === 2, 10_000);
+      const mine = await drawnHtml(page, "[data-surface=editor-body]");
+      await page.evaluate((id) => (location.hash = `#/ticket/${id}`), id);
+      await eventually("the view's cards", async () => (await page.locator("[data-surface=ticket-body] [data-surface=code-card]").count()) === 3, 5_000);
+      await eventually("the view painted", async () => (await page.locator("[data-surface=ticket-body] [data-surface=code-paint][data-state=painted]").count()) === 2, 10_000);
+      const theirs = await drawnHtml(page, "[data-surface=ticket-body]");
+      assert(JSON.stringify(mine) === JSON.stringify(theirs), "the view draws the code as the editor does");
+      await shoot(page, "code-card");
     } finally {
       await context.close();
     }

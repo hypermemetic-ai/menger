@@ -396,7 +396,10 @@ export default async (ctx) => {
 
   // SURFACE-16: a bundle of ticket-view and a page that places it, nothing else
   // of menger — by its sibling import and by its bound mark — draws from props
-  // alone: `uses` empty, and no call of a service's on the wire.
+  // alone: `uses` empty, and no call of a service's on the wire. EDITOR-9: and
+  // what draws its diagrams and code beside it: mermaid-diagram (Pele) and the
+  // code card's components (code-card, code-paint, a painter per language), each
+  // `uses` empty too.
   await test("ticket_view_draws_from_props_with_no_call", async () => {
     const live = () => sy("ui", "versions").find((e) => e.type === "version" && e.live)?.hash;
     const host = `<script module>
@@ -416,15 +419,16 @@ export default async (ctx) => {
     const alone = bundle(path.dirname(session), "view-alone", {
       engine: v1.engine,
       edit: (ui) => {
-        for (const f of fs.readdirSync(path.join(ui, "src"))) if (f !== "ticket-view.svelte") fs.rmSync(path.join(ui, "src", f));
+        for (const f of fs.readdirSync(path.join(ui, "src"))) if (f !== "ticket-view.svelte" && f !== "mermaid-diagram.svelte" && !f.startsWith("code-")) fs.rmSync(path.join(ui, "src", f));
         fs.writeFileSync(path.join(ui, "src", "view-host.svelte"), host);
         fs.writeFileSync(path.join(ui, "routes.json"), JSON.stringify({ "#/": "view-host" }));
         fs.writeFileSync(path.join(ui, "slots.json"), "{}");
       },
     });
     const m = JSON.parse(alone.manifest);
-    assert(JSON.stringify(Object.keys(m.components).sort()) === JSON.stringify(["ticket-view", "view-host"]), `the bundle holds the view and its page: ${Object.keys(m.components)}`);
-    assert(m.components["ticket-view"].uses.length === 0 && m.components["view-host"].uses.length === 0, "uses empty, the page's and the view's");
+    const drawers = Object.keys(m.components).filter((c) => c === "mermaid-diagram" || c.startsWith("code-"));
+    assert(JSON.stringify(Object.keys(m.components).filter((c) => !drawers.includes(c)).sort()) === JSON.stringify(["ticket-view", "view-host"]) && drawers.includes("mermaid-diagram") && drawers.includes("code-card") && drawers.includes("code-rust"), `the bundle holds the view, what draws its diagrams and code, and its page: ${Object.keys(m.components)}`);
+    assert(Object.values(m.components).every((c) => c.uses.length === 0), "uses empty, every one");
     const was = live();
     const answer = push(server, session, path.join(path.dirname(session), "signer.key"), alone);
     assert(answer?.type === "pushed", `pushed: ${JSON.stringify(answer)}`);

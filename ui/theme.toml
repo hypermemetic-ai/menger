@@ -81,6 +81,16 @@
 "--sev-medium"   = ['#9a6b00', '#e6c065', 'medium: two bars']
 "--sev-low"      = ['#6b6860', '#9b988f', 'low: one bar']
 
+[colour.code]   # EDITOR-9: code painted by its language (@lezer/highlight's classes), on --panel; One Light / One Dark's hues
+"--code-keyword"  = ['#a626a4', '#c678dd', 'a keyword, an atom, a boolean']
+"--code-string"   = ['#3f8a3e', '#98c379', 'a string, a literal, a URL']
+"--code-number"   = ['#986801', '#d19a66', 'a number']
+"--code-comment"  = ['#7d7e85', '#7f848e', 'a comment (italic)']
+"--code-type"     = ['#a36a00', '#e5c07b', 'a type, a class, a namespace']
+"--code-def"      = ['#2f63d9', '#61afef', 'a definition: the name a function or a binding is given']
+"--code-property" = ['#0176a5', '#56b6c2', 'a property name']
+"--code-meta"     = ['#c8402f', '#e06c75', 'a macro, an attribute, a preprocessor line']
+
 [colour.diff]   # a revision's diff: a line added, a line removed (SURFACE-4's mockup)
 "--diff-add-bg" = ['#e1f2dc', '#15301b', 'an added line']
 "--diff-add-fg" = ['#256b1a', '#8fd39a', "an added line's text, the +N"]

@@ -129,8 +129,8 @@
 <script>
   import { mount, tick, unmount, untrack } from "svelte";
   import { bus, live } from "plexus-ui/host";
-  import TicketView, { blocks, refDefs } from "./ticket-view.svelte";
-  import { Annotation, EditorSelection, EditorState, StateEffect, StateField } from "@codemirror/state";
+  import TicketView, { blocks, pieceClass, refDefs } from "./ticket-view.svelte";
+  import { Annotation, EditorSelection, EditorState, StateEffect, StateField, Transaction } from "@codemirror/state";
   import { Decoration, EditorView, WidgetType, keymap, placeholder } from "@codemirror/view";
   import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
   import { markdown as markdownSupport, markdownKeymap, markdownLanguage } from "@codemirror/lang-markdown";
@@ -138,6 +138,7 @@
   import * as Y from "yjs";
   import { yCollab, yUndoManagerKeymap } from "y-codemirror.next";
   import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate, removeAwarenessStates } from "y-protocols/awareness";
+  import { langOf } from "./code-card.svelte";
 
   let { id, sheet = null, kind = "ticket" } = $props();
   // The document this instance edits: fixed at mount (editor-screen keys the editor by it), so a
@@ -395,17 +396,19 @@
 
   /** A block away from the caret: ticket-view's drawing of it. A click enters it at the clicked place. */
   class Drawn extends WidgetType {
-    constructor(text, defs, hand) { super(); this.text = text; this.defs = defs; this.hand = hand; }
-    eq(o) { return o.text === this.text && o.defs === this.defs && o.hand === this.hand; }
+    constructor(piece, defs, hand) { super(); this.piece = piece; this.text = piece.text; this.defs = defs; this.hand = hand; }
+    eq(o) { return o.text === this.text && o.defs === this.defs && o.hand === this.hand && pieceClass(o.piece) === pieceClass(this.piece) && o.piece.wrap?.open === this.piece.wrap?.open && o.piece.wrap?.close === this.piece.wrap?.close; }
     toDOM(v) {
       const d = document.createElement("div");
-      d.className = "blk";
+      d.className = pieceClass(this.piece);
       d.setAttribute("data-block", "");
+      if (this.piece.wrap) d.setAttribute("data-tag", this.piece.wrap.tag);
       if (this.hand) { d.classList.add("eb-hand"); d.setAttribute("data-hand", this.hand); }
-      // ticket-view itself, drawing this block alone: the drawing #/ticket/:id makes of it.
-      d.view = mount(TicketView, { target: d, props: { body: this.text, defs: this.defs, block: true } });
+      // ticket-view itself, drawing this piece alone: the drawing #/ticket/:id makes of it.
+      d.view = mount(TicketView, { target: d, props: { body: this.text, piece: this.piece, defs: this.defs, block: true } });
       d.addEventListener("mousedown", (ev) => {
         if (ev.button !== 0) return;
+        if (ev.target?.closest?.("button, input, select, textarea, summary")) return; // a control drawn in the block is its own (a code card's copy)
         const a = ev.target?.closest?.("a[href]");
         if (a && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); window.open(a.href, "_blank", "noopener"); return; }
         if (this.hand) { accept(); }
@@ -417,22 +420,144 @@
     }
     destroy(dom) { if (dom.view) { unmount(dom.view); dom.view = null; } }
     ignoreEvent() { return true; }
+    /** A guess at the drawn height before it is measured (a wrapped line of about 90 characters is 22 px),
+     *  so blocks CodeMirror has not drawn yet sit close to where they will. */
+    get estimatedHeight() { return 10 + 22 * Math.max(1, Math.ceil(this.text.length / 90)); }
   }
-  /** The caret into the block drawn as `dom`, where the pointer was. */
+
+  // ── EDITOR-9: the page stays put ─────────────────────────────────────────
+  // Revealing a block (or hiding one) changes heights; a pin holds one position of the document at
+  // the place on screen it had before the change: the clicked character for a click, else the edge
+  // of the unit the caret lands in (its top moving down, its bottom moving up). The transaction is
+  // sent without CodeMirror's own scroll into view; once the new layout is measured, the scroller is
+  // moved by the difference, then just enough to keep the caret in sight.
+  const Pin = Annotation.define();
+  /** The element that scrolls the editor: the nearest ancestor that scrolls, else the page. */
+  function scrollerOf(el) {
+    for (let e = el?.parentElement; e; e = e.parentElement) {
+      const o = getComputedStyle(e).overflowY;
+      if ((o === "auto" || o === "scroll") && e.scrollHeight > e.clientHeight) return e;
+    }
+    return document.scrollingElement || document.documentElement;
+  }
+  /** The text of `dom` before the point (`node`, `offset`), what a reader sees: a diagram's labels aside. */
+  function seenBefore(dom, node, offset) {
+    const walk = document.createTreeWalker(dom, NodeFilter.SHOW_TEXT, {
+      acceptNode: (n) => (n.parentElement?.closest?.(".diagram, [hidden]") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+    });
+    let out = "";
+    for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+      if (n === node) return out + n.data.slice(0, offset);
+      if (node.nodeType !== 3 && node.contains?.(n) && node.childNodes[offset] && (node.childNodes[offset] === n || node.childNodes[offset].contains(n))) return out;
+      out += n.data;
+    }
+    return out;
+  }
+  /** The caret into the block drawn as `dom`, at the clicked character, that character held under the pointer. */
   function enter(v, dom, text, ev) {
     let base;
     try { base = v.posAtDOM(dom); } catch { return; }
-    let off = 0;
+    let off = 0, y = ev.clientY;
     const pt = document.caretPositionFromPoint ? document.caretPositionFromPoint(ev.clientX, ev.clientY)
       : document.caretRangeFromPoint ? ((r) => r && { offsetNode: r.startContainer, offset: r.startOffset })(document.caretRangeFromPoint(ev.clientX, ev.clientY)) : null;
-    if (pt && dom.contains(pt.offsetNode)) {
-      const r = document.createRange();
-      r.setStart(dom, 0);
-      try { r.setEnd(pt.offsetNode, pt.offset); off = sourceOffset(text, r.toString()); } catch { off = 0; }
+    if (pt && dom.contains(pt.offsetNode) && !pt.offsetNode.parentElement?.closest?.(".diagram")) {
+      off = sourceOffset(text, seenBefore(dom, pt.offsetNode, pt.offset));
+      try {
+        const r = document.createRange();
+        r.setStart(pt.offsetNode, pt.offset);
+        r.collapse(true);
+        const box = r.getClientRects()[0] ?? r.getBoundingClientRect();
+        if (box && box.height) y = box.top;
+      } catch { /* the pointer's own height */ }
     }
+    const pos = Math.min(base + off, v.state.doc.length);
     v.focus();
-    v.dispatch({ selection: { anchor: Math.min(base + off, v.state.doc.length) }, effects: focusFx.of(true), scrollIntoView: false });
+    v.dispatch({ selection: { anchor: pos }, effects: focusFx.of(true), scrollIntoView: false, annotations: Pin.of({ pos, side: 1, edge: "top", y }) });
   }
+  /** What is shown as markdown in `state`: the units the caret is in (a key, to tell a change). */
+  const shownKey = (state) => {
+    if (!state.field(focused)) return "";
+    const all = blocksOf(state.doc);
+    const ranges = state.selection.ranges;
+    return all.map((b, k) => { const end = k + 1 < all.length ? all[k + 1].from - 1 : state.doc.length; return ranges.some((r) => r.from <= end && r.to >= b.from) ? b.from : -1; }).filter((x) => x >= 0).join(",");
+  };
+  /** The unit holding `pos` in `state`: its `[from, to]`. */
+  function unitAt(state, pos) {
+    const all = blocksOf(state.doc);
+    for (let k = 0; k < all.length; k++) {
+      const end = k + 1 < all.length ? all[k + 1].from - 1 : state.doc.length;
+      if (pos >= all[k].from && pos <= end) return [all[k].from, Math.max(all[k].from, all[k].to)];
+    }
+    return [pos, pos];
+  }
+  /** A pin for a move of the caret from `was` to `now` (no text changed): the edge of the unit it lands in. */
+  function autoPin(v, state, was, now) {
+    const [a, z] = unitAt(state, now);
+    const down = now >= was;
+    const top = v.documentTop;
+    try {
+      const block = v.lineBlockAt(down ? a : z);
+      return down ? { pos: a, side: 1, edge: "top", y: top + block.top } : { pos: z, side: -1, edge: "bottom", y: top + block.bottom };
+    } catch { return null; }
+  }
+  /** After the update: the pinned position back where it was, then the caret in sight. */
+  function hold(v, pin) {
+    v.requestMeasure({
+      key: "editor-pin",
+      read: (view) => {
+        const c = view.coordsAtPos(pin.pos, pin.side);
+        const caret = view.coordsAtPos(view.state.selection.main.head, 1);
+        return { at: c ? (pin.edge === "bottom" ? c.bottom : c.top) : null, caret };
+      },
+      write: ({ at, caret }, view) => {
+        const sc = scrollerOf(view.dom);
+        const page = sc === document.scrollingElement || sc === document.documentElement;
+        const by = (dy) => { if (Math.abs(dy) < 0.5) return; if (page) window.scrollBy(0, dy); else sc.scrollTop += dy; };
+        if (at != null) by(at - pin.y);
+        if (!caret) return;
+        const shift = at != null ? at - pin.y : 0;
+        const box = page ? { top: 0, bottom: window.innerHeight } : sc.getBoundingClientRect();
+        const ct = caret.top - shift, cb = caret.bottom - shift;
+        if (ct < box.top + 4) by(ct - box.top - 24);
+        else if (cb > box.bottom - 4) by(cb - box.bottom + 24);
+      },
+    });
+  }
+  /** Every transaction: when it changes what is shown as markdown, sent pinned and without scrolling. */
+  function dispatched(trs, v) {
+    const last = trs[trs.length - 1];
+    let pin = trs.map((t) => t.annotation(Pin)).find(Boolean) ?? null;
+    if (!pin && !trs.some((t) => t.docChanged) && shownKey(v.state) !== shownKey(last.state)) {
+      const was = v.state.selection.main.head, now = last.state.selection.main.head;
+      pin = autoPin(v, last.state, was, last.state.field(focused) ? now : was);
+    }
+    if (pin && trs.some((t) => t.scrollIntoView) && !trs.some((t) => t.docChanged)) {
+      // The same move, without CodeMirror's scroll into view: the pin decides where the page goes.
+      const t = v.state.update({ selection: last.selection ?? v.state.selection, effects: trs.flatMap((x) => x.effects), annotations: [Pin.of(pin), ...(last.annotation(Transaction.userEvent) ? [Transaction.userEvent.of(last.annotation(Transaction.userEvent))] : [])], scrollIntoView: false });
+      v.update([t]);
+    } else v.update(trs);
+    if (pin) hold(v, pin);
+  }
+  /** ↑ / ↓ across units: CodeMirror's vertical motion jumps a drawn block whole (to the next text it
+   *  finds, the document's end when every block below is drawn), so a move that would leave the caret's
+   *  unit goes into the adjacent one — its start going down, its last line going up. Inside a unit, and
+   *  with shift held, CodeMirror's own. */
+  function vertical(v, down) {
+    const sel = v.state.selection.main;
+    const [a, z] = unitAt(v.state, sel.head);
+    const all = blocksOf(v.state.doc);
+    const end = (() => { const k = all.findIndex((b) => b.from === a); return k >= 0 && k + 1 < all.length ? all[k + 1].from - 1 : v.state.doc.length; })();
+    const moved = v.moveVertically(sel, down);
+    if (moved.head >= a && moved.head <= end && moved.head !== sel.head) return false;
+    const next = down ? all.find((b) => b.from > end) : [...all].reverse().find((b) => b.to < a);
+    if (!next) return false;
+    const to = down ? next.from : v.state.doc.lineAt(next.to).from;
+    v.dispatch({ selection: { anchor: to }, scrollIntoView: true, userEvent: "select" });
+    return true;
+  }
+  const BLOCKS = new WeakMap();
+  /** `blocks()` of a document, kept per document (a document is immutable). */
+  const blocksOf = (d) => { let b = BLOCKS.get(d); if (!b) { b = blocks(d.toString()); BLOCKS.set(d, b); } return b; };
 
   class Upload extends WidgetType {
     constructor(key, name, said) { super(); this.key = key; this.name = name; this.said = said; }
@@ -455,9 +580,8 @@
 
   /** The decorations of `state`: each block the caret is not in drawn; in the caret's, the markdown formed. */
   function surface(state) {
-    const src = state.doc.toString();
-    const all = blocks(src);
-    const defs = refDefs(src);
+    const all = blocksOf(state.doc);
+    const defs = refDefs(state.doc.toString());
     const focus = state.field(focused);
     const ranges = state.selection.ranges;
     const hands = state.field(handed);
@@ -466,10 +590,13 @@
     for (let k = 0; k < all.length; k++) {
       const blk = all[k];
       const end = k + 1 < all.length ? all[k + 1].from - 1 : state.doc.length;
-      if (focus && ranges.some((r) => r.from <= end && r.to >= blk.from)) { shown.push([blk.from, end]); continue; }
+      if (focus && ranges.some((r) => r.from <= end && r.to >= blk.from)) {
+        shown.push([blk.from, end]);
+        continue;
+      }
       let hand = null;
       hands.between(blk.from, end, (_f, _t, d) => { hand = d.spec.attributes?.["data-hand"] ?? hand; });
-      out.push(Decoration.replace({ widget: new Drawn(blk.text, defs, hand), block: true }).range(blk.from, end));
+      out.push(Decoration.replace({ widget: new Drawn(blk, defs, hand), block: true }).range(blk.from, end));
     }
     if (shown.length) out.push(...formed(state, shown));
     return Decoration.set(out, true);
@@ -539,6 +666,8 @@
             out.push(Decoration.line({ class: "eb-fence-last" }).range(last.from));
             for (const m of ref.node.getChildren("CodeMark")) mark(m.from, m.to, "eb-mk");
             for (const m of ref.node.getChildren("CodeInfo")) mark(m.from, m.to, "eb-info");
+            const info = ref.node.getChild("CodeInfo"), body = ref.node.getChild("CodeText");
+            if (info && body) for (const r of paintOf(state.doc.sliceString(info.from, info.to), state.doc.sliceString(body.from, body.to))) mark(body.from + r.from, body.from + r.to, r.cls);
             return false;
           }
           case "HorizontalRule": mark(ref.from, ref.to, "eb-mk"); return;
@@ -555,7 +684,7 @@
 
   const drawn = StateField.define({
     create: surface,
-    update(deco, tr) { return tr.docChanged || tr.selection || tr.effects.some((e) => e.is(focusFx) || e.is(handAdd) || e.is(handClear)) ? surface(tr.state) : deco; },
+    update(deco, tr) { return tr.docChanged || tr.selection || tr.effects.some((e) => e.is(focusFx) || e.is(handAdd) || e.is(handClear) || e.is(repaint)) ? surface(tr.state) : deco; },
     provide: (f) => EditorView.decorations.from(f),
   });
   const look = EditorView.theme({
@@ -754,6 +883,7 @@
     acked = isDoc ? null : tk.body;
     view = new EditorView({
       parent: host,
+      dispatchTransactions: dispatched,
       state: EditorState.create({
         doc: isDoc ? ytext.toString() : tk.body,
         extensions: [
@@ -765,6 +895,8 @@
             { key: "Mod-b", run: wrapWith("**") },
             { key: "Mod-i", run: wrapWith("*") },
             { key: "Mod-k", run: linkKey },
+            { key: "ArrowDown", run: (v) => vertical(v, true) },
+            { key: "ArrowUp", run: (v) => vertical(v, false) },
             { key: "Escape", run: (v) => { v.contentDOM.blur(); return true; } },
             ...markdownKeymap, indentWithTab, ...defaultKeymap, ...(isDoc ? [] : historyKeymap),
           ]),
@@ -795,6 +927,25 @@
   }
   /** Whether the surface can be drawn: the document read — and, for a doc, its CRDT synced. */
   const ready = () => t && (!isDoc || synced);
+  // EDITOR-9: a fence's source painted as its drawn card paints it: the language's module (code-paint)
+  // keeps its painting on globalThis.mengerCodeLanguages; when one arrives, the surface is drawn again.
+  const repaint = StateEffect.define();
+  const painted = new Map(); // `${lang}\n${text}` → ranges, the last few
+  function paintOf(info, text) {
+    const lang = langOf(info);
+    const kept = lang && globalThis.mengerCodeLanguages?.get(lang);
+    if (!kept || text.length > 20000) return [];
+    const key = `${lang}\n${text}`;
+    let r = painted.get(key);
+    if (!r) { try { r = kept.paint(text); } catch { r = []; } painted.set(key, r); if (painted.size > 64) painted.delete(painted.keys().next().value); }
+    return r;
+  }
+  $effect(() => {
+    const arrived = () => view?.dispatch({ effects: repaint.of(null) });
+    addEventListener("menger:code-language", arrived);
+    return () => removeEventListener("menger:code-language", arrived);
+  });
+
   function bodyMount(node) {
     host = node;
     if (ready() && !view) init(t);
@@ -925,13 +1076,13 @@
   @keyframes breathe { from { opacity: 1; } to { opacity: .5; } }
   /* The surface: a drawn block is ticket-view's (its rules reach in); the caret's block is the
      markdown, formed on the same sizes. */
-  .editor-body :global(.cm-editor) { font: inherit; max-width: 100%; }
+  .editor-body :global(.cm-editor) { font: inherit; max-width: 100%; overflow-anchor: none; }
   .editor-body :global(.cm-scroller) { min-width: 0; }
   .editor-body :global(.cm-content) { flex: 1 1 0; min-width: 0; max-width: 100%; }
   .editor-body :global(.blk) { min-width: 0; max-width: 100%; }
   .editor-body :global(.cm-content ::selection) { background: var(--row-sel); }
   .editor-body :global(.blk) { cursor: text; }
-  .editor-body :global(.blk:hover), .editor-body :global(.blk[data-sheet~=hover]) { background: var(--hover); box-shadow: 0 0 0 4px var(--hover); border-radius: var(--radius-sm); }
+  /* EDITOR-9: the caret's line shows its markdown and nothing more: no frame, tint or highlight. */
   .editor-body :global(.eb-h) { font-family: var(--font-display); font-weight: var(--weight-strong); line-height: 1.3; }
   .editor-body :global(.eb-h1) { font-size: 20px; }
   .editor-body :global(.eb-h2) { font-size: 16px; }
@@ -944,10 +1095,19 @@
   .editor-body :global(.eb-mk), .editor-body :global(.eb-info) { color: var(--muted); font-family: var(--font-text); font-size: 12px; }
   .editor-body :global(.eb-bullet) { display: inline-block; width: 1em; color: var(--muted); }
   .editor-body :global(.eb-li) { padding-left: 4px; }
-  .editor-body :global(.eb-quote) { padding-left: 12px; color: var(--muted); border-left: 3px solid var(--line); }
-  .editor-body :global(.eb-fence) { padding: 0 10px; font-family: var(--font-text); font-size: 12.5px; background: var(--panel); border-left: var(--border) solid var(--line); border-right: var(--border) solid var(--line); }
-  .editor-body :global(.eb-fence-first) { padding-top: 6px; border-top: var(--border) solid var(--line); border-radius: var(--radius) var(--radius) 0 0; }
-  .editor-body :global(.eb-fence-last) { padding-bottom: 6px; border-bottom: var(--border) solid var(--line); border-radius: 0 0 var(--radius) var(--radius); }
+  .editor-body :global(.eb-quote) { padding-left: 14px; color: var(--muted); border-left: 2px solid var(--line); }
+  .editor-body :global(.eb-fence) { padding: 0 12px; font-family: var(--font-text); font-size: 12.5px; white-space: pre; background: var(--panel); }
+  .editor-body :global(.eb-fence .tok-keyword), .editor-body :global(.eb-fence .tok-atom), .editor-body :global(.eb-fence .tok-bool) { color: var(--code-keyword); }
+  .editor-body :global(.eb-fence .tok-string), .editor-body :global(.eb-fence .tok-string2), .editor-body :global(.eb-fence .tok-literal) { color: var(--code-string); }
+  .editor-body :global(.eb-fence .tok-number) { color: var(--code-number); }
+  .editor-body :global(.eb-fence .tok-comment) { color: var(--code-comment); font-style: italic; }
+  .editor-body :global(.eb-fence .tok-typeName), .editor-body :global(.eb-fence .tok-className), .editor-body :global(.eb-fence .tok-namespace) { color: var(--code-type); }
+  .editor-body :global(.eb-fence .tok-definition) { color: var(--code-def); }
+  .editor-body :global(.eb-fence .tok-propertyName) { color: var(--code-property); }
+  .editor-body :global(.eb-fence .tok-meta), .editor-body :global(.eb-fence .tok-macroName) { color: var(--code-meta); }
+  .editor-body :global(.eb-fence .tok-operator), .editor-body :global(.eb-fence .tok-punctuation) { color: var(--muted); }
+  .editor-body :global(.eb-fence-first) { padding-top: 10px; border-radius: var(--radius) var(--radius) 0 0; }
+  .editor-body :global(.eb-fence-last) { padding-bottom: 10px; border-radius: 0 0 var(--radius) var(--radius); }
   .editor-body :global(.eb-html), .editor-body :global(.eb-table), .editor-body :global(.eb-tag) { font-family: var(--font-text); font-size: 12px; color: var(--muted); }
   .editor-body :global(.eb-upload) { display: block; margin: 4px 0; padding: 6px 10px; font-family: var(--font-text); font-size: 11px; color: var(--muted); background: var(--card); border: var(--border) dashed var(--line); border-radius: var(--radius-lg); }
   .editor-body :global(.eb-upload[data-state=refused]) { color: var(--warn); border-color: var(--warn); }
