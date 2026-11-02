@@ -1574,7 +1574,7 @@ ui_once() { # WS TOOL ENGINE TAR — one build and push; says what happened; 1 w
     grep -q unknown_method <<<"$out" && say "     a method test's server does not have: this change needs a release (deploy/pipeline build)"
     return 1
   fi
-  if ! ui_push_tar "$ws" "$tar" "$tool"; then say "red  $commit: the push refused it — $UI_WHY"; return 1; fi
+  if ! ui_push_tar "$ws" "$tar" "$2"; then say "red  $commit: the push refused it — $UI_WHY"; return 1; fi
   ms=$(( $(date +%s%3N) - t0 ))
   say "ok   $commit live on test: ${UI_PUSHED:0:12} in ${ms} ms, contract_matches: ${UI_MATCHES:-null}"
   [[ $UI_MATCHES != false ]]
