@@ -70,9 +70,10 @@
 //!   edits every page while the components stay svelte/1 and the
 //!   repository's; no route draws a svelte/1 component, and a placed one
 //!   keeps none of the page's chrome (the board link, the palette's mark).
-//! - FRAME-9: `tether/` takes `plexus-login` from the sibling, as
-//!   plexus-substrate (which tether takes) does — one `plexus-login` in its
-//!   graph, never menger's tree's.
+//! - V2-19 (FRAME-9 before it): `tether/` takes `plexus-login` as
+//!   plexus-substrate (which tether takes) does — by the git URL and rev
+//!   substrate's manifest names (PLEXUS-26) — one `plexus-login` in its
+//!   graph, never a second from a sibling path.
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -790,17 +791,25 @@ fn the_checks_read_what_they_are_given() {
     assert!(!golden_as_ours("`../plexus-ui`'s (`compiler/tests/golden/`)"));
 }
 
-// ── tether (FRAME-9) ───────────────────────────────────────────────────────
+// ── tether (FRAME-9, V2-19) ─────────────────────────────────────────────────
 
-/// The `path` of dependency `dep` in `text` (a manifest in `dir`): each line
-/// whose key is `dep` (`dep = { path = … }`), as (line, the place it names).
-fn dep_paths(dir: &Path, text: &str, dep: &str) -> Vec<(usize, PathBuf)> {
-    let lines: Vec<&str> = text.lines().collect();
-    named_places(dir, text)
-        .into_iter()
-        .filter(|(n, _)| {
-            let key = lines[n - 1].trim_start();
+/// A `git = "…"` dependency's URL and `rev` in `text` (a manifest): each
+/// line whose key is `dep`, as (line, url, rev) — `None` for either it
+/// does not say.
+fn git_deps(text: &str, dep: &str) -> Vec<(usize, Option<String>, Option<String>)> {
+    let value = |line: &str, key: &str| -> Option<String> {
+        let at = line.find(&format!("{key} ="))?;
+        quoted(&line[at..]).first().map(|s| s.to_string())
+    };
+    text.lines()
+        .enumerate()
+        .filter(|(_, raw)| {
+            let key = raw.split('#').next().unwrap_or("").trim_start();
             key.strip_prefix(dep).is_some_and(|rest| rest.trim_start().starts_with('='))
+        })
+        .map(|(i, raw)| {
+            let line = raw.split('#').next().unwrap_or("");
+            (i + 1, value(line, "git"), value(line, "rev"))
         })
         .collect()
 }
@@ -820,29 +829,38 @@ fn tether_metadata(root: &Path) -> Result<Value, String> {
     serde_json::from_slice(&out.stdout).map_err(|e| format!("cargo metadata answered no JSON: {e}"))
 }
 
-/// What tether breaks of FRAME-9's rule: its manifest's `plexus-login`
-/// path is the sibling `login` (canonical), and its graph `pkgs` holds
-/// exactly one `plexus-login`, from there.
-fn tether_breaks(paths: &[(usize, PathBuf)], pkgs: Result<&[(String, PathBuf)], &str>, login: &Path) -> Vec<String> {
+/// Each package named `name` in `cargo metadata`'s answer: its `source`
+/// (`None` for a path dependency).
+fn sources_of(metadata: &Value, name: &str) -> Vec<Option<String>> {
+    metadata["packages"]
+        .as_array()
+        .map(|ps| ps.iter().filter(|p| p["name"].as_str() == Some(name)).map(|p| p["source"].as_str().map(str::to_string)).collect())
+        .unwrap_or_default()
+}
+
+/// What tether breaks of the rule: its manifest's one `plexus-login` is
+/// `git = URL, rev = REV` — the URL and rev substrate names — and its
+/// graph `found` holds exactly one `plexus-login`, from that git source.
+fn tether_breaks(deps: &[(usize, Option<String>, Option<String>)], found: Result<&[Option<String>], &str>, url: &str, rev: &str) -> Vec<String> {
     let mut out = Vec::new();
-    if paths.is_empty() {
-        out.push("tether/Cargo.toml: no `plexus-login = { path = … }`".to_string());
+    if deps.is_empty() {
+        out.push("tether/Cargo.toml: no `plexus-login = { git = …, rev = … }`".to_string());
     }
-    for (n, place) in paths {
-        if canonical(place) != login {
-            out.push(format!("tether/Cargo.toml:{n}: plexus-login from {}, not the sibling {}", place.display(), login.display()));
+    for (n, git, at) in deps {
+        if git.as_deref() != Some(url) || at.as_deref() != Some(rev) {
+            out.push(format!("tether/Cargo.toml:{n}: plexus-login from {git:?} at {at:?}, not substrate's {url} at {rev}"));
         }
     }
-    match pkgs {
+    let wanted = format!("git+{url}?rev={rev}#{rev}");
+    match found {
         Err(e) => out.push(format!("cd tether && cargo metadata --locked --offline failed: {e}")),
-        Ok(pkgs) => {
-            let found: Vec<&PathBuf> = pkgs.iter().filter(|(n, _)| n == "plexus-login").map(|(_, d)| d).collect();
+        Ok(found) => {
             if found.len() != 1 {
                 out.push(format!("tether's graph holds {} plexus-login(s), not one: {found:?}", found.len()));
             }
-            for d in found {
-                if d != login {
-                    out.push(format!("tether's graph takes plexus-login from {}, not the sibling {}", d.display(), login.display()));
+            for s in found {
+                if s.as_deref() != Some(wanted.as_str()) {
+                    out.push(format!("tether's graph takes plexus-login from {s:?}, not {wanted}"));
                 }
             }
         }
@@ -850,41 +868,55 @@ fn tether_breaks(paths: &[(usize, PathBuf)], pkgs: Result<&[(String, PathBuf)], 
     out
 }
 
+/// V2-19 (FRAME-9 before it): `tether/` takes `plexus-login` as
+/// plexus-substrate — which tether imports — takes it: by the one git URL
+/// and rev substrate's manifest names (PLEXUS-26: substrate is on 0.7 by
+/// published versions, plexus-login by `git`, unpublished on that line), so
+/// its graph holds one `plexus-login`, never a second from a sibling path.
+/// Substrate's manifest is read from the sibling checkout tether names.
 #[test]
-fn tether_takes_the_sibling_login() {
+fn tether_takes_the_login_substrate_names() {
     let root = root();
-    let login = canonical(&sibling("plexus-login"));
-    assert!(login.join("Cargo.toml").is_file(), "FRAME-9: no checkout at {} (clone plexus-login beside menger)", login.display());
+    let substrate = sibling("plexus-substrate").join("Cargo.toml");
+    let substrate_text = std::fs::read_to_string(&substrate).unwrap_or_else(|e| panic!("PLEXUS-26: no plexus-substrate beside menger ({}): {e}", substrate.display()));
+    let named = git_deps(&substrate_text, "plexus-login");
+    let [(_, Some(url), Some(rev))] = named.as_slice() else { panic!("plexus-substrate/Cargo.toml names plexus-login by git and rev once: {named:?}") };
     let text = std::fs::read_to_string(root.join("tether/Cargo.toml")).expect("tether/Cargo.toml");
-    let paths = dep_paths(&root.join("tether"), &text, "plexus-login");
+    let deps = git_deps(&text, "plexus-login");
     let meta = tether_metadata(&root);
-    let pkgs = meta.as_ref().map(packages);
-    let broken = tether_breaks(&paths, pkgs.as_deref().map_err(|e| e.as_str()), &login);
-    assert!(broken.is_empty(), "FRAME-9: tether does not take the sibling plexus-login, alone:\n  {}", broken.join("\n  "));
+    let found = meta.as_ref().map(|m| sources_of(m, "plexus-login"));
+    let broken = tether_breaks(&deps, found.as_deref().map_err(|e| e.as_str()), url, rev);
+    assert!(broken.is_empty(), "V2-19: tether does not take plexus-login as substrate does, alone:\n  {}", broken.join("\n  "));
 }
 
-/// tether's check on what it must and must not see.
 #[test]
 fn tether_check_reads_what_it_is_given() {
-    let text = "# plexus-login = { path = \"../commented\" }\nplexus-login-extra = { path = \"../x\" }\n\
-                plexus-login = { path = \"../../plexus-login\", version = \"0.2\" }\nother = { path = \"../plexus-login\" }\n";
-    let paths = dep_paths(Path::new("/w/menger/tether"), text, "plexus-login");
-    assert_eq!(paths, [(3, PathBuf::from("/w/plexus-login"))]);
+    let url = "https://github.com/hypermemetic-ai/plexus-login";
+    let rev = "23b9e2c8ba710e78a296091775823760eeab078a";
+    let text = format!(
+        "# plexus-login = {{ git = \"x\" }}\nplexus-login-extra = {{ git = \"y\" }}\nplexus-login = {{ git = \"{url}\", rev = \"{rev}\" }}\nother = {{ path = \"../plexus-login\" }}\n"
+    );
+    let deps = git_deps(&text, "plexus-login");
+    assert_eq!(deps, [(3, Some(url.to_string()), Some(rev.to_string()))]);
+    assert_eq!(git_deps("plexus-login = { path = \"../../plexus-login\" }\n", "plexus-login"), [(1, None, None)], "a path line says neither");
 
-    let login = Path::new("/w/plexus-login");
-    let one = [("plexus-login".to_string(), login.to_path_buf()), ("menger-tether".to_string(), "/w/menger/tether".into())];
-    assert!(tether_breaks(&paths, Ok(&one), login).is_empty(), "the sibling, once");
-    // menger's tree's copy, in the manifest and in the graph; two copies; none; no path; cargo refusing.
-    let old = [(47, PathBuf::from("/w/menger/plexus-login"))];
-    let menger = [("plexus-login".to_string(), PathBuf::from("/w/menger/plexus-login"))];
-    assert_eq!(tether_breaks(&old, Ok(&menger), login).len(), 2);
-    let two = [one[0].clone(), menger[0].clone()];
-    assert_eq!(tether_breaks(&paths, Ok(&two), login).len(), 2, "two copies: counted and the stray named");
-    assert_eq!(tether_breaks(&paths, Ok(&one[1..]), login).len(), 1, "none in the graph");
-    assert_eq!(tether_breaks(&[], Ok(&one), login).len(), 1, "no path in the manifest");
-    let registry = [("plexus-login".to_string(), PathBuf::from("/home/u/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/plexus-login-0.2.2"))];
-    assert_eq!(tether_breaks(&paths, Ok(&registry), login).len(), 1, "the registry's is not the sibling");
-    assert_eq!(tether_breaks(&paths, Err("no such file"), login).len(), 1);
+    let wanted = Some(format!("git+{url}?rev={rev}#{rev}"));
+    let one = [wanted.clone()];
+    assert!(tether_breaks(&deps, Ok(&one[..]), url, rev).is_empty(), "substrate's, once");
+    // A sibling path in the manifest and in the graph; two copies; none; no line; another rev; the registry's; cargo refusing.
+    let path = [(47, None, None)];
+    let sibling: [Option<String>; 1] = [None];
+    assert_eq!(tether_breaks(&path, Ok(&sibling[..]), url, rev).len(), 2);
+    let two = [wanted.clone(), None];
+    assert_eq!(tether_breaks(&deps, Ok(&two[..]), url, rev).len(), 2, "two copies: counted and the stray named");
+    let none: [Option<String>; 0] = [];
+    assert_eq!(tether_breaks(&deps, Ok(&none[..]), url, rev).len(), 1, "none in the graph");
+    assert_eq!(tether_breaks(&[], Ok(&one[..]), url, rev).len(), 1, "no line in the manifest");
+    let other_rev = [(3, Some(url.to_string()), Some("abc123".to_string()))];
+    assert_eq!(tether_breaks(&other_rev, Ok(&one[..]), url, rev).len(), 1, "another rev");
+    let registry = [Some("registry+https://github.com/rust-lang/crates.io-index".to_string())];
+    assert_eq!(tether_breaks(&deps, Ok(&registry[..]), url, rev).len(), 1, "the registry's is not substrate's");
+    assert_eq!(tether_breaks(&deps, Err("no such file"), url, rev).len(), 1);
 }
 
 // ── FRAME-6: the binary ────────────────────────────────────────────────────

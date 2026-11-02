@@ -41,10 +41,13 @@ plexus-transport = "0.6.0"
 plexus-auth-core = { version = "0.2.2", features = ["adapters"] }
 base64 = "0.22"
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
-# The sibling checkout (`../plexus-login`, FRAME-4), the one path substrate
-# and everyone else name now (FRAME-9): two paths to one crate are two
-# packages to cargo, so this is never menger's tree's.
-plexus-login = { path = "../../plexus-login", version = "0.2" }
+# V2-19: plexus-login as plexus-substrate (imported above) takes it — by the
+# one git URL and rev substrate's manifest names (PLEXUS-26: substrate on 0.7
+# by published versions, plexus-login unpublished on that line) — so the
+# graph holds one plexus-login, never a second from a sibling path (FRAME-9
+# held the path while substrate did). tests/apart.rs holds this line to
+# substrate's.
+plexus-login = { git = "https://github.com/hypermemetic-ai/plexus-login", rev = "23b9e2c8ba710e78a296091775823760eeab078a" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = { version = "1.1", features = ["derive", "uuid1"] }
