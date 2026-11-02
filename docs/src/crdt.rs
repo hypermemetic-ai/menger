@@ -42,7 +42,7 @@ fn fresh() -> yrs::Doc {
     yrs::Doc::with_options(Options { offset_kind: OffsetKind::Bytes, ..Options::default() })
 }
 
-fn text_of(doc: &yrs::Doc) -> String {
+pub(crate) fn text_of(doc: &yrs::Doc) -> String {
     let body = doc.get_or_insert_text(BODY);
     let txn = doc.transact();
     body.get_string(&txn)
@@ -54,7 +54,7 @@ fn apply(doc: &yrs::Doc, bytes: &[u8]) -> Result<(), StoreError> {
     txn.apply_update(update).map_err(|e| StoreError::BadUpdate(e.to_string()))
 }
 
-fn b64(bytes: &[u8]) -> String {
+pub(crate) fn b64(bytes: &[u8]) -> String {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
@@ -152,7 +152,7 @@ fn replayed(conn: &Connection, id: &str, title_now: &str, seq: Option<u32>, at: 
 impl DocsStore {
     /// The loaded CRDT of `id`, loading it from the file when it is not:
     /// its snapshot, then every change after it.
-    fn crdt(&self, conn: &Connection, id: &str) -> Result<Arc<Mutex<yrs::Doc>>, StoreError> {
+    pub(crate) fn crdt(&self, conn: &Connection, id: &str) -> Result<Arc<Mutex<yrs::Doc>>, StoreError> {
         if let Some(d) = self.loaded.lock().unwrap_or_else(|p| p.into_inner()).get(id) {
             return Ok(Arc::clone(d));
         }

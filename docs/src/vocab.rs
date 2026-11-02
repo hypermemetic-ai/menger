@@ -208,6 +208,45 @@ text_type!(
     session
 );
 
+text_type!(
+    /// V2-30: a thread's id: 8 characters of Crockford's base32, as `ask` answered it.
+    ThreadId,
+    id
+);
+
+/// The most a question or an answer may be, in bytes: 256 KiB.
+pub const THREAD_TEXT_MAX: usize = 256 * 1024;
+
+fn thread_text(text: &str) -> Result<String, String> {
+    match (text.trim().is_empty(), text.len() <= THREAD_TEXT_MAX) {
+        (true, _) => Err("a question or an answer says something: it is empty".to_string()),
+        (_, false) => Err(format!("a question or an answer is at most {THREAD_TEXT_MAX} bytes; this one is {}", text.len())),
+        _ => Ok(text.trim_end().to_string()),
+    }
+}
+
+text_type!(
+    /// V2-30: a question or an answer: markdown — words, links, images as a
+    /// body shows them; at most 256 KiB, never empty.
+    ThreadText,
+    thread_text
+);
+
+fn agent_name(text: &str) -> Result<String, String> {
+    let t = text.trim();
+    match !t.is_empty() && t.len() <= 64 && !t.chars().any(char::is_whitespace) {
+        true => Ok(t.to_string()),
+        false => Err(not_a(t, "a name", "an agent's name or a principal, one word, e.g. builder (or agent, for any)")),
+    }
+}
+
+text_type!(
+    /// V2-30: whom a question is asked of: an agent's name (`builder`), a
+    /// principal, or `agent` for any agent.
+    AgentName,
+    agent_name
+);
+
 /// A fresh id from `draw`'s low 40 bits, most significant digit first.
 pub fn id_of_bits(bits: u64) -> String {
     (0..ID_LEN).map(|i| ID_ALPHABET[((bits >> (5 * (ID_LEN - 1 - i))) & 31) as usize] as char).collect()

@@ -282,3 +282,52 @@ async fn the_meter_is_asked_before_a_write() {
     assert!(matches!(s.save(&id, "a much longer body", None, "a", "key:a").await, Err(StoreError::Quota(m)) if m.contains("key:a")));
     assert_eq!((body(&s, &id).await, s.get(&id).await.unwrap().revision), ("ab".to_string(), 1), "nothing kept");
 }
+
+fn hand(n: &str) -> crate::threads::Hand {
+    crate::threads::Hand { name: n.into(), principal: format!("key:{n}") }
+}
+
+/// V2-30: a question on a range follows the text — edits before it, inside
+/// it and by a whole-body save move it with the words; deleted whole, it is
+/// detached and listed last; replies and a resolve are kept and said.
+#[tokio::test]
+async fn a_question_on_a_range_follows_the_text() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = open(&dir);
+    let id = s.create("acme", "Asked", "The kiln fires twice a week.\nLast line.\n", "a", "key:a").await.unwrap().id;
+    let mut rx = s.subscribe();
+    // "twice a week" is characters 15..27.
+    let t = s.ask(&id, 15, 27, "Still twice?", Some("agent".into()), hand("pat")).await.unwrap();
+    assert_eq!((t.quote.as_str(), t.from, t.to, t.detached, t.to_whom.as_deref()), ("twice a week", Some(15), Some(27), false, Some("agent")));
+    assert!(matches!(rx.recv().await.unwrap(), Change::Asked { .. }));
+    // A live edit before it, from a page.
+    let page = client(&s, &id).await;
+    s.update(&id, &typed(&page, 0, "Note: "), "w", "key:w", None).await.unwrap();
+    // An agent's save inside it.
+    s.save(&id, "Note: The kiln fires twice each week.\nLast line.\n", None, "agent", "key:g").await.unwrap();
+    let now = &s.threads(&id).await.unwrap()[0];
+    let text = body(&s, &id).await;
+    let range: String = text.chars().skip(now.from.unwrap() as usize).take((now.to.unwrap() - now.from.unwrap()) as usize).collect();
+    assert_eq!(range, "twice each week", "the anchor followed the words: {now:?}");
+    // Replies, then resolved.
+    let r = s.reply(&id, &t.thread, "Yes — see ![chart](media:00)", hand("builder")).await.unwrap();
+    assert_eq!((r.replies.len(), r.replies[0].by.as_str()), (1, "builder"));
+    let done = s.resolve(&id, &t.thread, false, hand("pat")).await.unwrap();
+    assert_eq!(done.resolved.as_ref().map(|r| r.by.as_str()), Some("pat"));
+    assert!(s.waiting(vec!["acme".into()], Some("agent".into())).await.unwrap().is_empty(), "resolved: no longer waiting");
+    assert!(s.resolve(&id, &t.thread, true, hand("pat")).await.unwrap().resolved.is_none(), "opened again");
+    assert_eq!(s.waiting(vec!["acme".into()], Some("agent".into())).await.unwrap().len(), 1);
+    assert!(s.waiting(vec!["other".into()], None).await.unwrap().is_empty(), "only the organizations asked");
+    // A second question; its text deleted whole: detached, listed last.
+    let gone = s.ask(&id, text.find("Last").unwrap() as u32, (text.find("Last").unwrap() + 4) as u32, "Why last?", None, hand("pat")).await.unwrap();
+    assert_eq!(gone.quote, "Last");
+    s.save(&id, "Note: The kiln fires twice each week.\n", None, "agent", "key:g").await.unwrap();
+    let all = s.threads(&id).await.unwrap();
+    assert_eq!((all.len(), all[1].thread.as_str(), all[1].detached, all[1].from), (2, gone.thread.as_str(), true, None));
+    // The anchor is a Yjs relative position the page decodes in its own copy.
+    let rel = crate::threads::anchor_bytes(&all[0].anchor.from).unwrap();
+    assert!(<yrs::StickyIndex as yrs::updates::decoder::Decode>::decode_v1(&rel).is_ok());
+    // Not a range, and no thread.
+    assert!(matches!(s.ask(&id, 9, 3, "?", None, hand("p")).await, Err(StoreError::BadRange(_))));
+    assert!(matches!(s.reply(&id, "zzzzzzzz", "x", hand("p")).await, Err(StoreError::NoThread(_))));
+}

@@ -20,7 +20,7 @@ pub const LIST_MAX: usize = 1_000;
 /// The role a grant of this service takes, for a refusal's words.
 fn role_of(grant: &str) -> &'static str {
     match grant {
-        "docs.get" | "docs.list" | "docs.history" | "docs.replay" | "docs.state" | "docs.present" | "docs.watch" | "docs.may" => "viewer",
+        "docs.threads" | "docs.waiting" | "docs.get" | "docs.list" | "docs.history" | "docs.replay" | "docs.state" | "docs.present" | "docs.watch" | "docs.may" => "viewer",
         "docs.delete" => "admin",
         "docs.squash" => "docs.squash's grant (admin's by default)",
         _ => "editor",
@@ -31,7 +31,9 @@ fn role_of(grant: &str) -> &'static str {
 pub(crate) fn failed(e: StoreError) -> DocsEvent {
     match e {
         StoreError::NotFound(id) => DocsEvent::no_doc(&id),
-        StoreError::NoRevision(id, r) => DocsEvent::NotFound { id: Some(id), revision: Some(r), org: None },
+        StoreError::NoRevision(id, r) => DocsEvent::NotFound { id: Some(id), revision: Some(r), org: None, thread: None },
+        StoreError::NoThread(t) => DocsEvent::NotFound { id: None, revision: None, org: None, thread: Some(t) },
+        StoreError::BadRange(m) => DocsEvent::Error { message: format!("{m} (nothing was written)") },
         StoreError::Quota(m) => DocsEvent::Refused { reason: "quota".into(), message: format!("{m} (nothing was written)") },
         e @ StoreError::BadUpdate(_) => DocsEvent::Error { message: format!("{e} (nothing was written)") },
         StoreError::Db(m) => DocsEvent::Error { message: m },
@@ -84,7 +86,7 @@ pub(crate) async fn create(store: Arc<DocsStore>, seam: Seam, user: Caller, titl
             let org = org.trim().trim_end_matches(':').to_string();
             match seam.orgs(user.context()).await {
                 Ok(orgs) if orgs.contains(&org) => {}
-                Ok(_) => return DocsEvent::NotFound { id: None, revision: None, org: Some(org) },
+                Ok(_) => return DocsEvent::NotFound { id: None, revision: None, org: Some(org), thread: None },
                 Err(message) => return DocsEvent::Error { message },
             }
             match seam.holds(user.context(), "docs.create", &org) {
@@ -280,4 +282,65 @@ pub(crate) async fn may(store: Arc<DocsStore>, seam: Seam, user: Caller, id: Str
         },
     };
     DocsEvent::May { id: doc.id, role, held }
+}
+
+/// V2-30: who a thread's hand is.
+fn hand(user: &Caller) -> crate::threads::Hand {
+    crate::threads::Hand { name: user.name(), principal: user.principal().to_string() }
+}
+
+/// `docs.ask`: a question on a range of the document.
+pub(crate) async fn ask(store: Arc<DocsStore>, seam: Seam, user: Caller, id: String, from: u32, to: u32, text: String, to_whom: Option<String>) -> DocsEvent {
+    if let Err(ev) = reached(&store, &seam, &user, &id, "docs.ask").await {
+        return ev;
+    }
+    match store.ask(&id, from, to, &text, to_whom, hand(&user)).await {
+        Ok(thread) => DocsEvent::Asked { thread },
+        Err(e) => failed(e),
+    }
+}
+
+/// `docs.reply`: an answer under a thread.
+pub(crate) async fn reply(store: Arc<DocsStore>, seam: Seam, user: Caller, id: String, thread: String, body: String) -> DocsEvent {
+    if let Err(ev) = reached(&store, &seam, &user, &id, "docs.reply").await {
+        return ev;
+    }
+    match store.reply(&id, &thread, &body, hand(&user)).await {
+        Ok(thread) => DocsEvent::Replied { thread },
+        Err(e) => failed(e),
+    }
+}
+
+/// `docs.resolve`: a thread folded, or opened again.
+pub(crate) async fn resolve(store: Arc<DocsStore>, seam: Seam, user: Caller, id: String, thread: String, open: bool) -> DocsEvent {
+    if let Err(ev) = reached(&store, &seam, &user, &id, "docs.resolve").await {
+        return ev;
+    }
+    match store.resolve(&id, &thread, open, hand(&user)).await {
+        Ok(thread) => DocsEvent::Resolved { thread },
+        Err(e) => failed(e),
+    }
+}
+
+/// `docs.threads`: the document's threads.
+pub(crate) async fn threads(store: Arc<DocsStore>, seam: Seam, user: Caller, id: String) -> Vec<DocsEvent> {
+    if let Err(ev) = reached(&store, &seam, &user, &id, "docs.threads").await {
+        return vec![ev];
+    }
+    match store.threads(&id).await {
+        Ok(rows) => rows.into_iter().map(|thread| DocsEvent::Thread { thread }).collect(),
+        Err(e) => vec![failed(e)],
+    }
+}
+
+/// `docs.waiting`: open threads asked of someone, in the documents the caller reads.
+pub(crate) async fn waiting(store: Arc<DocsStore>, seam: Seam, user: Caller, to: Option<String>) -> Vec<DocsEvent> {
+    let orgs = match orgs_holding(&seam, &user, "docs.waiting").await {
+        Ok(o) => o,
+        Err(ev) => return vec![ev],
+    };
+    match store.waiting(orgs, to).await {
+        Ok(rows) => rows.into_iter().map(|thread| DocsEvent::Thread { thread }).collect(),
+        Err(e) => vec![failed(e)],
+    }
 }

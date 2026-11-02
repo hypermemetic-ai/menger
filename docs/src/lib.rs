@@ -27,19 +27,21 @@
 //! | [`store`] | the file: `docs` and `doc_log`; get, list, rename, delete; the channel |
 //! | [`crdt`] | the body, a Yjs CRDT: create, update, save (a diff merged), state, replay, history, squash, restore |
 //! | [`presence`] | who is on a document: entries held by a watch, idling out |
+//! | [`threads`] | V2-30: questions on a range, anchored in the CRDT, and their answers |
 //! | [`quota`] | the meter every write is reserved against (always allows until V2-31) |
 //! | [`seam`] | the gate and `orgs.list` through the running service; [`seam::may`] for a client |
 //! | [`activation`] | the methods, the one declaration |
 
 pub mod vocab;
-pub use vocab::{DocAwareness, DocBody, DocId, DocQuery, DocSession, DocTitle, DocUpdate, DocVector};
+pub use vocab::{AgentName, DocAwareness, DocBody, DocId, DocQuery, DocSession, DocTitle, DocUpdate, DocVector, ThreadId, ThreadText};
 pub mod events;
-pub use events::{Author, Doc, DocsEvent, HistoryRow, Present, WatchEnd};
+pub use events::{Anchor, Author, Doc, DocsEvent, HistoryRow, Present, Reply, Resolution, Thread, WatchEnd};
 pub mod store;
 pub use store::{Change, DocsStore, StoreError};
 pub mod crdt;
 pub mod presence;
 pub mod quota;
+pub mod threads;
 mod caller;
 pub use caller::{Caller, DocsRequest};
 pub mod seam;

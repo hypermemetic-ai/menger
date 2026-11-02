@@ -368,6 +368,13 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("tickets.revisions.usage", Today::Admin, None),
     // V2-31: and the docs store's own count, which the recount reads.
     ("docs.usage", Today::Admin, None),
+    // V2-30: questions on a range — a viewer reads them and an agent's
+    // queue, an editor asks, answers and resolves.
+    ("docs.threads", Today::Viewer, None),
+    ("docs.waiting", Today::Viewer, None),
+    ("docs.ask", Today::Editor, None),
+    ("docs.reply", Today::Editor, None),
+    ("docs.resolve", Today::Editor, None),
 ];
 
 /// AUTH-7's one deliberate narrowing of the table: what an anonymous or

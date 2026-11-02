@@ -28,7 +28,7 @@
 //!
 //! One connection behind a mutex; every read and write off the runtime.
 
-use crate::events::{Doc, Present};
+use crate::events::{Doc, Present, Thread};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -88,6 +88,10 @@ pub enum Change {
     Present { org: String, present: Present },
     /// Someone left a document.
     Left { id: String, org: String, session: String, client: Option<u64> },
+    /// V2-30: a question asked on a range, a reply under it, a thread resolved (or opened again).
+    Asked { org: String, thread: Thread },
+    Replied { org: String, thread: Thread },
+    Resolved { org: String, thread: Thread },
 }
 
 impl Change {
@@ -97,6 +101,7 @@ impl Change {
             Change::Created(d) | Change::Renamed(d) | Change::Updated { doc: d, .. } => &d.id,
             Change::Deleted { id, .. } | Change::Squashed { id, .. } | Change::Left { id, .. } => id,
             Change::Present { present, .. } => &present.id,
+            Change::Asked { thread, .. } | Change::Replied { thread, .. } | Change::Resolved { thread, .. } => &thread.id,
         }
     }
 
@@ -105,6 +110,7 @@ impl Change {
         match self {
             Change::Created(d) | Change::Renamed(d) | Change::Updated { doc: d, .. } => &d.org,
             Change::Deleted { org, .. } | Change::Squashed { org, .. } | Change::Present { org, .. } | Change::Left { org, .. } => org,
+            Change::Asked { org, .. } | Change::Replied { org, .. } | Change::Resolved { org, .. } => org,
         }
     }
 }
@@ -116,6 +122,10 @@ pub enum StoreError {
     NotFound(String),
     /// The document has no change at that `seq` (or it was squashed).
     NoRevision(String, u32),
+    /// V2-30: no thread of that id on the document.
+    NoThread(String),
+    /// V2-30: a range that is not one of the text.
+    BadRange(String),
     /// The update or state is not one the CRDT reads.
     BadUpdate(String),
     /// The quota refused the write (its words).
@@ -129,6 +139,8 @@ impl std::fmt::Display for StoreError {
         match self {
             StoreError::NotFound(id) => write!(f, "no document {id}"),
             StoreError::NoRevision(id, r) => write!(f, "document {id} has no change {r}"),
+            StoreError::NoThread(t) => write!(f, "no thread {t}"),
+            StoreError::BadRange(e) => write!(f, "not a range of the text: {e}"),
             StoreError::BadUpdate(e) => write!(f, "not a Yjs v1 update: {e}"),
             StoreError::Quota(e) => write!(f, "{e}"),
             StoreError::Db(e) => write!(f, "the docs file: {e}"),
@@ -253,6 +265,7 @@ impl DocsStore {
         let conn = Connection::open(path)?;
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
         conn.execute_batch(TABLES)?;
+        conn.execute_batch(crate::threads::TABLES)?;
         Ok(Self {
             conn: Mutex::new(conn),
             path: path.to_path_buf(),
