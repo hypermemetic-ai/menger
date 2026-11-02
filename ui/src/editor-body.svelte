@@ -15,10 +15,12 @@
      and the scroll through; with the draft dirty it waits for the pause,
      then is merged line by line with ours, ours winning where they overlap,
      and the merge is sent and said — the revision the service kept has
-     theirs. CodeMirror comes from ../plexus-ui/package.json (the node_modules
+     theirs. EDITOR-5: a URL pasted over a selection links it; an image pasted,
+     dropped or picked goes to `media.put` and lands as `![name](media:<hash>)`,
+     an upload card beside the text until it does. CodeMirror comes from ../plexus-ui/package.json (the node_modules
      the svelte/1 build reads), bundled into this module by the tool. -->
 <script module>
-  export const uses = ["tickets.get", "tickets.watch", "tickets.amend", "tickets.revisions.list"];
+  export const uses = ["tickets.get", "tickets.watch", "tickets.amend", "tickets.revisions.list", "media.put"];
 
   /** A line-level diff of `a` → `b`: hunks `{ a0, a1, b0, b1 }`, each "replace a[a0:a1] with b[b0:b1]",
    *  by the common prefix and suffix, then an LCS over what is left (one hunk past 4 M cells). */
@@ -83,7 +85,7 @@
 <script>
   import { untrack } from "svelte";
   import { bus, live } from "plexus-ui/host";
-  import { Annotation, EditorState, StateField } from "@codemirror/state";
+  import { Annotation, EditorState, StateEffect, StateField } from "@codemirror/state";
   import { Decoration, EditorView, WidgetType, keymap } from "@codemirror/view";
   import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
   import { markdown as markdownSupport, markdownLanguage } from "@codemirror/lang-markdown";
@@ -118,6 +120,7 @@
 
   // ── the write model ──────────────────────────────────────────────────────
   function edited() {
+    view.dispatch({ effects: upFade.of(null) }); // a refused upload goes with the next key
     dirty = doc() !== acked;
     if (timer) clearTimeout(timer);
     if (dirty || pending !== null) timer = setTimeout(flush, PAUSE);
@@ -320,6 +323,107 @@
     ".cm-scroller": { fontFamily: "inherit", overflow: "visible" },
   });
 
+  // ── EDITOR-5: links and images ───────────────────────────────────────────
+  // An upload is a widget beside the text, never text in it: the source holds no placeholder, so no
+  // amend can carry one. It rides the changes around it, and its image lands where it ended up.
+  const IMAGES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+  const CAP = 7 * 1024 * 1024; // media's; past about 7.5 MiB the socket drops the message
+  let uploads = 0;
+  class Upload extends WidgetType {
+    constructor(key, name, said) { super(); this.key = key; this.name = name; this.said = said; }
+    eq(o) { return o.key === this.key && o.said === this.said; }
+    toDOM() {
+      const d = document.createElement("span");
+      d.className = "eb-upload";
+      d.setAttribute("data-upload", this.name);
+      d.setAttribute("data-state", this.said == null ? "uploading" : "refused");
+      if (this.said != null) d.setAttribute("data-refused", "");
+      d.textContent = this.said == null ? `uploading ${this.name}…` : `${this.name}: ${this.said}`;
+      return d;
+    }
+  }
+  const upAdd = StateEffect.define({ map: (v, m) => ({ ...v, pos: m.mapPos(v.pos) }) });
+  const upDrop = StateEffect.define();
+  const upFade = StateEffect.define();
+  const upRefuse = StateEffect.define();
+  const upWidget = (key, name, said, pos) => Decoration.widget({ widget: new Upload(key, name, said), side: 1 }).range(pos);
+  const pendingUploads = StateField.define({
+    create: () => Decoration.none,
+    update(deco, tr) {
+      deco = deco.map(tr.changes);
+      for (const e of tr.effects) {
+        if (e.is(upAdd)) deco = deco.update({ add: [upWidget(e.value.key, e.value.name, null, e.value.pos)], sort: true });
+        else if (e.is(upDrop)) deco = deco.update({ filter: (_f, _t, d) => d.spec.widget.key !== e.value });
+        else if (e.is(upFade)) deco = deco.update({ filter: (_f, _t, d) => d.spec.widget.said == null });
+        else if (e.is(upRefuse)) {
+          let at = null;
+          deco.between(0, tr.state.doc.length, (f, _t, d) => { if (d.spec.widget.key === e.value.key) at = f; });
+          if (at != null) deco = deco.update({ filter: (_f, _t, d) => d.spec.widget.key !== e.value.key, add: [upWidget(e.value.key, e.value.name, e.value.said, at)] });
+        }
+      }
+      return deco;
+    },
+    provide: (f) => EditorView.decorations.from(f),
+  });
+  const base64 = (file) => new Promise((done, fail) => {
+    const r = new FileReader();
+    r.onload = () => done(String(r.result).replace(/^data:[^,]*,/, ""));
+    r.onerror = () => fail(r.error);
+    r.readAsDataURL(file);
+  });
+  /** One image: its widget at `pos`, `media.put`, then `![name](media:<hash>)` on a line of its own. */
+  async function upload(file, pos) {
+    const key = ++uploads;
+    const name = (file.name || "image").replace(/\.[a-z0-9]+$/i, "").replace(/[[\]\n]/g, " ") || "image";
+    view.dispatch({ effects: upAdd.of({ key, name, pos }) });
+    const refuse = (said) => view?.dispatch({ effects: upRefuse.of({ key, name, said }) });
+    if (!IMAGES.includes(file.type)) return refuse("PNG, JPEG, GIF or WebP only");
+    if (file.size > CAP) return refuse("over the 7 MiB an image may be");
+    const data = await base64(file).catch(() => null);
+    if (data == null) return refuse("the file could not be read");
+    const r = await b.call("media.put", { ticket: id, mime: file.type, data });
+    if (!view) return;
+    const stored = r.events?.find((e) => e.type === "stored");
+    if (!stored) return refuse(String(r.message ?? r.events?.[0]?.message ?? r.events?.[0]?.type ?? "refused").replace(/^Invalid params: /, ""));
+    let at = null;
+    view.state.field(pendingUploads).between(0, view.state.doc.length, (f, _t, d) => { if (d.spec.widget.key === key) at = f; });
+    if (at == null) return;
+    const line = view.state.doc.lineAt(at);
+    // A paragraph of its own: right after a line it would render inside that line.
+    const above = at > line.from ? "\n\n" : line.number > 1 && view.state.doc.line(line.number - 1).text.trim() !== "" ? "\n" : "";
+    const insert = `${above}![${name}](media:${stored.hash})${at < line.to ? "\n\n" : ""}`;
+    view.dispatch({ changes: { from: at, insert }, effects: upDrop.of(key) });
+  }
+  const images = (list) => [...(list ?? [])].filter((f) => f.type.startsWith("image/"));
+  function pasted(ev, v) {
+    const files = images(ev.clipboardData?.files);
+    if (files.length) {
+      ev.preventDefault();
+      for (const f of files) upload(f, v.state.selection.main.head);
+      return true;
+    }
+    const text = (ev.clipboardData?.getData("text/plain") ?? "").trim();
+    const sel = v.state.selection.main;
+    if (sel.empty || !/^https?:\/\/\S+$/i.test(text)) return false;
+    ev.preventDefault();
+    const label = v.state.sliceDoc(sel.from, sel.to);
+    v.dispatch({ changes: { from: sel.from, to: sel.to, insert: `[${label}](${text})` } });
+    return true;
+  }
+  function dropped(ev, v) {
+    const files = images(ev.dataTransfer?.files);
+    if (!files.length) return false;
+    ev.preventDefault();
+    const pos = v.posAtCoords({ x: ev.clientX, y: ev.clientY }) ?? v.state.selection.main.head;
+    for (const f of files) upload(f, pos);
+    return true;
+  }
+  let picker = $state(null);
+  function picked(ev) {
+    for (const f of ev.currentTarget.files ?? []) if (view) upload(f, view.state.selection.main.head);
+    ev.currentTarget.value = "";
+  }
+
   function init(ticket) {
     acked = ticket.body;
     titleDraft = ticket.title;
@@ -333,9 +437,10 @@
           markdownSupport({ base: markdownLanguage }),
           EditorView.lineWrapping,
           formed,
+          pendingUploads,
           look,
           EditorView.updateListener.of((u) => { if (u.docChanged && !u.transactions.some((tr) => tr.annotation(Outside))) edited(); }),
-          EditorView.domEventHandlers({ blur: () => { if (dirty || pending !== null) flush(); return false; } }),
+          EditorView.domEventHandlers({ blur: () => { if (dirty || pending !== null) flush(); return false; }, paste: pasted, drop: dropped }),
           EditorView.contentAttributes.of({ "data-field": "body", "aria-label": "the body" }),
         ],
       }),
@@ -375,6 +480,8 @@
   {#if t}
     <p class="state" data-field="write-state" data-state={state.kind} data-refused={state.kind === "refused" ? "" : undefined} data-hand={state.who ?? undefined}>
       {#if state.kind === "idle"}<span class="muted">every change is written 600 ms after the last key</span>{:else}{state.text}{/if}
+      <button type="button" class="pick" data-action="image" onclick={() => picker?.click()}>image</button>
+      <input class="file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple aria-label="an image" bind:this={picker} onchange={picked}/>
       <a class="revs" href={"#/ticket/" + id} data-action="revisions">revisions</a>
     </p>
   {/if}
@@ -395,6 +502,11 @@
   .revs { margin-left: auto; color: var(--accent); text-decoration: none; }
   .revs:hover, .revs:global([data-sheet~=hover]) { text-decoration: underline; }
   .revs:focus-visible, .revs:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; border-radius: var(--radius-sm); }
+  .pick { margin-left: auto; padding: 0 8px; font: inherit; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; }
+  .pick:hover, .pick:global([data-sheet~=hover]) { background: var(--hover); }
+  .pick:focus-visible, .pick:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .pick + .file + .revs { margin-left: 0; }
+  .file { display: none; }
   .muted { color: var(--muted); }
   .empty { margin: 0; padding: 8px 10px; color: var(--muted); }
   .skel .bone { display: block; width: 100%; height: 10px; margin: 8px 10px; background: var(--skeleton); border-radius: var(--radius-sm); animation: breathe var(--motion-pulse) var(--ease) infinite alternate; }
@@ -421,6 +533,8 @@
   .cm :global(.eb-fence-last) { margin-bottom: 6px; border-radius: 0 0 var(--radius) var(--radius); }
   .cm :global(.eb-html), .cm :global(.eb-table) { font-family: var(--font-text); font-size: 12px; color: var(--muted); }
   .cm :global(.eb-rule) { display: inline-block; width: 100%; height: 0; vertical-align: middle; border-top: var(--border) solid var(--line); }
+  .cm :global(.eb-upload) { display: block; margin: 4px 0; padding: 6px 10px; font-family: var(--font-text); font-size: 11px; color: var(--muted); background: var(--card); border: var(--border) dashed var(--line); border-radius: var(--radius-lg); }
+  .cm :global(.eb-upload[data-state=refused]) { color: var(--warn); border-color: var(--warn); }
   .cm :global(.eb-img) { padding: 4px 10px 6px; }
   .cm :global(.eb-img img) { display: block; max-width: 100%; max-height: 60vh; border: var(--border) solid var(--line); border-radius: var(--radius); }
   @media (prefers-reduced-motion: reduce) {
