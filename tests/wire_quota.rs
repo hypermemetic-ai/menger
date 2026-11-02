@@ -47,7 +47,7 @@ async fn start_with(disk: Option<Arc<FakeDisk>>, limits: menger::calls::CallLimi
             let ui = menger::UiSetup::beside(&db_path).unwrap();
             let media = menger::MediaSetup::beside(&db_path).unwrap();
             let quota = menger::QuotaSetup::beside(&db_path).unwrap().guarding(disk as Arc<dyn DiskUsage>);
-            menger::build_rpc_services(&db_path, None, Default::default(), Vec::new(), access, backend, None, menger::store::BODY_MAX_DEFAULT, ui, media, quota, |store, access| {
+            menger::build_rpc_services(&db_path, None, Default::default(), Vec::new(), access, backend, None, menger::store::BODY_MAX_DEFAULT, ui, media, menger::DocsSetup::beside(&db_path).unwrap(), quota, |store, access| {
                 menger::TicketsActivation::with_access(store, access)
             })
             .await
@@ -297,8 +297,7 @@ async fn recount_rebuilds_from_the_stores_and_reports_drift() {
     let done = r.last().unwrap();
     assert_eq!((done["type"].as_str(), done["drifted"].as_u64()), (Some("recounted"), Some(0)), "{r:?}");
     assert!(done["sources"].as_array().unwrap().contains(&json!("tickets.bytes")));
-    let not = done["not_counted"].as_array().unwrap();
-    assert!(not.iter().any(|n| n.as_str().unwrap().starts_with("docs.usage")), "{not:?}");
+    assert_eq!(done["not_counted"], json!([]), "every store answers: {done}");
     // Drift (a credit the stores never saw), found and set back.
     one(&admin, "quota.credit", json!({"principal": me, "source": "tickets.bytes", "amount": 40})).await;
     let r = all(&admin, "quota.recount", json!({})).await;
@@ -396,4 +395,46 @@ async fn an_upload_is_counted_against_the_uploader_and_refused_past_the_cap() {
     let done = r.last().unwrap();
     assert!(done["sources"].as_array().unwrap().contains(&json!("media.bytes")), "{done}");
     assert!(done["not_counted"].as_array().unwrap().iter().all(|n| !n.as_str().unwrap().starts_with("media.")), "{done}");
+}
+
+/// The docs service's meter is the quota service (V2-29's call site): a
+/// document made counts one `docs.count` and its body's bytes, every change
+/// its bytes; past the cap the write is `refused { reason: quota }` with the
+/// numbers, nothing written; the recount reads `docs.usage { everyone }`.
+#[tokio::test]
+async fn a_document_is_counted_against_its_writer_and_refused_past_the_cap() {
+    let port = start(None).await;
+    let admin = support::connect(port).await;
+    grant(&admin, &OTHER, "editor", "*").await;
+    let writer = connect_key(&OTHER, port).await;
+    let me = support::principal_of(&OTHER);
+    let made = one(&writer, "docs.create", json!({"title": "kiln notes", "body": "a".repeat(300)})).await;
+    assert_eq!(made["type"], "created", "{made}");
+    let u = one(&writer, "quota.usage", json!({})).await;
+    let first = source(&u, "docs.bytes")["used"].as_u64().unwrap();
+    assert_eq!((source(&u, "docs.count")["used"].as_u64(), source(&u, "docs.bytes")["held"].as_u64()), (Some(1), Some(0)));
+    assert!((300..400).contains(&first), "the body's change, as kept: {first}");
+    let id = made["doc"]["id"].as_str().unwrap().to_string();
+    let body = format!("{}{}", "a".repeat(300), "b".repeat(50));
+    let saved = one(&writer, "docs.save", json!({"id": id, "body": body})).await;
+    assert_eq!(saved["type"], "saved", "{saved}");
+    let grown = source(&one(&writer, "quota.usage", json!({})).await, "docs.bytes")["used"].as_u64().unwrap();
+    assert!(grown > first, "a change counts its bytes: {grown}");
+    // Capped where it stands: the next change is refused, said with the numbers.
+    one(&admin, "quota.set", json!({"principal": me, "source": "docs.bytes", "cap": grown.to_string()})).await;
+    let over = one(&writer, "docs.save", json!({"id": id, "body": "c".repeat(400)})).await;
+    assert_eq!((over["type"].as_str(), over["reason"].as_str()), (Some("refused"), Some("quota")), "{over}");
+    assert!(over["message"].as_str().unwrap().contains(&format!("used of {grown} B")) || over["message"].as_str().unwrap().contains("used of"), "{over}");
+    assert_eq!(one(&writer, "docs.get", json!({"id": id})).await["doc"]["body"], body, "nothing written");
+    one(&admin, "quota.set", json!({"principal": me, "source": "docs.count", "cap": "1"})).await;
+    let second = one(&writer, "docs.create", json!({"title": "another"})).await;
+    assert_eq!(second["reason"], "quota", "{second}");
+    // The store's own count, and the recount by it.
+    let counted = all(&admin, "docs.usage", json!({"everyone": true})).await;
+    assert_eq!(counted, vec![json!({"type": "usage", "principal": me, "count": 1, "bytes": grown})]);
+    assert_eq!(all(&writer, "docs.usage", json!({"everyone": true})).await[0]["type"], "error", "an admin's");
+    one(&admin, "quota.credit", json!({"principal": me, "source": "docs.bytes", "amount": 100})).await;
+    let r = all(&admin, "quota.recount", json!({"principal": me})).await;
+    assert!(r.contains(&json!({"type": "drift", "principal": me, "source": "docs.bytes", "was": grown - 100, "counted": grown})), "{r:?}");
+    assert_eq!(r.last().unwrap()["not_counted"], json!([]), "every store answers now");
 }

@@ -265,18 +265,19 @@ async fn every_write_is_said_and_the_file_survives_a_reopen() {
 /// that refuses keeps nothing.
 #[tokio::test]
 async fn the_meter_is_asked_before_a_write() {
-    struct Full;
+    // The first change (the create's) fits; nothing after it does.
+    struct Full(std::sync::atomic::AtomicBool);
     impl crate::quota::Quota for Full {
         fn reserve(&self, author: &str, bytes: u64) -> Result<crate::quota::Reserved, String> {
-            if bytes > 3 {
+            if self.0.swap(true, std::sync::atomic::Ordering::SeqCst) {
                 return Err(format!("{author} is out of docs.bytes"));
             }
-            Ok(crate::quota::Reserved { author: author.into(), bytes })
+            Ok(crate::quota::Reserved { author: author.into(), bytes, hold: None })
         }
         fn commit(&self, _: crate::quota::Reserved) {}
     }
     let dir = tempfile::tempdir().unwrap();
-    let s = Arc::new(DocsStore::open(&dir.path().join("docs.db")).unwrap().metered(Arc::new(Full)));
+    let s = Arc::new(DocsStore::open(&dir.path().join("docs.db")).unwrap().metered(Arc::new(Full(Default::default()))));
     let id = s.create("acme", "Metered", "ab", "a", "key:a").await.unwrap().id;
     assert!(matches!(s.save(&id, "a much longer body", None, "a", "key:a").await, Err(StoreError::Quota(m)) if m.contains("key:a")));
     assert_eq!((body(&s, &id).await, s.get(&id).await.unwrap().revision), ("ab".to_string(), 1), "nothing kept");

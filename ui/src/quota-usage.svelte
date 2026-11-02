@@ -73,12 +73,12 @@
   .tr { display: grid; grid-template-columns: minmax(150px, 1.1fr) minmax(120px, 2fr) minmax(170px, 1.3fr) 110px; gap: 0 14px; align-items: center; min-height: 40px; padding: 6px 12px; border-bottom: var(--border) solid var(--line); }
   .tr:last-child { border-bottom: 0; }
   .name { display: flex; flex-direction: column; font-weight: var(--weight-medium); }
-  .name code { font-size: 11px; font-weight: normal; color: var(--muted); font-family: var(--font-mono, monospace); }
+  .name code { font-size: 11px; font-weight: normal; color: var(--muted); font-family: var(--font-text); }
   .bar { position: relative; height: 8px; background: var(--hover); border-radius: var(--radius-pill); overflow: hidden; }
   .bar[aria-hidden] { background: repeating-linear-gradient(90deg, var(--line) 0 6px, transparent 6px 10px); opacity: 0.6; }
   .bar i { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: var(--radius-pill); transition: width var(--motion-fast) var(--ease); }
   .bar[data-state=near] i { background: var(--warn); }
-  .bar[data-state=over] i { background: var(--danger, var(--warn)); }
+  .bar[data-state=over] i { background: var(--warn); }
   .nums { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
   .nums b { color: var(--ink); font-weight: var(--weight-medium); }
   .held { color: var(--accent); }

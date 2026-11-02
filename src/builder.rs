@@ -560,6 +560,8 @@ where
     let media_seam = media.seam().clone();
     // V2-29: `docs` beside them — documents, over their own file; who may is
     // the gate's word on a document's organization, asked through its seam.
+    // V2-31: every change a document takes is reserved against its writer's allowance.
+    docs.store.set_quota(Arc::new(crate::quota_allowance::DocsMetered(access.meter().clone())));
     let docs = DocsActivation::new(docs.store);
     let docs_seam = docs.seam().clone();
     // V2-31: `quota` beside them — every principal's usage per source, over

@@ -207,6 +207,9 @@ pub enum DocsEvent {
     /// `message` naming the grant and role it takes), or the meter refused the
     /// write (`quota`). Nothing was written.
     Refused { reason: String, message: String },
+    /// V2-31: `usage { everyone }` — what one principal's changes keep:
+    /// the documents they made and the bytes they wrote.
+    Usage { principal: String, count: u64, bytes: u64 },
     /// Any other in-band refusal, naming the problem; nothing was written.
     Error { message: String },
 }

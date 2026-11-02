@@ -391,4 +391,31 @@ impl DocsActivation {
     ) -> impl Stream<Item = DocsEvent> + Send + 'static {
         crate::watch::watch(self.store.clone(), self.seam.clone(), user, id.map(DocId::into_string), session.map(DocSession::into_string))
     }
+
+    /// Every principal's documents made and bytes written (admin of *): yields usage { principal, count, bytes } each — what quota.recount reads.
+    ///
+    /// V2-31: from the changes kept — `count` the documents a principal
+    /// made, `bytes` every change they wrote (a squash's snapshot is
+    /// nobody's). Admin of `*`.
+    #[plexus_macros::method(group = "read", example(note = "every author", params = r#"{"everyone": true}"#))]
+    pub async fn usage(
+        &self,
+        #[from_auth(self.callers.verify)] user: Caller,
+        /// true: every principal (the only reading there is).
+        everyone: Option<bool>,
+    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
+        use futures::StreamExt;
+        let _ = everyone;
+        let (store, seam) = (self.store.clone(), self.seam.clone());
+        futures::stream::once(async move {
+            if !seam.everywhere(user.context(), "quota.set") {
+                return vec![DocsEvent::Error { message: "every principal's usage is an admin of *'s".into() }];
+            }
+            match store.usage_by_principal().await {
+                Ok(rows) => rows.into_iter().map(|(principal, count, bytes)| DocsEvent::Usage { principal, count, bytes }).collect(),
+                Err(e) => vec![DocsEvent::Error { message: e.to_string() }],
+            }
+        })
+        .flat_map(futures::stream::iter)
+    }
 }

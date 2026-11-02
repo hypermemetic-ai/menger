@@ -443,7 +443,7 @@ whole. synapse `-j` prints the `rows` event as one line (SYNAPSE-36).
 | `finish` | `--upload` | the upload hashed and kept: `stored { … }`, or `refused { reason: incomplete }` |
 | `get` | `--hash` | a file's bytes up to 7 MiB: `media { …, data }` (data base64); larger, `refused { reason: too_large }` — read it at `/media/<hash>` |
 | `info` | `--hash` | what a file is, without its bytes: `info { hash, mime, kind, name, bytes, width, height }` |
-| `usage` | | what you have put, each file once: `usage { principal, files, bytes }` |
+| `usage` | `[--principal] [--everyone true]` | what you have put, each file once: `usage { principal, files, bytes }`; V2-31: an admin of `*` names anyone, or every uploader, each file against its first (what `quota.recount` reads) |
 | `unfurl` | `--url` | a public link read into a card: `unfurled { url, kind, title, description, site, image, provider, embed }` |
 | `fetch` | `--url [--ticket] [--doc] [--name]` | a remote image or file kept as yours (never hot-linked): `stored { … }` |
 
@@ -545,6 +545,7 @@ agents and image references.
 | `here` | `--id --session [--client] [--awareness]` | your caret (a Yjs awareness update, base64), said to everyone on it |
 | `delete` | `--id` | admin's: `deleted { id, at, by }`; its changes stay in the file |
 | `may` | `--id --role` | `may { id, role, held }` — the question the media service asks |
+| `usage` | `--everyone true` | admin of `*` (V2-31): one `usage { principal, count, bytes }` per writer — the documents they made and the bytes their changes keep (a squash's snapshot is nobody's); what `quota.recount` reads |
 | `watch` | `[--id] [--session]` | `watching`, then `created`, `updated { id, seq, update, by, session? }`, `renamed`, `deleted`, `squashed`, and on one document `present` and `left { session, client? }`; with `session` the watch is your presence while open, and your own updates are not said back; held to you by the gate as `ui.watch` is (`watch_closed { reason }`) |
 
 **Who may**: a viewer reads, follows and is present (`get`, `list`,
@@ -565,8 +566,9 @@ Kept in the service's own file, `docs.db` (`--docs-db-path`,
 ui or media file): `docs` (each document now, its derived text, and a
 snapshot of its CRDT every 64 changes so a load applies only what came
 after) and `doc_log` (every change, with who and when). Every byte written
-is reserved against a meter first (`docs/src/quota.rs`, always allowing
-until V2-31's quota service).
+is reserved against a meter first (`docs/src/quota.rs`, answered by the
+quota service, V2-31: `docs.bytes` per change, `docs.count` per document;
+over the cap `refused { reason: quota }` with the numbers).
 
 The tracker's older documents — tickets of kind `doc` — stay tickets
 (V2-29's `existing`, queued to the owner; built as *leave*).
@@ -604,7 +606,8 @@ name is refused, so a new input registers one):
 | `media.fetch.bytes` | bytes | day | the server reads a file for you (`media.fetch`) |
 | `media.fetch.calls` | calls | day | the server reads a link for you (`media.unfurl`, `media.fetch`) |
 | `media.egress.bytes` | bytes | day | `/media/<hash>` serves bytes to you |
-| `docs.bytes`, `docs.count` | bytes, count | total | the docs service saves and creates (V2-29, once it lands) |
+| `docs.bytes` | bytes | total | a document's change is kept (`docs.create`, `update`, `save`, `restore`, `rename`): its bytes, as `doc_log` keeps them, against its writer |
+| `docs.count` | count | total | a document is made (`docs.create`) |
 | `tickets.bytes` | bytes | total | a ticket's body is written — `create`, and `amend` or `update` when the body changes (each kept as a revision) |
 | `tickets.count` | count | total | a ticket is created |
 | `questions.count` | count | total | registered; nothing asks it yet |

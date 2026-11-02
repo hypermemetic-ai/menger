@@ -68,6 +68,12 @@ impl Seam {
         })
     }
 
+    /// V2-31: whether `caller` holds `grant` on `*` — an admin of
+    /// everything, as the gate answers now. No gate: everyone does.
+    pub fn everywhere(&self, caller: &AuthContext, grant: &str) -> bool {
+        self.service().is_some_and(|s| s.gate().is_none_or(|g| g.held_on(caller, &Grant::new(grant)).iter().any(|h| h.is_everywhere())))
+    }
+
     /// The organizations `caller` is in, in the order they were made —
     /// `orgs.list` asked as the caller, the tickets service's word.
     pub async fn orgs(&self, caller: &AuthContext) -> Result<Vec<String>, String> {

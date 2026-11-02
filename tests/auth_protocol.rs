@@ -366,6 +366,8 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("quota.set", Today::Admin, None),
     ("quota.recount", Today::Admin, None),
     ("tickets.revisions.usage", Today::Admin, None),
+    // V2-31: and the docs store's own count, which the recount reads.
+    ("docs.usage", Today::Admin, None),
 ];
 
 /// AUTH-7's one deliberate narrowing of the table: what an anonymous or

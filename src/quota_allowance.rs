@@ -60,6 +60,50 @@ impl menger_media::Allowance for Metered {
     }
 }
 
+/// V2-31: **the docs service's meter is the quota service** too (V2-29's
+/// `menger_docs::Quota`, called inside the store's blocking work):
+/// `docs.bytes` for every change a principal writes, `docs.count` for every
+/// document made, each reserved before the change is kept and committed
+/// after. Its calls are synchronous; the quota service's are asked on a
+/// thread of their own, the runtime's handle blocking on them.
+#[derive(Clone, Debug)]
+pub struct DocsMetered(pub MeterSlot);
+
+impl DocsMetered {
+    fn wait<F: std::future::Future + Send>(f: F) -> Option<F::Output>
+    where
+        F::Output: Send,
+    {
+        let h = tokio::runtime::Handle::try_current().ok()?;
+        std::thread::scope(|s| s.spawn(move || h.block_on(f)).join().ok())
+    }
+
+    fn hold(&self, author: &str, source: &str, amount: u64) -> Result<menger_docs::quota::Reserved, String> {
+        let meter = self.0.get();
+        match Self::wait(meter.reserve(author, source, amount)) {
+            Some(Ok(h)) => Ok(menger_docs::quota::Reserved { author: author.to_string(), bytes: amount, hold: h.ticket }),
+            Some(Err(r)) => Err(r.to_string()),
+            // No runtime to ask on (a test's store): nothing is held.
+            None => Ok(menger_docs::quota::Reserved { author: author.to_string(), bytes: amount, hold: None }),
+        }
+    }
+}
+
+impl menger_docs::quota::Quota for DocsMetered {
+    fn reserve(&self, author: &str, bytes: u64) -> Result<menger_docs::quota::Reserved, String> {
+        self.hold(author, "docs.bytes", bytes)
+    }
+    fn reserve_count(&self, author: &str) -> Result<menger_docs::quota::Reserved, String> {
+        self.hold(author, "docs.count", 1)
+    }
+    fn commit(&self, reserved: menger_docs::quota::Reserved) {
+        if let Some(t) = reserved.hold {
+            let meter = self.0.get();
+            Self::wait(meter.commit(Hold { ticket: Some(t), remaining: None }, None));
+        }
+    }
+}
+
 fn uuid_like() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static N: AtomicU64 = AtomicU64::new(0);

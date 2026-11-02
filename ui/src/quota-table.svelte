@@ -150,18 +150,18 @@
   .th button[aria-sort=descending], .th button[aria-sort=ascending] { color: var(--accent); }
   .th button[aria-sort=descending]::after { content: " ↓"; }
   .th button[aria-sort=ascending]::after { content: " ↑"; }
-  .th button:focus-visible, .cap:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
+  .th button:focus-visible, .cap:focus-visible, .cap:global([data-sheet~=focus]) { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--radius-sm); }
   .tr { min-height: 36px; padding-top: 4px; padding-bottom: 4px; border-bottom: var(--border) solid var(--line); }
   .tr:last-child { border-bottom: 0; }
-  .tr:hover { background: var(--hover); }
-  .who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono, monospace); font-size: 12px; }
+  .tr:hover, .tr:global([data-sheet~=hover]) { background: var(--hover); }
+  .who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-text); font-size: 12px; }
   .chip { margin-left: 6px; padding: 0 6px; font-family: var(--font-text); font-size: 10px; color: var(--chip-fg); background: var(--chip-bg); border: var(--border) solid var(--chip-line); border-radius: var(--radius-pill); }
   .num, .cell { font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .cell[data-state=near] [data-field=used] { color: var(--warn); }
   .cell[data-state=over] [data-field=used] { color: var(--warn); font-weight: var(--weight-strong); }
   .of { margin: 0 3px; color: var(--muted); }
   .cap { all: unset; cursor: pointer; color: var(--accent); border-bottom: 1px dashed var(--line); }
-  .cap:disabled { cursor: default; color: var(--muted); border-bottom: 0; }
+  .cap:disabled, .cap:global([data-sheet~=disabled]) { cursor: default; color: var(--muted); border-bottom: 0; }
   .cell input { width: 80px; font: inherit; color: var(--ink); background: var(--bg); border: var(--border) solid var(--accent); border-radius: var(--radius-sm); padding: 1px 4px; }
   .total { font-weight: var(--weight-medium); background: var(--hover); }
   [data-loading] { color: transparent; background: var(--skeleton); border-radius: var(--radius-sm); }
