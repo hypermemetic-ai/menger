@@ -360,5 +360,32 @@
   .md :global(.diagram:has([data-state=drawn]) + pre) { display: none; }
   /* EDITOR-9: a fence drawn as its code card (code-card); the fence it was drawn from goes. */
   .md :global(.code + pre) { display: none; }
+  /* EDITOR-10: what a doc absorbed, drawn (media-draw's widgets), on EDITOR-9's one smooth page: a player,
+     an image and a PDF bare, in the flow; a file card and a link card a hairline frame and nothing more. */
+  .md :global(.mx) { display: block; margin: 8px 0; max-width: 100%; }
+  .md :global(.mx video), .md :global(.mx iframe) { display: block; width: 100%; max-width: 720px; border: 0; }
+  .md :global(.mx video) { max-height: 480px; }
+  .md :global(.mx audio) { display: block; width: 100%; max-width: 520px; }
+  .md :global(.mx[data-media=pdf] iframe) { height: 560px; }
+  .md :global(.mx-embed iframe) { aspect-ratio: 16 / 9; height: auto; }
+  .md :global(.mx-embed[data-provider=x] iframe) { aspect-ratio: auto; height: 420px; max-width: 550px; }
+  .md :global(.mx-embed[data-provider=figma] iframe) { aspect-ratio: 4 / 3; }
+  .md :global(.mx-cap) { display: flex; gap: 8px; align-items: baseline; margin-top: 4px; font-family: var(--font-text); font-size: 12px; color: var(--muted); }
+  .md :global(.mx-cap .mx-name) { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .md :global(.mx[data-media=file]) { display: flex; align-items: center; gap: 10px; max-width: 520px; padding: 8px 10px; border: var(--border) solid var(--line); border-radius: var(--radius); }
+  .md :global(.mx-ext) { flex: none; font-family: var(--font-text); font-size: 11px; font-weight: var(--weight-strong); color: var(--muted); }
+  .md :global(.mx-meta) { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .md :global(.mx-meta .mx-name) { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .md :global(.mx-size) { font-family: var(--font-text); font-size: 12px; color: var(--muted); }
+  .md :global(.mx-dl) { flex: none; font-size: 12px; }
+  .md :global(.mx-card) { display: flex; max-width: 560px; overflow: hidden; color: inherit !important; text-decoration: none !important; border: var(--border) solid var(--line); border-radius: var(--radius); }
+  .md :global(.mx-card:hover), .md :global(.mx-card[data-sheet~=hover]) { border-color: var(--muted); }
+  .md :global(.mx-card img) { flex: none; width: 120px; height: auto; max-height: 100px; object-fit: cover; border-radius: 0 !important; }
+  .md :global(.mx-text) { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 8px 10px; }
+  .md :global(.mx-site) { font-family: var(--font-text); font-size: 11px; color: var(--muted); }
+  .md :global(.mx-title) { font-weight: var(--weight-strong); color: var(--ink); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .md :global(.mx-desc) { font-size: 12px; color: var(--muted); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .md :global(.mx-src) { display: inline-block; margin-top: 4px; font-size: 12px; }
+  .md :global([data-media-pending]) { min-height: 1.5em; }
   .empty { margin: 0; color: var(--muted); font-family: var(--font-text); font-size: 12px; }
 </style>
