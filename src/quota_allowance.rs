@@ -74,7 +74,7 @@ mod tests {
     fn a_refusal_keeps_its_numbers() {
         let d = denied(Refusal::OverAllowance { source: "media.bytes".into(), used: 1_900_000_000, cap: 2_000_000_000, asked: 300_000_000 });
         assert_eq!(d.remaining, Some(100_000_000));
-        assert!(d.message.starts_with("over_allowance: ") && d.message.contains("1900000000 used of 2000000000") && d.message.contains("300000000"), "{}", d.message);
+        assert!(d.message.starts_with("over_allowance: ") && d.message.contains("1.9 GB used of 2 GB") && d.message.contains("300 MB more"), "{}", d.message);
         assert!(denied(Refusal::BoxFull { used_percent: 90.0, full_percent: 85.0 }).message.starts_with("box_full: "));
         assert!(denied(Refusal::TooManyAtOnce { source: "media.bytes".into(), open: 2, max: 2 }).message.starts_with("too_many_at_once: "));
     }

@@ -385,7 +385,7 @@ async fn an_upload_is_counted_against_the_uploader_and_refused_past_the_cap() {
     let over = one(&editor, "media.put", json!({"data": b64(&b), "name": "b.bin"})).await;
     assert_eq!((over["type"].as_str(), over["reason"].as_str(), over["max"].as_u64()), (Some("refused"), Some("over_allowance"), Some(400)), "{over}");
     let m = over["message"].as_str().unwrap();
-    assert!(m.contains("600 used of 1000") && m.contains("603 more") && m.contains("nothing was kept"), "{m}");
+    assert!(m.contains("600 B used of 1 KB") && m.contains("603 B more") && m.contains("nothing was kept"), "{m}");
     assert_eq!(one(&editor, "media.usage", json!({})).await["bytes"], 600);
     // Every uploader's charge is an admin's to read; the recount reads it.
     assert_eq!(one(&editor, "media.usage", json!({"everyone": true})).await["type"], "error");

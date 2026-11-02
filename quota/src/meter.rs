@@ -32,7 +32,8 @@ impl std::fmt::Display for Refusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Refusal::OverAllowance { source, used, cap, asked } => {
-                write!(f, "over your allowance of {source}: {used} used of {cap}, and this asks {asked} more (an admin raises it with quota.set)")
+                let n = |v: u64| amount(source, v);
+                write!(f, "over your allowance of {source}: {} used of {}, and this asks {} more (an admin raises it with quota.set)", n(*used), n(*cap), n(*asked))
             }
             Refusal::TooManyAtOnce { source, open, max } => write!(f, "{open} of {source} already in flight, at most {max} at once: wait for one to finish"),
             Refusal::BoxFull { used_percent, full_percent } => {
@@ -41,6 +42,44 @@ impl std::fmt::Display for Refusal {
             Refusal::UnknownSource { source } => write!(f, "`{source}` is no quota source (the sources: {})", crate::sources::names()),
             Refusal::Failed(m) => write!(f, "the quota service: {m}"),
         }
+    }
+}
+
+/// An amount of `source` in words: bytes as a person reads them (`603 B`,
+/// `1.9 GB`, powers of 1000, as the caps are written), anything else the
+/// number.
+pub fn amount(source: &str, n: u64) -> String {
+    if !source.ends_with(".bytes") {
+        return n.to_string();
+    }
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let (mut v, mut u) = (n as f64, 0);
+    while v >= 1000.0 && u < UNITS.len() - 1 {
+        v /= 1000.0;
+        u += 1;
+    }
+    match u {
+        0 => format!("{n} B"),
+        _ => {
+            let t = format!("{v:.1}");
+            format!("{} {}", t.strip_suffix(".0").unwrap_or(&t), UNITS[u])
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn amounts_read_as_a_person_reads_them() {
+        assert_eq!(amount("media.bytes", 603), "603 B");
+        assert_eq!(amount("media.bytes", 1000), "1 KB");
+        assert_eq!(amount("media.bytes", 1_900_000_000), "1.9 GB");
+        assert_eq!(amount("docs.bytes", 200_000_000), "200 MB");
+        assert_eq!(amount("media.fetch.calls", 300), "300");
+        let r = Refusal::OverAllowance { source: "media.bytes".into(), used: 1_900_000_000, cap: 2_000_000_000, asked: 300_000_000 };
+        assert!(r.to_string().contains("1.9 GB used of 2 GB, and this asks 300 MB more"), "{r}");
     }
 }
 
