@@ -72,6 +72,18 @@
   import TicketActions from "plexus-ui:ticket-actions";
   import TicketBody from "plexus-ui:ticket-body";
   import TicketView from "plexus-ui:ticket-view";
+  import MermaidDiagram from "plexus-ui:mermaid-diagram";
+  import CodeCard from "plexus-ui:code-card";
+  import CodePaint from "plexus-ui:code-paint";
+  import CodeRust from "plexus-ui:code-rust";
+  import CodeJavascript from "plexus-ui:code-javascript";
+  import CodePython from "plexus-ui:code-python";
+  import CodeJson from "plexus-ui:code-json";
+  import CodeYaml from "plexus-ui:code-yaml";
+  import CodeGo from "plexus-ui:code-go";
+  import CodeHtml from "plexus-ui:code-html";
+  import CodeCss from "plexus-ui:code-css";
+  import CodeLegacy from "plexus-ui:code-legacy";
   import TicketChip from "plexus-ui:ticket-chip";
   import TicketChipSv from "plexus-ui:ticket-chip-sv";
   import TicketCommits from "plexus-ui:ticket-commits";
@@ -188,14 +200,28 @@
       ["ticket-head", TicketHead, ID, ["hover", "focus"], gone],
       ["ticket-body", TicketBody, ID, [], gone],
       ["ticket-view", TicketView, (t) => ({ title: t, status: "Ready", body: "## A ticket\n\nDrawn from its **props**, no call.\n\n- a list\n- of two\n\n<m-summary>\n\n<m-field data-field=\"standing\">**A house card**, drawn as the editor draws it.</m-field>\n\n<m-stat value=\"2\" tone=\"pass\">blocks</m-stat>\n\n</m-summary>\n" }), [], { empty: { body: "" } }],
+      // EDITOR-9: a mermaid fence drawn by Pele, and one it refuses.
+      ["mermaid-diagram", MermaidDiagram, (t) => ({ source: "flowchart LR\n  A[a click] --> B[the caret]" }), [], { refused: { source: "flowchart TD\n  A[open --> \n" } }],
+      // EDITOR-9: code — the card every fence draws as, its painter, and a painter per language.
+      ["code-card", CodeCard, (t) => ({ code: "fn main() {\n    println!(\"{}\", 42);\n}", info: "rust", path: "src/main.rs", why: "the entry" }), ["hover", "focus"], {}],
+      ["code-paint", CodePaint, (t) => ({ code: "plain text, no language" }), [], {}],
+      ["code-rust", CodeRust, (t) => ({ code: "fn main() { let x: u32 = 1; }" }), [], {}],
+      ["code-javascript", CodeJavascript, (t) => ({ code: "const n = 1; // a comment", lang: "typescript" }), [], {}],
+      ["code-python", CodePython, (t) => ({ code: "def f(x):\n    return x + 1  # one more" }), [], {}],
+      ["code-json", CodeJson, (t) => ({ code: "{ \"id\": 1, \"ok\": true }" }), [], {}],
+      ["code-yaml", CodeYaml, (t) => ({ code: "name: menger\nports: [4455, 4456]" }), [], {}],
+      ["code-go", CodeGo, (t) => ({ code: "func main() { fmt.Println(1) }" }), [], {}],
+      ["code-html", CodeHtml, (t) => ({ code: "<p class=\"x\">hi</p>" }), [], {}],
+      ["code-css", CodeCss, (t) => ({ code: ".x { color: red; }" }), [], {}],
+      ["code-legacy", CodeLegacy, (t) => ({ code: "cargo test -p menger --test apart  # a selection", lang: "shell" }), [], {}],
       ["ticket-relations", TicketRelations, ID, ["hover", "focus"], { loading: { sheet: "loading" } }],
       ["ticket-subtasks", TicketSubtasks, ID, ["hover", "focus"], { loading: { sheet: "loading" } }],
       ["ticket-commits", TicketCommits, ID, ["hover", "focus"], {}],
       ["ticket-history", TicketHistory, ID, ["hover"], { loading: { sheet: "loading" }, ...gone }],
       ["ticket-revisions", TicketRevisions, ID, ["hover", "focus", "selected"], { loading: { sheet: "loading" }, ...gone }],
       ["ticket-edit", TicketEdit, ID, ["hover", "focus", "disabled", "checked"], { checked: { sheet: "open" }, loading: { sheet: "loading" } }, false, { checked: ["[role=radio][aria-checked=false]"] }],
-      // EDITOR-8: the rendering as the editor; hover held on a drawn block, focus on its revisions link.
-      ["editor-body", EditorBody, ID, ["hover", "focus"], { loading: { sheet: "loading" }, ...gone }, false, { hover: [".blk"], focus: [".revs"] }],
+      // EDITOR-8: the rendering as the editor; hover and focus held on its revisions link (EDITOR-9: a block has no highlight).
+      ["editor-body", EditorBody, ID, ["hover", "focus"], { loading: { sheet: "loading" }, ...gone }, false, { hover: [".revs"], focus: [".revs"] }],
       // EDITOR-8: the writing screen, small; selected held on a document of the list, disabled on *new*.
       ["editor-screen", EditorScreen, ID, ["hover", "focus", "selected", "disabled"], { loading: { sheet: "loading" }, empty: { id: NONE } }, true, { hover: [".doc"], focus: [".id"], selected: [".doc"], disabled: ["[data-action=new]"] }],
       ["ticket-actions", TicketActions, ID, ["hover", "focus", "disabled", "checked"], { loading: { sheet: "loading" } }],
