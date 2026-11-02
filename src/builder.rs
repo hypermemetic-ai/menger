@@ -3,6 +3,9 @@ use menger_tickets_api::access::Access;
 // browser's sign-in — `members`, `orgs`, `epics`, `session`.
 use menger_tickets_api::{EpicsActivation, MembersActivation, OrgsActivation, ProviderOffer, SessionActivation, TicketsActivation};
 use plexus_ui_service::{Compiler, Signers, UiActivation, UiStore, DEFAULT_CHANNEL, UI_DB_FILE};
+// V2-24: the media service — a service of v2's own, its file its own, the
+// ticket's permit asked of `tickets` through the seam.
+use menger_media::{MediaActivation, MediaStore, MEDIA_DB_FILE};
 use menger_tickets_api::store::{OpenPurge, SeedShape, SeedSpec, Store, StoreError, System, PURGE_EVERY};
 use plexus_auth_core::grants::GrantsGeneration;
 use plexus_core::plexus::{Activation, AuthBackend, AuthSetup, ChildRouter, DynamicHub, Provider as AuthProvider, ProviderKind as AuthKind};
@@ -47,6 +50,18 @@ pub fn default_ui_channel(env: Option<&str>) -> &'static str {
         Some("test") => "test",
         Some("prod") => "prod",
         _ => DEFAULT_CHANNEL,
+    }
+}
+
+/// V2-24: the media service's file when `--media-db-path` names none —
+/// `media.db` beside the tickets file `db_path`, never the same file (and
+/// never the ui file).
+pub fn default_media_db_path(db_path: &Path) -> PathBuf {
+    let beside = |name: &str| db_path.parent().map_or_else(|| PathBuf::from(name), |d| d.join(name));
+    match beside(MEDIA_DB_FILE) {
+        // A tickets file that is itself named media.db: the media file goes beside it under another name.
+        same if same == db_path => beside("media-service.db"),
+        media => media,
     }
 }
 
@@ -121,6 +136,27 @@ impl UiSetup {
     /// signer — every push refused `no_signer`.
     pub fn beside(db_path: &Path) -> anyhow::Result<Self> {
         Self::open(&default_ui_db_path(db_path), Signers::none())
+    }
+}
+
+/// V2-24: what the `media` activation and the shell's `/media/<hash>` are
+/// built over — the store on its own file.
+#[derive(Clone)]
+pub struct MediaSetup {
+    pub store: Arc<MediaStore>,
+}
+
+impl MediaSetup {
+    /// The store at `path` (`--media-db-path`); the directory made if missing.
+    pub fn open(path: &Path) -> anyhow::Result<Self> {
+        let store = MediaStore::open(path).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
+        tracing::info!("media:     {} ({} images)", path.display(), store.count());
+        Ok(Self { store: Arc::new(store) })
+    }
+
+    /// The store beside the tickets file ([`default_media_db_path`]).
+    pub fn beside(db_path: &Path) -> anyhow::Result<Self> {
+        Self::open(&default_media_db_path(db_path))
     }
 }
 
@@ -250,7 +286,9 @@ pub async fn build_rpc_ui(
 /// by `tickets` over the store and the rule — main's is
 /// [`TicketsActivation`]; a test's may be a reduced service, to show the
 /// ui service reads the running one through the seam, never a copy. The
-/// ui activation's seam is attached to the hub built here.
+/// ui activation's seam is attached to the hub built here. V2-24: the
+/// media service on its file beside the tickets file
+/// ([`MediaSetup::beside`]); main names it ([`build_rpc_services`]).
 #[allow(clippy::too_many_arguments)]
 pub async fn build_rpc_ui_over<T, F>(
     db_path: &Path,
@@ -262,6 +300,32 @@ pub async fn build_rpc_ui_over<T, F>(
     resource_metadata: Option<String>,
     body_max: usize,
     ui: UiSetup,
+    tickets: F,
+) -> anyhow::Result<Arc<DynamicHub>>
+where
+    T: Activation + ChildRouter + Clone + 'static,
+    F: FnOnce(Arc<Store>, Access) -> T,
+{
+    let media = MediaSetup::beside(db_path)?;
+    build_rpc_services(db_path, seed, shape, offers, access, backend, resource_metadata, body_max, ui, media, tickets).await
+}
+
+/// V2-24: [`build_rpc_ui_over`] with the media service over `media` (main's
+/// `--media-db-path`) registered beside `tickets` and `ui` — every service
+/// of v2's, in one process (V2-1): the media service's seam is attached to
+/// the hub built here, so a put asks `tickets.may` through it as the caller.
+#[allow(clippy::too_many_arguments)]
+pub async fn build_rpc_services<T, F>(
+    db_path: &Path,
+    seed: Option<SeedSpec>,
+    shape: SeedShape,
+    offers: Vec<ProviderOffer>,
+    access: Access,
+    backend: Arc<dyn AuthBackend>,
+    resource_metadata: Option<String>,
+    body_max: usize,
+    ui: UiSetup,
+    media: MediaSetup,
     tickets: F,
 ) -> anyhow::Result<Arc<DynamicHub>>
 where
@@ -347,9 +411,14 @@ where
     // a watch held by the gate (`ui.watch`) hears `members.*` too.
     let generation = grants_generation(&store);
     let seam = ui.seam().clone();
+    // V2-24: `media` beside them — the images a body shows, over its own
+    // file; whose a ticket is, it asks `tickets` through its seam.
+    let media = MediaActivation::new(media.store);
+    let media_seam = media.seam().clone();
     let mut hub = DynamicHub::new("menger")
         .register(tickets)
         .register(ui)
+        .register(media)
         // ORG-4: `orgs` beside `members` — the organizations, and their making.
         .register(OrgsActivation::with_access(Arc::clone(&store), access.clone()))
         // ORG-13: `epics` beside `orgs` — the level that holds shortcodes.
@@ -374,6 +443,9 @@ where
     // (`tickets`) through this service, as the server's own caller (its full
     // view, whoever pushes).
     seam.attach(&hub, access.system_caller());
+    // V2-24: the media service asks `tickets.may` through this service, as
+    // the caller it serves (its permit is the tickets service's word).
+    media_seam.attach(&hub);
     Ok(hub)
 }
 
@@ -424,6 +496,22 @@ async fn purge_planted(store: &Store, system: &System, admins: &[String]) -> any
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// V2-24: the media file is beside the tickets file, never the same file.
+    #[test]
+    fn the_media_db_is_beside_the_tickets_file_never_it() {
+        for tickets in ["/var/lib/menger/tickets.db", "/tmp/x/local.db", "/tmp/x/media.db.d/t.db"] {
+            let tickets = Path::new(tickets);
+            let media = default_media_db_path(tickets);
+            assert_eq!(media, tickets.parent().unwrap().join("media.db"), "{}", tickets.display());
+            assert_ne!(media, tickets);
+            assert_ne!(media, default_ui_db_path(tickets), "nor the ui file");
+        }
+        let tickets = Path::new("/tmp/x/media.db");
+        let media = default_media_db_path(tickets);
+        assert_ne!(media, tickets);
+        assert_eq!(media.parent(), tickets.parent(), "still beside it");
+    }
 
     /// UI-3: the ui file is beside the tickets file, never the same file.
     #[test]

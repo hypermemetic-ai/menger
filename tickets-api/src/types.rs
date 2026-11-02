@@ -1822,6 +1822,13 @@ pub enum TicketsEvent {
     Member { id: crate::vocab::TicketRef, matched: bool },
     /// Lookup miss.
     NotFound { id: crate::vocab::Asked },
+    /// V2-24: `may`'s answer — whether the caller holds `role` on the
+    /// ticket `id` names (its id as the store keeps it), by the kept tree
+    /// and within the session's ceiling: what another service asks through
+    /// the seam before it writes something of a ticket's (the one that
+    /// keeps images, before it keeps one for a ticket). A ticket the caller
+    /// cannot see is `not_found`, as everywhere.
+    May { id: TicketId, role: crate::members::Role, held: bool },
     /// ORG-3: `id` (an address as it was asked — a ticket or a shortcode)
     /// names more than one thing in the reader's reach: `candidates` are
     /// each one's full address, in the store's order. Nothing was read or

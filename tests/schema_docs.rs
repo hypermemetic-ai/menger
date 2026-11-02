@@ -61,10 +61,14 @@ const SCHEMA_WORDS: &[&str] = &[
 /// The words the `ui` service may say: its components are the UI's.
 const UI_WORDS: &[&str] = &["components", "component"];
 
+/// V2-24: the word the `media` service may say — it is back, as a service
+/// of its own; the tickets service's docs still name no media.
+const MEDIA_WORDS: &[&str] = &["media"];
+
 /// Every service a v2 server registers, and their children, by path.
 const PATHS: &[&str] = &[
     "auth", "epics", "members", "members.teams", "orgs", "session", "tickets", "tickets.commits", "tickets.filters",
-    "tickets.inputs", "tickets.nav", "tickets.revisions", "tickets.subtasks", "tickets.work", "ui", "ui.routes", "ui.slots",
+    "tickets.inputs", "tickets.nav", "tickets.revisions", "tickets.subtasks", "tickets.work", "ui", "ui.routes", "ui.slots", "media",
 ];
 
 /// Whether `word` occurs in `text` as an identifier of its own, ignoring
@@ -85,7 +89,8 @@ fn says(text: &str, word: &str) -> bool {
 /// the UI's components allowed).
 fn gone_in(path: &str, text: &str) -> Vec<&'static str> {
     let ui = path == "ui" || path.starts_with("ui.");
-    GONE_WORDS.iter().chain(SCHEMA_WORDS).filter(|w| !(ui && UI_WORDS.contains(w))).filter(|w| says(text, w)).copied().collect()
+    let media = path == "media" || path.starts_with("media.");
+    GONE_WORDS.iter().chain(SCHEMA_WORDS).filter(|w| !(ui && UI_WORDS.contains(w)) && !(media && MEDIA_WORDS.contains(w))).filter(|w| says(text, w)).copied().collect()
 }
 
 /// What a walk of a schema finds: each description by its name, and (under

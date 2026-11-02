@@ -14,7 +14,9 @@
 # `../plexus-ui`'s (`plexus-ui-compiler`, `plexus-ui-engine`), by sibling
 # path: the compiler a dev-dependency below, the engine built into the
 # bundle by ../plexus-ui's plexus-ui tool (FRAME-8; scripts/plexus-ui).
-members = [".", "tickets-api"]
+# V2-24: `media/` is the media service — menger-media, a service of v2's own
+# beside `tickets` and `ui`, its images in a file of its own (`media.db`).
+members = [".", "tickets-api", "media"]
 # TETHER-7: `tether/` is a workspace of its own — substrate's sqlx and this
 # workspace's rusqlite link two libsqlite3-sys, which one resolve refuses.
 exclude = ["tether"]
@@ -55,6 +57,10 @@ path = "src/main.rs"
 # app (frontend/), which takes it with `default-features = false`. Default
 # features here: `server`, the real thing.
 menger-tickets-api = { path = "tickets-api", version = "0.6.2" }
+# V2-24: the media service — `media.put` and `media.get`, its own file, the
+# ticket's permit asked of `tickets` through the seam; the shell's
+# `/media/<hash>` is its client too (menger_media::fetch).
+menger-media = { path = "media", version = "0.6.2" }
 # UI-3, FRAME-5: the ui service — the framework's (`../plexus-ui/service`):
 # its activation registered beside `tickets`, its routes mounted on the
 # shell, serving `/`, `/app/` and `/app/<hash>/…` from its store.
