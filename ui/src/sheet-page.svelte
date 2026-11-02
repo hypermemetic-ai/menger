@@ -90,6 +90,7 @@
   import TicketCreate from "plexus-ui:ticket-create";
   import TicketEdit from "plexus-ui:ticket-edit";
   import EditorBody from "plexus-ui:editor-body";
+  import DocMargin from "plexus-ui:doc-margin";
   import EditorScreen from "plexus-ui:editor-screen";
   import PageEditor from "plexus-ui:page-editor";
   import TicketHead from "plexus-ui:ticket-head";
@@ -220,6 +221,8 @@
       ["ticket-history", TicketHistory, ID, ["hover"], { loading: { sheet: "loading" }, ...gone }],
       ["ticket-revisions", TicketRevisions, ID, ["hover", "focus", "selected"], { loading: { sheet: "loading" }, ...gone }],
       ["ticket-edit", TicketEdit, ID, ["hover", "focus", "disabled", "checked"], { checked: { sheet: "open" }, loading: { sheet: "loading" } }, false, { checked: ["[role=radio][aria-checked=false]"] }],
+      // V2-30: a doc's margin, alone — its threads as a list (a ticket's id: none).
+      ["doc-margin", DocMargin, ID, [], {}],
       // EDITOR-8: the rendering as the editor; hover and focus held on its revisions link (EDITOR-9: a block has no highlight).
       ["editor-body", EditorBody, ID, ["hover", "focus"], { loading: { sheet: "loading" }, ...gone }, false, { hover: [".revs"], focus: [".revs"] }],
       // EDITOR-8: the writing screen, small; selected held on a document of the list, disabled on *new*.

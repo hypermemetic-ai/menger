@@ -546,7 +546,12 @@ agents and image references.
 | `delete` | `--id` | admin's: `deleted { id, at, by }`; its changes stay in the file |
 | `may` | `--id --role` | `may { id, role, held }` — the question the media service asks |
 | `usage` | `--everyone true` | admin of `*` (V2-31): one `usage { principal, count, bytes }` per writer — the documents they made and the bytes their changes keep (a squash's snapshot is nobody's); what `quota.recount` reads |
-| `watch` | `[--id] [--session]` | `watching`, then `created`, `updated { id, seq, update, by, session? }`, `renamed`, `deleted`, `squashed`, and on one document `present` and `left { session, client? }`; with `session` the watch is your presence while open, and your own updates are not said back; held to you by the gate as `ui.watch` is (`watch_closed { reason }`) |
+| `ask` | `--id --from --to --text [--to-whom]` | V2-30: a question on characters `from..to` of the text, anchored in the CRDT so it follows the words through every edit: `asked { thread }` — `{ thread, id, anchor { from, to }, from, to, detached, quote, question, to_whom?, by, at, resolved?, replies }` |
+| `reply` | `--id --thread --body` | an answer (markdown: links, images): `replied { thread }` |
+| `resolve` | `--id --thread [--open]` | the thread folded (or opened again): `resolved { thread }` |
+| `threads` | `--id` | `thread { thread }` each, by where its range stands, the detached (text deleted whole) last |
+| `waiting` | `[--to]` | the open questions asked of someone (`agent`, or a name) in the documents you read, oldest first — an agent's queue |
+| `watch` | `[--id] [--session]` | `watching`, then `created`, `updated { id, seq, update, by, session? }`, `renamed`, `deleted`, `squashed`, and on one document `present` and `left { session, client? }`, and (V2-30) `asked`, `replied`, `resolved` with the thread whole; with `session` the watch is your presence while open, and your own updates are not said back; held to you by the gate as `ui.watch` is (`watch_closed { reason }`) |
 
 **Who may**: a viewer reads, follows and is present (`get`, `list`,
 `state`, `history`, `replay`, `present`, `here`, `watch`, `may`), an editor
@@ -555,6 +560,20 @@ and squashes — each grant held on the document's organization (`acme:`) or
 on `*`. The gate admits a call whose grant is held somewhere; the method
 asks it again on the organization: a document you do not read is
 `not_found`, one you read and may not write `refused { forbidden }`.
+
+**Questions on a range** (V2-30; the owner: *"I want to have the ability to
+highlight a line in a doc and ask a question"*): a selection on the surface
+and **ask** (mod+enter) keep a question on that range, to anyone or to an
+agent; the margin beside the text holds each thread at its range's height
+(a list under the text below 1400 px), its answers live, a box to answer
+(an image pastes) and *resolve*, which folds it (the margin counts the
+resolved). The anchor is two Yjs relative positions in the CRDT — the page
+resolves them in its own copy, the service in its — so it follows the text
+through every hand's edit; its text deleted whole, the thread is detached
+and listed last. A question asked of an agent waits in `waiting` and is said
+on every watch of the organization's documents; the agent answers with
+`reply`, or edits the document itself. Kept in `docs.db`'s `doc_threads` and
+`doc_replies`.
 
 **Presence**: a page's `watch { id, session }` is its presence for as long
 as it is open (gone, `left`, when the connection closes); a writer with no
@@ -1406,7 +1425,9 @@ ticket's. V2-29 (2026-11-02) gave documents a service of their own —
 `docs`, in `docs.db`, the same editor surface writing to it (`#/doc/:id`;
 `+ new` makes a doc, not a ticket) — and, on the owner's word, made a
 document a Yjs CRDT written live by many hands, who is on it shown, every
-change kept to replay and squash. V2-25
+change kept to replay and squash. V2-30 (2026-11-02) let a selection in a
+doc be asked about: a thread anchored in the CRDT, in the margin, answered
+live by a person or an agent. V2-25
 (2026-11-01): epics leave v2's surface — the `epics` activation, the header's
 switcher and `#/epics`, and the `me` page — and the board is the
 organization's whole set; `session` stays as the agents' door. V2-31
