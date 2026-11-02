@@ -223,3 +223,15 @@ async fn images_survive_a_reopen_and_an_older_file_gains_the_tables() {
     let deep = dir.path().join("a/b/media.db");
     assert!(MediaStore::open(&deep).is_ok() && deep.exists());
 }
+
+/// V2-29: an image put for a document is that document's, kept apart from
+/// a ticket's and the putter's, and read back as it was put.
+#[tokio::test]
+async fn an_image_put_for_a_doc_is_the_docs() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = open(&dir);
+    let bytes = png(4, 4, 9);
+    let put = s.put(Owner::Doc("7k3mq2xa".into()), b64(&bytes), None, Some("key:aa".into())).await.unwrap();
+    s.put(on("OPEN-2"), b64(&bytes), None, None).await.unwrap();
+    assert_eq!(s.kept(&put.info.hash).await.unwrap().owners, vec![Owner::Doc("7k3mq2xa".into()), on("OPEN-2")]);
+}

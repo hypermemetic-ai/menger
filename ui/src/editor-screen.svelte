@@ -1,24 +1,25 @@
 <!-- EDITOR-8: the writing screen (svelte/1) — one document on one surface,
-     and the documents beside it. A document is a ticket. The surface is
-     editor-body (the ticket drawn as ticket-view draws it, edited in place),
-     ticket-questions (V2-20) under it; nothing is drawn twice. The list, a
-     narrow column (a drawer under 1024 px, `docs` in the bar): a search
-     (`tickets.find`, id or title), the documents opened here lately
-     (`menger.editor.recent`, this browser's), and this shortcode's docs
-     (`tickets.list { filter: "in S and kind doc" }`, live by the watch).
-     `+ new` makes a ticket of kind `doc` in the current shortcode
-     (`tickets.create { epic, title: "Untitled", kind: "doc" }` — a doc is
-     born `Doc`, SDLC-11) and opens it at `#/edit/<id>`. Switching documents
-     keeps autosave: the editor is keyed by the document, and the one left
-     sends what it holds as it goes. `#/` opens the document last opened in
-     this browser (`menger.editor.last`, written here and by the ticket
-     page's body); `#/edit/:id` a given one. Keys: `escape` (outside the
-     text) and the bar's *board* go to `#/board`; `n` is *new*; `/` the
-     search. -->
+     and the documents beside it. The surface is editor-body (the document
+     drawn as ticket-view draws it, edited in place), ticket-questions (V2-20)
+     under it for a ticket; nothing is drawn twice. V2-29: the documents are
+     the docs service's (the owner: "move the docs onto a new docs api. same
+     fe though"). The list, a narrow column (a drawer under 1024 px, `docs` in
+     the bar): a search (`docs.list { query }`, by title), the documents
+     opened here lately (`menger.editor.recent`, this browser's) and the docs
+     you read, newest first (`docs.list`, live by `docs.watch`). `+ new`
+     makes a doc (`docs.create { title: "Untitled" }`) and opens it at
+     `#/doc/<id>`. `#/doc/:id` opens a doc on the surface, `#/edit/:id` a
+     ticket, as before. Switching documents keeps autosave: the editor is
+     keyed by the document, and the one left sends what it holds as it goes.
+     `#/` opens the document last opened in this browser (`menger.editor.last`:
+     a ticket's id, or `doc:<id>`). Keys: `escape` (outside the text) and the
+     bar's *board* go to `#/board`; `n` is *new*; `/` the search. -->
 <script module>
-  export const uses = ["tickets.get", "tickets.watch", "tickets.create", "tickets.nav.groups", "tickets.list", "tickets.find"];
+  export const uses = ["tickets.get", "tickets.watch", "docs.list", "docs.watch", "docs.create"];
   export const LAST = "menger.editor.last";
   export const RECENT = "menger.editor.recent";
+  /** What `menger.editor.last` names: `doc:<id>` a doc, anything else a ticket's id. */
+  export const lastOf = (v) => (!v ? null : v.startsWith("doc:") ? { kind: "doc", id: v.slice(4) } : { kind: "ticket", id: v });
 </script>
 
 <script>
@@ -26,60 +27,59 @@
   import Editor from "plexus-ui:editor-body";
   import Questions from "plexus-ui:ticket-questions";
 
-  let { id = null, sheet = null } = $props();
+  let { id = null, doc = null, sheet = null } = $props();
   const b = bus();
-  const FIELDS = ["id", "title", "kind", "status"];
   const remembered = () => { try { return localStorage.getItem(LAST) || null; } catch { return null; } };
   const remember = (v) => { try { localStorage.setItem(LAST, v); } catch { /* a private window */ } };
   const readRecent = () => { try { const r = JSON.parse(localStorage.getItem(RECENT) || "[]"); return Array.isArray(r) ? r.filter((x) => x && typeof x.id === "string") : []; } catch { return []; } };
-  // The document on screen: the route's, else the last opened here.
+  // The document on screen: the route's (a doc, or a ticket), else the last opened here.
   let last = $state(remembered());
-  const current = $derived(id ?? last);
-  $effect(() => { if (id) { remember(id); last = id; } });
+  const route = $derived(doc ? { kind: "doc", id: doc } : id ? { kind: "ticket", id } : null);
+  const cur = $derived(route ?? lastOf(last));
+  const current = $derived(cur?.id ?? null);
+  const isDoc = $derived(cur?.kind === "doc");
+  const href = (r) => (r.kind === "doc" ? "#/doc/" : "#/edit/") + r.id;
+  $effect(() => { if (route) { const v = route.kind === "doc" ? "doc:" + route.id : route.id; remember(v); last = v; } });
 
-  const ticket = live({ snapshot: "tickets.get", params: () => ({ id: current }), changes: "tickets.watch", key: "id", when: () => current != null,
-                        on: { amended: "upsert:ticket", status_changed: "upsert:ticket", kind_changed: "upsert:ticket", updated: "upsert:ticket",
-                              labels_changed: "upsert:ticket", severity_changed: "upsert:ticket", frozen_changed: "upsert:ticket", hidden_changed: "upsert:ticket",
-                              blockers_changed: "upsert:ticket", unlocks_changed: "upsert:ticket", unlocks_removed: "upsert:ticket", parent_changed: "upsert:ticket",
-                              commits_linked: "upsert:ticket", commits_unlinked: "upsert:ticket", revision_restored: "upsert:ticket", deleted: "upsert:." } });
-  // The page's spec word for word: one get and one watch of the ticket, shared with every part.
-  const t = $derived(ticket.rows.find((r) => r.id === current && r.title != null));
-  // Where *new* creates: the current ticket's shortcode, else the first group (asked only when there is no ticket).
-  const groups = live({ snapshot: "tickets.nav.groups", params: {}, key: "shortcode", when: () => current == null, on: {} });
-  const shortcode = $derived(t?.epic ?? groups.rows.find((g) => g.shortcode)?.shortcode ?? null);
+  // A ticket on the surface: its kind for the bar (the editor holds the same get and watch).
+  const ticket = live({ snapshot: "tickets.get", params: () => ({ id: current }), changes: "tickets.watch", key: "id", when: () => current != null && !isDoc,
+                        on: { amended: "upsert:ticket", kind_changed: "upsert:ticket", updated: "upsert:ticket", deleted: "upsert:." } });
+  const t = $derived(isDoc ? null : ticket.rows.find((r) => r.id === current && r.title != null));
 
   // ── the documents ────────────────────────────────────────────────────────
+  const docs = live({ snapshot: "docs.list", params: { limit: 200 }, changes: "docs.watch", changes_params: {}, key: "id",
+                      on: { created: "upsert:doc", updated: "upsert:doc", renamed: "upsert:doc", deleted: "remove:id" } });
+  const theirs = $derived(docs.rows.filter((r) => r.id && r.title != null).slice().sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0)));
+  const titled = $derived(new Map(docs.rows.filter((r) => r.id && r.title != null).map((r) => [r.id, r.title])));
   let recent = $state(readRecent());
+  /** The one on the surface goes first in recent, by its title now. */
   $effect(() => {
-    if (!t) return;
-    const row = { id: t.id, title: t.title };
+    const title = isDoc ? titled.get(current) : t?.title;
+    if (!cur || title == null) return;
+    const row = { id: cur.id, title, kind: cur.kind };
     const next = [row, ...recent.filter((r) => r.id !== row.id)].slice(0, 12);
     if (JSON.stringify(next) === JSON.stringify(recent)) return;
     recent = next;
     try { localStorage.setItem(RECENT, JSON.stringify(next)); } catch { /* a private window */ }
   });
-  const docs = live({ snapshot: "tickets.list", params: () => ({ filter: `in ${shortcode} and kind doc`, summary: true, limit: 200, fields: FIELDS }),
-                      changes: "tickets.watch", changes_params: () => ({ filter: `in ${shortcode} and kind doc` }), key: "id", when: () => shortcode != null,
-                      on: { created: "upsert:ticket", amended: "upsert:ticket", updated: "upsert:ticket", kind_changed: "upsert:ticket", deleted: "remove:ids" } });
-  const theirs = $derived(docs.rows.filter((r) => r.id && r.title != null && r.kind === "doc").slice().reverse());
   let q = $state("");
-  const found = live({ snapshot: "tickets.find", params: () => ({ query: q.trim(), limit: 20, fields: FIELDS }), key: "id", when: () => q.trim().length > 0, debounce_ms: 150 });
+  const found = live({ snapshot: "docs.list", params: () => ({ query: q.trim(), limit: 20 }), key: "id", when: () => q.trim().length > 0, debounce_ms: 150 });
   const hits = $derived(q.trim() ? found.rows.filter((r) => r.id && r.title != null) : []);
   let drawer = $state(false);
   let searchBox = $state(null);
-  const open = (to) => { drawer = false; q = ""; if (to !== current) b.navigate("#/edit/" + to); };
+  const open = (to) => { drawer = false; q = ""; if (to.id !== current || to.kind !== cur?.kind) b.navigate(href(to)); };
 
   let making = $state(false);
   let refused = $state("");
   async function create() {
-    if (making || !shortcode) return;
+    if (making) return;
     making = true;
     refused = "";
-    const r = await b.call("tickets.create", { epic: shortcode, title: "Untitled", kind: "doc" });
+    const r = await b.call("docs.create", { title: "Untitled" });
     making = false;
-    const made = r.events?.find((e) => e.type === "created")?.ticket;
-    if (r.ok && made) { remember(made.id); drawer = false; b.navigate("#/edit/" + made.id); }
-    else refused = String(r.message ?? "refused").replace(/^Invalid params: /, "");
+    const made = r.events?.find((e) => e.type === "created")?.doc;
+    if (r.ok && made) { remember("doc:" + made.id); drawer = false; b.navigate("#/doc/" + made.id); }
+    else refused = String(r.message ?? r.events?.[0]?.message ?? "refused").replace(/^Invalid params: /, "");
   }
   b.keys({
     escape: { to: () => (drawer ? (drawer = false) : b.navigate("#/board")), label: "the board" },
@@ -88,10 +88,13 @@
   });
 </script>
 
-<div class="editor-screen" data-surface="editor-screen" data-ticket={current ?? undefined} data-drawer={drawer ? "open" : undefined}>
+<div class="editor-screen" data-surface="editor-screen" data-ticket={current ?? undefined} data-kind={cur?.kind} data-drawer={drawer ? "open" : undefined}>
   <div class="bar">
     <button type="button" class="btn docs" data-action="docs" aria-expanded={drawer} onclick={() => (drawer = !drawer)}>docs</button>
-    {#if current}
+    {#if current && isDoc}
+      <span class="kind" data-field="kind"><i class="kmark" data-kind="doc" aria-hidden="true"></i>doc</span>
+      <span class="id" data-field="current">{current}</span>
+    {:else if current}
       <a class="id" href={"#/ticket/" + current} data-field="current">{current}</a>
       {#if t}<span class="kind" data-field="kind"><i class="kmark" data-kind={t.kind} aria-hidden="true"></i>{t.kind}</span>{/if}
     {:else}
@@ -104,12 +107,12 @@
   </div>
   <div class="main">
     <nav class="list" data-field="documents" aria-label="documents">
-      <button type="button" class="btn primary new" data-action="new" disabled={making || !shortcode || sheet === "loading"} onclick={create}>+ new{shortcode ? ` in ${shortcode}` : ""} <kbd>n</kbd></button>
-      <input class="find" data-field="find" type="search" placeholder="find a ticket…" aria-label="find a ticket" autocomplete="off" spellcheck="false" bind:value={q} bind:this={searchBox}/>
+      <button type="button" class="btn primary new" data-action="new" disabled={making || sheet === "loading"} onclick={create}>+ new document <kbd>n</kbd></button>
+      <input class="find" data-field="find" type="search" placeholder="find a document…" aria-label="find a document" autocomplete="off" spellcheck="false" bind:value={q} bind:this={searchBox}/>
       {#if q.trim()}
         <p class="head">found</p>
         {#each hits as r (r.id)}
-          <button type="button" class="doc" data-doc={r.id} data-current={r.id === current ? "" : undefined} onclick={() => open(r.id)}><span class="did">{r.id}</span>{r.title}</button>
+          <button type="button" class="doc" data-doc={r.id} data-current={r.id === current ? "" : undefined} onclick={() => open({ kind: "doc", id: r.id })}>{r.title}</button>
         {:else}
           <p class="none">{found.status === "pending" ? "finding…" : "nothing found"}</p>
         {/each}
@@ -117,31 +120,29 @@
         {#if recent.length}
           <p class="head">recent</p>
           {#each recent as r (r.id)}
-            <button type="button" class="doc" data-doc={r.id} data-recent data-current={r.id === current ? "" : undefined} onclick={() => open(r.id)}><span class="did">{r.id}</span>{r.title}</button>
+            <button type="button" class="doc" data-doc={r.id} data-recent data-current={r.id === current ? "" : undefined} onclick={() => open({ kind: r.kind ?? "ticket", id: r.id })}>{#if (r.kind ?? "ticket") === "ticket"}<span class="did">{r.id}</span>{/if}{r.title}</button>
           {/each}
         {/if}
-        {#if shortcode}
-          <p class="head">docs in {shortcode}</p>
-          {#each theirs as r (r.id)}
-            <button type="button" class="doc" data-doc={r.id} data-current={r.id === current ? "" : undefined} onclick={() => open(r.id)}><span class="did">{r.id}</span>{r.title}</button>
-          {:else}
-            <p class="none">{docs.status === "pending" ? "…" : "none yet"}</p>
-          {/each}
-        {/if}
+        <p class="head">documents</p>
+        {#each theirs as r (r.id)}
+          <button type="button" class="doc" data-doc={r.id} data-current={r.id === current ? "" : undefined} onclick={() => open({ kind: "doc", id: r.id })}>{r.title}</button>
+        {:else}
+          <p class="none">{docs.status === "pending" ? "…" : "none yet"}</p>
+        {/each}
       {/if}
     </nav>
     <button type="button" class="scrim" aria-label="close the documents" tabindex="-1" onclick={() => (drawer = false)}></button>
     <div class="page">
       {#if current}
         <div class="sheet">
-          {#key current}<Editor id={current} {sheet}/>{/key}
-          {#key current}<Questions id={current}/>{/key}
+          {#key `${cur.kind}:${current}`}<Editor id={current} kind={cur.kind} {sheet}/>{/key}
+          {#if !isDoc}{#key current}<Questions id={current}/>{/key}{/if}
         </div>
       {:else}
         <div class="welcome" data-welcome>
           <p class="lead">Write a document here. It saves as you type.</p>
-          <p class="muted">Open one from the list or the <a href="#/board">board</a>, or make a new one{#if shortcode} in {shortcode}{/if}.</p>
-          <button type="button" class="btn primary" data-action="new" disabled={making || !shortcode} onclick={create}>+ new document <kbd>n</kbd></button>
+          <p class="muted">Open one from the list, a ticket from the <a href="#/board">board</a>, or make a new one.</p>
+          <button type="button" class="btn primary" data-action="new" disabled={making} onclick={create}>+ new document <kbd>n</kbd></button>
         </div>
       {/if}
     </div>

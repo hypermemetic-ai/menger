@@ -75,6 +75,6 @@ pub use menger_tickets_api::store;
 pub use menger_tickets_api::{MembersActivation, MembersClient, OrgsActivation, SessionActivation, SessionClient, TicketsActivation, TicketsClient};
 
 pub use builder::{
-    build_rpc, build_rpc_login, build_rpc_offering, build_rpc_seeded, build_rpc_services, build_rpc_ui, build_rpc_ui_over, build_rpc_with, default_db_path, default_media_db_path, media_blobs,
-    default_ui_channel, default_ui_db_path, sessions_file, MediaSetup, UiSetup, SESSIONS_FILE, SIGNED_IN_GRANTS,
+    build_rpc, build_rpc_login, build_rpc_offering, build_rpc_seeded, build_rpc_services, build_rpc_ui, build_rpc_ui_over, build_rpc_with, default_db_path, default_docs_db_path, default_media_db_path, media_blobs,
+    default_ui_channel, default_ui_db_path, sessions_file, DocsSetup, MediaSetup, UiSetup, SESSIONS_FILE, SIGNED_IN_GRANTS,
 };

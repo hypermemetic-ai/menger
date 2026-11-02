@@ -5,12 +5,14 @@
   // section and the palette in its `palette` section (app-top and
   // jump-palette-sv by ui/slots.json). A full-height column: the two halves
   // scroll in their own boxes under the bar (EDITOR-8: one surface and the documents beside it). The board is at `#/board`.
+  // V2-29: `#/doc/:doc` opens a document of the docs service on the same surface.
   prop("id");
+  prop("doc");
 </script>
 
 <section class="page page-editor">
   <slot name="top" here="editor"/>
-  <editor-screen id={id}/>
+  <editor-screen id={id} doc={doc}/>
   <slot name="palette"/>
 </section>
 

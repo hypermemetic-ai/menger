@@ -11,7 +11,7 @@ components written in rhx (Rhai in markup, `ui/src/<name>.rhx`, profile
 `rhx/1`; `../plexus-ui/CONTRACT.md`), pushed as signed bundles,
 versioned by content hash and drawn by a small engine.
 
-v1 is tag `v0.0.1`; what v2 cut — the chats, comments, deployments, themes, notes, assignees and components, the Leptos app (trunk) with the frames' SDK (sdk-codegen) and mockups, the diagrams service — lives there. Media came back as a service of its own (V2-24, "The services").
+v1 is tag `v0.0.1`; what v2 cut — the chats, comments, deployments, themes, notes, assignees and components, the Leptos app (trunk) with the frames' SDK (sdk-codegen) and mockups, the diagrams service — lives there. Media came back as a service of its own (V2-24, "The services"), and documents have a service of their own (V2-29, `docs`).
 
 ## Run
 
@@ -276,7 +276,8 @@ behind plexus-core's gate; menger's own are declared on the frame
 | `session` | who a connection is, agents' sessions | `tickets-api/src/session_activation.rs` |
 | `auth` | the AUTH protocol's door and roles | plexus-login, over `src/login_access.rs` |
 | `ui` | the UI's versions, live pointer, previews; child `slots` | the framework's: `../plexus-ui/service` (`plexus-ui-service`, FRAME-5) |
-| `media` | any file a body shows, by sha256 — its rows in a file of its own (`media.db`), its bytes in a `BlobStore` (the disk); links read into cards; the ticket's permit asked of `tickets` through the seam | `media/` (`menger-media`, V2-24, EDITOR-10) |
+| `media` | any file a body shows, by sha256 — its rows in a file of its own (`media.db`), its bytes in a `BlobStore` (the disk); links read into cards; the ticket's (or, V2-29, the doc's) permit asked through the seam | `media/` (`menger-media`, V2-24, EDITOR-10) |
+| `docs` | documents — writing, not work: a title and a markdown body kept as a Yjs CRDT, written live by many hands, every change kept, in a file of its own (`docs.db`); who may is the gate's word on the document's organization | `docs/` (`menger-docs`, V2-29) |
 
 **Service to service.** The ui service reaches the tickets service as a
 client, never through its store: its seam (`../plexus-ui/service/src/seam.rs`)
@@ -294,6 +295,14 @@ and a `media.get` asks `tickets.may { id, role: viewer }` for a ticket the
 image was put for. Its seam is `media/src/seam.rs`; it never opens the
 tickets file either. The shell's `GET /media/<hash>` is a client of the
 media service in turn (`menger_media::fetch`, as the request's session).
+
+The docs service (V2-29) asks two things through its seam (`docs/src/seam.rs`),
+never another's file: the gate, whether the caller holds a method's grant
+(`docs.save`) on the document's organization (`acme:`) — `DynamicHub::gate()`
+asked with the scope as target — and the tickets service, which organizations
+the caller is in (`orgs.list`, as the caller). The media service asks it in
+turn: a `media.put { doc }` asks `docs.may { id, role: editor }` as the
+caller, a `media.get` of a doc's image `docs.may { id, role: viewer }`.
 
 A throwaway's `synapse -P 4460 menger` lists them; `synapse -P 4460 menger
 tickets` lists a service's methods and children; `<method> --help` prints
@@ -416,15 +425,15 @@ whole. synapse `-j` prints the `rows` event as one line (SYNAPSE-36).
 
 | method | flags | what it does |
 |---|---|---|
-| `put` | `--data [--name] [--ticket] [--mime]` | keep any file in one message (at most 7 MiB, `data` standard base64) for a ticket you may edit — or, with no ticket, as yours: `stored { hash, mime, kind, name, bytes, width, height, duplicate }` |
-| `begin` | `--size [--name] [--ticket]` · `--upload` | start an upload of any size, or resume one of yours: `upload { upload, size, received, chunk }` |
+| `put` | `--data [--name] [--ticket] [--doc] [--mime]` | keep any file in one message (at most 7 MiB, `data` standard base64) for a ticket you may edit, or (V2-29) a doc you may write (`docs.may`) — or, with neither, as yours: `stored { hash, mime, kind, name, bytes, width, height, duplicate }` |
+| `begin` | `--size [--name] [--ticket] [--doc]` · `--upload` | start an upload of any size, or resume one of yours: `upload { upload, size, received, chunk }` |
 | `chunk` | `--upload --offset --data` | the next bytes (at most `chunk`, 4 MiB) at `offset` (what the upload has): `chunked { upload, received, size, duplicate }`; a gap `refused { reason: out_of_order }` |
 | `finish` | `--upload` | the upload hashed and kept: `stored { … }`, or `refused { reason: incomplete }` |
 | `get` | `--hash` | a file's bytes up to 7 MiB: `media { …, data }` (data base64); larger, `refused { reason: too_large }` — read it at `/media/<hash>` |
 | `info` | `--hash` | what a file is, without its bytes: `info { hash, mime, kind, name, bytes, width, height }` |
 | `usage` | | what you have put, each file once: `usage { principal, files, bytes }` |
 | `unfurl` | `--url` | a public link read into a card: `unfurled { url, kind, title, description, site, image, provider, embed }` |
-| `fetch` | `--url [--ticket] [--name]` | a remote image or file kept as yours (never hot-linked): `stored { … }` |
+| `fetch` | `--url [--ticket] [--doc] [--name]` | a remote image or file kept as yours (never hot-linked): `stored { … }` |
 
 EDITOR-10: **any file.** Its type is read from its own magic bytes, never
 from `mime` or `name`, and drawn by its `kind`: `image` (PNG, JPEG, GIF,
@@ -491,6 +500,69 @@ base64 -w0 shot.png > shot.b64
 synapse -P 4460 menger media put --ticket KILN-4 --name shot.png --data @shot.b64        # → stored { hash, … }
 synapse -P 4460 menger tickets amend --id KILN-4 --body @body.md                        # body.md says ![shot](media:<hash>)
 synapse -P 4460 -j menger media get --hash <hash> | jq -r 'select(.content.data) | .content.data' | base64 -d > back.png
+```
+
+### `docs` (V2-29)
+
+The owner, 2026-11-02: *"I would like us to move the docs onto a new docs
+api. same fe though."* — and, on V2-29's `pairing`: *"live co editting. we
+should see that they have a connection open on that document too. we should
+keep all changes over time too, so we could replay how it got built. with
+the ability to squash, permission gated"*. A **document** is an id (8
+characters of Crockford's base32 — TICKETS-35's form, `7k3mq2xa`; the app
+opens it at `#/doc/<id>`), the organization it is in, a title, and a body:
+a **Yjs CRDT** (yrs on the service, yjs in the browser, the same v1 updates)
+whose markdown is derived on every change for `get`, `list`, the search,
+agents and image references.
+
+| method | flags | what it does |
+|---|---|---|
+| `create` | `--title [--body] [--org]` | a document in an organization you write in (else the first): `created { doc }` |
+| `get` | `--id` | `doc { doc }` — `{ id, org, title, body, bytes, revision, created_at, created_by, at, by }`; `not_found` for one you do not read |
+| `list` | `[--query] [--limit] [--after]` | the documents you read, newest made first, without bodies; `query` keeps titles holding every word: `rows { items: [doc] }`, `page { next, remaining }` |
+| `update` | `--id --update [--session]` | a Yjs v1 update (base64) of the body — the editor's live typing — merged and kept: `applied { id, revision }` |
+| `save` | `--id --body [--base]` | a whole body (an agent's, a script's): diffed from the text it read (`base`, the revision read) and made into the CRDT's own edits, so it **merges** with live typing instead of overwriting it: `saved { id, revision, at, by, stale? }` |
+| `state` | `--id [--vector]` | what a copy whose state vector is `vector` lacks: `state { id, update, vector, revision }` |
+| `rename` | `--id --title` | `renamed { id, title, revision, at, by }` |
+| `history` | `--id [--limit] [--before]` | every change, newest first, kept with who and when (`at` in ms): `change { change: { seq, kind, at, by, principal, bytes, title?, authors? } }` — `create`, `update`, `save`, `rename`, `delete`, `snapshot` |
+| `replay` | `--id [--seq] [--at]` | the document as it stood after change `seq` (or at the moment `at`, ms): `doc { doc }`; squashed away: `not_found { revision }` |
+| `restore` | `--id --seq` | the body put back as it stood after `seq`, merged as a save: `saved { … }` |
+| `squash` | `--id --until` | the changes up to `until` collapsed into one `snapshot`, its `authors` keeping who wrote what (changes, bytes, first, last): `squashed { id, until, removed, at, by }`, said on `watch`. Its own grant, `docs.squash` — admin's by default, grantable to a role by the role table |
+| `present` | `--id` | who is on it: `present { present: { session, principal, name, agent, colour, client?, awareness?, at } }` |
+| `here` | `--id --session [--client] [--awareness]` | your caret (a Yjs awareness update, base64), said to everyone on it |
+| `delete` | `--id` | admin's: `deleted { id, at, by }`; its changes stay in the file |
+| `may` | `--id --role` | `may { id, role, held }` — the question the media service asks |
+| `watch` | `[--id] [--session]` | `watching`, then `created`, `updated { id, seq, update, by, session? }`, `renamed`, `deleted`, `squashed`, and on one document `present` and `left { session, client? }`; with `session` the watch is your presence while open, and your own updates are not said back; held to you by the gate as `ui.watch` is (`watch_closed { reason }`) |
+
+**Who may**: a viewer reads, follows and is present (`get`, `list`,
+`state`, `history`, `replay`, `present`, `here`, `watch`, `may`), an editor
+writes (`create`, `update`, `save`, `rename`, `restore`), an admin deletes
+and squashes — each grant held on the document's organization (`acme:`) or
+on `*`. The gate admits a call whose grant is held somewhere; the method
+asks it again on the organization: a document you do not read is
+`not_found`, one you read and may not write `refused { forbidden }`.
+
+**Presence**: a page's `watch { id, session }` is its presence for as long
+as it is open (gone, `left`, when the connection closes); a writer with no
+watch — an agent's `save` — is present while it writes and idles out 30 s
+after; a held one idles out after 10 minutes of silence.
+
+Kept in the service's own file, `docs.db` (`--docs-db-path`,
+`MENGER_DOCS_DB_PATH`; default beside the tickets file, never the tickets,
+ui or media file): `docs` (each document now, its derived text, and a
+snapshot of its CRDT every 64 changes so a load applies only what came
+after) and `doc_log` (every change, with who and when). Every byte written
+is reserved against a meter first (`docs/src/quota.rs`, always allowing
+until V2-31's quota service).
+
+The tracker's older documents — tickets of kind `doc` — stay tickets
+(V2-29's `existing`, queued to the owner; built as *leave*).
+
+```sh
+synapse -P 4460 menger docs create --title "The kiln" --body @kiln.md           # → created { doc: { id: "7k3mq2xa", … } }
+synapse -P 4460 menger docs save --id 7k3mq2xa --body @kiln.md --base 3          # merged with whoever is typing
+synapse -P 4460 menger docs history --id 7k3mq2xa --limit 20
+synapse -P 4460 menger docs replay --id 7k3mq2xa --seq 10
 ```
 
 ## Tickets
@@ -1225,7 +1297,11 @@ v2 keeps its store and replaces the app with the ui service. V2-24
 and `media.get`, by sha256 in `media.db`, the ticket's permit asked of the
 tickets service through the seam (`tickets.may`), `/media/<hash>` on the
 shell — the first service beside `tickets` to write something of a
-ticket's. V2-25
+ticket's. V2-29 (2026-11-02) gave documents a service of their own —
+`docs`, in `docs.db`, the same editor surface writing to it (`#/doc/:id`;
+`+ new` makes a doc, not a ticket) — and, on the owner's word, made a
+document a Yjs CRDT written live by many hands, who is on it shown, every
+change kept to replay and squash. V2-25
 (2026-11-01): epics leave v2's surface — the `epics` activation, the header's
 switcher and `#/epics`, and the `me` page — and the board is the
 organization's whole set; `session` stays as the agents' door.

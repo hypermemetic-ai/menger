@@ -469,7 +469,8 @@ fn nothing_reads_the_moved_paths() {
 /// menger's own packages: the workspace's members, and nothing else of the
 /// graph under its root.
 /// V2-24: the media service is menger's own crate, as the tickets service is.
-const OWN: &[&str] = &["menger", "menger-media", "menger-tickets-api"];
+/// V2-29: and the docs service.
+const OWN: &[&str] = &["menger", "menger-docs", "menger-media", "menger-tickets-api"];
 
 /// What the graph `pkgs` (with `members`, the workspace's member names)
 /// breaks of FRAME-7's first row: the members are exactly [`OWN`], no
@@ -741,17 +742,17 @@ fn the_checks_read_what_they_are_given() {
     assert!(moved_paths("../plexus-ui/compiler/ and dist/ui-compiler.wasm and ui-service.db").is_empty());
     assert!(moved_paths("plexus-ui-compiler/ build-ui-compiler/ my_ui-engine/ plexus-ui-service/").is_empty());
 
-    // FRAME-7: the tenant's graph — members exactly menger's own (V2-24: three), nothing
+    // FRAME-7: the tenant's graph — members exactly menger's own (V2-24: three; V2-29: four), nothing
     // else under its root, no ui crate under menger's name anywhere.
     let m = Path::new("/w/menger");
-    let own = |n: &str| (n.to_string(), PathBuf::from(format!("/w/menger/{}", match n { "menger" => "", "menger-media" => "media", _ => "tickets-api" })));
-    let members = [String::from("menger-tickets-api"), String::from("menger"), String::from("menger-media")];
-    assert!(tenant_breaks(&[own("menger"), own("menger-tickets-api"), own("menger-media"), pkgs[2].clone()], &members, m).is_empty());
+    let own = |n: &str| (n.to_string(), PathBuf::from(format!("/w/menger/{}", match n { "menger" => "", "menger-media" => "media", "menger-docs" => "docs", _ => "tickets-api" })));
+    let members = [String::from("menger-tickets-api"), String::from("menger"), String::from("menger-media"), String::from("menger-docs")];
+    assert!(tenant_breaks(&[own("menger"), own("menger-tickets-api"), own("menger-media"), own("menger-docs"), pkgs[2].clone()], &members, m).is_empty());
     let extra = [own("menger"), ("menger-ui-kit".to_string(), PathBuf::from("/w/elsewhere/kit")), ("plexus-ui-service".to_string(), PathBuf::from("/w/menger/vendor/s"))];
     assert_eq!(
         tenant_breaks(&extra, &members[..1], m),
         [
-            "the workspace's members are [\"menger-tickets-api\"], not [\"menger\", \"menger-media\", \"menger-tickets-api\"]".to_string(),
+            "the workspace's members are [\"menger-tickets-api\"], not [\"menger\", \"menger-docs\", \"menger-media\", \"menger-tickets-api\"]".to_string(),
             "menger-ui-kit: a ui crate under menger's name (/w/elsewhere/kit)".to_string(),
             "plexus-ui-service: a package of menger's own (/w/menger/vendor/s)".to_string(),
         ]
@@ -2060,14 +2061,14 @@ fn the_tokens_are_whole() {
 /// repository's. Each page (its name holds a hyphen, as a component's must:
 /// `page-<name>`), the routes that draw it and the Svelte components it
 /// places by their marks (`<ticket-head id={id}/>`, a bound mark the host
-/// fills). The first ten are the app's pages (EDITOR-4: `page-editor` at `#/`, the board at `#/board`) and carry the app's top
+/// fills). The first ten are the app's pages (EDITOR-4: `page-editor` at `#/`, V2-29: a doc at `#/doc/:doc`; the board at `#/board`) and carry the app's top
 /// (`<slot name="top"/>`, app-top by `slots.json`) and the palette its jump
 /// button opens (`<slot name="palette"/>`, jump-palette-sv); the rest draw one
 /// component alone for its browser cases. V2-25: `page-epics` (`#/epics`)
 /// and `page-me` (`#/me`) went with the `epics` activation and the owner's
 /// call on `session`'s page.
 const PAGES: [(&str, &[&str], &[&str]); 16] = [
-    ("page-editor", &["#/", "#/edit/:id"], &["editor-screen"]),
+    ("page-editor", &["#/", "#/edit/:id", "#/doc/:doc"], &["editor-screen"]),
     ("page-ticket", &["#/ticket/:id", "#/sv/ticket/:id"], &["ticket-head", "ticket-body", "ticket-edit", "ticket-relations", "ticket-actions", "ticket-commits", "ticket-history", "ticket-revisions"]),
     ("page-new", &["#/new", "#/new/:parent"], &["ticket-create"]),
     ("page-search", &["#/search", "#/search/:q", "#/search/:q/f/:filter"], &["search-page"]),

@@ -102,19 +102,29 @@ pub enum Owner {
     App(Option<String>),
     /// EDITOR-10: anyone signed in — a public page's preview image.
     Anyone,
+    /// V2-29: the document it was put for, by its id — kept in the
+    /// `ticket` column as `doc:<id>` (a ticket's id never begins so).
+    Doc(String),
 }
+
+/// V2-29: how a document's id is kept in `media_owners.ticket`.
+pub const DOC_PREFIX: &str = "doc:";
 
 impl Owner {
     /// Its two stored columns.
     fn columns(&self) -> (String, String) {
         match self {
             Owner::Ticket(t) => (t.clone(), String::new()),
+            Owner::Doc(d) => (format!("{DOC_PREFIX}{d}"), String::new()),
             Owner::App(p) => (String::new(), p.clone().unwrap_or_default()),
             Owner::Anyone => (String::new(), ANYONE.into()),
         }
     }
 
     fn of(ticket: String, principal: String) -> Self {
+        if let Some(doc) = ticket.strip_prefix(DOC_PREFIX) {
+            return Owner::Doc(doc.to_string());
+        }
         match (ticket.is_empty(), principal.as_str()) {
             (false, _) => Owner::Ticket(ticket),
             (true, ANYONE) => Owner::Anyone,

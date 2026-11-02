@@ -1,0 +1,51 @@
+# V2-29: menger's docs service — documents on their own API and in a file
+# of their own (`docs.db`), as a service of v2's own beside `tickets`, `ui`
+# and `media` (V2-1: services that coexist, each reaching the others as a
+# client through the seam). The owner, 2026-11-02: "I would like us to move
+# the docs onto a new docs api. same fe though." A document is writing, not
+# work: an id, a title, a markdown body, who and when, every write kept as a
+# revision. Who may is the gate's word on the document's organization
+# (`acme:`), asked of the running service — never of the tickets file.
+[package]
+name = "menger-docs"
+version = "0.6.2"
+edition = "2021"
+license = "MIT"
+description = "menger's docs service — documents on their own API and file, every write a revision, the organization's roles held by the gate"
+repository = "https://github.com/hypermemetic-ai/menger"
+
+[dependencies]
+# The organizations a caller is in (`OrgsClient::list`, over the seam) and
+# the role a `may` asks (`Role`).
+menger-tickets-api = { path = "../tickets-api", version = "0.6.2" }
+# The 0.7 line, by published version (PLEXUS-16), as the server takes it.
+plexus-core = "0.7.0"
+plexus-macros = "0.7.0"
+plexus-client = { version = "0.7.0", default-features = false }
+# The gate's types: a grant asked on a scope.
+plexus-auth-core = "0.2.2"
+async-trait = "0.1"
+async-stream = "0.3"
+futures = "0.3"
+jsonrpsee = { version = "0.26", features = ["server", "macros"] }
+# What the activation macro's server half emits paths into; and a doc's id,
+# 40 bits of a v4 uuid's randomness (TICKETS-35's draw).
+uuid = { version = "1.6", features = ["v4", "serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = { version = "1.1", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+anyhow = "1"
+tracing = "0.1"
+# V2-29 (`pairing`, the owner: "live co editting"): a document's body is a
+# Yjs CRDT — yrs, Yjs' Rust port, its v1 updates the browser's (yjs,
+# y-codemirror.next) byte for byte; the markdown is derived from it.
+yrs = "0.28.0"
+# An agent's whole-body save becomes the CRDT's edits by a diff of the text.
+similar = "2.7.0"
+# An update travels as base64.
+base64 = "0.22"
+
+[dev-dependencies]
+tempfile = "3"
