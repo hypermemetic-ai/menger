@@ -217,7 +217,7 @@ export default async (ctx) => {
   });
 
   await test("g_q_from_the_board_opens_the_queue", async () => {
-    const { context, page } = await openPage("#/", { signedIn: true });
+    const { context, page } = await openPage("#/board", { signedIn: true });
     try {
       await page.locator("[data-chord='g q']").waitFor();
       await page.keyboard.press("g");

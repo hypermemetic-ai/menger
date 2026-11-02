@@ -43,7 +43,7 @@ export default async (ctx) => {
   };
 
   /** The board, with the spy in before the page's scripts, focus on the board's head (no input). */
-  async function board(route = "") {
+  async function board(route = "#/board") {
     const { context, page, seen } = await openPage(route);
     await context.addInitScript(SPY);
     await page.reload();
@@ -75,7 +75,7 @@ export default async (ctx) => {
     const n0 = health();
     const shown = async () => Number((await t.locator("[data-field=health] [data-health-count]").textContent()).replace(/[^0-9]/g, ""));
     await eventually(`the health says ${n0}`, async () => (await shown()) === n0, 5_000);
-    for (const [link, href] of [["board", "#/"], ["ready", "#/ready"], ["waves", "#/waves"], ["filters", "#/filters"], ["new", "#/new"]]) {
+    for (const [link, href] of [["board", "#/board"], ["ready", "#/ready"], ["waves", "#/waves"], ["filters", "#/filters"], ["new", "#/new"]]) {
       assert((await t.locator(`[data-link=${link}]`).getAttribute("href")) === href, `the ${link} link is ${href}`);
     }
     assert((await t.locator("[data-link=me]").count()) === 0, "V2-25: no me link");
@@ -111,7 +111,7 @@ export default async (ctx) => {
     await input.fill("kettle");
     await input.press("Enter");
     await eventually("enter in the top's search goes to #/search/kettle", async () => (await hash(page)) === "#/search/kettle", 3_000);
-    await page.evaluate(() => (location.hash = "#/"));
+    await page.evaluate(() => (location.hash = "#/board"));
     await boardUp(page, B);
     const again = top(page).locator("[data-form=search] input");
     await again.fill("glaze/ash #2");
@@ -217,7 +217,7 @@ export default async (ctx) => {
     await page.keyboard.press("Escape");
     await eventually("escape clears it", async () => (await selected(page)).length === 0, 2_000);
     // c and the g chords route.
-    for (const [keys, want] of [[["c"], "#/new"], [["g", "r"], "#/ready"], [["g", "w"], "#/waves"], [["g", "b"], "#/"]]) {
+    for (const [keys, want] of [[["c"], "#/new"], [["g", "r"], "#/ready"], [["g", "w"], "#/waves"], [["g", "b"], "#/board"]]) {
       await page.evaluate(() => (location.hash = "#/f/ready"));
       await boardUp(page, B);
       await calm(page);

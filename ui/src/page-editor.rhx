@@ -1,16 +1,23 @@
 <script>
-  // EDITOR-3: the editor alone, for its browser cases — an rhx page like
-  // every route's (STUDIO-12), placing one svelte/1 component by its mark.
-  // #/editor/:id: editor-body. EDITOR-4 makes the editor the first screen
-  // (`#/`, `#/edit/:id`) with the rendered ticket beside it.
+  // EDITOR-4: the first screen — an rhx page like every route's (STUDIO-12),
+  // placing editor-screen by its mark: `#/` for the ticket last opened (or a
+  // new one), `#/edit/:id` for a given ticket; the app's top in its `top`
+  // section and the palette in its `palette` section (app-top and
+  // jump-palette-sv by ui/slots.json). A full-height column: the two halves
+  // scroll in their own boxes under the bar. The board is at `#/board`.
   prop("id");
 </script>
 
 <section class="page page-editor">
-  <editor-body id={id}/>
+  <slot name="top" here="editor"/>
+  <editor-screen id={id}/>
+  <slot name="palette"/>
 </section>
 
 <style>
   :scope { display: block; }
-  .page-editor { max-width: 900px; margin: 0 auto; padding: 16px 20px 40px; color: var(--ink); background: var(--bg); font-family: var(--font-text); font-size: var(--text-size); }
+  .page-editor { display: flex; flex-direction: column; height: 100vh; height: 100dvh; color: var(--ink); background: var(--bg); font-family: var(--font-text); font-size: var(--text-size); }
+  .page-editor > [data-slot=top] { flex: none; }
+  .page-editor > [data-slot=editor-screen] { flex: 1; min-height: 0; min-width: 0; display: flex; }
+  .page-editor > [data-slot=editor-screen] > * { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 </style>

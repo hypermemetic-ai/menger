@@ -35,6 +35,8 @@
   let { filter = null } = $props();
   const b = bus();
   const base = location.hash.startsWith("#/sv/") ? "#/sv/" : "#/";
+  // EDITOR-4: the board itself is #/board (#/ is the editor); under #/sv/ the alias stays.
+  const board = base === "#/" ? "#/board" : base;
   let q = $state(untrack(() => filter ?? ""));
   let typed = $state(false);
   let field = $state(null);
@@ -79,12 +81,12 @@
     if (ev?.target?.data?.["filter-input"] === undefined) return;
     q = "";
     typed = false;
-    if (filter != null) b.navigate(base);
+    if (filter != null) b.navigate(board);
   }
   function keyed(ev) {
     if (ev.key !== "Enter") return;
     const t = text.replaceAll("%", "%25").replaceAll("/", "%2F").replaceAll("#", "%23");
-    b.navigate(t === "" ? base : base + "f/" + t);
+    b.navigate(t === "" ? board : base + "f/" + t);
   }
   function complete(name) {
     q = completed(q, name);

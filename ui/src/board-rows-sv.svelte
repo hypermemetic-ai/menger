@@ -37,6 +37,8 @@
   const PITCH = 28;
   const PAGE = 200;
   const base = location.hash.startsWith("#/sv/") ? "#/sv/" : "#/";
+  // EDITOR-4: the board itself is #/board (#/ is the editor); under #/sv/ the alias stays.
+  const board = base === "#/" ? "#/board" : base;
 
   // The extents first: the board's first call, before the window's list.
   const extents = live({ snapshot: "tickets.nav.extents", params: {}, changes: "tickets.watch", key: "shortcode",
@@ -151,7 +153,7 @@
     "shift+x": { to: range, label: "check the range to here" },
     c: { to: () => b.navigate(base + "new"), label: "a new ticket" },
     "/": { to: () => b.emit("filter.focus", {}), label: "the filter line" },
-    "g b": { to: () => b.navigate(base), label: "the board" },
+    "g b": { to: () => b.navigate(board), label: "the board" },
     "g r": { to: () => b.navigate("#/ready"), label: "ready" },
     "g q": { to: () => b.navigate("#/queue"), label: "the queue" },
     "g w": { to: () => b.navigate("#/waves"), label: "waves" },

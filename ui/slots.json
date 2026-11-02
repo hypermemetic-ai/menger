@@ -57,5 +57,9 @@
   "page-sheet": {
     "top": "app-top",
     "palette": "jump-palette-sv"
+  },
+  "page-editor": {
+    "top": "app-top",
+    "palette": "jump-palette-sv"
   }
 }

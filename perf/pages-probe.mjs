@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // UI-8: the ladder's browser rows for v2 — the first pages on the engine.
 //
-//   node perf/pages-probe.mjs [--seed N] [--runs 5] [--path /app/] [--timeout-ms 30000] [--debug] [--no-build] [--headed] [--keep]
+//   node perf/pages-probe.mjs [--seed N] [--runs 5] [--path /app/#/board] [--timeout-ms 30000] [--debug] [--no-build] [--headed] [--keep]
 //
 // `--path` (FRAME-14) is what each load opens, the board by its route:
-// `/app/` (the default) the Svelte board (svelte/1; SURFACE-2: the default
-// since 2026-10-30, `/app/#/sv/` its alias), `/app/#/rhx/` the rhx one.
+// `/app/#/board` (the default) the Svelte board (svelte/1; SURFACE-2: the default
+// since 2026-10-30, `/app/#/sv/` its alias; EDITOR-4: `/app/` itself is the editor), `/app/#/rhx/` the rhx one.
 // Both draw the same marks, so one probe reads either.
 //
 // A throwaway menger seeded N (default 10⁶; release build), the bundle
@@ -52,7 +52,7 @@ const PROFILE = flag("--debug") ? "debug" : "release";
 const FIRST_ROWS_MS = 300;
 const MEMORY_BYTES = 10 * 1000 * 1000;
 const RUN_TIMEOUT_MS = Number(opt("--timeout-ms", "30000"));
-const PATH = opt("--path", "/app/");
+const PATH = opt("--path", "/app/#/board");
 
 const median = (xs) => {
   const s = [...xs].sort((a, b) => a - b);
@@ -164,7 +164,7 @@ async function main() {
   const each = runs.map((r) => (r.firstRow == null ? "never" : `${r.firstRow.toFixed(0)}`)).join(", ");
   const ok = painted.length === runs.length && first <= FIRST_ROWS_MS && memory <= MEMORY_BYTES;
   console.log(
-    `| ${magnitude(SEED)} | v2 · board first rows painted${PATH === "/app/" ? "" : ` · ${PATH}`} | ${painted.length ? `${(first / 1000).toFixed(3)} s` : "never"} (median of ${RUNS}: ${each} ms) | wasm ${Number.isFinite(memory) ? mib(memory) : "unknown"} · ${Number.isFinite(held) ? held : 0} rows held · JS heap ${Number.isFinite(heap) ? mib(heap) : "unknown"} · created row ${Number.isFinite(createdMs) ? `${createdMs.toFixed(1)} ms` : "never"} | ${ok ? "within" : "over"} 0.3 s / 10 MB |`,
+    `| ${magnitude(SEED)} | v2 · board first rows painted${PATH === "/app/#/board" ? "" : ` · ${PATH}`} | ${painted.length ? `${(first / 1000).toFixed(3)} s` : "never"} (median of ${RUNS}: ${each} ms) | wasm ${Number.isFinite(memory) ? mib(memory) : "unknown"} · ${Number.isFinite(held) ? held : 0} rows held · JS heap ${Number.isFinite(heap) ? mib(heap) : "unknown"} · created row ${Number.isFinite(createdMs) ? `${createdMs.toFixed(1)} ms` : "never"} | ${ok ? "within" : "over"} 0.3 s / 10 MB |`,
   );
   const names = [...new Set(runs.flatMap((r) => Object.keys(r.marks ?? {})))];
   const marks = Object.fromEntries(names.map((n) => [n, median(runs.map((r) => r.marks?.[n]).filter((x) => x != null))]).sort((a, b) => a[1] - b[1]));

@@ -17,6 +17,8 @@
                               blockers_changed: "upsert:ticket", unlocks_changed: "upsert:ticket", unlocks_removed: "upsert:ticket", parent_changed: "upsert:ticket",
                               commits_linked: "upsert:ticket", commits_unlinked: "upsert:ticket", revision_restored: "upsert:ticket", deleted: "upsert:." } });
   const t = $derived(ticket.rows.find((r) => r.title != null));
+  // EDITOR-4: the ticket page is "the ticket last opened" for the editor at #/ (editor-screen reads it).
+  $effect(() => { try { if (id) localStorage.setItem("menger.editor.last", id); } catch { /* a private window */ } });
 </script>
 
 <section class="ticket-body" data-surface="ticket-body">

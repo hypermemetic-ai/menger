@@ -29,6 +29,8 @@
   let { sheet = null, sample = null } = $props();
   const b = bus();
   const base = location.hash.startsWith("#/sv/") ? "#/sv/" : "#/";
+  // EDITOR-4: the board itself is #/board (#/ is the editor); under #/sv/ the alias stays.
+  const board = base === "#/" ? "#/board" : base;
   let limit = $state(STEP);
   const queue = live({ snapshot: "tickets.queued", params: () => ({ limit }), changes: "tickets.watch", key: "id",
                        on: { queue_row: "upsert:.", queued: "upsert:.", snoozed: "upsert:.", unqueued: "remove:id", deleted: "remove:ids", page: "upsert:.", queue_end: "upsert:." } });
@@ -77,7 +79,7 @@
     s: { to: () => here && snooze(here.id), label: "snooze it an hour" },
     d: { to: () => here && done(here.id), label: "take it out of the queue" },
     c: { to: () => here && changes(here.id), label: "request changes" },
-    "g b": { to: () => b.navigate(base), label: "the board" },
+    "g b": { to: () => b.navigate(board), label: "the board" },
   });
   const questions = (e) => (e.inputs?.length ? e.inputs.length : e.input ? 1 : 0);
 </script>

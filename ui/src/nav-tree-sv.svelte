@@ -17,6 +17,8 @@
 
   let { filter = null } = $props();
   const base = location.hash.startsWith("#/sv/") ? "#/sv/" : "#/";
+  // EDITOR-4: the board itself is #/board (#/ is the editor); under #/sv/ the alias stays.
+  const board = base === "#/" ? "#/board" : base;
 
   const groups = live({ snapshot: "tickets.nav.groups", params: {}, changes: "tickets.watch", key: "shortcode", on: { group_changed: "upsert:group" } });
   const counts = live({ snapshot: "tickets.nav.counts", params: () => ({ filter: filter ?? null }), key: "shortcode", on: { count: "upsert:." } });
@@ -40,7 +42,7 @@
         <li class="nav-group" data-nav-group={g.shortcode}>
           <div class="nav-group-row">
             <button class="nav-toggle" data-nav-toggle={g.shortcode} aria-expanded={open.includes(g.shortcode) ? "true" : "false"} onclick={() => toggle(g.shortcode)}>{open.includes(g.shortcode) ? "▾" : "▸"}</button>
-            <a class="nav-code" href={g.root == null ? base : base + "ticket/" + g.root} title={g.root_row == null ? g.shortcode : g.root_row.title}>{g.shortcode}</a>
+            <a class="nav-code" href={g.root == null ? board : base + "ticket/" + g.root} title={g.root_row == null ? g.shortcode : g.root_row.title}>{g.shortcode}</a>
             {#if filter != null}
               <span class="nav-held" data-nav-held>{heldIn(g.shortcode)}</span>
             {/if}

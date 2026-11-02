@@ -1,4 +1,4 @@
-// EDITOR-3: the editor — editor-body at #/editor/:id on the throwaway: the
+// EDITOR-3: the editor — editor-body at #/edit/:id on the throwaway: the
 // body in CodeMirror, formed in place and exact; one amend 600 ms after the
 // last key; a refusal in the bar; an outside amend landing around the caret;
 // a dirty draft merged with an outside write at the pause. Run alone by
@@ -36,7 +36,7 @@ export default async (ctx) => {
     child.on("exit", (code) => (code === 0 ? done() : fail(new Error(`outside amend failed (${code}): ${err}`))));
   });
   const open = async (id) => {
-    const { context, page } = await openPage(`#/editor/${id}`);
+    const { context, page } = await openPage(`#/edit/${id}`);
     const ed = page.locator("[data-surface=editor-body]");
     await eventually("the editor is drawn", async () => (await ed.locator(".cm-content[data-field=body]").count()) === 1);
     return { context, page, ed, content: ed.locator(".cm-content") };
@@ -186,9 +186,109 @@ export default async (ctx) => {
   });
 
   await test("no_ticket_and_the_loading_state", async () => {
-    const { context, page } = await openPage("#/editor/ZZZZ-999999");
+    const { context, page } = await openPage("#/edit/ZZZZ-999999");
     try {
       await eventually("no such ticket", async () => (await page.locator("[data-surface=editor-body] [data-empty]").count()) === 1, 5_000);
+    } finally {
+      await context.close();
+    }
+  });
+
+  // ── EDITOR-4: the first screen ───────────────────────────────────────────
+  // Marks: `[data-surface=editor-screen]` (`[data-ticket]`, `[data-pane=editor|rendered]`), `[data-half=editor|rendered]`,
+  // `[data-action=new]`, `[data-action=pane][data-to]`, `[data-welcome]`, `[data-field=current]`.
+  const hash = (page) => page.evaluate(() => location.hash);
+
+  await test("the_first_screen_is_the_editor_with_the_ticket_rendered_beside_it", async () => {
+    const id = make("the first screen", "# Beside\n\nwritten on the left, read on the right\n");
+    const { context, page } = await openPage(`#/edit/${id}`);
+    try {
+      const screen = page.locator("[data-surface=editor-screen]");
+      await eventually("both halves", async () => (await screen.locator("[data-half=editor] [data-surface=editor-body] .cm-content").count()) === 1 && (await screen.locator("[data-half=rendered] [data-surface=ticket-head]").count()) === 1);
+      assert((await screen.locator("[data-half=rendered] [data-surface=ticket-body]").count()) === 1 && (await screen.locator("[data-half=rendered] [data-surface=ticket-questions]").count()) === 1, "the body and the questions on the right");
+      assert((await page.locator("[data-layout=page-editor][data-slot=top] [data-surface=app-top]").count()) === 1, "the app's top on the page");
+      assert((await page.locator("[data-surface=app-top] [data-link=board]").getAttribute("href")) === "#/board", "the top's board link goes to #/board");
+      // A key on the left lands on the right, as everyone else sees it.
+      const content = screen.locator("[data-half=editor] .cm-content");
+      await content.click();
+      await page.keyboard.press("Control+End");
+      await page.keyboard.type("!");
+      await eventually("the rendered half redraws", async () => ((await screen.locator("[data-half=rendered] [data-ticket-body]").innerText()) || "").includes("read on the right\n!") || ((await screen.locator("[data-half=rendered] [data-ticket-body]").innerText()) || "").includes("!"), 5_000);
+      // Then `#/` is this ticket: the last opened.
+      await page.evaluate(() => (location.hash = "#/"));
+      await eventually("#/ opens the last ticket", async () => (await page.locator("[data-surface=editor-screen]").getAttribute("data-ticket")) === id, 5_000);
+      assert((await hash(page)) === "#/", "the route stays #/");
+      const shots = process.env.PAGES_SHOTS;
+      if (shots) {
+        await eventually("drawn for the shot", async () => (await screen.locator("[data-half=rendered] [data-ticket-body] h1").count()) === 1, 5_000);
+        await page.screenshot({ path: path.join(shots, "editor-screen-1440-light.png") });
+        await page.evaluate(() => (document.documentElement.dataset.theme = "dark"));
+        await sleep(300); // the colours' transitions end
+        await page.screenshot({ path: path.join(shots, "editor-screen-1440-dark.png") });
+        await page.evaluate(() => (document.documentElement.dataset.theme = "light"));
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("a_phone_shows_one_pane_and_a_switch", async () => {
+    const id = make("on a phone", "# Phone\n\none pane at a time\n");
+    const { context, page } = await openPage(`#/edit/${id}`);
+    try {
+      await page.setViewportSize({ width: 390, height: 844 });
+      const screen = page.locator("[data-surface=editor-screen]");
+      await eventually("the editor pane", async () => (await screen.getAttribute("data-pane")) === "editor" && (await screen.locator("[data-half=editor] .cm-content").isVisible()));
+      assert(!(await screen.locator("[data-half=rendered]").isVisible()), "the rendered half is hidden on the phone");
+      const shots = process.env.PAGES_SHOTS;
+      if (shots) {
+        await page.screenshot({ path: path.join(shots, "editor-screen-390-light.png") });
+        await page.evaluate(() => (document.documentElement.dataset.theme = "dark"));
+        await sleep(300); // the colours' transitions end
+        await page.screenshot({ path: path.join(shots, "editor-screen-390-dark.png") });
+        await page.evaluate(() => (document.documentElement.dataset.theme = "light"));
+      }
+      await screen.locator("[data-action=pane][data-to=rendered]").click();
+      await eventually("the rendered pane", async () => (await screen.getAttribute("data-pane")) === "rendered" && (await screen.locator("[data-half=rendered] [data-ticket-body]").isVisible()));
+      assert(!(await screen.locator("[data-half=editor]").isVisible()), "the editor is hidden in turn");
+      if (shots) await page.screenshot({ path: path.join(shots, "editor-screen-390-rendered.png") });
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("with_no_last_ticket_new_makes_a_draft_and_opens_it", async () => {
+    const { context, page } = await openPage("#/");
+    try {
+      const screen = page.locator("[data-surface=editor-screen]");
+      await eventually("the welcome", async () => (await screen.locator("[data-welcome]").count()) === 1);
+      await eventually("new is ready once a shortcode is known", async () => !(await screen.locator("[data-welcome] [data-action=new]").isDisabled()), 5_000);
+      await screen.locator("[data-welcome] [data-action=new]").click();
+      await eventually("the new ticket opens", async () => /^#\/edit\/[A-Z]+-\d+$/.test(await hash(page)), 5_000);
+      const made = (await hash(page)).replace("#/edit/", "");
+      const t = get(made);
+      assert(t.status === "Draft" && t.title === "Untitled", `a Draft called Untitled: ${t.status} ${t.title}`);
+      await eventually("its editor", async () => (await screen.locator("[data-half=editor] .cm-content").count()) === 1);
+      assert((await screen.getAttribute("data-ticket")) === made, "the screen is the new ticket's");
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("escape_and_g_b_go_to_the_board", async () => {
+    const id = make("one key from the board", "# Esc\n");
+    const { context, page } = await openPage(`#/edit/${id}`);
+    try {
+      const content = page.locator("[data-surface=editor-screen] [data-half=editor] .cm-content");
+      await content.click();
+      await page.keyboard.press("Escape");
+      await eventually("the board", async () => (await hash(page)) === "#/board" && (await page.locator("[data-layout=board-frame]").count()) > 0, 5_000);
+      // And the ticket page's board key lands there too.
+      await page.evaluate((id) => (location.hash = `#/ticket/${id}`), id);
+      await page.locator("[data-surface=ticket-head]").waitFor();
+      await page.keyboard.press("g");
+      await page.keyboard.press("b");
+      await eventually("g b from the ticket page", async () => (await hash(page)) === "#/board", 5_000);
     } finally {
       await context.close();
     }
