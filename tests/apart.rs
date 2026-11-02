@@ -1464,6 +1464,13 @@ const OWN_SANITIZER: [&str; 10] =
 /// is the way; a focus or a scroll is Svelte's `tick()` or an action).
 const OWN_TIMERS: [&str; 6] = ["setTimeout(", "setInterval(", "requestAnimationFrame(", "queueMicrotask(", "Date.now(", "performance.now("];
 
+/// EDITOR-3: a component whose timer is a write's pause, not a read's
+/// debounce — the editor sends `tickets.amend` 600 ms after the last key,
+/// which no `live` spec can keep (the registry debounces what is asked,
+/// never what is written). Named here, reviewed here; every other timer
+/// beside a `live(` is still the bus's.
+const WRITE_PAUSE: [&str; 1] = ["editor-body.svelte"];
+
 /// Whether `code` draws a `<svelte:element …>` that spreads attributes
 /// (`{...`) — elements and attributes taken from data, the copied
 /// allow-list's way of drawing a body.
@@ -1525,7 +1532,7 @@ fn bus_breaks(sources: &[(String, String)]) -> Vec<String> {
     let mut out = Vec::new();
     for (f, text) in sources.iter().filter(|(f, _)| f.ends_with(".svelte")) {
         let code = svelte_code(text);
-        if code.contains("live(") {
+        if code.contains("live(") && !WRITE_PAUSE.contains(&f.as_str()) {
             for t in OWN_TIMERS.iter().filter(|t| code.contains(*t)) {
                 out.push(format!("ui/src/{f}: keeps time by hand (`{t}`) beside a live(: the bus's debounce_ms keeps the time (a focus or a scroll is Svelte's tick() or an action)"));
             }
@@ -2059,7 +2066,7 @@ fn the_tokens_are_whole() {
 /// component alone for its browser cases. V2-25: `page-epics` (`#/epics`)
 /// and `page-me` (`#/me`) went with the `epics` activation and the owner's
 /// call on `session`'s page.
-const PAGES: [(&str, &[&str], &[&str]); 15] = [
+const PAGES: [(&str, &[&str], &[&str]); 16] = [
     ("page-ticket", &["#/ticket/:id", "#/sv/ticket/:id"], &["ticket-head", "ticket-body", "ticket-edit", "ticket-relations", "ticket-actions", "ticket-commits", "ticket-history", "ticket-revisions"]),
     ("page-new", &["#/new", "#/new/:parent"], &["ticket-create"]),
     ("page-search", &["#/search", "#/search/:q", "#/search/:q/f/:filter"], &["search-page"]),
@@ -2075,6 +2082,7 @@ const PAGES: [(&str, &[&str], &[&str]); 15] = [
     ("page-actions", &["#/actions/:id"], &["ticket-actions"]),
     ("page-facets", &["#/facets", "#/facets/:filter"], &["nav-facets"]),
     ("page-counts", &["#/counts/:filter"], &["nav-counts"]),
+    ("page-editor", &["#/editor/:id"], &["editor-body"]),
 ];
 
 /// The app's pages: [`PAGES`]' first nine, each with the top.

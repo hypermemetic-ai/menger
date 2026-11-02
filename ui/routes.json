@@ -25,6 +25,7 @@
   "#/search/:q": "page-search",
   "#/search/:q/f/:filter": "page-search",
   "#/edit/:id": "page-edit",
+  "#/editor/:id": "page-editor",
   "#/actions/:id": "page-actions",
   "#/orgs": "page-orgs",
   "#/releases": "page-releases",

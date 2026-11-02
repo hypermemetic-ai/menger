@@ -1,0 +1,16 @@
+<script>
+  // EDITOR-3: the editor alone, for its browser cases — an rhx page like
+  // every route's (STUDIO-12), placing one svelte/1 component by its mark.
+  // #/editor/:id: editor-body. EDITOR-4 makes the editor the first screen
+  // (`#/`, `#/edit/:id`) with the rendered ticket beside it.
+  prop("id");
+</script>
+
+<section class="page page-editor">
+  <editor-body id={id}/>
+</section>
+
+<style>
+  :scope { display: block; }
+  .page-editor { max-width: 900px; margin: 0 auto; padding: 16px 20px 40px; color: var(--ink); background: var(--bg); font-family: var(--font-text); font-size: var(--text-size); }
+</style>
