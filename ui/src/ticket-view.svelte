@@ -24,7 +24,6 @@
   const MEDIA = /\]\(\s*media:([0-9a-fA-F]{64})\s*\)/g;
   const origin = () => (typeof location === "object" && location?.origin) || "";
   const mediaLinks = (md) => String(md ?? "").replace(MEDIA, (_, hash) => `](${origin()}/media/${hash.toLowerCase()})`);
-  const drawn = $derived(markdown(mediaLinks(body)));
 </script>
 
 <article class="ticket-view" data-surface="ticket-view">
@@ -37,7 +36,7 @@
   {#if !body}
     <p class="empty" data-field="body" data-empty>No body yet.</p>
   {:else}
-    <div class="md" data-field="body" data-ticket-body>{@html drawn}</div>
+    <div class="md" data-field="body" data-ticket-body>{@html markdown(mediaLinks(body))}</div>
   {/if}
 </article>
 
