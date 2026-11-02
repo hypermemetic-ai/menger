@@ -44,6 +44,18 @@ export default async (ctx) => {
   const lineText = (ed, n) => ed.locator(".cm-line").nth(n - 1).innerText();
   const state = (ed) => ed.locator("[data-field=write-state]");
   const shots = process.env.PAGES_SHOTS;
+  /** `name`-1440-light … `name`-390-dark: both widths, both themes, the transitions ended; the page left at 1440, light. */
+  const shoot = async (page, name) => {
+    if (!shots) return;
+    for (const [w, h] of [[1440, 900], [390, 844]]) for (const theme of ["light", "dark"]) {
+      await page.setViewportSize({ width: w, height: h });
+      await page.evaluate((th) => (document.documentElement.dataset.theme = th), theme);
+      await sleep(300);
+      await page.screenshot({ path: path.join(shots, `${name}-${w}-${theme}.png`) });
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.evaluate(() => (document.documentElement.dataset.theme = "light"));
+  };
 
   await test("the_body_is_formed_in_place_and_exact", async () => {
     const SRC = "# The editor\n\nSome *words*, **weight** and `code` with a [link](https://menger.sh).\n\n- one\n- two\n\n```js\nlet a = 1;\n```\n\n> quoted\n\n\\*escaped\\*  __odd__\n";
@@ -289,6 +301,107 @@ export default async (ctx) => {
       await page.keyboard.press("g");
       await page.keyboard.press("b");
       await eventually("g b from the ticket page", async () => (await hash(page)) === "#/board", 5_000);
+    } finally {
+      await context.close();
+    }
+  });
+
+  // ── EDITOR-5: links and images, against the real media service ───────────
+  const PNG_2X1 = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEUlEQVR42mP8z8DwnwEJMAIAKQgD/2zM2wkAAAAASUVORK5CYII=";
+  /** A paste of a file on the editor; answers how many upload cards stood the moment it was dispatched. */
+  const pasteFile = (page, b64, type, name) => page.evaluate(({ b64, type, name }) => {
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const dt = new DataTransfer();
+    dt.items.add(new File([bytes], name, { type }));
+    document.querySelector("[data-surface=editor-body] .cm-content").dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+    return document.querySelectorAll("[data-upload]").length;
+  }, { b64, type, name });
+
+  await test("a_url_pasted_over_a_selection_links_it", async () => {
+    const id = make("a link", "see the site\n");
+    const { context, page, ed, content } = await open(id);
+    try {
+      await content.click();
+      await page.keyboard.press("Control+Home");
+      for (let i = 0; i < 4; i++) await page.keyboard.press("ArrowRight");
+      for (let i = 0; i < 8; i++) await page.keyboard.press("Shift+ArrowRight");
+      await page.evaluate(() => {
+        const dt = new DataTransfer();
+        dt.setData("text/plain", "https://menger.sh/x");
+        document.querySelector("[data-surface=editor-body] .cm-content").dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+      });
+      await eventually("the link is in the store", async () => get(id).body === "see [the site](https://menger.sh/x)\n", 5_000);
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("a_pasted_image_lands_as_media_and_renders", async () => {
+    const id = make("an image", "above\n\nbelow\n");
+    const { context, page, ed, content } = await open(id);
+    try {
+      await content.click();
+      await page.keyboard.press("Control+Home");
+      await page.keyboard.press("End");
+      assert((await pasteFile(page, PNG_2X1, "image/png", "the curve.png")) === 1, "the upload card stands at once");
+      assert(!get(id).body.includes("uploading"), "no placeholder in the source");
+      await eventually("the source names the image", async () => /^above\n\n!\[the curve\]\(media:[0-9a-f]{64}\)\n\nbelow\n$/.test(get(id).body), 8_000);
+      assert((await ed.locator("[data-upload]").count()) === 0, "the card is gone");
+      const hash = /media:([0-9a-f]{64})/.exec(get(id).body)[1];
+      await eventually("the editor draws it", async () => (await ed.locator(`[data-image="${hash}"]`).count()) === 1, 5_000);
+      assert((await ed.locator(`[data-image="${hash}"]`).evaluate((i) => new Promise((r) => (i.complete ? r(i.naturalWidth) : (i.onload = () => r(i.naturalWidth)))))) === 2, "with its pixels");
+      await page.evaluate((id) => (location.hash = `#/edit/${id}`), id);
+      const img = page.locator("[data-half=rendered] [data-ticket-body] img");
+      await eventually("the rendered half draws it", async () => (await img.count()) === 1 && (await img.getAttribute("src")).endsWith(`/media/${hash}`), 5_000);
+      if (shots) {
+        // A picture worth looking at: drawn in the page, pasted as any image is.
+        const big = await page.evaluate(() => {
+          const c = Object.assign(document.createElement("canvas"), { width: 640, height: 300 });
+          const x = c.getContext("2d");
+          x.fillStyle = "#3b5bdb"; x.fillRect(0, 0, 640, 300);
+          x.fillStyle = "#ffffff"; x.fillRect(40, 40, 260, 220); x.fillRect(340, 40, 260, 220);
+          return c.toDataURL("image/png").split(",")[1];
+        });
+        await ed.locator(".cm-content").click();
+        await page.keyboard.press("Control+End");
+        await pasteFile(page, big, "image/png", "the first screen.png");
+        await eventually("the picture is in the editor", async () => (await ed.locator("[data-image]").count()) === 2, 8_000);
+        await eventually("and on the right", async () => (await img.count()) === 2, 5_000);
+        await shoot(page, "editor-image");
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("a_refused_image_is_said_and_leaves_no_line", async () => {
+    const id = make("no image", "text\n");
+    const { context, page, ed, content } = await open(id);
+    try {
+      await content.click();
+      await pasteFile(page, btoa("this is no image"), "image/png", "fake.png");
+      await eventually("the refusal stands where it was pasted", async () => (await ed.locator("[data-upload][data-refused]").count()) === 1, 5_000);
+      assert(get(id).body === "text\n", "nothing written");
+      await page.keyboard.type("x");
+      await eventually("it goes with the next key", async () => (await ed.locator("[data-upload]").count()) === 0, 3_000);
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("an_image_too_large_is_refused_before_the_socket", async () => {
+    const id = make("too large", "text\n");
+    const { context, page, ed, content } = await open(id);
+    try {
+      await content.click();
+      const before = (await sentCalls(page)).filter((c) => c.method === "media.put").length;
+      await page.evaluate(() => {
+        const dt = new DataTransfer();
+        dt.items.add(new File([new Uint8Array(7 * 1024 * 1024 + 1)], "huge.png", { type: "image/png" }));
+        document.querySelector("[data-surface=editor-body] .cm-content").dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+      });
+      await eventually("said in place", async () => /7 MiB/.test((await ed.locator("[data-upload][data-refused]").textContent({ timeout: 500 })) ?? ""), 3_000);
+      assert((await sentCalls(page)).filter((c) => c.method === "media.put").length === before, "no media.put sent");
     } finally {
       await context.close();
     }
