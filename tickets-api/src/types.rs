@@ -1284,7 +1284,7 @@ pub struct ShortcodeMove {
 
 /// ACCESS-12: why an open watch ended — its caller verified again when the
 /// grants moved (or its sign-in ended), and refused. Every watch
-/// (`tickets.watch`, `epics.watch`, `ui.watch`) ends with one
+/// (`tickets.watch`, `ui.watch`) ends with one
 /// `watch_closed { reason, message }` and nothing after it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]

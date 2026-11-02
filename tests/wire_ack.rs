@@ -33,7 +33,7 @@ fn median(mut xs: Vec<Duration>) -> Duration {
 /// The board's first calls, as the page asks them.
 fn board_calls() -> Vec<(&'static str, Value)> {
     vec![
-        ("epics.current", json!({})),
+        // V2-25: the top asks no epics.current any more — the board is the organization's whole set.
         ("tickets.health", json!({})),
         ("auth.whoami", json!({})),
         ("tickets.get", json!({ "id": "BAG-2" })),
