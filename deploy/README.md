@@ -230,6 +230,10 @@ when the module is there. A service names its signers at start: app-test's
 line in `deploy/env/app-test.env` is the pipeline key's public key, written
 by hand, never by a test; prod names none (UI-15: it takes no push).
 
+V2-24: the media service keeps its file beside the database in the data
+volume by default (`media.db`; `--media-db-path`, `MENGER_MEDIA_DB_PATH`
+to name another) — nothing in the env files or `run-menger` for it.
+
 After a deploy is healthy — `remote test`, and `local` — the pipeline
 pushes the release's bundle: `ui.push { bundle, manifest, signature,
 commit }` by `plexus-ui push` (the release's own `bin/plexus-ui`, else

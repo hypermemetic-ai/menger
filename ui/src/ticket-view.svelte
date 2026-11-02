@@ -4,7 +4,13 @@
      sanitizer), the look on the tokens. It sits in any bundle with nothing
      else of menger. A parent holding the ticket imports it as a sibling,
      `./ticket-view.svelte`: its code inlined, no section per instance
-     (perf/notes.md "SURFACE-16" has what a bound mark costs instead). -->
+     (perf/notes.md "SURFACE-16" has what a bound mark costs instead).
+     V2-24: a body names a kept image `![alt](media:<hash>)` (the media
+     service's `media.put` answers the hash); the page draws it from the
+     shell's `/media/<hash>`, behind the session, so the link is rewritten
+     to that path on this origin before the render — the sanitizer keeps an
+     image's `src` only when it is http(s), and the page policy (`img-src
+     'self'`) admits the origin's own. -->
 <script module>
   export const uses = [];
 </script>
@@ -13,6 +19,12 @@
   import { markdown } from "plexus-ui/host";
 
   let { body = "", title = null, status = null } = $props();
+
+  // V2-24: `](media:<64 hex>)` → `](<origin>/media/<hash>)`, the hash lower-cased.
+  const MEDIA = /\]\(\s*media:([0-9a-fA-F]{64})\s*\)/g;
+  const origin = () => (typeof location === "object" && location?.origin) || "";
+  const mediaLinks = (md) => String(md ?? "").replace(MEDIA, (_, hash) => `](${origin()}/media/${hash.toLowerCase()})`);
+  const drawn = $derived(markdown(mediaLinks(body)));
 </script>
 
 <article class="ticket-view" data-surface="ticket-view">
@@ -25,7 +37,7 @@
   {#if !body}
     <p class="empty" data-field="body" data-empty>No body yet.</p>
   {:else}
-    <div class="md" data-field="body" data-ticket-body>{@html markdown(body)}</div>
+    <div class="md" data-field="body" data-ticket-body>{@html drawn}</div>
   {/if}
 </article>
 
@@ -55,5 +67,6 @@
   .md :global(table) { border-collapse: collapse; }
   .md :global(th), .md :global(td) { padding: 3px 8px; border: var(--border) solid var(--line); }
   .md :global(blockquote) { margin: 0; padding-left: 12px; color: var(--muted); border-left: 3px solid var(--line); }
+  .md :global(img) { max-width: 100%; height: auto; border-radius: var(--radius); }
   .empty { margin: 0; color: var(--muted); font-family: var(--font-text); font-size: 12px; }
 </style>
