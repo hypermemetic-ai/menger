@@ -9,7 +9,10 @@
 //!   (ACCESS-33: a request path is a key into it, never a path on disk), or
 //!   the "not built" page (200) while there is none;
 //! - the login routes (IDENTITY-19), unchanged — the auth surface is the
-//!   next thing v2 reworks.
+//!   next thing v2 reworks;
+//! - V2-24: `/media/<hash>` — an image a body shows, from the media service
+//!   asked as the request's session ([`media_get`]), behind the session as
+//!   the ui routes are; content-addressed, so kept forever.
 //!
 //! SCAFFOLD-5: the table, the stamping, the app's routes, the hardening
 //! (IDENTITY-38) and [`AppSource`] are `plexus-webapp`'s; this module is
@@ -68,6 +71,45 @@ pub struct ShellConfig {
     /// as `bundle:studio`), beside `/app/` — for a session [`Studio::may`]
     /// admits, with the compiler module it compiles in. None: no studio.
     pub studio: Option<Studio>,
+    /// V2-24: the running service, for `GET /media/<hash>` — the media
+    /// service asked `media.get` as the request's session
+    /// (`menger_media::fetch`, a client through plexus-core's in-memory
+    /// transport: the gate admits or refuses it, the service decides whose
+    /// the image is). None: no route.
+    pub media: Option<Arc<plexus_core::plexus::DynamicHub>>,
+}
+
+/// V2-24: what `GET /media/<hash>` is served under — the bytes never change
+/// under their hash (the framework's [`IMMUTABLE`]); a miss is never kept.
+pub const MEDIA_ROUTE: &str = "/media/{hash}";
+
+/// V2-24: `/media/<hash>` for a signed-in session: the image's bytes with
+/// their type, kept forever (content-addressed); 404 for a hash that names
+/// no image or one the session may not see (one answer, as `media.get`
+/// gives it), and for a request with no session — the ui routes' session
+/// layer sends one to the sign-in page first.
+async fn media_get(
+    State((service, login)): State<(Arc<plexus_core::plexus::DynamicHub>, Option<Arc<crate::web_login::Login>>)>,
+    axum::extract::Path(hash): axum::extract::Path<String>,
+    headers: header::HeaderMap,
+) -> Response {
+    let miss = |why: &'static str| (StatusCode::NOT_FOUND, [(header::CACHE_CONTROL, NO_STORE)], why).into_response();
+    let Some(caller) = login.as_ref().and_then(|l| l.session(&headers)) else { return miss("no session") };
+    match menger_media::fetch(service, caller, &hash).await {
+        menger_media::Fetched::Image { mime, bytes } => {
+            let mime = header::HeaderValue::from_str(&mime).unwrap_or(header::HeaderValue::from_static("application/octet-stream"));
+            (
+                [(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, header::HeaderValue::from_static(IMMUTABLE)), (header::X_CONTENT_TYPE_OPTIONS, header::HeaderValue::from_static("nosniff"))],
+                bytes,
+            )
+                .into_response()
+        }
+        menger_media::Fetched::NotFound => miss("no such image"),
+        menger_media::Fetched::Refused(why) => {
+            tracing::debug!("V2-24: /media/{hash} refused: {why}");
+            miss("no such image")
+        }
+    }
 }
 
 /// STUDIO-2: who opens `/studio/`, and the module the studio compiles in.
@@ -307,6 +349,11 @@ async fn router(cfg: ShellConfig, at: std::net::SocketAddr) -> Router {
             None => routes,
         };
         app = routes.mount(app);
+    }
+    // V2-24: `/media/<hash>` from the media service, as the session —
+    // inside the session check below, like the ui routes.
+    if let Some(service) = cfg.media.clone() {
+        app = app.merge(Router::new().route(MEDIA_ROUTE, get(media_get)).with_state((service, cfg.login.clone())));
     }
     if let Some(login) = cfg.login.as_ref().filter(|l| l.require) {
         app = app.route_layer(axum::middleware::from_fn_with_state(login.clone(), require_session));

@@ -24,6 +24,37 @@ pub(super) fn get_stream(store: Arc<Store>, caller: VerifiedUser, id: String) ->
     }
 }
 
+/// V2-24: `may` — whether the caller holds `role` on the ticket `id` names,
+/// as a write's permit would say ([`crate::access::VerifiedUser::permit`]):
+/// `may { id, role, held }` for a ticket it sees, `not_found` otherwise
+/// (ACCESS-10: not there and not theirs, one answer).
+pub(super) fn may_stream(store: Arc<Store>, caller: VerifiedUser, id: String, role: crate::members::Role) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    use crate::access::{Admin, Chatter, Deployer, Hidden, Viewer};
+    use crate::members::Role;
+    stream! {
+        let k = match key(&store, &caller, &id) {
+            Ok(k) => k,
+            Err(ev) => {
+                yield ev;
+                return;
+            }
+        };
+        // Seen at all? Else not found, whatever the role asked.
+        if let Err(Hidden) = caller.permit::<Viewer>(&k, &store) {
+            yield TicketsEvent::NotFound { id: Asked::stored(id.trim()) };
+            return;
+        }
+        let held = match role {
+            Role::Viewer => true,
+            Role::Chatter => caller.permit::<Chatter>(&k, &store).is_ok(),
+            Role::Deployer => caller.permit::<Deployer>(&k, &store).is_ok(),
+            Role::Editor => caller.permit::<Editor>(&k, &store).is_ok(),
+            Role::Admin => caller.permit::<Admin>(&k, &store).is_ok(),
+        };
+        yield TicketsEvent::May { id: k, role, held };
+    }
+}
+
 /// `work blockers` — the ticket's blockers in its reach, each resolved or
 /// dangling; ACCESS-17: then how many it is not shown, when any.
 pub(super) fn blockers_stream(store: Arc<Store>, caller: VerifiedUser, id: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {

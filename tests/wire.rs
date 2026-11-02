@@ -1091,7 +1091,7 @@ async fn shell_serves_the_page() {
             metadata: None,
             framing: Default::default(),
             ui: None,
-            studio: None,
+            studio: None, media: None,
         })
         .await;
     });

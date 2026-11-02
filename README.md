@@ -11,7 +11,7 @@ components written in rhx (Rhai in markup, `ui/src/<name>.rhx`, profile
 `rhx/1`; `../plexus-ui/CONTRACT.md`), pushed as signed bundles,
 versioned by content hash and drawn by a small engine.
 
-v1 is tag `v0.0.1`; what v2 cut — the chats, comments, deployments, themes, media, notes, assignees and components, the Leptos app (trunk) with the frames' SDK (sdk-codegen) and mockups, the diagrams service — lives there.
+v1 is tag `v0.0.1`; what v2 cut — the chats, comments, deployments, themes, notes, assignees and components, the Leptos app (trunk) with the frames' SDK (sdk-codegen) and mockups, the diagrams service — lives there. Media came back as a service of its own (V2-24, "The services").
 
 ## Run
 
@@ -184,7 +184,7 @@ where it has one (a list in it is `;`-separated).
 
 | group | flags |
 |---|---|
-| run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path`, `--ui-signer`, `--ui-compiler`, `--ui-author-key`, `--ui-channel` (UI-15: the live pointer this environment serves in its ui file; default from `--env`: `test`, `prod`, else `default`), `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell` |
+| run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path`, `--ui-signer`, `--ui-compiler`, `--ui-author-key`, `--media-db-path` (`media.db` beside the database), `--ui-channel` (UI-15: the live pointer this environment serves in its ui file; default from `--env`: `test`, `prod`, else `default`), `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell` |
 | sign-in | `--auth-provider`, `--admin`, `--public-url`, `--login-button`, `--login-email`, `--login-password`, `--login-forgot`, `--identity`, `--workos-api-key-file`, `--allowed-origin`, `--frame-ancestor` (an origin that may frame the shell's pages; none by default), `--live-origin` (an origin the shell's pages may frame), `--allowed-host`, `--trusted-proxy`, `--return-origin`, `--session-hours` (12), `--session-idle-minutes` (120) |
 | maintenance and testing | `--dev-login`, `--dev-password`, `--dev-idp-ws`, `--dev-user` (all `--env test` only), `--verify-derived`, `--seed-synthetic`, `--seed-value`, `--seed-shape` (`flat`, `nested`), `--seed-into-existing` |
 | limits | `--max-body-bytes` (8 MiB), `--max-calls-per-connection` (256), `--idle-timeout-secs` (900), `--max-connections` (1,024), `--max-connections-per-ip` (256), `--max-connections-per-principal` (64), `--max-anonymous-connections` (128), `--max-anonymous-connections-per-ip` (32) |
@@ -277,6 +277,7 @@ behind plexus-core's gate; menger's own are declared on the frame
 | `session` | who a connection is, agents' sessions | `tickets-api/src/session_activation.rs` |
 | `auth` | the AUTH protocol's door and roles | plexus-login, over `src/login_access.rs` |
 | `ui` | the UI's versions, live pointer, previews; child `slots` | the framework's: `../plexus-ui/service` (`plexus-ui-service`, FRAME-5) |
+| `media` | the images a body shows, by sha256, in a file of its own (`media.db`); the ticket's permit asked of `tickets` through the seam | `media/` (`menger-media`, V2-24) |
 
 **Service to service.** The ui service reaches the tickets service as a
 client, never through its store: its seam (`../plexus-ui/service/src/seam.rs`)
@@ -285,6 +286,15 @@ holds the running process's service and calls each service a component's
 `HubTransport::as_(service, caller)` as the server's own caller — the same
 route and gate a socket reaches. A push asks it for those methods and for
 the services' schema hashes. The ui service never opens the tickets file.
+
+The media service (V2-24) reaches it the same way, **as the caller**: a
+`media.put` for a ticket asks `tickets.may { id, role: editor }` through
+`HubTransport::as_(service, caller)` — the caller's own identity, so the
+tickets service decides by its reach, exactly as the write itself would —
+and a `media.get` asks `tickets.may { id, role: viewer }` for a ticket the
+image was put for. Its seam is `media/src/seam.rs`; it never opens the
+tickets file either. The shell's `GET /media/<hash>` is a client of the
+media service in turn (`menger_media::fetch`, as the request's session).
 
 A throwaway's `synapse -P 4460 menger` lists them; `synapse -P 4460 menger
 tickets` lists a service's methods and children; `<method> --help` prints
@@ -345,6 +355,7 @@ whole. synapse `-j` prints the `rows` event as one line (SYNAPSE-36).
 | `undelete` | `--ids` | back within 30 days (admin) |
 | `freeze` / `unfreeze` | `--id` | a scope that takes no new children or numbers (admin) |
 | `history` | `--id` | each status and kind transition, then the queue's lines, then `history_end` |
+| `may` | `--id --role` | whether you hold `viewer`, `editor` or `admin` on one ticket, as a write's permit would say: `may { id, role, held }`, or `not_found` for a ticket you cannot see (V2-24: what another service asks through the seam) |
 | `inputs list` | `[--ticket] [--epic] [--state] [--filter] [--tz] [--limit] [--after]` | a page of a ticket's questions, or of every ticket's |
 | `inputs ask` | `--ticket --question` | a question filed as a text input of its body |
 | `inputs answer` | `--ticket --input --value [--rationale]` | an answer, checked against what the input declares |
@@ -403,6 +414,50 @@ whole. synapse `-j` prints the `rows` event as one line (SYNAPSE-36).
 | `slots list` | `[--layout]` | every section's assignment and the default it overrides |
 | `slots set` | `--layout --slot --component [--version]` | fill a section |
 | `slots clear` | `--layout --slot` | back to the default |
+
+### `media` (V2-24)
+
+| method | flags | what it does |
+|---|---|---|
+| `put` | `--mime --data [--ticket]` | keep an image (PNG, JPEG, GIF or WebP by its magic bytes, at most 7 MiB, `data` standard base64) for a ticket you may edit — or, with no ticket, as yours: `stored { hash, mime, bytes, width, height, duplicate }` |
+| `get` | `--hash` | the image's bytes: `media { hash, mime, bytes, width, height, data }` (data base64), or `not_found { hash }` |
+
+An image is named by its SHA-256 (`hash`, 64 hex digits; a `media:` before
+it is read past, any case). A body shows it as `![alt](media:<hash>)`, and
+the ticket page draws it from the shell's **`GET /media/<hash>`** — behind
+the login's session as `/app/` is, the bytes with their type, kept forever
+(content-addressed: `Cache-Control: public, max-age=31536000, immutable`);
+404 for a hash that names nothing or an image the session may not see, one
+answer. The same bytes put twice are one row (`duplicate: true`); put for a
+second ticket, the one image is that ticket's too. A refusal is in band,
+nothing kept: `refused { reason, message, bytes?, max? }` — `too_large`
+(naming the cap), `not_an_image` (an SVG, or bytes none of the kept types),
+`type_mismatch` (the bytes are not the `mime` given), `truncated`,
+`bad_data` (not base64); a ticket that is none, or whose editor permit the
+tickets service does not give you, is `not_found { ticket }`.
+
+**Whose it is**: an image is answered to a reader the tickets service says
+sees a ticket it was put for (`tickets.may { id, role: viewer }` through
+the seam, as the reader — ACCESS-10: an image out of reach and none are one
+answer); put with no ticket (what the editor pastes before its ticket
+exists) it is its putter's, and anyone's holding `media.get` on `*` (an
+admin of `*`). `media.get` is a viewer's grant, `media.put` an editor's; a
+viewer's put is the gate's `forbidden`, a stranger's put on a ticket
+`not_found` — the permit is asked, never read.
+
+Kept in the service's own file, `media.db` (`--media-db-path`,
+`MENGER_MEDIA_DB_PATH`; default beside the tickets file, never the tickets
+file and never the ui file): `media` (a row per image, its bytes a BLOB)
+and `media_owners` (a row per ticket, or putter, it is for), made on first
+open. Through synapse the data is a file, never `"$(base64 …)"` (Linux caps
+an argument at 128 KB):
+
+```sh
+base64 -w0 shot.png > shot.b64
+synapse -P 4460 menger media put --ticket KILN-4 --mime image/png --data @shot.b64     # → stored { hash, … }
+synapse -P 4460 menger tickets amend --id KILN-4 --body @body.md                        # body.md says ![shot](media:<hash>)
+synapse -P 4460 -j menger media get --hash <hash> | jq -r 'select(.content.data) | .content.data' | base64 -d > back.png
+```
 
 ## Tickets
 
@@ -594,6 +649,11 @@ that is not the caller's.
   `activation/writes.rs` and checked by the store under its write lock.
   Store tests write as `SYS.permit(id)`, `SYS.moving(a, b)`,
   `SYS.updating(id)`.
+- **Another service's writes** (V2-24) hold no `Permit`: they ask for one
+  over the seam — `tickets.may { id, role }`, as the caller — and the
+  tickets service answers from the same `VerifiedUser::permit` a write
+  takes, `not_found` for a ticket out of reach. The media service's put is
+  the first (`media/src/streams.rs`).
 
 ### The frame (ACCESS-13)
 
@@ -689,8 +749,8 @@ scope; every read answers under the caller's filter **and** its scopes.
 
 | role | may |
 |---|---|
-| `viewer` | read under the scope: `tickets`' reads and its children's, `orgs.list`, `epics`' own settings, `ui.versions`, `ui.watch`, `ui.slots.list`, `ui.history` |
-| `editor` | also create and change tickets: `tickets`' writes, `commits`, saved filters, `revisions restore`, `subtasks create` |
+| `viewer` | read under the scope: `tickets`' reads and its children's (`tickets.may` among them), `orgs.list`, `epics`' own settings, `ui.versions`, `ui.watch`, `ui.slots.list`, `ui.history`, `media.get` |
+| `editor` | also create and change tickets: `tickets`' writes, `commits`, saved filters, `revisions restore`, `subtasks create`, `media.put` |
 | `admin` | every grant: `tickets.delete`, `undelete`, `freeze`, `unfreeze`, `members.*`, `orgs.create`, `auth.role_set`, `auth.grant`, `ui.rollback`, `ui.preview`, `ui.slots.set`, `ui.slots.clear`, and the undo of a push or a rollback (FRAME-52), … |
 | `deployer` | `ui.push` alone — a CI's key (V2-7: the pipeline key) |
 | `member` | `auth.whoami`, `auth.logout`, `auth.requires` |
@@ -1098,6 +1158,8 @@ src/                 the binary: main.rs (flags), builder.rs (the services regis
                      shell.rs, bind.rs, calls.rs, local.rs, first_run.rs, login_access.rs
 tickets-api/         menger-tickets-api: the tickets service — vocabulary, store, filter
                      language, activations (activation/), access (access/)
+media/               menger-media: the media service — images by sha256 in media.db, the
+                     ticket's permit asked of tickets through the seam (V2-24)
 ui/                  the UI's source bundle (compiled and drawn by ../plexus-ui's
                      plexus-ui-compiler and plexus-ui-engine, FRAME-3; stored and
                      served by its plexus-ui-service, FRAME-5)
@@ -1112,7 +1174,12 @@ scripts/             builds, cleanup-gate, disk-check, sweep, throwaways
 
 `menger-hs` (0.04, Haskell) is the ancestor. v1 (0.05–0.6, tag `v0.0.1`
 above) moved menger onto Plexus RPC and Rust with a browser app of its own;
-v2 keeps its store and replaces the app with the ui service.
+v2 keeps its store and replaces the app with the ui service. V2-24
+(2026-11-02) brought media back as a service of its own — v1's `media.put`
+and `media.get`, by sha256 in `media.db`, the ticket's permit asked of the
+tickets service through the seam (`tickets.may`), `/media/<hash>` on the
+shell — the first service beside `tickets` to write something of a
+ticket's.
 
 ## License
 

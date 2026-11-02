@@ -4,7 +4,7 @@ use menger::login::{LoginButton, Provider};
 use menger::wiring::{LoginOptions, Wiring};
 use menger_tickets_api::access::Access;
 use menger::first_run::{self, Mode};
-use menger::{build_rpc_ui, local, shell, MengerAccess};
+use menger::{build_rpc_services, local, shell, MengerAccess};
 use plexus_transport::{ConnectionQuotas, TransportServer};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -65,6 +65,11 @@ struct Args {
     /// The ui service's file (default: ui.db beside the database file)
     #[arg(long, env = "MENGER_UI_DB_PATH", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
     ui_db_path: Option<PathBuf>,
+
+    // V2-24: the media service's own file.
+    /// The media service's file — the images bodies show (default: media.db beside the database file)
+    #[arg(long, env = "MENGER_MEDIA_DB_PATH", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
+    media_db_path: Option<PathBuf>,
 
     /// A public key (64 hex digits, Ed25519) a `ui.push` may be signed by
     ///
@@ -574,7 +579,17 @@ async fn run(args: Args) -> anyhow::Result<()> {
     };
     let ui = ui.authoring(author);
     let ui_store = ui.store.clone();
-    let hub = build_rpc_ui(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, ui).await?;
+    // V2-24: the media service's file (beside the tickets file unless
+    // named): never the tickets file, never the ui file.
+    let media_db_path = args.media_db_path.clone().unwrap_or_else(|| menger::default_media_db_path(&db_path));
+    if media_db_path == db_path || media_db_path == ui_db_path {
+        anyhow::bail!("--media-db-path {} is the {} file: the media service keeps a file of its own", media_db_path.display(), if media_db_path == db_path { "database" } else { "ui service's" });
+    }
+    let media = menger::MediaSetup::open(&media_db_path)?;
+    let hub = build_rpc_services(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, ui, media, |store, access| {
+        menger::TicketsActivation::with_access(store, access)
+    })
+    .await?;
 
     local::log_activations(&hub);
     // STUDIO-2/6: who opens /studio/ is the framework's rule over the hub's gate.
@@ -653,6 +668,8 @@ async fn run(args: Args) -> anyhow::Result<()> {
             ui: Some(ui_store),
             // STUDIO-2: /studio/ for a session holding ui.author on * (the gate's answer).
             studio: Some(shell::Studio { may: std::sync::Arc::new(move |ctx| studio_may.as_ref().is_some_and(|may| may(ctx))), compiler: studio_module }),
+            // V2-24: /media/<hash> — the media service asked as the session.
+            media: Some(hub.clone()),
             framing: shell::Framing {
                 ancestors: args.frame_ancestor.iter().map(|o| shell::check_origin(o)).collect::<Result<_, _>>().map_err(|e| anyhow::anyhow!("--frame-ancestor: {e}"))?,
                 live: args.live_origin.as_deref().map(shell::check_origin).transpose().map_err(|e| anyhow::anyhow!("--live-origin: {e}"))?,

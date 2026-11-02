@@ -241,6 +241,31 @@ export default async (ctx) => {
     }
   });
 
+  // V2-24: a body's `![alt](media:<hash>)` draws from the shell's `/media/<hash>`:
+  // the image put by synapse (`media put`), the body naming its hash, the page's
+  // `img` sourced at this origin and drawn with its pixels (the route is behind
+  // the session the page holds).
+  await test("a_bodys_media_image_draws_from_the_shell", async () => {
+    // A real 2×1 PNG (signature, IHDR, IDAT, IEND).
+    const PNG_2X1 = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEUlEQVR42mP8z8DwnwEJMAIAKQgD/2zM2wkAAAAASUVORK5CYII=";
+    const t = made("the kiln, with a picture");
+    const png = path.join(scratch, `s3-png-${++n}.b64`);
+    fs.writeFileSync(png, PNG_2X1);
+    const [stored] = sy("media", "put", "--ticket", t.id, "--mime", "image/png", "--data", `@${png}`);
+    assert(stored?.type === "stored" && stored.hash?.length === 64 && stored.width === 2, `media put: ${JSON.stringify(stored)}`);
+    const [amended] = sy("tickets", "amend", "--id", t.id, "--body", body(`The curve:\n\n![the curve](media:${stored.hash.toUpperCase()})\n`));
+    assert(amended?.type === "amended", `amend: ${JSON.stringify(amended)}`);
+    const { tp, context } = await open(t.id);
+    try {
+      const img = tp.locator("[data-surface=ticket-body] [data-field=body] img");
+      await eventually("the image is sourced at this origin's /media/<hash>", async () => (await img.count()) === 1 && (await img.first().getAttribute("src")) === `${server.origin}/media/${stored.hash}`, 10_000);
+      assert((await img.first().getAttribute("alt")) === "the curve", "its alt text");
+      await eventually("and is drawn with its pixels", async () => (await img.first().evaluate((e) => e.complete && e.naturalWidth)) === 2, 10_000);
+    } finally {
+      await context.close();
+    }
+  });
+
   await test("a_missing_ticket_says_so", async () => {
     const { page, context } = await openPage(`${ROUTE}NOPE-99999`);
     try {

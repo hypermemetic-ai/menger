@@ -4,7 +4,10 @@
 //! frames' SDK generator — and acceptance 4 holds the crate to it: no module
 //! names chats, comments, deployments, themes, media, notes, components or
 //! profiles. This file is that check, over the tree. V2-20: questions
-//! (`tickets inputs`) and the queue came back, and left it.
+//! (`tickets inputs`) and the queue came back, and left it. V2-24: media
+//! came back as a service of its own (`media/`, `menger-media`, registered
+//! in `src/builder.rs`), so its activation's name and its wire test left
+//! the list — the tickets crate itself still holds no media module.
 
 use std::path::{Path, PathBuf};
 
@@ -93,7 +96,6 @@ const GOES: &[&str] = &[
     "tests/wire_chats.rs",
     "tests/wire_assign.rs",
     "tests/wire_deployments.rs",
-    "tests/wire_media.rs",
     "tests/wire_themes.rs",
     "tests/deploy_record.rs",
     "tests/webhook_secret.rs",
@@ -108,7 +110,6 @@ const TYPES: &[&str] = &[
     "CommentsActivation",
     "DeploymentsActivation",
     "WebhookActivation",
-    "MediaActivation",
     "NotesActivation",
     "ThemesActivation",
     "ProfilesActivation",

@@ -249,6 +249,8 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("tickets.watch", Today::Viewer, None),
     // MENGER-13: a ticket's history is a read.
     ("tickets.history", Today::Viewer, None),
+    // V2-24: the permit question another service asks through the seam.
+    ("tickets.may", Today::Viewer, None),
     ("tickets.create", Today::Editor, None),
     ("tickets.set_status", Today::Editor, Some("id")),
     ("tickets.set_kind", Today::Editor, Some("id")),
@@ -317,6 +319,11 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("session.login", Today::SignedIn, None),
     ("session.logout", Today::SignedIn, None),
     ("session.providers", Today::Anyone, None),
+    // V2-24: the media service — a viewer reads an image, an editor puts
+    // one; no target: whose a ticket is, is the tickets service's word
+    // (`tickets.may` over the seam), so a stranger's put is `not_found`.
+    ("media.get", Today::Viewer, None),
+    ("media.put", Today::Editor, None),
 ];
 
 /// AUTH-7's one deliberate narrowing of the table: what an anonymous or
@@ -357,7 +364,7 @@ async fn the_roles_are_what_identity_21_asked_method_by_method() {
         .map(|(path, s)| (format!("tickets.{path}"), s));
     let top = hub.list_plugin_schemas().into_iter().map(|s| (s.namespace.clone(), s));
     for (path, schema) in top.chain(children) {
-        if !["tickets", "members", "session"].contains(&schema.namespace.as_str()) && !path.starts_with("tickets.") {
+        if !["tickets", "members", "session", "media"].contains(&schema.namespace.as_str()) && !path.starts_with("tickets.") {
             continue;
         }
         for m in &schema.methods {

@@ -132,7 +132,7 @@ export class Throwaway {
     this.ws = await freePort();
     this.shell = await freePort();
     const env = { ...process.env, PLEXUS_NO_REGISTRY: "1" };
-    for (const v of ["MENGER_DB_PATH", "MENGER_AUTH_PROVIDERS", "MENGER_ADMINS", "MENGER_UI_DB_PATH", "MENGER_UI_SIGNERS", "MENGER_APP_DIST", "RUST_LOG"]) delete env[v];
+    for (const v of ["MENGER_DB_PATH", "MENGER_AUTH_PROVIDERS", "MENGER_ADMINS", "MENGER_UI_DB_PATH", "MENGER_UI_SIGNERS", "MENGER_MEDIA_DB_PATH", "MENGER_APP_DIST", "RUST_LOG"]) delete env[v];
     const argv = [
       "--port", String(this.ws),
       "--shell-port", String(this.shell),

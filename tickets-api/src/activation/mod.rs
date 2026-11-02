@@ -223,7 +223,7 @@ pub use revisions::RevisionsClient;
     roles(
         viewer = [
             "health", "get", "list", "find", "search", "watch", "history",
-            "queued", "await_reply"
+            "queued", "await_reply", "may"
         ],
         editor = [
             viewer, "create", "set_status", "set_kind", "set_parent", "amend", "label", "update", "update_many",
@@ -331,6 +331,33 @@ impl TicketsActivation {
         id: TicketRef,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         crate::store::reading_as(user.principal_text(), get_stream(self.store.clone(), user, id.into_string()))
+    }
+
+    /// Whether you hold a role on one ticket — viewer | editor | admin — as the gate and the kept tree say now; yields may { id, role, held }, or not_found for a ticket you cannot see.
+    ///
+    /// V2-24: the question another service asks before it writes something
+    /// of a ticket's — the one that keeps images, before it keeps one for a
+    /// ticket — through the seam, as the caller: the tickets service decides, by
+    /// the caller's grants (direct, its teams', the operator's), the kept
+    /// tree (a role `under` an ancestor, on the shortcode, on `*`) and the
+    /// session's ceiling, exactly as the write itself would (`Permit<R>`).
+    /// Yields exactly one event: `may { id, role, held }` with `id` as the
+    /// store keeps it, or `not_found` for a ticket that is none or out of
+    /// your reach (ACCESS-10: one answer). Nothing is written.
+    #[plexus_macros::method(
+        group = "read",
+        values(role = ["viewer", "editor", "admin"]),
+        example(note = "may I edit MENGER-40?", params = r#"{"id": "MENGER-40", "role": "editor"}"#)
+    )]
+    pub async fn may(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// Ticket id, e.g. MENGER-40.
+        id: TicketRef,
+        /// The role asked: viewer | editor | admin.
+        role: crate::members::Role,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        crate::store::reading_as(user.principal_text(), may_stream(self.store.clone(), user, id.into_string(), role))
     }
 
     /// List tickets, optionally filtered by epic, status, parent and/or a filter; paged with after + limit, or at a position with at.

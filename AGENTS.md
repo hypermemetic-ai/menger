@@ -2,9 +2,9 @@
 
 A plan is a program whose leaves are prose. menger is a Plexus RPC
 ticketing service and the seed of a Plexus-native reactive web framework.
-This is **v2**: the tickets service and the ui service, nothing else.
+This is **v2**: the tickets service, the ui service and the media service, nothing else.
 
-v1 is tag `v0.0.1`; v2 cut its chats, comments, deployments, themes, media, notes, assignees and components, the Leptos app (trunk) and the frames' SDK (sdk-codegen), mockups and the diagrams service — read v1 there, never here.
+v1 is tag `v0.0.1`; v2 cut its chats, comments, deployments, themes, notes, assignees and components, the Leptos app (trunk) and the frames' SDK (sdk-codegen), mockups and the diagrams service — read v1 there, never here. Media came back as a service of its own (V2-24, `media/`).
 
 README.md is the reference: the services and their methods ("Surface"),
 the flags ("Run" → Every flag), the rules each ticket set down. This file is
@@ -69,12 +69,17 @@ components in `ui/`, nothing of the framework's.
 
 **The services registered** (`src/builder.rs`, one process): `tickets`
 (children `commits`, `filters`, `inputs`, `nav`, `revisions`, `subtasks`, `work`),
-`members` (child `teams`), `orgs`, `epics`, `session`, `auth`, and `ui`
-(child `slots`). A service reaches another as a client, through
-plexus-core's `HubTransport::as_(service, caller)` — the ui service's seam
-(`../plexus-ui/service/src/seam.rs`) asks each service a component's `uses`
-names (`tickets`) as the server's own caller, through the same route and
-gate a socket reaches; it never opens the tickets file.
+`members` (child `teams`), `orgs`, `epics`, `session`, `auth`, `ui`
+(child `slots`), and `media` (V2-24: `media/`, `menger-media` — images by
+sha256 in `media.db`, `--media-db-path`). A service reaches another as a
+client, through plexus-core's `HubTransport::as_(service, caller)` — the ui
+service's seam (`../plexus-ui/service/src/seam.rs`) asks each service a
+component's `uses` names (`tickets`) as the server's own caller; the media
+service's (`media/src/seam.rs`) asks `tickets.may { id, role }` **as the
+caller** before it keeps an image for a ticket, so the tickets service
+decides by the caller's reach — through the same route and gate a socket
+reaches; neither opens the tickets file. A body shows an image as
+`![alt](media:<hash>)`; the page draws it from the shell's `/media/<hash>`.
 
 **The tickets service** is v1's core and nothing else: the cache
 (`tickets-api/src/store/`), the cells and the lens over Roaring bitmaps, the

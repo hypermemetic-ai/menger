@@ -2103,6 +2103,7 @@ dependencies = [
  "hyper-util",
  "jsonrpsee",
  "jsonwebtoken",
+ "menger-media",
  "menger-tickets-api",
  "nostr",
  "plexus-auth-core",
@@ -2129,6 +2130,32 @@ dependencies = [
  "url",
  "uuid",
  "wat",
+]
+
+[[package]]
+name = "menger-media"
+version = "0.6.2"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "async-trait",
+ "base64",
+ "futures",
+ "jsonrpsee",
+ "menger-tickets-api",
+ "plexus-auth-core",
+ "plexus-client",
+ "plexus-core",
+ "plexus-macros",
+ "rusqlite",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
