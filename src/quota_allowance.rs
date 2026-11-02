@@ -102,6 +102,19 @@ impl menger_docs::quota::Quota for DocsMetered {
             Self::wait(meter.commit(Hold { ticket: Some(t), remaining: None }, None));
         }
     }
+    /// A squash: what `author` keeps shrank (credited back) or, their share
+    /// of the snapshot past what was folded, grew (counted, never refused:
+    /// the squash is done; past the cap, the recount says so).
+    fn moved(&self, author: &str, delta: i64) {
+        let meter = self.0.get();
+        if delta < 0 {
+            Self::wait(meter.credit(author, "docs.bytes", delta.unsigned_abs()));
+        } else if let Ok(h) = self.hold(author, "docs.bytes", delta as u64) {
+            if let Some(t) = h.hold {
+                Self::wait(meter.commit(Hold { ticket: Some(t), remaining: None }, None));
+            }
+        }
+    }
 }
 
 fn uuid_like() -> String {

@@ -4932,7 +4932,7 @@ pub use reshortcode::{Rename, Reshortcode, Reshortcoded};
 /// ticket's work runs — the `deployed` cells.
 // TICKETS-7: every change keeps a revision.
 pub(crate) mod revisions;
-pub use revisions::{acting, say_act, DiffView, RevisionPage, Restoring};
+pub use revisions::{acting, say_act, BodyCharge, DiffView, RevisionPage, Restoring};
 pub use eras::{reading_as, reading_now};
 /// TICKETS-9: the assignees and their history.
 /// APP-23: a change request — a comment and an unqueue, one write.

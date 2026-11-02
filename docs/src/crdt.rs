@@ -443,9 +443,30 @@ impl DocsStore {
                 }
                 let state = crdt.transact().encode_state_as_update_v1(&StateVector::default());
                 let authors = serde_json::to_string(&authors).map_err(|e| StoreError::Db(e.to_string()))?;
+                // V2-31: what each author keeps moves from the rows folded to
+                // their share of the snapshot (`crate::events::shares`).
+                let mut moved: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
+                for (_, kind, _, _, _, p, bytes, folded) in &rows {
+                    match (kind.as_str(), folded) {
+                        ("snapshot", Some(f)) => {
+                            for (who, n) in crate::events::shares(*bytes as u64, &serde_json::from_str::<Vec<Author>>(f).unwrap_or_default()) {
+                                *moved.entry(who).or_default() -= n as i64;
+                            }
+                        }
+                        _ => *moved.entry(p.clone()).or_default() -= *bytes,
+                    }
+                }
+                let folded: Vec<Author> = serde_json::from_str(&authors).unwrap_or_default();
+                for (who, n) in crate::events::shares(state.len() as u64, &folded) {
+                    *moved.entry(who).or_default() += n as i64;
+                }
                 tx.execute("DELETE FROM doc_log WHERE id = ?1 AND seq <= ?2", params![id, until])?;
                 log(&tx, LogRow { id: &id, seq: until, kind: "snapshot", update: Some(&state), title: Some(&then.title), at: last_at, by: &by, principal: &principal, authors: Some(&authors) })?;
                 tx.commit()?;
+                let quota = s.quota();
+                for (who, delta) in moved.into_iter().filter(|(_, d)| *d != 0) {
+                    quota.moved(&who, delta);
+                }
                 Ok((doc.org, rows.len() as u32 - 1))
             })
             .await?;

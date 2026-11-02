@@ -601,12 +601,9 @@ impl TicketsActivation {
         answered!(store = self.store.clone(), user, Some(id.to_string()) => {
             let on = permit::<Editor>(&store, &user, &id)?;
             let body = body.map(String::from);
-            let held = metered::hold(&access, &user, &[("tickets.bytes", body.as_ref().map_or(0, |b| b.len() as u64))]).await?;
-            let changed = |c: &crate::store::Change, _: &str| match c {
-                crate::store::Change::Amended { changed, .. } if changed.contains(&crate::vocab::AmendedField::Body) => None,
-                _ => Some(0),
-            };
-            Ok(change_event(held.settle(store.amend(on, title.map(String::from), body).await, changed).await?))
+            let held = metered::rewrite(&access, &user, &store, &on.id().to_string(), body.as_deref()).await?;
+            let moved = |c: &crate::store::Change| matches!(c, crate::store::Change::Amended { changed, .. } if changed.contains(&crate::vocab::AmendedField::Body));
+            Ok(change_event(held.settle(&access, store.amend(on, title.map(String::from), body).await, moved).await?))
         })
     }
 
@@ -741,9 +738,9 @@ impl TicketsActivation {
         answered_then!(store = self.store.clone(), user, Some(id.to_string()), then => {
             let at = updating(&store, &user, permit::<Editor>(&store, &user, &id)?, &ask)?;
             let (act, chain) = (act_of(&user, source, message)?, chain_of(&store, &user, ask.parent.as_deref())?);
-            let held = metered::hold(&access, &user, &[("tickets.bytes", ask.body.as_ref().map_or(0, |b| b.len() as u64))]).await?;
-            let body_moved = |u: &crate::store::Updated, _: &str| (!u.changed.iter().any(|c| c == "body")).then_some(0);
-            let crate::store::Updated { ticket, changed } = held.settle(store.update_by(at, ask, act).await, body_moved).await?;
+            let held = metered::rewrite(&access, &user, &store, at.id(), ask.body.as_deref()).await?;
+            let moved = |u: &crate::store::Updated| u.changed.iter().any(|c| c == "body");
+            let crate::store::Updated { ticket, changed } = held.settle(&access, store.update_by(at, ask, act).await, moved).await?;
             then = restore_chain(&store, &user, chain, format!("{} was moved under it", ticket.id)).await;
             Ok(TicketsEvent::Updated { ticket, changed })
         })
