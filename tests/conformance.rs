@@ -79,6 +79,7 @@ fn kit_green_on_menger() {
         .args(["run", "--role", "service", "--url", &format!("ws://127.0.0.1:{port}"), "--key", key.to_str().unwrap()])
         .args(["--max-calls", "8", "--idle-secs", "3", "--max-per-principal", "8", "--origin-allowed", &format!("http://127.0.0.1:{shell}")])
         // A debug build answers its self-description in seconds (07's schema walk): four times the kit's budgets.
+        .args(["--encoding", "json,msgpack"]) // PERF-9: every case in both, spec/13
         .args(["--expect-fail", expect.to_str().unwrap(), "--budget-scale", "4"])
         .output()
         .unwrap_or_else(|e| panic!("python3 (the conformance kit's interpreter) did not run: {e}"));

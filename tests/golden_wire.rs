@@ -381,22 +381,29 @@ async fn every_item_round_trips_and_the_json_is_what_it_was() {
 
 type MpSocket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
-/// A socket signed in as the admin that asked for msgpack alone (spec/13).
-async fn mp_connect(port: u16) -> MpSocket {
+/// A socket signed in as the admin that asked for `ask` alone (`None`: for nothing).
+async fn raw_connect(port: u16, ask: Option<&str>) -> MpSocket {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     for _ in 0..50 {
         let mut req = format!("ws://127.0.0.1:{port}").into_client_request().unwrap();
         for (k, v) in support::admin_headers(port).iter() {
             req.headers_mut().insert(k.clone(), v.clone());
         }
-        req.headers_mut().insert("Sec-WebSocket-Protocol", "plexus.msgpack".parse().unwrap());
+        if let Some(a) = ask {
+            req.headers_mut().insert("Sec-WebSocket-Protocol", a.parse().unwrap());
+        }
         if let Ok((ws, resp)) = tokio_tungstenite::connect_async(req).await {
-            assert_eq!(resp.headers().get("Sec-WebSocket-Protocol").unwrap(), "plexus.msgpack", "the 101 names msgpack");
+            assert_eq!(resp.headers().get("Sec-WebSocket-Protocol").map(|v| v.to_str().unwrap()), ask, "the 101 names the ask");
             return ws;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    panic!("no msgpack socket on {port}");
+    panic!("no socket on {port}");
+}
+
+/// A socket that asked for msgpack alone (spec/13).
+async fn mp_connect(port: u16) -> MpSocket {
+    raw_connect(port, Some("plexus.msgpack")).await
 }
 
 /// `menger.call {method, params}` on a msgpack socket: the subscription's id.
@@ -489,5 +496,71 @@ async fn in_msgpack_every_item_round_trips_and_is_the_json_it_was() {
     assert_eq!(golden.len(), want.len(), "the script answered a different number of calls");
     for (a, b) in golden.iter().zip(&want) {
         assert_eq!(a, b, "in msgpack, the JSON changed");
+    }
+}
+
+/// PERF-9's bytes: a `data` item in msgpack, on the wire, against the same
+/// item in JSON — `tickets.health` and a summary row, two of PERF-16's three
+/// frames (the third, a 1 KB item, is plexus-bench's `wire_bytes_per_item`).
+#[tokio::test]
+async fn an_item_in_msgpack_is_smaller_than_in_json() {
+    use futures::SinkExt;
+    use tokio_tungstenite::tungstenite::Message;
+    let port = start_server().await;
+    let mut m = mp_connect(port).await;
+    mp_call(&mut m, "tickets.create", json!({"epic": "SIZE", "kind": "scope", "title": "a scope", "body": "a body"})).await;
+    mp_items(&mut m, None).await;
+
+    // The first data frame of a call, as the socket carried it.
+    async fn first_data(ws: &mut MpSocket, frame: Message) -> Vec<u8> {
+        ws.send(frame).await.unwrap();
+        loop {
+            let bytes = match tokio::time::timeout(Duration::from_secs(10), ws.next()).await.expect("a frame in 10 s").unwrap().unwrap() {
+                Message::Binary(b) => b.to_vec(),
+                Message::Text(t) => t.as_bytes().to_vec(),
+                _ => continue,
+            };
+            let carries = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+            if carries(b"content_type") {
+                return bytes;
+            }
+        }
+    }
+    let mut j = raw_connect(port, None).await;
+    for (name, method, params) in [
+        ("tickets.health", "tickets.health", json!({})),
+        ("a summary row", "tickets.list", json!({"epic": "SIZE", "summary": true, "limit": 1})),
+    ] {
+        let call = json!({"id": 1, "method": "menger.call", "params": {"method": method, "params": params}});
+        let frame = first_data(&mut m, Message::Binary(rmp_serde::to_vec_named(&call).unwrap().into())).await;
+        mp_items_after_first(&mut m).await;
+        let at = frame.windows(7).position(|w| w == b"\xa6result").expect("the item") + 7;
+        let packed = frame.len() - at;
+
+        let mut call = call;
+        call["jsonrpc"] = json!("2.0");
+        let text = first_data(&mut j, Message::Text(call.to_string().into())).await;
+        mp_items_after_first_json(&mut j).await;
+        let at = text.windows(9).position(|w| w == b"\"result\":").expect("the item") + 9;
+        let json_item = text.len() - at - 2; // the two braces that close `params` and the frame
+        println!("{name}: {packed} B in msgpack, {json_item} B in JSON (PERF-16's rows: health 152 · 190 typed, a row 463 · 575)");
+        assert!(packed < json_item, "{name}: {packed} B in msgpack against {json_item} B in JSON");
+    }
+}
+
+/// The rest of a call whose first data frame was read: until its `done`.
+async fn mp_items_after_first(ws: &mut MpSocket) {
+    mp_items(ws, None).await;
+}
+
+/// The same on a JSON socket.
+async fn mp_items_after_first_json(ws: &mut MpSocket) {
+    use tokio_tungstenite::tungstenite::Message;
+    loop {
+        if let Message::Text(t) = tokio::time::timeout(Duration::from_secs(10), ws.next()).await.expect("a frame in 10 s").unwrap().unwrap() {
+            if t.as_str().contains(r#""result":{"type":"done""#) {
+                return;
+            }
+        }
     }
 }
