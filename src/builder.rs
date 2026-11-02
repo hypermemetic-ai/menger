@@ -1,7 +1,8 @@
 use menger_tickets_api::access::Access;
 // V2-4: `tickets`, and the addresses, the grants its reach reads and the
-// browser's sign-in — `members`, `orgs`, `epics`, `session`.
-use menger_tickets_api::{EpicsActivation, MembersActivation, OrgsActivation, ProviderOffer, SessionActivation, TicketsActivation};
+// browser's sign-in — `members`, `orgs`, `session` (V2-25: `epics` went; the
+// board is the organization's whole set).
+use menger_tickets_api::{MembersActivation, OrgsActivation, ProviderOffer, SessionActivation, TicketsActivation};
 use plexus_ui_service::{Compiler, Signers, UiActivation, UiStore, DEFAULT_CHANNEL, UI_DB_FILE};
 // V2-24: the media service — a service of v2's own, its file its own, the
 // ticket's permit asked of `tickets` through the seam.
@@ -421,8 +422,6 @@ where
         .register(media)
         // ORG-4: `orgs` beside `members` — the organizations, and their making.
         .register(OrgsActivation::with_access(Arc::clone(&store), access.clone()))
-        // ORG-13: `epics` beside `orgs` — the level that holds shortcodes.
-        .register(EpicsActivation::with_access(Arc::clone(&store), access.clone()))
         .register(MembersActivation::new(store, access.clone()))
         // IDENTITY-37: a signed-out connection is `anonymous` to whoami too.
         .register(SessionActivation::offering(offers, access.clone()));

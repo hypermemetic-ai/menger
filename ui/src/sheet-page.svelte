@@ -32,7 +32,6 @@
   import BoardRows from "plexus-ui:board-rows";
   import BoardRowsSv from "plexus-ui:board-rows-sv";
   import BulkBar from "plexus-ui:bulk-bar";
-  import EpicsPage from "plexus-ui:epics-page";
   import FilterLine from "plexus-ui:filter-line";
   import FilterLineSv from "plexus-ui:filter-line-sv";
   import FiltersSaved from "plexus-ui:filters-saved";
@@ -40,7 +39,6 @@
   import JumpPalette from "plexus-ui:jump-palette";
   import JumpPaletteSv from "plexus-ui:jump-palette-sv";
   import KeysHelp from "plexus-ui:keys-help";
-  import MePage from "plexus-ui:me-page";
   import NavChildren from "plexus-ui:nav-children";
   import NavChildrenSv from "plexus-ui:nav-children-sv";
   import NavCounts from "plexus-ui:nav-counts";
@@ -55,10 +53,8 @@
   import PageBulk from "plexus-ui:page-bulk";
   import PageCounts from "plexus-ui:page-counts";
   import PageEdit from "plexus-ui:page-edit";
-  import PageEpics from "plexus-ui:page-epics";
   import PageFacets from "plexus-ui:page-facets";
   import PageFilters from "plexus-ui:page-filters";
-  import PageMe from "plexus-ui:page-me";
   import PageNew from "plexus-ui:page-new";
   import PageOrgs from "plexus-ui:page-orgs";
   import PageReady from "plexus-ui:page-ready";
@@ -208,9 +204,7 @@
       ["work-waves", WorkWaves, ID, ["hover", "focus", "checked"], { loading: { id: t0(), sheet: "loading" } }, true],
     ]],
     ["the admin pages", [
-      ["epics-page", EpicsPage, F, ["hover", "focus", "disabled"], { loading: { sheet: "loading" } }, true],
       ["orgs-list", OrgsList, F, ["hover"], { loading: { sheet: "loading" } }],
-      ["me-page", MePage, F, ["hover", "focus", "disabled"], { loading: { sheet: "loading" } }, true],
       ["ui-versions", UiVersions, F, ["hover", "focus", "disabled"], { loading: { sheet: "loading" } }, true],
     ]],
     // STUDIO-12: the pages — each route's rhx page, placing its components by their marks (#/sheet's own, page-sheet, aside: it places this).
@@ -222,9 +216,7 @@
       ["page-ready", PageReady, F, [], fil, true],
       ["page-waves", PageWaves, ID, [], {}, true],
       ["page-filters", PageFilters, F, [], {}, true],
-      ["page-epics", PageEpics, F, [], {}, true],
       ["page-orgs", PageOrgs, F, [], {}, true],
-      ["page-me", PageMe, F, [], {}, true],
       ["page-releases", PageReleases, F, [], {}, true],
       ["page-bulk", PageBulk, (t) => ({ ids: t }), [], {}, true],
       ["page-blockers", PageBlockers, ID, [], {}, true],

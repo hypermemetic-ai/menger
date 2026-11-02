@@ -21,32 +21,16 @@ pub(super) fn watcher_for(store: &Store, filter: Option<&Filter>, epic: Option<&
 /// first; `None` with none, an empty text the empty filter. The store ANDs
 /// the reader's reach into it (never this text formatted with it).
 ///
-/// ORG-13: a read is in the caller's current epic of each organization it
-/// reads, unless its filter names `epic` ([`in_era`]) — a read with no
-/// filter too, once some organization holds two epics.
-pub(super) fn asked(store: &Store, caller: &VerifiedUser, text: Option<&str>) -> Result<Option<Filter>, String> {
+/// V2-25: a read is the organization's whole set — ORG-13's hold to the
+/// caller's current epic went with the `epics` activation (owner,
+/// 2026-11-01); a filter that names `epic` still reads that one.
+pub(super) fn asked(text: Option<&str>) -> Result<Option<Filter>, String> {
     text.map(crate::limits::check_filter).transpose()?;
-    let filter = match text.map(str::trim) {
+    Ok(match text.map(str::trim) {
         None => None,
         Some("") => Some(Filter::default()),
         Some(t) => Some(Filter::parse(t).map_err(|e| e.to_string())?),
-    };
-    // A read with no filter is a view too: in the caller's epic, once some
-    // organization holds two (until then, unfiltered as ever).
-    Ok(match filter {
-        Some(f) => Some(in_era(store, caller, f)),
-        None => store.era_filter(&caller.principal_text(), caller.orgs().as_deref(), &Filter::default()),
     })
-}
-
-/// ORG-13: `f` held to the epic `caller` is in, in each organization it
-/// reads — unchanged when it names `epic`, or while no organization holds
-/// two ([`Store::era_filter`]).
-pub(super) fn in_era(store: &Store, caller: &VerifiedUser, f: Filter) -> Filter {
-    match store.era_filter(&caller.principal_text(), caller.orgs().as_deref(), &f) {
-        Some(era) => f.and(&era),
-        None => f,
-    }
 }
 
 /// MENGER-13: how a read's filter reads time — in `tz` (an IANA name, UTC,

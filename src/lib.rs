@@ -70,7 +70,7 @@ pub mod first_run;
 /// The cache and its storage, re-exported from the activation crate so
 /// `menger::store::SeedSpec` and friends keep their paths.
 pub use menger_tickets_api::store;
-pub use menger_tickets_api::{EpicsActivation, MembersActivation, MembersClient, OrgsActivation, SessionActivation, SessionClient, TicketsActivation, TicketsClient};
+pub use menger_tickets_api::{MembersActivation, MembersClient, OrgsActivation, SessionActivation, SessionClient, TicketsActivation, TicketsClient};
 
 pub use builder::{
     build_rpc, build_rpc_login, build_rpc_offering, build_rpc_seeded, build_rpc_services, build_rpc_ui, build_rpc_ui_over, build_rpc_with, default_db_path, default_media_db_path,

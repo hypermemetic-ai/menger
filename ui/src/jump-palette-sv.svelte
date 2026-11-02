@@ -25,7 +25,7 @@
   const COMMANDS = [
     ["board", "#/", ""], ["ready", "#/ready", ""], ["waves", "#/waves", ""], ["waves under", "#/waves/", "an id"],
     ["waves to", "#/waves/to/", "an id"], ["new", "#/new", ""], ["new under", "#/new/", "a parent"], ["filters", "#/filters", ""],
-    ["search", "#/search/", "words"], ["epics", "#/epics", ""], ["me", "#/me", ""], ["releases", "#/releases", ""],
+    ["search", "#/search/", "words"], ["releases", "#/releases", ""],
   ];
 
   /** The commands `>…` names: each { name, typed, rest, arg, needs, route, shown, ready }. */

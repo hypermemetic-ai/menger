@@ -124,13 +124,12 @@ pub use orgs_activation::OrgsClient;
 #[cfg(feature = "server")]
 pub use orgs_activation::OrgsActivation;
 
-// ORG-13: epics — a level of the organization above its shortcodes.
+// ORG-13: epics — a level of the organization above its shortcodes: the
+// store's vocabulary (the eras a file holds, `org:epic:CODE` addresses).
+// V2-25: the `epics` activation that listed, switched and made them went;
+// nothing on the wire says these.
 pub mod epics;
 pub use epics::{Epic, EpicArchived, EpicChange, EpicMove, EpicsEvent};
-pub mod epics_activation;
-pub use epics_activation::EpicsClient;
-#[cfg(feature = "server")]
-pub use epics_activation::EpicsActivation;
 
 pub mod session;
 pub use session::{ProviderKind, ProviderOffer, SessionEvent};

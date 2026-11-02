@@ -1,7 +1,7 @@
 // SURFACE-5: create, pick and bulk — `node tests/pages_browser.mjs --group create`.
 //
 // Marks: ticket-create `[data-surface=ticket-create][data-form="tickets.create"]`, its fields
-// `[data-field=epic|shortcode|kind|severity|title|body]`, the picked values
+// `[data-field=shortcode|kind|severity|title|body]` (V2-25: no epic menu), the picked values
 // `[data-field-value=parent|blocked_by] [data-chip-id]`, `[data-unblock=<id>]`, `[data-preview-toggle]`,
 // `[data-preview]`, the write `[data-action="tickets.create"]`, its refusal `[data-refused]`;
 // ticket-picker `[data-surface=ticket-picker][data-picker=<name>]`, its field `input[data-field=<name>]`,
@@ -16,9 +16,8 @@
 // `board.selected { ids }` on the bus, the bulk bar and a `<board-rows filter="in CRTB"/>` — and
 // rolls back to the runner's v2 after.
 //
-// The epic: these cases expect the owner's current epic to be `genesis` (the first one, the
-// throwaway's default) — a group that switches epics (admin.mjs) restores it in a finally.
-// `create_in_another_epic` makes an epic of its own, `kilnfresh`, and archives it after.
+// V2-25: the epic menu went with the `epics` activation; a ticket is born in its shortcode's epic
+// (`genesis` on the throwaway), and `create_in_another_epic` went with `epics create`.
 import { bundle, push, sentCalls } from "../../scripts/ui-throwaway.mjs";
 
 const STUB = `<script>
@@ -58,8 +57,9 @@ export default async (ctx) => {
   const bulk = [1, 2, 3, 4].map((i) => make("--epic", "CRTB", "--title", `bulk row ${i}`, "--parent", crtb.id));
 
   const form = (page) => page.locator('[data-surface=ticket-create][data-form="tickets.create"]');
-  const formUp = (page) => eventually("ticket-create draws its form, the epics listed", async () =>
-    (await form(page).count()) === 1 && (await form(page).locator("[data-field=epic] option").count()) > 0);
+  // V2-25: no epic menu (the `epics` activation went); the shortcode field is the form's first.
+  const formUp = (page) => eventually("ticket-create draws its form", async () =>
+    (await form(page).count()) === 1 && (await form(page).locator("[data-field=shortcode]").count()) === 1);
 
   await test("create_fills_and_navigates", async () => {
     const { page, context } = await openPage("#/new");
@@ -67,9 +67,7 @@ export default async (ctx) => {
       await formUp(page);
       const origin = await marked(page);
       const f = form(page);
-      const first = await f.locator("[data-field=epic] option").first().textContent();
-      assert(/genesis · current/.test(first), `the epic menu starts at the current epic (epics.current): ${first}`);
-      assert((await f.locator('[data-current-epic="genesis"]').count()) === 1, "epics.current is said beside the menu");
+      assert((await f.locator("[data-field=epic]").count()) === 0, "V2-25: no epic menu");
       // The disabled state: no title, no shortcode.
       assert(await f.locator('[data-action="tickets.create"]').isDisabled(), "Create waits for a title and a shortcode");
       await f.locator("[data-field=shortcode]").fill("CRTA");
@@ -229,33 +227,6 @@ export default async (ctx) => {
       assert(t.parent === zephyr.id && t.title === "a child of zephyr", `filed under the route's parent: ${t.parent}`);
     } finally {
       await context.close();
-    }
-  });
-
-  await test("create_in_another_epic", async () => {
-    const made = one(sy("epics", "create", "--name", "kilnfresh"), "created");
-    assert(made, "the epic kilnfresh made");
-    const org = made.epic.org;
-    const { page, context } = await openPage("#/new");
-    try {
-      await formUp(page);
-      const f = form(page);
-      await eventually("the epic menu offers kilnfresh", async () => (await f.locator(`[data-field=epic] option[value="${org}:kilnfresh"]`).count()) === 1);
-      const chosen = await f.locator("[data-field=epic]").inputValue();
-      assert(chosen === `${org}:genesis`, `the current epic is selected first, by org:name: ${chosen}`);
-      await f.locator("[data-field=epic]").selectOption(`${org}:kilnfresh`);
-      await f.locator("[data-field=shortcode]").fill("KFRESH");
-      await f.locator("[data-field=kind]").selectOption("scope");
-      await f.locator("[data-field=title]").fill("a scope in another epic");
-      await f.locator('[data-action="tickets.create"]').click();
-      const at = await eventually("created, the page at its address", async () => { const h = await hash(page); return h.startsWith("#/ticket/") && h; });
-      assert(at === `#/ticket/${org}:kilnfresh:KFRESH-1`, `the ticket's address, its epic named: ${at}`);
-      await eventually("the ticket page draws it", async () => (await page.locator("[data-ticket-title]").textContent({ timeout: 500 })) === "a scope in another epic");
-      const t = ticket(`${org}:kilnfresh:KFRESH-1`);
-      assert(t?.address === `${org}:kilnfresh:KFRESH-1`, `made in kilnfresh: ${t?.address}`);
-    } finally {
-      await context.close();
-      sy("epics", "archive", "--name", "kilnfresh");
     }
   });
 

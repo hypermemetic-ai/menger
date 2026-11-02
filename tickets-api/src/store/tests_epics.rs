@@ -73,8 +73,6 @@ async fn a_store_has_genesis_and_reads_as_before() {
     let t = store.get(SYS, "IDENTITY-2").await.unwrap();
     assert_eq!((t.id.as_str(), t.address.as_str()), ("IDENTITY-2", "hypermemetic:MENGER/IDENTITY-2"));
     assert_eq!(key_of(&store, "hypermemetic:genesis:MENGER/IDENTITY-2").await, "IDENTITY-2", "naming the first epic is allowed");
-    // One epic: a reader's filter is not narrowed at all.
-    assert_eq!(store.era_filter(ADA, None, &crate::filter::Filter::parse("kind build").unwrap()), None);
     assert_eq!(held(&store, "epic genesis"), 5);
     assert_eq!(held(&store, "epic any"), 5);
 }
@@ -166,27 +164,22 @@ async fn a_whole_shortcode_moves_in_keeping_its_numbers_and_what_it_hosts_follow
 }
 
 #[tokio::test]
-async fn a_readers_filter_is_held_to_its_epic_unless_it_names_one() {
+async fn a_filter_naming_an_epic_reads_it_and_a_reader_is_held_to_none() {
     let store = Store::new();
     fixture(&store).await;
     store.create_epic(SYS, &hm(), &name("fresh"), ADA).await.unwrap();
     store.create(SYS, new("hypermemetic:fresh:MENGER", "m", Kind::Scope, None)).await.unwrap();
+    // V2-25: a reader's choice narrows no read — ADA on `fresh` reads every
+    // epic's scopes; a filter naming `epic` reads that one.
     store.switch_epic(On::for_tests(Scope::Org(hm())), &hm(), "fresh", ADA).await.unwrap();
-    let asked = crate::filter::Filter::parse("kind scope").unwrap();
-    let era = store.era_filter(ADA, None, &asked).unwrap();
-    assert_eq!(era.format(), "epic hypermemetic:fresh");
-    assert_eq!(held(&store, &asked.and(&era).format()), 1);
-    assert_eq!(store.era_filter(ADA, None, &crate::filter::Filter::parse("kind scope and epic any").unwrap()), None, "naming an epic lifts it");
+    assert_eq!(held(&store, "kind scope"), 3);
+    assert_eq!(held(&store, "kind scope and epic fresh"), 1);
     assert_eq!(held(&store, "kind scope and epic any"), 3);
     assert_eq!(held(&store, "epic hypermemetic:genesis"), 5);
     assert_eq!(held(&store, "epic nowhere"), 0);
     assert!(crate::filter::Filter::parse("epic Not_A_Name").is_err());
     // The language says it back as written.
     assert_eq!(crate::filter::Filter::parse("not epic fresh").unwrap().format(), "not epic fresh");
-    // The nav's shortcodes: the reader's epic only.
-    assert!(!store.in_current_era(ADA, &ShortcodeId::new("MENGER")));
-    store.switch_epic(On::for_tests(Scope::Org(hm())), &hm(), "genesis", ADA).await.unwrap();
-    assert!(store.in_current_era(ADA, &ShortcodeId::new("MENGER")));
 }
 
 #[tokio::test]

@@ -2020,20 +2020,20 @@ fn the_tokens_are_whole() {
 /// repository's. Each page (its name holds a hyphen, as a component's must:
 /// `page-<name>`), the routes that draw it and the Svelte components it
 /// places by their marks (`<ticket-head id={id}/>`, a bound mark the host
-/// fills). The first eleven are the app's pages and carry the app's top
+/// fills). The first nine are the app's pages and carry the app's top
 /// (`<slot name="top"/>`, app-top by `slots.json`) and the palette its jump
 /// button opens (`<slot name="palette"/>`, jump-palette-sv); the rest draw one
-/// component alone for its browser cases.
-const PAGES: [(&str, &[&str], &[&str]); 17] = [
+/// component alone for its browser cases. V2-25: `page-epics` (`#/epics`)
+/// and `page-me` (`#/me`) went with the `epics` activation and the owner's
+/// call on `session`'s page.
+const PAGES: [(&str, &[&str], &[&str]); 15] = [
     ("page-ticket", &["#/ticket/:id", "#/sv/ticket/:id"], &["ticket-head", "ticket-body", "ticket-edit", "ticket-relations", "ticket-actions", "ticket-commits", "ticket-history", "ticket-revisions"]),
     ("page-new", &["#/new", "#/new/:parent"], &["ticket-create"]),
     ("page-search", &["#/search", "#/search/:q", "#/search/:q/f/:filter"], &["search-page"]),
     ("page-ready", &["#/ready", "#/ready/:filter"], &["work-ready"]),
     ("page-waves", &["#/waves", "#/waves/in/:epics", "#/waves/:id", "#/waves/to/:to"], &["work-waves"]),
     ("page-filters", &["#/filters", "#/filters/:filter"], &["filters-saved"]),
-    ("page-epics", &["#/epics"], &["epics-page"]),
     ("page-orgs", &["#/orgs"], &["orgs-list"]),
-    ("page-me", &["#/me"], &["me-page"]),
     ("page-releases", &["#/releases"], &["ui-versions"]),
     ("page-sheet", &["#/sheet", "#/sheet/:id"], &["sheet-page"]),
     ("page-bulk", &["#/bulk", "#/bulk/:ids"], &["bulk-bar"]),
@@ -2044,8 +2044,8 @@ const PAGES: [(&str, &[&str], &[&str]); 17] = [
     ("page-counts", &["#/counts/:filter"], &["nav-counts"]),
 ];
 
-/// The app's pages: [`PAGES`]' first eleven, each with the top.
-const APP_PAGES: usize = 11;
+/// The app's pages: [`PAGES`]' first nine, each with the top.
+const APP_PAGES: usize = 9;
 
 /// What STUDIO-12 finds wrong, given the sources in `ui/src` (file name →
 /// text), `routes.json` and `slots.json`: a route drawing a svelte/1
@@ -2155,7 +2155,7 @@ fn every_route_is_an_rhx_page() {
     for (f, t) in bad.iter_mut() {
         match f.as_str() {
             "page-ticket.rhx" => *t = t.replace("<ticket-commits id={id}/>", "").replace("<slot name=\"top\"/>", ""),
-            "page-me.rhx" => *t = t.replace("class=\"page page-me\"", "class=\"me\""),
+            "page-releases.rhx" => *t = t.replace("class=\"page page-releases\"", "class=\"releases\""),
             "search-page.svelte" => *t = sv(" data-back").replace("[]", "[]; // \"plexus-ui:jump-palette-sv\""),
             "page-counts.rhx" => *t = "<section class=\"page page-counts\"><p/></section>".into(),
             _ => {}
@@ -2166,7 +2166,7 @@ fn every_route_is_an_rhx_page() {
     routes2.insert("#/sv/ticket/:id".into(), Value::from("ticket-page-sv"));
     let mut slots2 = slots.clone();
     slots2.insert("page-ready".into(), serde_json::json!({ "top": "board-layout-sv" }));
-    slots2.insert("page-me".into(), serde_json::json!({ "top": "app-top" }));
+    slots2.insert("page-releases".into(), serde_json::json!({ "top": "app-top" }));
     let mut got = page_breaks(&bad, &Value::Object(routes2).to_string(), &Value::Object(slots2).to_string());
     got.sort();
     let mut want = vec![
@@ -2174,13 +2174,13 @@ fn every_route_is_an_rhx_page() {
         "routes.json: #/sv/ticket/:id draws ticket-page-sv, not page-ticket",
         "ui/src/page-counts.rhx, #/counts/:filter's page, places no component: a page is a component of components",
         "ui/src/page-counts.rhx places no nav-counts (<nav-counts …/>)",
-        "ui/src/page-me.rhx: no <section class=\"page page-me\">",
+        "ui/src/page-releases.rhx: no <section class=\"page page-releases\">",
         "ui/src/page-orgs.rhx is missing (the page of #/orgs)",
         "ui/src/page-ticket.rhx places no ticket-commits (<ticket-commits …/>)",
         "ui/src/page-ticket.rhx marks no section top (<slot name=\"top\" …/>)",
         "slots.json: page-ready's top defaults to board-layout-sv, not app-top",
         "slots.json: page-ready's palette defaults to nothing, not jump-palette-sv",
-        "slots.json: page-me's palette defaults to nothing, not jump-palette-sv",
+        "slots.json: page-releases's palette defaults to nothing, not jump-palette-sv",
         "ui/src/search-page.svelte keeps the page's chrome (`data-back`): it is page-search's",
         "ui/src/search-page.svelte keeps the page's chrome (`\"plexus-ui:jump-palette`): it is page-search's",
     ];

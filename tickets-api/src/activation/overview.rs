@@ -7,7 +7,7 @@ use super::*;
 /// FILTER-4: `counts` — each shortcode's matches of a filter (the activation's doc).
 pub(super) fn counts_stream(store: Arc<Store>, caller: VerifiedUser, filter: Option<FilterText>, keep: Option<TicketRef>, tz: Option<Zone>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
-        let filter = match asked(&store, &caller, filter.as_deref()) {
+        let filter = match asked(filter.as_deref()) {
             Ok(v) => v,
             Err(message) => {
                 yield TicketsEvent::Error { message };
@@ -46,14 +46,14 @@ pub(super) fn counts_stream(store: Arc<Store>, caller: VerifiedUser, filter: Opt
 /// FILTER-4: `facets` — the menus' counts (the activation's doc).
 pub(super) fn facets_stream(store: Arc<Store>, caller: VerifiedUser, filter: Option<FilterText>, base: Option<FilterText>, tz: Option<Zone>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
-        let filter = match asked(&store, &caller, filter.as_deref()) {
+        let filter = match asked(filter.as_deref()) {
             Ok(v) => v,
             Err(message) => {
                 yield TicketsEvent::Error { message };
                 return;
             }
         };
-        let base = match asked(&store, &caller, base.as_deref()) {
+        let base = match asked(base.as_deref()) {
             Ok(v) => v,
             Err(message) => {
                 yield TicketsEvent::Error { message };

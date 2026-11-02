@@ -1,16 +1,14 @@
 <!-- SURFACE-5: a new ticket (svelte/1) — `#/new`, and `#/new/:parent` with the
-     parent filled. The epic is one of `epics.list`, the reader's
-     `epics.current` first and selected when none is chosen; an option's value
-     is `org:name`, so two organizations' epics of one name stay apart. The
-     current epic's shortcodes are named bare, any other's as `org:epic:CODE`.
-     The shortcode is typed, or the parent's. Parent and blockers come from
+     parent filled. V2-25: no epic menu — the `epics` activation went; the
+     shortcode is typed (bare, or `org:epic:CODE` for another epic's), or it
+     is the parent's. Parent and blockers come from
      sibling `ticket-picker`s, each drawn as a `ticket-chip`. Create (or
      ctrl+enter, a key the host takes: FRAME-36) awaits `tickets.create`'s
      answer — `created { ticket }` goes to the ticket (its address, for one
      born outside the genesis epic), a refusal is said under the form.
      STUDIO-12: the board link and the title are page-new's (rhx). -->
 <script module>
-  export const uses = ["epics.list", "epics.current", "tickets.get", "tickets.create"];
+  export const uses = ["tickets.get", "tickets.create"];
 
   /** A call's answer as FRAME-37 says it, `{ ok, events, message }` — also
    *  from a host before it (the data events, or a rejection), and from none. */
@@ -36,7 +34,6 @@
   let { parent = null, sheet = null } = $props();
   const b = bus();
 
-  let epic = $state("");
   let code = $state("");
   let kind = $state("build");
   let severity = $state("");
@@ -49,13 +46,8 @@
   let sending = $state(false);
   let refused = $state(null);
 
-  const epics = live({ snapshot: "epics.list", params: {}, key: "name", on: { epic: "upsert:epic" } });
-  const current = live({ snapshot: "epics.current", params: {}, key: "name", on: { current: "upsert:epic" } });
   const par = live({ snapshot: "tickets.get", params: () => ({ id: parent }), key: "id", when: () => !!parent });
 
-  const keyOf = (e) => `${e.org}:${e.name}`;
-  const choices = $derived([...epics.rows.filter((e) => e.current), ...epics.rows.filter((e) => !e.current && !e.archived)]);
-  const chosen = $derived(epic || (choices.find((e) => e.current) ? keyOf(choices.find((e) => e.current)) : ""));
   const parentNow = $derived(picked ?? (unparent ? null : parent));
   const prefill = $derived(!picked && !unparent && parent && par.rows[0]?.id ? par.rows[0].epic : "");
   const shortcode = $derived(code.trim() || prefill || (parentNow ? parentNow.slice(0, parentNow.lastIndexOf("-")) : ""));
@@ -74,8 +66,7 @@
 
   async function create() {
     if (!ready || sending) return;
-    const e = choices.find((x) => keyOf(x) === chosen);
-    const params = { epic: e && !e.current ? `${keyOf(e)}:${shortcode}` : shortcode, title: title.trim(), kind, blocked_by: blocked };
+    const params = { epic: shortcode, title: title.trim(), kind, blocked_by: blocked };
     if (parentNow) params.parent = parentNow;
     if (severity) params.severity = severity;
     if (body) params.body = body;
@@ -93,17 +84,9 @@
 
 <section class="create" data-surface="ticket-create" data-form="tickets.create">
   <div class="grid">
-    <label class="f"><span class="l">epic</span>
-      <select data-field="epic" value={chosen} onchange={(ev) => (epic = ev.currentTarget.value)}>
-        {#each choices as e (keyOf(e))}
-          <option value={keyOf(e)} selected={keyOf(e) === chosen}>{e.name + (e.current ? " · current" : "")}</option>
-        {/each}
-      </select>
-      {#if sheet === "loading" || epics.status === "pending"}<span class="skeleton" data-loading aria-hidden="true"></span>{/if}
-      {#each current.rows as c (keyOf(c))}<span class="hint" data-current-epic={c.name}>you are in {c.name}</span>{/each}
-    </label>
     <label class="f"><span class="l">shortcode</span>
-      <input data-field="shortcode" type="text" spellcheck="false" autocomplete="off" placeholder="KILN" bind:value={() => code || prefill, (v) => (code = v)}/>
+      <input data-field="shortcode" type="text" spellcheck="false" autocomplete="off" placeholder="KILN, or org:epic:KILN" bind:value={() => code || prefill, (v) => (code = v)}/>
+      {#if sheet === "loading"}<span class="skeleton" data-loading aria-hidden="true"></span>{/if}
     </label>
     <label class="f"><span class="l">kind</span>
       <select data-field="kind" bind:value={kind}>
@@ -156,7 +139,7 @@
 
 <style>
   .create { display: block; max-width: 760px; margin: 0 auto; padding: 16px 20px 40px; color: var(--ink); font-family: var(--font-text); font-size: var(--text-size); }
-  .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+  .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
   @media (max-width: 720px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   .f { display: flex; flex-direction: column; gap: 4px; min-width: 0; margin-bottom: 12px; }
   .l { display: flex; gap: 8px; align-items: center; font-size: 11px; font-weight: var(--weight-medium); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }

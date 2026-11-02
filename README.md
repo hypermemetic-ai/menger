@@ -273,7 +273,6 @@ behind plexus-core's gate; menger's own are declared on the frame
 | `tickets` | the store, its reads, writes and watch; children `commits`, `filters`, `nav`, `revisions`, `subtasks`, `work` | `tickets-api/src/activation/` |
 | `members` | grants and teams (child `teams`) | `tickets-api/src/members_activation.rs` |
 | `orgs` | organizations | `tickets-api/src/orgs_activation.rs` |
-| `epics` | an organization's levels of shortcodes | `tickets-api/src/epics_activation.rs` |
 | `session` | who a connection is, agents' sessions | `tickets-api/src/session_activation.rs` |
 | `auth` | the AUTH protocol's door and roles | plexus-login, over `src/login_access.rs` |
 | `ui` | the UI's versions, live pointer, previews; child `slots` | the framework's: `../plexus-ui/service` (`plexus-ui-service`, FRAME-5) |
@@ -383,7 +382,7 @@ whole. synapse `-j` prints the `rows` event as one line (SYNAPSE-36).
 | `work waves_under` · `waves_to` | `--id [--kinds]` | under one ticket · up to one ticket |
 | `work blockers` | `--id` | a ticket's blockers at their statuses |
 
-### `members`, `orgs`, `epics`, `session`, `auth`
+### `members`, `orgs`, `session`, `auth`
 
 | method | flags | what it does |
 |---|---|---|
@@ -395,8 +394,6 @@ whole. synapse `-j` prints the `rows` event as one line (SYNAPSE-36).
 | `members pairing` | `--code` | the machines waiting on a pairing code (TETHER-12) |
 | `members teams list` · `show` · `create` · `rename` · `delete` · `add` · `remove` | `[--org]` · `--team` · `--name [--org]` · `--team --to` · `--team` · `--team --principal` · `--team --principal` | teams (ACCESS-22) |
 | `orgs list` · `create` · `rename` · `delete` | — · `--name [--admin]` · `--name --to` · `--name` | organizations (ORG-4) |
-| `epics list` · `get` · `current` · `switch` · `dismiss` · `watch` | `[--archived] [--org]` · `--name [--org]` · `[--org]` · `--name [--org]` · `[--org]` · — | an organization's epics, and yours |
-| `epics create` · `rename` · `delete` · `set_default` · `archive` · `restore` | `--name [--org]` · `--name --to [--org]` · `--name [--org]` · `--name [--org]` · `--name [--dry-run] [--org]` · `--name [--org]` | an admin's |
 | `session whoami` · `providers` · `login` · `logout` | — · — · `[--ttl-secs] [--scope]` · — | the connection's identity; an agent's session |
 | `auth providers` · `login` · `signup` · `whoami` · `logout` · `requires` | — · `--flow` · `[--via]` · — · — · `--method` | the door (AUTH-7) |
 | `auth roles` · `role_set` · `grant` · `revoke` · `waiting` | — · `--role --grants` · `--principal --role --scope` · `--principal --scope [--role]` · — | roles and grants (admin) |
@@ -680,7 +677,7 @@ an id older than ORG-3 is pinned. A name that fits two is refused in band
 `SYNAPSE-CC-1` is ticket 1 of `SYNAPSE-CC`). A scope roots its own
 shortcode (ORG-5): `create --kind scope --epic NEW --parent X`.
 
-### Organizations (ORG-4) and epics (ORG-13, ORG-23)
+### Organizations (ORG-4) and epics (ORG-13, ORG-23; out of the surface, V2-25)
 
 Every ticket and shortcode is in one organization (`hypermemetic`).
 `orgs create --name N --admin P` (admin on `*`), `rename` (the old name an
@@ -691,11 +688,18 @@ it holds a role in.
 
 An **epic** is a level of an organization that holds shortcodes:
 organization → epic → shortcode → ticket. Each organization starts with
-`genesis`; a principal reads in its own epic (its `switch`, else the
-organization's default). `epics archive` moves everyone on it to the next
-newer live epic in one write (`--dry-run true` first); an archived epic's
-tickets are in no view unless a filter names it or `archived`. `tickets
-reshortcode --to org:epic:CODE` moves tickets between epics.
+`genesis`, whose addresses name no epic; another epic's name it
+(`hypermemetic:fresh:MENGER-1`), and `create --epic org:epic:CODE` and
+`tickets reshortcode --to org:epic:CODE` still address one a file holds.
+**V2-25** (owner, 2026-11-01: "remove even more … epics"): the `epics`
+activation went — no method lists, makes, switches or archives an epic — and
+nothing narrows a read to one: the board, `list`, `nav groups` and
+`extents` and a `watch` are the organization's whole set, whatever a file
+keeps of ORG-13's choices and ORG-23's marks; a filter naming `epic` reads
+that one, `epic any` every live one. The store keeps the level
+(`tickets-api/src/store/eras.rs`, `era_archive.rs`) and the header's
+switcher, `#/epics` and the `me` page went with it (`session` stays: it is
+how agents sign in).
 
 ## Login (IDENTITY-14)
 
@@ -749,7 +753,7 @@ scope; every read answers under the caller's filter **and** its scopes.
 
 | role | may |
 |---|---|
-| `viewer` | read under the scope: `tickets`' reads and its children's (`tickets.may` among them), `orgs.list`, `epics`' own settings, `ui.versions`, `ui.watch`, `ui.slots.list`, `ui.history`, `media.get` |
+| `viewer` | read under the scope: `tickets`' reads and its children's (`tickets.may` among them), `orgs.list`, `ui.versions`, `ui.watch`, `ui.slots.list`, `ui.history`, `media.get` |
 | `editor` | also create and change tickets: `tickets`' writes, `commits`, saved filters, `revisions restore`, `subtasks create`, `media.put` |
 | `admin` | every grant: `tickets.delete`, `undelete`, `freeze`, `unfreeze`, `members.*`, `orgs.create`, `auth.role_set`, `auth.grant`, `ui.rollback`, `ui.preview`, `ui.slots.set`, `ui.slots.clear`, and the undo of a push or a rollback (FRAME-52), … |
 | `deployer` | `ui.push` alone — a CI's key (V2-7: the pipeline key) |
@@ -849,7 +853,7 @@ against a tenant that is not menger (`../plexus-ui/service/tests`); menger's
   the `service`); the manifest's `contract` is compared with the hash of the
   services named — one service, its schema's own hash, several a hash over
   each (a bundle naming `tickets` alone: `tickets.schema`'s; one naming
-  `epics` or `ui` beside it, another), which `plexus-ui build
+  `orgs` or `ui` beside it, another), which `plexus-ui build
   --contract-from URL` stamps, or `--contract HASH` as given — UI-12,
   SURFACE-11: the pipeline's build asks the binary it built `ui contract
   --uses` the methods the bundle's manifest names and passes the answer so;
@@ -1060,8 +1064,8 @@ svelte components"): the real Svelte board is the default, at `#/`,
 comparison at `#/rhx/`, `#/rhx/f/:filter` and `#/rhx/ticket/:id`. The Svelte
 board is drawn in `board-frame.rhx`, an rhx layout that only places its
 sections (a section is the host's, and only an rhx template marks one), whose
-defaults are the svelte/1 ones — `top` the app's top (`app-top`: the epic,
-the live count, search, the links, the palette's button), `bar`
+defaults are the svelte/1 ones — `top` the app's top (`app-top`: the live
+count, search, the links, the palette's button), `bar`
 `board-layout-sv` (the top bar and its filter line), `nav`, `keys` the
 board's keymap (`keys-help`), `main`, `bulk` the bulk bar (`bulk-bar`,
 hearing the rows' `board.selected`) and `palette`. The rhx board at `#/rhx/`
@@ -1097,8 +1101,8 @@ relations, actions, commits, history and revisions — the ticket page's
 skeleton, "no such ticket", the deleted notice and its keys `e`, `escape`,
 `g b` are the page's, `escape` and `g b` to `#/` under either prefix, and
 its key strip), `page-new`, `page-search`, `page-ready` and `page-waves`
-(full-height columns: the list scrolls in its own box under its bar), `page-filters`, `page-epics`,
-`page-orgs`, `page-me`, `page-releases`, `page-sheet`; `page-bulk`, `page-blockers`,
+(full-height columns: the list scrolls in its own box under its bar), `page-filters`,
+`page-orgs`, `page-releases`, `page-sheet` (V2-25: `page-epics` and `page-me` went); `page-bulk`, `page-blockers`,
 `page-edit`, `page-actions`, `page-facets` and `page-counts` draw one
 component alone for its browser cases. A placed component keeps its
 behaviour and its look and loses the page's chrome to the page — the board
@@ -1179,7 +1183,10 @@ v2 keeps its store and replaces the app with the ui service. V2-24
 and `media.get`, by sha256 in `media.db`, the ticket's permit asked of the
 tickets service through the seam (`tickets.may`), `/media/<hash>` on the
 shell — the first service beside `tickets` to write something of a
-ticket's.
+ticket's. V2-25
+(2026-11-01): epics leave v2's surface — the `epics` activation, the header's
+switcher and `#/epics`, and the `me` page — and the board is the
+organization's whole set; `session` stays as the agents' door.
 
 ## License
 

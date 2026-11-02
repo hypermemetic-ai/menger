@@ -78,11 +78,9 @@ impl NavActivation {
     /// at the top for this caller).
     #[plexus_macros::method(group = "overview")]
     pub async fn groups(&self, #[from_auth(self.access.verify)] user: VerifiedUser) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        // ORG-13: the shortcodes of the epic the caller is in.
-        let me = user.principal_text();
-        listed(&self.store, &user, move |store, user| {
-            store.groups(user).into_iter().filter(|g| store.in_current_era(&me, &g.shortcode)).map(|group| Row::Group { group }).collect()
-        })
+        // V2-25: every shortcode the caller sees — ORG-13's hold to the
+        // caller's current epic went with the `epics` activation.
+        listed(&self.store, &user, move |store, user| store.groups(user).into_iter().map(|group| Row::Group { group }).collect())
     }
 
     /// Each shortcode's last sequence (a deleted ticket's too: numbers are never reused) and the holes below it, in shortcode order — where each shortcode ends in the store's order.
@@ -102,10 +100,8 @@ impl NavActivation {
     /// `created` already carries the newborn's `epic` and `seq`.
     #[plexus_macros::method(group = "overview")]
     pub async fn extents(&self, #[from_auth(self.access.verify)] user: VerifiedUser) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        let me = user.principal_text();
         listed(&self.store, &user, move |store, user| {
-            let mine = store.extents_holed(user).into_iter().filter(|(sc, ..)| store.in_current_era(&me, sc));
-            mine.map(|(shortcode, epic, last_seq, holes)| Row::Extent { epic, shortcode, last_seq, holes }).collect()
+            store.extents_holed(user).into_iter().map(|(shortcode, epic, last_seq, holes)| Row::Extent { epic, shortcode, last_seq, holes }).collect()
         })
     }
 

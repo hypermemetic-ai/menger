@@ -69,7 +69,7 @@ components in `ui/`, nothing of the framework's.
 
 **The services registered** (`src/builder.rs`, one process): `tickets`
 (children `commits`, `filters`, `inputs`, `nav`, `revisions`, `subtasks`, `work`),
-`members` (child `teams`), `orgs`, `epics`, `session`, `auth`, `ui`
+`members` (child `teams`), `orgs`, `session`, `auth`, `ui`
 (child `slots`), and `media` (V2-24: `media/`, `menger-media` — images by
 sha256 in `media.db`, `--media-db-path`). A service reaches another as a
 client, through plexus-core's `HubTransport::as_(service, caller)` — the ui
@@ -508,14 +508,15 @@ synapse -P 4460 menger tickets work waves_to --id MENGER-30
 synapse -P 4460 menger tickets work blockers --id MENGER-30
 ```
 
-### Addresses, organizations, epics, members
+### Addresses, organizations, members
 
 A shortcode is unique within its namespace (ORG-3); every `--id`,
 `--parent`, `--blocked-by`, `--epic` and `under` takes any short form of a
 ticket's address (`MENGER/ORG-3`, `ACCESS/ORG-3`, the bare id); a name that
 fits two is refused in band, naming each candidate. A scope roots its own
 shortcode (ORG-5). Every ticket is in one organization (ORG-4) and one epic
-(ORG-13, ORG-23). A grant's scope is `*`, `org:`, a shortcode, a ticket
+(ORG-13; V2-25: the `epics` methods went — a read is the organization's
+whole set, and an epic is named only in an address). A grant's scope is `*`, `org:`, a shortcode, a ticket
 alone or `under` a ticket (ACCESS-21); a team holds grants for its members
 (ACCESS-22); `--everyone true` grants every signed-in principal
 (ACCESS-57). README "Addresses", "Organizations", "Members and roles":
@@ -526,18 +527,6 @@ synapse -P 4460 menger orgs list
 synapse -P 4460 menger orgs create --name acme --admin key:54a9677a62e4289ee5a2d0a4751a6f188abafd8b1f2b2d4019ec0768eb3b0d28
 synapse -P 4460 menger orgs rename --name acme --to acme-co
 synapse -P 4460 menger orgs delete --name acme-co
-synapse -P 4460 menger epics list --archived true
-synapse -P 4460 menger epics current
-synapse -P 4460 menger epics get --name genesis
-synapse -P 4460 menger epics create --name fresh
-synapse -P 4460 menger epics switch --name genesis
-synapse -P 4460 menger epics set_default --name genesis
-synapse -P 4460 menger epics rename --name fresh --to spring
-synapse -P 4460 menger epics archive --name spring --dry-run true
-synapse -P 4460 menger epics restore --name spring
-synapse -P 4460 menger epics delete --name spring
-synapse -P 4460 menger epics dismiss
-synapse -P 4460 menger epics watch          # open-ended
 synapse -P 4460 menger tickets reshortcode --ids MENGER-40 --to hypermemetic:fresh:MENGER --dry-run true
 synapse -P 4460 menger members mine
 synapse -P 4460 menger members list

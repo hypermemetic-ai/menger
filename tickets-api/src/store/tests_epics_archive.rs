@@ -161,24 +161,19 @@ async fn nothing_switches_to_is_made_in_or_moves_into_an_archived_epic_and_resto
 }
 
 #[tokio::test]
-async fn an_archived_epics_tickets_leave_the_views_and_answer_by_name() {
+async fn an_archived_epic_is_out_of_epic_any_and_answers_by_name() {
     let store = Store::new();
     fixture(&store).await;
     assert_eq!(held(&store, "epic any"), 5);
     store.archive_epic(SYS, &hm(), "spring", false, BO).await.unwrap();
     assert_eq!(held(&store, "epic any"), 3, "every live epic");
     assert_eq!(held(&store, "epic spring"), 2, "named, it answers");
-    // A reader's view: its epic; with `archived`, the archived epics too.
-    let plain = crate::filter::Filter::parse("kind scope").unwrap();
-    assert_eq!(store.era_filter(ADA, None, &plain).unwrap().format(), "epic hypermemetic:fresh");
-    let asks = crate::filter::Filter::parse("kind scope and archived").unwrap();
-    assert_eq!(store.era_filter(ADA, None, &asks).unwrap().format(), "epic in (hypermemetic:spring, hypermemetic:fresh)");
+    // V2-25: no reader's view narrows to its epic; the mark alone says it.
     // get still answers, with the mark.
     let t = store.get(SYS, "hypermemetic:spring:MENGER-2").await.unwrap();
     let mark = t.epic_archived.expect("its epic's mark");
     assert_eq!((mark.name.as_str(), mark.by.as_str()), ("spring", BO));
     assert_eq!(store.get(SYS, "hypermemetic:MENGER-2").await.unwrap().epic_archived, None, "genesis's is live");
-    assert!(!store.in_current_era(ADA, &store.get(SYS, "hypermemetic:spring:MENGER-1").await.unwrap().shortcode));
 }
 
 #[tokio::test]
