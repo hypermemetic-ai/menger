@@ -366,7 +366,8 @@ pub(crate) fn DeployMenu(tree: nav::Tree) -> impl IntoView {
     let open = RwSignal::new(None::<Open>);
     OPEN.with(|o| o.set(Some(open)));
     install(open);
-    move || open.get().map(|o| menu_view(o, open, tree))
+    // APP-116: the menu's one item opens a chat; with chat hidden it never opens.
+    move || open.get().filter(|_| crate::chats::ENABLED).map(|o| menu_view(o, open, tree))
 }
 
 fn menu_view(o: Open, open: RwSignal<Option<Open>>, tree: nav::Tree) -> impl IntoView {

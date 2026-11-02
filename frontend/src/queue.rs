@@ -1170,7 +1170,8 @@ pub(crate) fn Tray() -> impl IntoView {
         Signal::derive(move || held.with(Option::is_some))
     };
     let unread_chats = Memo::new(move |_| chat_lines.with(|l| queue_tabs::waiting(l)));
-    let tab = RwSignal::new(queue_tabs::kept());
+    // APP-116: with chat hidden there is one tab.
+    let tab = RwSignal::new(if crate::chats::ENABLED { queue_tabs::kept() } else { Tab::Queue });
     let chat_sel = RwSignal::new(None::<u64>);
     let sheet_ref = NodeRef::<leptos::html::Div>::new();
     let control_ref = NodeRef::<leptos::html::Button>::new();
@@ -1739,18 +1740,21 @@ pub(crate) fn Tray() -> impl IntoView {
                                 <span class="qt">"queue"</span>
                                 <b class="qn">{move || rows.with(Vec::len)}</b>
                             </button>
-                            <button
-                                type="button"
-                                class="qtb"
-                                role="tab"
-                                data-tab="chats"
-                                aria-selected=move || (tab.get() == Tab::Chats).to_string()
-                                aria-label=move || format!("chats, {}", queue_tabs::words(unread_chats.get()))
-                                on:click=move |_| set_tab(Tab::Chats)
-                            >
-                                <span class="qt">"chats"</span>
-                                <b class=move || chat_n_class(unread_chats.get())>{move || unread_chats.get()}</b>
-                            </button>
+                            // APP-116: the chats tab only while chat is shown.
+                            {crate::chats::ENABLED.then(|| view! {
+                                <button
+                                    type="button"
+                                    class="qtb"
+                                    role="tab"
+                                    data-tab="chats"
+                                    aria-selected=move || (tab.get() == Tab::Chats).to_string()
+                                    aria-label=move || format!("chats, {}", queue_tabs::words(unread_chats.get()))
+                                    on:click=move |_| set_tab(Tab::Chats)
+                                >
+                                    <span class="qt">"chats"</span>
+                                    <b class=move || chat_n_class(unread_chats.get())>{move || unread_chats.get()}</b>
+                                </button>
+                            })}
                         </span>
                         {move || (tab.get() == Tab::Queue && !one.get() && !rows.with(Vec::is_empty)).then(|| view! { <span class="qjs">{chips}</span> })}
                         <span class="sp"></span>

@@ -3795,6 +3795,8 @@ the tickets outside the caller's reach, never naming them.
 
 ### Chats (CHAT-3)
 
+**Hidden in the app since APP-116** (owner, 2026-11-01: *"remove all chat options"*): `frontend/src/chats.rs`'s `ENABLED` is `false`, so the app draws no chat surface and subscribes to no chat; the activation below is unchanged and still serves agents. Set it `true` to show chat again.
+
 A **chat** is a conversation among named participants, opened inside one
 ticket (CHAT-1: its own record, not a comment; no chat without a ticket),
 reached as the `chats` activation; its vocabulary (`Chat`, `Message`,
