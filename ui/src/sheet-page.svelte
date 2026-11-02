@@ -73,6 +73,7 @@
   import TicketCreate from "plexus-ui:ticket-create";
   import TicketEdit from "plexus-ui:ticket-edit";
   import EditorBody from "plexus-ui:editor-body";
+  import EditorScreen from "plexus-ui:editor-screen";
   import PageEditor from "plexus-ui:page-editor";
   import TicketHead from "plexus-ui:ticket-head";
   import TicketHistory from "plexus-ui:ticket-history";
@@ -190,6 +191,8 @@
       ["ticket-edit", TicketEdit, ID, ["hover", "focus", "disabled", "checked"], { checked: { sheet: "open" }, loading: { sheet: "loading" } }, false, { checked: ["[role=radio][aria-checked=false]"] }],
       // EDITOR-3: the body in CodeMirror; focus held on its title, hover on its revisions link.
       ["editor-body", EditorBody, ID, ["hover", "focus"], { loading: { sheet: "loading" }, ...gone }, false, { hover: [".revs"], focus: [".title"] }],
+      // EDITOR-4: the first screen, small; selected held on the phone switch, disabled on *new*.
+      ["editor-screen", EditorScreen, ID, ["hover", "focus", "selected", "disabled"], { loading: { sheet: "loading" }, empty: { id: NONE } }, true, { hover: [".id"], focus: [".id"], selected: [".switch button"], disabled: ["[data-action=new]"] }],
       ["ticket-actions", TicketActions, ID, ["hover", "focus", "disabled", "checked"], { loading: { sheet: "loading" } }],
       ["work-blockers", WorkBlockers, ID, [], { loading: { sheet: "loading" } }],
       ["work-blocker", WorkBlocker, (t) => ({ id: t, side: "blocker" }), ["hover", "focus"], { loading: { sheet: "loading" } }],

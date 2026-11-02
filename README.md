@@ -1024,8 +1024,8 @@ with the stamped version.
 `ui/` is the UI's source: `index.html` (FRAME-30: the page's frame alone,
 `theme.css` loaded first), `theme.toml` (the tokens, light and dark —
 `[colour.paper]` `"--bg" = [light, dark, "what it paints"]`, …; every
-component's `<style>` paints with them, never a literal), `routes.json` (`#/` and `#/f/:filter`
-→ `board-layout`, `#/ticket/:id` → `ticket-page`), `slots.json` (the
+component's `<style>` paints with them, never a literal), `routes.json` (`#/board` and `#/f/:filter`
+→ `board-frame`, `#/` and `#/edit/:id` → `page-editor`, `#/ticket/:id` → `ticket-page`), `slots.json` (the
 layouts' default sections), `src/*.rhx` (`board-layout`, `board-rows`,
 `filter-line`, `jump-palette`, `nav-tree`, `nav-flat`, `nav-children`,
 `ticket-page`, `ticket-chip`, `page-shell`, `hello-list`).
@@ -1059,7 +1059,9 @@ components above (`board-layout`, `board-rows`, `nav-tree`, `jump-palette`)
 is its real Svelte twin, `src/<name>-sv.svelte` (`svelte/1`:
 compiled at build in Node, `--node-modules ../plexus-ui/node_modules`), with
 the same calls and the same DOM marks. SURFACE-2 (owner, 2026-10-30: "I want
-svelte components"): the real Svelte board is the default, at `#/`,
+svelte components"): the real Svelte board is the default, at `#/board`
+(EDITOR-4: `#/` and `#/edit/:id` are the editor, `page-editor` placing
+`editor-screen`: `editor-body` beside the rendered ticket),
 `#/f/:filter` and `#/ticket/:id` (`#/sv/…` its alias), and the rhx board the
 comparison at `#/rhx/`, `#/rhx/f/:filter` and `#/rhx/ticket/:id`. The Svelte
 board is drawn in `board-frame.rhx`, an rhx layout that only places its

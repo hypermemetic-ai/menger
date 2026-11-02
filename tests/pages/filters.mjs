@@ -47,7 +47,7 @@ export default async (ctx) => {
   await test("the_navs_sections_ask_after_the_first_rows", async () => {
     const mark = (page, name) => page.evaluate((name) => performance.getEntriesByType("mark").find((e) => e.name === name)?.startTime ?? null, name);
     {
-      const { page, context } = await openPage("");
+      const { page, context } = await openPage("#/board");
       try {
         await eventually("the board's rows", async () => (await page.locator(".board-row[data-id]").count()) > 0, 10000);
         await eventually("the facets' chips and the saved filters drawn", async () =>
@@ -104,7 +104,7 @@ export default async (ctx) => {
         fs.appendFileSync(path.join(ui, "src", "nav-facets.svelte"), '<p class="facets-f50">swapped</p>\n');
       },
     });
-    const { page, context } = await openPage("");
+    const { page, context } = await openPage("#/board");
     try {
       await eventually("the board drawn and the facets' chips", async () =>
         (await page.locator("[data-board][data-surface=board-rows][data-drawn]").count()) === 1 && (await facets(page).locator("[data-facet]").count()) > 0, 10000);
@@ -134,7 +134,7 @@ export default async (ctx) => {
   // the clear puts nav-facets back: each draws. Then, the behaviour held:
   // none of the three nav components' sources looks at the page.
   await test("a_nav_section_remounted_after_the_board_drew_hears_it", async () => {
-    const { page, context } = await openPage("");
+    const { page, context } = await openPage("#/board");
     try {
       await eventually("the board drawn and the facets' chips", async () =>
         (await page.locator("[data-board][data-surface=board-rows][data-drawn]").count()) === 1 && (await facets(page).locator("[data-facet]").count()) > 0, 10000);
@@ -165,7 +165,7 @@ export default async (ctx) => {
   // tickets.filters.list, when its kept collection does not serve it) is
   // sent after the new tickets.list is answered.
   await test("a_return_trip_asks_the_nav_after_the_new_rows", async () => {
-    const { page, context } = await openPage("");
+    const { page, context } = await openPage("#/board");
     try {
       await eventually("the board drawn and the facets' chips", async () =>
         (await page.locator(".board-row[data-id]").count()) > 0 && (await facets(page).locator("[data-facet]").count()) > 0, 10000);
@@ -352,12 +352,12 @@ export default async (ctx) => {
     sy("tickets", "filters", "save", "--name", "S6 spikes", "--filter", "kind spike");
     // On both boards: the rhx line (filter-line.rhx) and the Svelte one (filter-line-sv, board-layout-sv's).
     for (const L of [
-      // the rhx line's Escape goes to `#/` (it cannot know its board's route), the Svelte line's to its board's root
+      // the rhx line's Escape goes to `#/board` (it cannot know its board's route; EDITOR-4: `#/` is the editor), the Svelte line's to its board's root
       svelteFirst
-        ? { name: "rhx", route: "#/rhx/", f: "#/rhx/f/", home: ["#/rhx/", "#/"], focuses: false }
-        : { name: "rhx", route: "", f: "#/f/", home: ["", "#/"], focuses: false },
+        ? { name: "rhx", route: "#/rhx/", f: "#/rhx/f/", home: ["#/rhx/", "#/board"], focuses: false }
+        : { name: "rhx", route: "#/board", f: "#/f/", home: ["#/board", "#/board"], focuses: false },
       svelteFirst
-        ? { name: "sv", route: "", f: "#/f/", home: ["", "#/"], focuses: true, slash: true }
+        ? { name: "sv", route: "#/board", f: "#/f/", home: ["#/board", "#/board"], focuses: true, slash: true }
         : { name: "sv", route: "#/sv/", f: "#/sv/f/", home: ["#/sv/", "#/sv/"], focuses: true },
     ]) {
       {

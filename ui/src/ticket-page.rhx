@@ -15,7 +15,7 @@
 </script>
 
 <article class="ticket-page" data-ticket={id}>
-  <nav class="crumbs"><a href="#/" data-back>← board</a></nav>
+  <nav class="crumbs"><a href="#/board" data-back>← board</a></nav>
   {#each ticket as t (t.id)}
     <header class="ticket-head">
       <p class="ticket-code"><span data-ticket-id>{t.id}</span></p>

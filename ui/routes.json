@@ -1,5 +1,6 @@
 {
-  "#/": "board-frame",
+  "#/": "page-editor",
+  "#/board": "board-frame",
   "#/f/:filter": "board-frame",
   "#/ticket/:id": "page-ticket",
   "#/rhx/": "board-layout",
@@ -24,8 +25,8 @@
   "#/search": "page-search",
   "#/search/:q": "page-search",
   "#/search/:q/f/:filter": "page-search",
-  "#/edit/:id": "page-edit",
-  "#/editor/:id": "page-editor",
+  "#/edit/:id": "page-editor",
+  "#/form/:id": "page-edit",
   "#/actions/:id": "page-actions",
   "#/orgs": "page-orgs",
   "#/releases": "page-releases",

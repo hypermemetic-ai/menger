@@ -1319,7 +1319,7 @@ fn board_breaks(sources: &[(String, String)], routes: &str, slots: &str) -> Vec<
     // SURFACE-2: the Svelte board is the default (owner, 2026-10-30), the rhx
     // one the comparison at #/rhx/, and #/sv/ the Svelte board's alias.
     for (route, want) in [
-        ("#/", SV_FRAME),
+        ("#/board", SV_FRAME),
         ("#/f/:filter", SV_FRAME),
         ("#/ticket/:id", "page-ticket"),
         ("#/rhx/", "board-layout"),
@@ -1380,7 +1380,7 @@ fn each_board_component_has_both_profiles() {
     let sv = "<script module>\n  export const uses = [];\n</script>\n<p/>\n";
     let mut good: Vec<(String, String)> = BOARD.iter().chain(BOARD_SIBLINGS.iter()).flat_map(|n| [(format!("{n}.rhx"), "<p/>".to_string()), (format!("{n}-sv.svelte"), sv.to_string())]).collect();
     good.push((format!("{SV_FRAME}.rhx"), r#"<slot name="top" filter={filter}/><slot name="bar"/><slot name="nav"/><slot name="facets"/><slot name="saved"/><slot name="keys"/><slot name="main"/><slot name="bulk"/><slot name="palette"/>"#.into()));
-    let routes = r##"{ "#/": "board-frame", "#/f/:filter": "board-frame", "#/ticket/:id": "page-ticket", "#/rhx/": "board-layout", "#/rhx/f/:filter": "board-layout", "#/rhx/ticket/:id": "ticket-page", "#/sv/": "board-frame", "#/sv/f/:filter": "board-frame", "#/sv/ticket/:id": "page-ticket" }"##;
+    let routes = r##"{ "#/board": "board-frame", "#/f/:filter": "board-frame", "#/ticket/:id": "page-ticket", "#/rhx/": "board-layout", "#/rhx/f/:filter": "board-layout", "#/rhx/ticket/:id": "ticket-page", "#/sv/": "board-frame", "#/sv/f/:filter": "board-frame", "#/sv/ticket/:id": "page-ticket" }"##;
     let slots = r#"{ "board-layout": { "nav": "nav-tree", "main": "board-rows", "palette": "jump-palette" }, "board-frame": { "top": "app-top", "bar": "board-layout-sv", "nav": "nav-tree-sv", "facets": "nav-facets", "saved": "filters-saved", "keys": "keys-help", "main": "board-rows-sv", "bulk": "bulk-bar", "palette": "jump-palette-sv" } }"#;
     assert_eq!(board_breaks(&good, routes, slots), Vec::<String>::new());
     let chipless: Vec<(String, String)> = good.iter().filter(|(f, _)| f != "ticket-chip-sv.svelte").cloned().collect();
@@ -1390,7 +1390,7 @@ fn each_board_component_has_both_profiles() {
     bad.iter_mut().filter(|(f, _)| f == "jump-palette-sv.svelte").for_each(|(_, t)| *t = "<script>\n</script>\n<p/>\n".into());
     let swapped = r#"{ "board-layout": { "nav": "nav-tree", "main": "board-rows-sv", "palette": "jump-palette" }, "board-frame": { "top": "app-top", "bar": "board-layout-sv", "nav": "nav-tree-sv", "facets": "nav-facets", "saved": "filters-saved", "keys": "keys-help", "main": "board-rows-sv", "bulk": "bulk-bar", "palette": "jump-palette-sv" } }"#;
     assert_eq!(
-        board_breaks(&bad, r##"{ "#/": "board-frame", "#/f/:filter": "board-frame", "#/ticket/:id": "page-ticket", "#/rhx/": "board-layout", "#/rhx/f/:filter": "board-layout", "#/rhx/ticket/:id": "ticket-page", "#/sv/": "board-frame", "#/sv/ticket/:id": "ticket-page" }"##, swapped),
+        board_breaks(&bad, r##"{ "#/board": "board-frame", "#/f/:filter": "board-frame", "#/ticket/:id": "page-ticket", "#/rhx/": "board-layout", "#/rhx/f/:filter": "board-layout", "#/rhx/ticket/:id": "ticket-page", "#/sv/": "board-frame", "#/sv/ticket/:id": "ticket-page" }"##, swapped),
         [
             "ui/src/board-rows.rhx is missing (the rhx board-rows)",
             "ui/src/nav-tree-sv.svelte is missing (the Svelte nav-tree)",
@@ -2060,13 +2060,14 @@ fn the_tokens_are_whole() {
 /// repository's. Each page (its name holds a hyphen, as a component's must:
 /// `page-<name>`), the routes that draw it and the Svelte components it
 /// places by their marks (`<ticket-head id={id}/>`, a bound mark the host
-/// fills). The first nine are the app's pages and carry the app's top
+/// fills). The first ten are the app's pages (EDITOR-4: `page-editor` at `#/`, the board at `#/board`) and carry the app's top
 /// (`<slot name="top"/>`, app-top by `slots.json`) and the palette its jump
 /// button opens (`<slot name="palette"/>`, jump-palette-sv); the rest draw one
 /// component alone for its browser cases. V2-25: `page-epics` (`#/epics`)
 /// and `page-me` (`#/me`) went with the `epics` activation and the owner's
 /// call on `session`'s page.
 const PAGES: [(&str, &[&str], &[&str]); 16] = [
+    ("page-editor", &["#/", "#/edit/:id"], &["editor-screen"]),
     ("page-ticket", &["#/ticket/:id", "#/sv/ticket/:id"], &["ticket-head", "ticket-body", "ticket-edit", "ticket-relations", "ticket-actions", "ticket-commits", "ticket-history", "ticket-revisions"]),
     ("page-new", &["#/new", "#/new/:parent"], &["ticket-create"]),
     ("page-search", &["#/search", "#/search/:q", "#/search/:q/f/:filter"], &["search-page"]),
@@ -2078,15 +2079,14 @@ const PAGES: [(&str, &[&str], &[&str]); 16] = [
     ("page-sheet", &["#/sheet", "#/sheet/:id"], &["sheet-page"]),
     ("page-bulk", &["#/bulk", "#/bulk/:ids"], &["bulk-bar"]),
     ("page-blockers", &["#/blockers/:id"], &["work-blockers"]),
-    ("page-edit", &["#/edit/:id"], &["ticket-edit"]),
+    ("page-edit", &["#/form/:id"], &["ticket-edit"]),
     ("page-actions", &["#/actions/:id"], &["ticket-actions"]),
     ("page-facets", &["#/facets", "#/facets/:filter"], &["nav-facets"]),
     ("page-counts", &["#/counts/:filter"], &["nav-counts"]),
-    ("page-editor", &["#/editor/:id"], &["editor-body"]),
 ];
 
 /// The app's pages: [`PAGES`]' first nine, each with the top.
-const APP_PAGES: usize = 9;
+const APP_PAGES: usize = 10;
 
 /// What STUDIO-12 finds wrong, given the sources in `ui/src` (file name →
 /// text), `routes.json` and `slots.json`: a route drawing a svelte/1
@@ -2186,7 +2186,7 @@ fn every_route_is_an_rhx_page() {
     good.push(("board-frame.rhx".into(), "<slot name=\"top\"/>".into()));
     good.push(("ticket-page.rhx".into(), "<ticket-chip id={id}/>".into()));
     good.push(("ticket-chip.rhx".into(), "<p/>".into()));
-    routes.insert("#/".into(), Value::from("board-frame"));
+    routes.insert("#/board".into(), Value::from("board-frame")); // EDITOR-4: the board; `#/` is page-editor's, from the table
     routes.insert("#/rhx/ticket/:id".into(), Value::from("ticket-page"));
     let (r, s) = (Value::Object(routes.clone()).to_string(), Value::Object(slots.clone()).to_string());
     assert_eq!(page_breaks(&good, &r, &s), Vec::<String>::new());

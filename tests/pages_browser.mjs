@@ -90,7 +90,7 @@ const BOARDS = {
     lands: { filterRoute: "#/f/", ticketRoute: "#/ticket/", layout: "board-frame", top: "board-layout-sv" },
   },
   sv: {
-    name: "sv", tag: "_sv", route: "", filterRoute: "#/f/", ticketRoute: "#/ticket/",
+    name: "sv", tag: "_sv", route: "#/board", filterRoute: "#/f/", ticketRoute: "#/ticket/",
     layout: "board-frame", top: "board-layout-sv", nav: "nav-tree-sv", main: "board-rows-sv", palette: "jump-palette-sv", page: "page-ticket",
     sections: [["top", "app-top"], ["bar", "board-layout-sv"], ["nav", "nav-tree-sv"], ["facets", "nav-facets"], ["saved", "filters-saved"], ["keys", "keys-help"], ["main", "board-rows-sv"], ["bulk", "bulk-bar"], ["palette", "jump-palette-sv"]],
     module: "board-rows-sv.js", epics: ["AAAC", "AAAD"],

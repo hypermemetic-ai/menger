@@ -1,5 +1,5 @@
 // SURFACE-4: the ticket page's writes — ticket-edit and ticket-actions —
-// on the throwaway, through their test routes (#/edit/:id → ticket-edit,
+// on the throwaway, through their test routes (#/form/:id → ticket-edit,
 // #/actions/:id → ticket-actions) until SURFACE-3's ticket page places them.
 //
 // Marks: ticket-edit `[data-surface=ticket-edit]`, `[data-action=edit|cancel|tickets.update|tickets.amend]`,
@@ -71,7 +71,7 @@ export default async (ctx) => {
 
   await test("amend_saves_the_body_and_the_page_shows_it", async () => {
     const id = child("a body to write");
-    const { context, page } = await openPage(`#/edit/${id}`);
+    const { context, page } = await openPage(`#/form/${id}`);
     try {
       const edit = await opened(page);
       const form = edit.locator("[data-form='tickets.amend']");
@@ -110,7 +110,7 @@ export default async (ctx) => {
   await test("update_changes_severity_and_blockers", async () => {
     const a = child("waits on b");
     const b = child("b, waited on");
-    const { context, page } = await openPage(`#/edit/${a}`);
+    const { context, page } = await openPage(`#/form/${a}`);
     try {
       const edit = await opened(page);
       const form = edit.locator("[data-form='tickets.update']");
@@ -158,7 +158,7 @@ export default async (ctx) => {
     const other = child("another parent", "--kind", "build");
     const moved = child("to be moved", "--kind", "build");
     const below = make("under the moved one", "--parent", moved);
-    const { context, page } = await openPage(`#/edit/${moved}`);
+    const { context, page } = await openPage(`#/form/${moved}`);
     try {
       const edit = await opened(page);
       const form = edit.locator("[data-form='tickets.update']");
@@ -184,7 +184,7 @@ export default async (ctx) => {
   // FRAME-36: the form's keys — ctrl+enter saves (in a field too, never a newline in the body), escape cancels.
   await test("the_edit_forms_keys", async () => {
     const id = child("saved by a key");
-    const { context, page } = await openPage(`#/edit/${id}`);
+    const { context, page } = await openPage(`#/form/${id}`);
     try {
       const edit = await opened(page);
       const body = edit.locator("textarea[data-field=body]");

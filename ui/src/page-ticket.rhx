@@ -13,8 +13,8 @@
   // spec word for word, so the page holds one `get` and one stream of it.
   // Keys: `e` says `ticket.edit` on the bus (ticket-edit hears it; the page
   // counts it in `data-edit-asked` and the edit's mark flashes), `escape`
-  // and `g b` go to the board — `#/` under either prefix: rhx reads no
-  // route prefix, and `#/sv/` is the same board's alias; `[` and `]` are
+  // and `g b` go to the board — `#/board` under either prefix (EDITOR-4: `#/`
+  // is the editor): rhx reads no route prefix, and `#/sv/` is the same board's alias; `[` and `]` are
   // ticket-head's, which knows the siblings (and keeps the prefix). The key
   // strip says them; the palette is the page's `palette` section
   // (jump-palette-sv by ui/slots.json: app-top's jump button and ctrl+k).
@@ -34,7 +34,7 @@
     "g b": #{ to: "board", label: "go to the board" },
   });
   fn edit(state, ev) { emit("ticket.edit", #{ id: ev.props.id }); state.knocked += 1; state }
-  fn board(state, ev) { navigate("#/"); state }
+  fn board(state, ev) { navigate("#/board"); state }
 </script>
 
 <section class="page page-ticket">

@@ -29,7 +29,7 @@
     t.replace("%", "%25");
     t.replace("/", "%2F");
     t.replace("#", "%23");
-    if t == "" { navigate("#/"); } else { navigate("#/f/" + t); }
+    if t == "" { navigate("#/board"); } else { navigate("#/f/" + t); }
     state
   }
   fn typed(state, ev) {
@@ -70,7 +70,7 @@
     state.typed = true;
     state.naming = false;
     state.gen += 1;
-    if ev.props.filter != () { navigate("#/"); }
+    if ev.props.filter != () { navigate("#/board"); }
     state
   }
 </script>
