@@ -176,7 +176,8 @@
   .ticket-questions .tq-item { padding: 10px 0; border-top: var(--border) solid var(--line); }
   .ticket-questions .tq-item[data-state=open] .tq-q { font-weight: var(--weight-medium); }
   .ticket-questions .tq-item[data-state=closed], .ticket-questions .tq-item[data-state=withdrawn] { color: var(--muted); }
-  .ticket-questions .tq-q { margin: 0 0 6px; }
+  .ticket-questions .tq-q { margin: 0 0 6px; overflow-wrap: anywhere; }
+  .ticket-questions .tq-item { min-width: 0; overflow-wrap: anywhere; }
   .ticket-questions .tq-options { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
   .ticket-questions .tq-opt { padding: 2px 10px; font: inherit; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-sm); cursor: pointer; transition: background-color var(--motion-fast) var(--ease); }
   .ticket-questions .tq-opt[data-recommended=true] { border-color: var(--accent); }

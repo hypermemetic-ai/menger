@@ -661,7 +661,13 @@
           }
           case "FencedCode": {
             const first = lineOf(ref.from), last = lineOf(ref.to);
-            lines(ref.from, ref.to, "eb-fence");
+            // EDITOR-12: each line's leading whitespace, the hanging indent its wrapped rows keep on a phone.
+            for (let l = first; ; l = lineOf(l.to + 1)) {
+              let ind = 0;
+              for (const ch of l.text) { if (ch === " ") ind++; else if (ch === "\t") ind += 4; else break; }
+              out.push(Decoration.line({ class: "eb-fence", attributes: { style: `--ind: ${Math.min(ind, 8)}` } }).range(l.from));
+              if (l.number >= last.number || l.to + 1 > state.doc.length) break;
+            }
             out.push(Decoration.line({ class: "eb-fence-first" }).range(first.from));
             out.push(Decoration.line({ class: "eb-fence-last" }).range(last.from));
             for (const m of ref.node.getChildren("CodeMark")) mark(m.from, m.to, "eb-mk");
@@ -1052,6 +1058,15 @@
   .editor-body :global(.eb-upload[data-state=refused]) { color: var(--warn); border-color: var(--warn); }
   .editor-body :global(.eb-hand) { cursor: pointer; background: var(--sel); box-shadow: inset 2px 0 0 var(--accent); }
   .editor-body :global(.eb-hand::after) { content: attr(data-hand); float: right; padding-left: 8px; font-family: var(--font-text); font-size: 10px; color: var(--muted); }
+  /* EDITOR-12: on a phone (under 641 px) the surface never scrolls sideways: the caret's fence wraps, its rows
+     hung past each line's own indent (code-card's rule); every line breaks a long word; who is here wraps. */
+  @media (max-width: 640px) {
+    .editor-body :global(.cm-content) { overflow-wrap: anywhere; word-break: normal; }
+    .editor-body :global(.eb-fence) { white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; padding-left: calc(12px + (var(--ind, 0) + 2) * 1ch); text-indent: calc((var(--ind, 0) + 2) * -1ch); }
+    .who, .when, .asked, .state { overflow-wrap: anywhere; min-width: 0; }
+    .say { min-width: 0; flex-basis: 100%; }
+    .pick[data-action=ask-open] { margin-left: 0; }
+  }
   @media (prefers-reduced-motion: reduce) {
     .state[data-state=saving]::before, .skel .bone { animation: none; }
   }

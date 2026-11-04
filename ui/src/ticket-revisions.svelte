@@ -219,6 +219,12 @@
     .ticket-revisions[data-open=true] .grid { grid-template-columns: minmax(0, 1fr); }
     .ticket-revisions[data-open=true] .revs { border-right: 0; }
   }
+  /* EDITOR-12: on a phone the row's columns narrow and a field chip shortens to an ellipsis, never past its edge. */
+  @media (max-width: 640px) {
+    .ticket-revisions .rev-row { grid-template-columns: 40px 66px 50px minmax(0, 1fr) auto; gap: 4px; }
+    .ticket-revisions .rev-f { min-width: 0; }
+    .ticket-revisions .rev-f span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  }
   @media (prefers-reduced-motion: reduce) {
     .ticket-revisions .rev-row, .ticket-revisions .seg button, .ticket-revisions .btn { transition: none; }
   }

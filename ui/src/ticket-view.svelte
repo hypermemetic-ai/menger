@@ -220,6 +220,12 @@
         code.parentElement.before(at);
         placed.push({ at, app: mount(Diagram, { target: at, props: { source: code.textContent } }) });
       }
+      // EDITOR-12: each table's cells labelled by their column's header (`data-label`), so on a phone a row
+      // stacks into a group, each cell under its header's words.
+      for (const table of node.querySelectorAll("table")) {
+        const heads = [...(table.querySelector("thead tr")?.children ?? [])].map((th) => th.textContent.trim());
+        if (heads.length) for (const tr of table.querySelectorAll("tbody tr")) [...tr.children].forEach((td, k) => { if (heads[k]) td.setAttribute("data-label", heads[k]); });
+      }
       // Every other fence (and an indented block) is a code card: its language from the fence, else
       // the <m-code> around it, which gives its `path` and `why` too.
       for (const code of node.querySelectorAll("pre > code:not(.language-mermaid)")) {
@@ -388,4 +394,24 @@
   .md :global(.mx-src) { display: inline-block; margin-top: 4px; font-size: 12px; }
   .md :global([data-media-pending]) { min-height: 1.5em; }
   .empty { margin: 0; color: var(--muted); font-family: var(--font-text); font-size: 12px; }
+  /* EDITOR-12: on a phone (under 641 px) nothing is wider than the column — the owner: "make sure for the doc
+     component that there is no scroll … horizontally". A table stacks, a row a group, each cell under its
+     column's header (the `data-label` enhance gave it); a bare fence wraps; media and players fit. */
+  @media (max-width: 640px) {
+    .md { min-width: 0; max-width: 100%; }
+    .md :global(pre:not(.plain, .painted)) { overflow-x: visible; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .md :global(table), .md :global(tbody), .md :global(tr), .md :global(td), .md :global(th) { display: block; }
+    .md :global(table) { width: 100%; }
+    .md :global(thead) { display: none; }
+    .md :global(tr) { padding: 6px 0; border-bottom: var(--border) solid var(--line); }
+    .md :global(td), .md :global(th) { padding: 1px 0; border-bottom: 0; }
+    .md :global(td[data-label]) { display: grid; grid-template-columns: minmax(0, 38%) minmax(0, 1fr); gap: 10px; }
+    .md :global(td[data-label])::before { content: attr(data-label); font-family: var(--font-text); font-size: 11px; line-height: 1.9; color: var(--muted); overflow-wrap: anywhere; }
+    .md :global(img), .md :global(video), .md :global(iframe), .md :global(svg) { max-width: 100%; }
+    .md :global(.mx video), .md :global(.mx iframe), .md :global(.mx audio) { max-width: 100%; }
+    .md :global(.mx-embed[data-provider=x] iframe) { height: auto; aspect-ratio: 550 / 420; }
+    .md :global(.mx[data-media=pdf] iframe) { height: auto; aspect-ratio: 3 / 4; }
+    .md :global(.mx-card img) { width: 88px; }
+    .md :global(m-stat) { margin-right: 14px; }
+  }
 </style>

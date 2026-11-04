@@ -203,6 +203,12 @@
     .sheet { padding: 16px 16px calc(48px + env(safe-area-inset-bottom)); }
     .board kbd { display: none; }
   }
+  /* EDITOR-12: on a phone the drawer's titles wrap (two lines) rather than run past its edge. */
+  @media (max-width: 640px) {
+    .doc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: normal; overflow-wrap: anywhere; }
+    .bar { padding: 4px 12px; }
+    .sheet { padding-left: 12px; padding-right: 12px; }
+  }
   @media (prefers-reduced-motion: reduce) {
     .btn, .list { transition: none; }
   }
