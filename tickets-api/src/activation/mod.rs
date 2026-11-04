@@ -603,7 +603,7 @@ impl TicketsActivation {
             let body = body.map(String::from);
             let held = metered::rewrite(&access, &user, &store, &on.id().to_string(), body.as_deref()).await?;
             let moved = |c: &crate::store::Change| matches!(c, crate::store::Change::Amended { changed, .. } if changed.contains(&crate::vocab::AmendedField::Body));
-            Ok(change_event(held.settle(&access, store.amend(on, title.map(String::from), body).await, moved).await?))
+            Ok(change_event(held.settle(&access, &store, store.amend(on, title.map(String::from), body).await, moved).await?))
         })
     }
 
@@ -740,7 +740,7 @@ impl TicketsActivation {
             let (act, chain) = (act_of(&user, source, message)?, chain_of(&store, &user, ask.parent.as_deref())?);
             let held = metered::rewrite(&access, &user, &store, at.id(), ask.body.as_deref()).await?;
             let moved = |u: &crate::store::Updated| u.changed.iter().any(|c| c == "body");
-            let crate::store::Updated { ticket, changed } = held.settle(&access, store.update_by(at, ask, act).await, moved).await?;
+            let crate::store::Updated { ticket, changed } = held.settle(&access, &store, store.update_by(at, ask, act).await, moved).await?;
             then = restore_chain(&store, &user, chain, format!("{} was moved under it", ticket.id)).await;
             Ok(TicketsEvent::Updated { ticket, changed })
         })

@@ -627,7 +627,7 @@ name is refused, so a new input registers one):
 | `media.egress.bytes` | bytes | day | `/media/<hash>` serves bytes to you |
 | `docs.bytes` | bytes | total | **the update log as stored**: each change's bytes (`docs.create`, `update`, `save`, `restore`, `rename`) its writer's; a squash's snapshot shared among its authors by what each wrote, so a squash shrinks it and credits each author back |
 | `docs.count` | count | total | a document is made (`docs.create`) |
-| `tickets.bytes` | bytes | total | **what the store keeps**, not every write: each body's content the first time it is kept as a revision (a copy of one kept already costs nothing) is its first writer's, and each ticket's current body its last writer's. A write reserves the delta — the new content's bytes, plus the new body less the old when the old was the writer's own (else the old body's writer is credited it back); a write that leaves the body as it was counts nothing |
+| `tickets.bytes` | bytes | total | **what the store keeps**, not every write: each body's content the first time it is kept as a revision (a copy of one kept already costs nothing) is its first writer's, and each ticket's current body its last writer's. A write reserves the delta — the new content's bytes, plus the new body less the old when the old was the writer's own (else the old body's writer is credited it back); a write that leaves the body as it was counts nothing; a write that replaces its author's latest revision (V2-37, below) lets go of the body that revision alone held, and its keeper is credited it back |
 | `tickets.count` | count | total | a ticket is created |
 | `questions.count` | count | total | registered; nothing asks it yet |
 
@@ -734,7 +734,16 @@ keeps a revision in its transaction; `revisions list | get | diff |
 restore`; a restore is an `update` and itself a revision. `watch
 --revisions true` adds `revised`. A new write path goes through the store's
 `upsert` / `update_row` / `set_body` inside a write runner, or it keeps no
-revision (`tickets-api/src/store/revisions.rs`).
+revision (`tickets-api/src/store/revisions.rs`). **Coalesced** (V2-37): a
+write by the same principal to the same ticket within 2 minutes
+(`COALESCE_WINDOW`, 120 s) of its latest revision **replaces** that revision —
+the same number, the fields of both, the write's moment and body — so an
+editor autosaving every pause keeps one revision per sitting, not a copy
+per pause. Another is kept when the writer changes, after 2 minutes, and
+whenever either write moves the status, kind or parent or says why (a
+`--message`; a restore always does) — a birth, a delete and an undelete
+are always their own. A body only the replaced revision
+held is let go.
 
 **The archive** (ARCHIVE-2) is a mark apart from status: `archive` takes ids
 or a filter and archives each with its whole subtree; `restore` brings a

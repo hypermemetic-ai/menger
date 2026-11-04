@@ -33,6 +33,17 @@
 //! update, by nobody known — "the version before"), then the write's. A
 //! write that changes nothing keeps neither, and reads no body.
 //!
+//! **Coalesced** (V2-37): an editor autosaving a long ticket every pause
+//! would keep a whole copy per pause. A write by the same actor to the same
+//! ticket within [`COALESCE_WINDOW`] of its latest revision **replaces** that
+//! revision (same number, the fields of both, the moment and body of the
+//! write) instead of adding one — unless either moved its status, kind or
+//! parent, or is a birth, a delete, an undelete or a baseline, or says why
+//! (a message: a restore always does, an autosave never). A body the
+//! replaced revision alone held goes from `revision_bodies`, and its bytes
+//! with it ([`Store::body_charge`]'s `freeable`). The window is read on the
+//! store's clock ([`Store::shift_revision_clock`] moves it, for a test).
+//!
 //! **Stored** in `revisions` (a row per revision: the fields, the body's
 //! SHA-256, its size and line counts) and `revision_bodies` (a body's text
 //! once per content — a label change costs a row, never another copy of a
@@ -52,6 +63,16 @@ use rusqlite::{params, OptionalExtension};
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 
+/// V2-37: how long after a revision the same actor's next write to the same
+/// ticket replaces it instead of keeping another, in seconds.
+pub const COALESCE_WINDOW: i64 = 120;
+
+/// V2-37: whether a revision's (or a write's) fields keep it apart — a
+/// status, kind or parent moved, a birth, a delete, an undelete.
+fn apart(fields: &[String]) -> bool {
+    fields.iter().any(|f| matches!(f.as_str(), "status" | "kind" | "parent") || f == CREATED || f == DELETED || f == UNDELETED)
+}
+
 /// V2-31: what a body write adds to what the store keeps
 /// ([`Store::body_charge`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +83,10 @@ pub struct BodyCharge {
     pub old: u64,
     /// Who wrote the body it replaces.
     pub writer: Option<String>,
+    /// V2-37: the ticket's latest revision's body, when that revision alone
+    /// holds it — what the store lets go if the write replaces it: its hash,
+    /// its bytes, and whose they are.
+    pub freeable: Option<(String, u64, String)>,
 }
 
 /// The tables.
@@ -213,6 +238,11 @@ impl Fields {
 /// read only once the write is about to replace it).
 struct Prior {
     rev: u32,
+    /// Who kept it, its source, why and the fields it moved (V2-37).
+    actor: String,
+    message: Option<String>,
+    source: RevisionSource,
+    moved: Vec<String>,
     fields: Fields,
     hash: Option<String>,
     body: Option<String>,
@@ -249,6 +279,8 @@ pub(super) struct Kept {
 
 struct Recording {
     act: Act,
+    /// The moment the write keeps its revisions at — the store's clock.
+    now: i64,
     touched: Vec<Touch>,
     said: HashMap<String, Said>,
     kept: Vec<Kept>,
@@ -265,9 +297,9 @@ pub(super) struct Writing(());
 
 impl Writing {
     /// Opens the write's recording, as `act` (the caller's, when known).
-    pub(super) fn begin(act: Option<Act>) -> Self {
+    pub(super) fn begin(act: Option<Act>, now: i64) -> Self {
         let act = act.unwrap_or_default();
-        RECORDING.with(|r| *r.borrow_mut() = Some(Recording { act, touched: Vec::new(), said: HashMap::new(), kept: Vec::new() }));
+        RECORDING.with(|r| *r.borrow_mut() = Some(Recording { act, now, touched: Vec::new(), said: HashMap::new(), kept: Vec::new() }));
         Writing(())
     }
 }
@@ -300,12 +332,13 @@ pub(super) fn said(t: &Transition) {
 /// The latest revision of `id`, as a prior.
 fn latest(conn: &Connection, id: &str) -> rusqlite::Result<Option<Prior>> {
     conn.prepare_cached(
-        "SELECT rev, title, status, kind, severity, parent, blocked_by, labels, commits, body_hash, fields, at_unix
+        "SELECT rev, title, status, kind, severity, parent, blocked_by, labels, commits, body_hash, fields, at_unix, actor, source, message
            FROM revisions WHERE ticket = ?1 ORDER BY rev DESC LIMIT 1",
     )?
     .query_row([id], |r| {
-        let fields: String = r.get(10)?;
-        Ok(Prior { rev: r.get(0)?, fields: fields_of(r, 1)?, hash: Some(r.get(9)?), body: None, deleted: list(&fields).iter().any(|f| f == DELETED), at: r.get(11)? })
+        let moved = list(&r.get::<_, String>(10)?);
+        let (actor, source) = (r.get(12)?, RevisionSource::parse(&r.get::<_, String>(13)?));
+        Ok(Prior { rev: r.get(0)?, actor, source, message: r.get(14)?, deleted: moved.iter().any(|f| f == DELETED), moved, fields: fields_of(r, 1)?, hash: Some(r.get(9)?), body: None, at: r.get(11)? })
     })
     .optional()
 }
@@ -341,7 +374,7 @@ pub(super) fn touch(conn: &Connection, id: &str, body: Option<&str>) -> rusqlite
         let (prior, shortcode) = match latest(conn, id)? {
             Some(p) => (Some(p), None),
             None => match db::row(conn, id)? {
-                Some(row) => (Some(Prior { rev: 0, fields: Fields::of(&row), hash: None, body: None, deleted: false, at: row.updated_unix }), Some(row.shortcode)),
+                Some(row) => (Some(Prior { rev: 0, actor: String::new(), message: None, source: RevisionSource::Baseline, moved: Vec::new(), fields: Fields::of(&row), hash: None, body: None, deleted: false, at: row.updated_unix }), Some(row.shortcode)),
                 None => (None, None),
             },
         };
@@ -468,10 +501,9 @@ fn line_count(body: &str) -> u32 {
 /// Keeps the revisions of everything the write touched — in its
 /// transaction, before it commits. Outside a recording, nothing.
 pub(super) fn flush(conn: &Connection) -> rusqlite::Result<()> {
-    let Some((touched, act, mut said)) = with(|r| (std::mem::take(&mut r.touched), r.act.clone(), std::mem::take(&mut r.said))) else {
+    let Some((touched, act, mut said, now)) = with(|r| (std::mem::take(&mut r.touched), r.act.clone(), std::mem::take(&mut r.said), r.now)) else {
         return Ok(());
     };
-    let now = chrono::Utc::now().timestamp();
     let mut kept: Vec<Kept> = Vec::new();
     for t in touched {
         let row = db::row(conn, &t.id)?;
@@ -575,7 +607,33 @@ pub(super) fn flush(conn: &Connection) -> rusqlite::Result<()> {
             let bytes: i64 = conn.query_row("SELECT length(CAST(body AS BLOB)) FROM revision_bodies WHERE hash = ?1", [&h], |r| r.get(0)).optional()?.unwrap_or(0);
             (h, bytes as u64, 0, 0)
         };
-        let next = rev + 1;
+        // V2-37: the same actor again, soon, nothing kept apart — the write
+        // replaces its latest revision instead of adding one.
+        let replaces = t.prior.as_ref().filter(|p| {
+            p.rev > 1 && p.rev == rev && p.actor == actor && p.source != RevisionSource::Baseline && p.message.is_none() && message.is_none() && !apart(&p.moved) && !apart(&fields) && now.saturating_sub(p.at) <= COALESCE_WINDOW
+        });
+        let (next, added, removed) = match replaces {
+            None => (rev + 1, added, removed),
+            Some(p) => {
+                let merged: Vec<String> = FIELDS.iter().filter(|f| p.moved.iter().chain(fields.iter()).any(|m| m == *f)).map(|f| f.to_string()).collect();
+                fields = merged;
+                let before: Option<String> = conn.query_row("SELECT body_hash FROM revisions WHERE ticket = ?1 AND rev = ?2", params![t.id, p.rev - 1], |r| r.get(0)).optional()?;
+                let before = before.map(|b| body_of(conn, &b)).transpose()?.flatten().unwrap_or_default();
+                let now_body = match (&t.body, body_moved) {
+                    (Some(b), true) => b.clone(),
+                    _ => body_of(conn, &h)?.unwrap_or_default(),
+                };
+                let (a, r) = diff::counts(&before, &now_body);
+                // Deleted and kept again under the same number: a new row,
+                // so the first keeper of a body shared with another ticket
+                // stays the one who kept it first (`revision_usage`).
+                conn.prepare_cached("DELETE FROM revisions WHERE ticket = ?1 AND rev = ?2")?.execute(params![t.id, p.rev])?;
+                if let Some(old) = p.hash.as_deref().filter(|o| *o != h) {
+                    conn.prepare_cached("DELETE FROM revision_bodies WHERE hash = ?1 AND NOT EXISTS (SELECT 1 FROM revisions WHERE body_hash = ?1)")?.execute([old])?;
+                }
+                (p.rev, a, r)
+            }
+        };
         insert(
             conn,
             Row_ {
@@ -788,7 +846,7 @@ impl Store {
         self.readers
             .read(move |conn| {
                 let kept = conn.query_row("SELECT 1 FROM revision_bodies WHERE hash = ?1", [&hash], |_| Ok(())).optional()?.is_some();
-                let Some(id) = id else { return Ok(BodyCharge { kept, old: 0, writer: None }) };
+                let Some(id) = id else { return Ok(BodyCharge { kept, old: 0, writer: None, freeable: None }) };
                 let old: i64 = conn.query_row("SELECT length(CAST(body AS BLOB)) FROM tickets WHERE id = ?1", [&id], |r| r.get(0)).optional()?.unwrap_or(0);
                 let writer: Option<String> = conn
                     .query_row(
@@ -797,9 +855,38 @@ impl Store {
                         |r| r.get(0),
                     )
                     .optional()?;
-                Ok(BodyCharge { kept, old: old.max(0) as u64, writer })
+                // V2-37: the latest revision's body, when no other revision holds it.
+                let freeable = conn
+                    .query_row(
+                        "SELECT r.body_hash, length(CAST(b.body AS BLOB)), r.actor FROM revisions r JOIN revision_bodies b ON b.hash = r.body_hash
+                          WHERE r.ticket = ?1 AND (SELECT count(*) FROM revisions o WHERE o.body_hash = r.body_hash) = 1 ORDER BY r.rev DESC LIMIT 1",
+                        [&id],
+                        |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?.max(0) as u64, r.get::<_, String>(2)?)),
+                    )
+                    .optional()?
+                    .filter(|(h, ..)| *h != hash);
+                Ok(BodyCharge { kept, old: old.max(0) as u64, writer, freeable })
             })
             .await
+    }
+
+    /// V2-37: whether a body's content is still kept (a coalesced write lets
+    /// go of one its replaced revision alone held).
+    pub async fn body_kept(&self, hash: String) -> Result<bool, StoreError> {
+        self.readers.read(move |conn| Ok(conn.query_row("SELECT 1 FROM revision_bodies WHERE hash = ?1", [&hash], |_| Ok(())).optional()?.is_some())).await
+    }
+
+    /// V2-37: the moment a write keeps its revisions at — now, moved by
+    /// [`Self::shift_revision_clock`].
+    pub(super) fn revision_now(&self) -> i64 {
+        chrono::Utc::now().timestamp() + self.revision_clock.load(Ordering::SeqCst)
+    }
+
+    /// V2-37: moves the clock revisions are kept by `secs` on — a test's way
+    /// past [`COALESCE_WINDOW`]. Nothing else reads it.
+    #[doc(hidden)]
+    pub fn shift_revision_clock(&self, secs: i64) {
+        self.revision_clock.fetch_add(secs, Ordering::SeqCst);
     }
 
     /// TICKETS-7: one revision of `id` with its body — the cheap read of an

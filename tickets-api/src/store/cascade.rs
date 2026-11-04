@@ -388,10 +388,10 @@ impl Store {
         committing.fetch_add(1, Ordering::SeqCst);
         // TICKETS-7: the write keeps its revisions (each step's commit is
         // `revisions::commit`), as its caller.
-        let by = super::revisions::caller_act();
+        let (by, now) = (super::revisions::caller_act(), self.revision_now());
         tokio::task::spawn_blocking(move || {
             let _serial = serial;
-            let _kept = super::revisions::Writing::begin(by);
+            let _kept = super::revisions::Writing::begin(by, now);
             let mut cache = tickets.write().expect("store lock poisoned");
             let mut conn = db.lock().expect("db lock poisoned");
             let written = cache.written;

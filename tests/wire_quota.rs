@@ -176,23 +176,24 @@ async fn a_tickets_write_counts_what_is_stored_and_is_refused_typed_over_the_cap
         assert_eq!(one(&editor, "tickets.amend", json!({"id": id, "body": "x".repeat(10)})).await["type"], "amended");
     }
     assert_eq!(mine().await, (80, 0), "an unchanged write keeps nothing");
-    // Back to a body kept already: only the current body grows.
+    // Back to a body kept already, in the same sitting (V2-37): it replaces
+    // the revision that alone held the 10, which is let go and credited.
     one(&editor, "tickets.amend", json!({"id": id, "body": "x".repeat(60)})).await;
-    assert_eq!(mine().await, (130, 0), "70 kept + 60 current");
+    assert_eq!(mine().await, (120, 0), "60 kept + 60 current");
     // update's body likewise; a title alone keeps no body.
     assert_eq!(one(&editor, "tickets.update", json!({"id": id, "title": "renamed"})).await["type"], "updated");
-    assert_eq!(mine().await, (130, 0));
+    assert_eq!(mine().await, (120, 0));
 
     // Over the cap: typed, the numbers said, nothing written, nothing held.
     one(&admin, "quota.set", json!({"principal": me, "source": "tickets.bytes", "cap": "140"})).await;
     let over = one(&editor, "tickets.amend", json!({"id": id, "body": "z".repeat(41)})).await;
-    assert_eq!((over["type"].as_str(), over["source"].as_str(), over["used"].as_u64(), over["cap"].as_u64(), over["asked"].as_u64()), (Some("over_allowance"), Some("tickets.bytes"), Some(130), Some(140), Some(41)), "{over}");
+    assert_eq!((over["type"].as_str(), over["source"].as_str(), over["used"].as_u64(), over["cap"].as_u64(), over["asked"].as_u64()), (Some("over_allowance"), Some("tickets.bytes"), Some(120), Some(140), Some(41)), "{over}");
     assert!(over["message"].as_str().unwrap().contains("nothing was written"));
     assert_eq!(one(&editor, "tickets.get", json!({"id": id})).await["ticket"]["body"], "x".repeat(60));
     let born = one(&editor, "tickets.create", json!({"epic": "Q", "title": "too much", "body": "y".repeat(20)})).await;
     assert_eq!(born["type"], "over_allowance", "{born}");
     assert_eq!(all(&editor, "tickets.find", json!({"query": "too much"})).await[0]["items"], json!([]), "no ticket was made");
-    assert_eq!(mine().await, (130, 0));
+    assert_eq!(mine().await, (120, 0));
     let upd = one(&editor, "tickets.update", json!({"id": id, "body": "w".repeat(31)})).await;
     assert_eq!(upd["type"], "over_allowance", "{upd}");
 
@@ -201,15 +202,39 @@ async fn a_tickets_write_counts_what_is_stored_and_is_refused_typed_over_the_cap
     grant(&admin, &OTHER, "editor", "Q").await;
     let other = connect_key(&OTHER, port).await;
     assert_eq!(one(&other, "tickets.amend", json!({"id": id, "body": "o".repeat(20)})).await["type"], "amended");
-    assert_eq!(mine().await, (70, 0), "the current body is no longer theirs");
+    assert_eq!(mine().await, (60, 0), "the current body is no longer theirs");
     assert_eq!(bytes(&one(&other, "quota.usage", json!({})).await), (40, 0), "20 kept + 20 current");
 
     // The store's own count says the same: the recount finds no drift.
     let counted = all(&admin, "tickets.revisions.usage", json!({})).await;
-    assert!(counted.contains(&json!({"type": "usage", "principal": me, "count": 1, "bytes": 70})), "{counted:?}");
+    assert!(counted.contains(&json!({"type": "usage", "principal": me, "count": 1, "bytes": 60})), "{counted:?}");
     assert!(counted.contains(&json!({"type": "usage", "principal": support::principal_of(&OTHER), "count": 0, "bytes": 40})), "{counted:?}");
     let r = all(&admin, "quota.recount", json!({})).await;
     assert!(!r.iter().any(|e| e["type"] == "drift" && e["source"] == "tickets.bytes"), "{r:?}");
+}
+
+/// V2-37: an editor autosaving a ticket — 25 different bodies within a
+/// minute — keeps one revision for the sitting, not 25 copies, and its
+/// allowance counts what is kept: the store's recount agrees.
+#[tokio::test]
+async fn autosaves_in_one_sitting_keep_one_revision_and_count_what_is_kept() {
+    let (admin, editor, _) = with_editor(None).await;
+    let me = support::principal_of(&EDITOR);
+    let made = one(&editor, "tickets.create", json!({"epic": "Q", "title": "long", "body": "a".repeat(1000)})).await;
+    let id = made["ticket"]["id"].as_str().unwrap().to_string();
+    for i in 0..25 {
+        let body = format!("{}{i:02}", "a".repeat(1000));
+        assert_eq!(one(&editor, "tickets.amend", json!({"id": id, "body": body})).await["type"], "amended");
+    }
+    let page = all(&editor, "tickets.revisions.list", json!({"id": id})).await;
+    let end = page.iter().find(|e| e["type"] == "revisions_end").expect("the end");
+    assert_eq!(end["count"], 2, "the birth and the sitting: {page:?}");
+    let used = source(&one(&editor, "quota.usage", json!({})).await, "tickets.bytes")["used"].as_u64().unwrap();
+    assert_eq!(used, 1000 + 1002 + 1002, "the birth's body, the last save's, the current one");
+    let counted = all(&admin, "tickets.revisions.usage", json!({"principal": me})).await;
+    assert_eq!(counted, vec![json!({"type": "usage", "principal": me, "count": 1, "bytes": used})]);
+    let r = all(&admin, "quota.recount", json!({"principal": me})).await;
+    assert_eq!(r.last().unwrap()["drifted"], 0, "{r:?}");
 }
 
 #[tokio::test]
