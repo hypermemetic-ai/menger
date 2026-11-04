@@ -12,6 +12,17 @@ use crate::store::{DocsStore, Listing, StoreError};
 use menger_tickets_api::members::Role;
 use std::sync::Arc;
 
+/// One event, as a method's stream.
+pub(crate) fn once(ev: impl std::future::Future<Output = DocsEvent> + Send + 'static) -> impl futures::Stream<Item = DocsEvent> + Send + 'static {
+    futures::stream::once(ev)
+}
+
+/// Each of the events, as a method's stream.
+pub(crate) fn many(evs: impl std::future::Future<Output = Vec<DocsEvent>> + Send + 'static) -> impl futures::Stream<Item = DocsEvent> + Send + 'static {
+    use futures::StreamExt;
+    futures::stream::once(evs).flat_map(futures::stream::iter)
+}
+
 /// A page of `list` when the call names none.
 pub const LIST_PAGE: usize = 50;
 /// The most a page of `list` (or `history`) may be.
@@ -342,5 +353,16 @@ pub(crate) async fn waiting(store: Arc<DocsStore>, seam: Seam, user: Caller, to:
     match store.waiting(orgs, to).await {
         Ok(rows) => rows.into_iter().map(|thread| DocsEvent::Thread { thread }).collect(),
         Err(e) => vec![failed(e)],
+    }
+}
+
+/// `docs.usage`: every principal's documents made and bytes, for quota.recount — an admin of `*`'s.
+pub(crate) async fn usage(store: Arc<DocsStore>, seam: Seam, user: Caller) -> Vec<DocsEvent> {
+    if !seam.everywhere(user.context(), "quota.set") {
+        return vec![DocsEvent::Error { message: "every principal's usage is an admin of *'s".into() }];
+    }
+    match store.usage_by_principal().await {
+        Ok(rows) => rows.into_iter().map(|(principal, count, bytes)| DocsEvent::Usage { principal, count, bytes }).collect(),
+        Err(e) => vec![DocsEvent::Error { message: e.to_string() }],
     }
 }
