@@ -36,7 +36,12 @@
 #               build_directory, read from each workspace in it before it goes)
 #   scratch-db  /tmp/menger-*.db, .db-shm, .db-wal, .sessions.jsonl(.lock),
 #               .log — a throwaway server's database, sessions and log
-#   session     anything below /tmp/claude-UID/ (a session's scratch)
+#   pages-tmp   V2-38: /tmp/claude-UID/ui8-pages-… — a browser page-test run's work
+#               directory (tests/pages_browser.mjs, which removes its own since
+#               V2-38; these are what a killed run left). By --path at once, as a
+#               session's scratch; the sweep takes one nothing in has touched for
+#               an hour (whatever --idle-hours says) and nothing holds
+#   session     anything else below /tmp/claude-UID/ (a session's scratch)
 #   sweep       /tmp/theme-sweep (scripts/theme-sweep.mjs's default out)
 #   pipeline-log ~/.local/state/menger-deploy/logs/<stamp>-….log (CI-6): one
 #               run's log; the sweep takes those older than 60 days
@@ -65,7 +70,8 @@
 # scripts/sweep/install.sh) takes only build output: every cargo-build dir,
 # every non-shared target and every target-part, each only when nothing in it
 # was modified for the idle threshold and nothing holds it — and RUN-34's
-# ui8-work directories in the scratch roots, idle an hour. The threshold
+# ui8-work directories in the scratch roots and V2-38's pages-tmp ones below
+# /tmp/claude-UID/, each idle an hour. The threshold
 # drops as the disk fills: 6 h (--idle-hours), 1 h at 75% used, 15 min at
 # 90%. What it keeps is said (`kept`), not refused; a candidate of any other
 # shape (never expected: a symlink into a worktree, say) is refused and the
@@ -265,6 +271,8 @@ remove_path() {
     shape=target
   elif [[ -f $r && $(dirname "$r") == "$TMPR" && $(basename "$r") =~ ^menger-.+\.(db|db-shm|db-wal|sessions\.jsonl|sessions\.jsonl\.lock|log)$ ]]; then
     shape=scratch-db
+  elif [[ -d $r && ! -L $p && $(dirname "$r") == "$SCR" && $(basename "$r") =~ ^ui8-pages-[A-Za-z0-9._-]+$ ]]; then
+    shape=pages-tmp
   elif under "$r" "$SCR"; then
     shape=session
   elif [[ -d $r && $r == "$TMPR/theme-sweep" ]]; then
@@ -276,16 +284,16 @@ remove_path() {
     if ! has_ui8_marks "$r"; then refuse "$shown" "a ui8 directory without the throwaway's marks (${UI8_MARKS[*]})"; return; fi
     shape=ui8-work
   else
-    refuse "$shown" 'not a leftover shape (worktree, ws-scratch, target, target-part, cargo-build, scratch-db, session, sweep, pipeline-log, ui8-work)'; return
+    refuse "$shown" 'not a leftover shape (worktree, ws-scratch, target, target-part, cargo-build, scratch-db, pages-tmp, session, sweep, pipeline-log, ui8-work)'; return
   fi
   # the sweep takes build output and work directories, nothing else, whatever named it
   if [[ $sweep == 1 ]]; then
-    case $shape in cargo-build|target|target-part|pipeline-log|ui8-work) ;;
-      *) refuse "$shown" "a $shape, and the sweep takes only build output, pipeline logs and ui8-work"; return ;;
+    case $shape in cargo-build|target|target-part|pipeline-log|ui8-work|pages-tmp) ;;
+      *) refuse "$shown" "a $shape, and the sweep takes only build output, pipeline logs, ui8-work and pages-tmp"; return ;;
     esac
   fi
   # what rm -r takes must not be, or cross, a mount
-  case $shape in target|target-part|cargo-build|session|ws-scratch|sweep|ui8-work)
+  case $shape in target|target-part|cargo-build|session|ws-scratch|sweep|ui8-work|pages-tmp)
     if [[ -d $r ]] && { mountpoint -q -- "$r" 2>/dev/null || [[ $(stat -c %d -- "$r" 2>/dev/null) != "$(stat -c %d -- "$(dirname "$r")" 2>/dev/null)" ]]; }; then
       refuse "$shown" 'a mount point, never removed'; return
     fi ;;
@@ -293,6 +301,8 @@ remove_path() {
   local busy="" idle=$idle_min
   # RUN-34: a work directory waits an hour, by path or by the sweep, whatever --idle-hours says
   [[ $shape == ui8-work ]] && idle=60
+  # V2-38: a page-test run's, swept an hour after it was last written
+  [[ $shape == pages-tmp && $sweep == 1 ]] && idle=60
   if [[ $sweep == 1 || $shape == ui8-work ]] && busy=$(busy_since "$r" "$idle") && [[ -n $busy ]]; then
     [[ $busy == "$r" ]] && busy=itself || busy=${busy#"$r"/}
     if [[ $sweep == 1 ]]; then say "kept     $(printf '%-11s' "$shape") $shown — modified within $(mins "$idle") ($busy)"
@@ -334,7 +344,7 @@ remove_path() {
         if out=$(git -C "$main" branch -d -- "$br" 2>&1); then extra=", branch $br deleted"
         else extra=", branch $br kept (${out//$'\n'/ })"; fi
       fi ;;
-    target|target-part|cargo-build|session|ws-scratch|sweep|ui8-work)
+    target|target-part|cargo-build|session|ws-scratch|sweep|ui8-work|pages-tmp)
       if [[ -d $r ]]; then out=$(rm -r --one-file-system -- "$r" 2>&1); rc=$?
       else out=$(rm -f -- "$r" 2>&1); rc=$?; fi
       [[ $rc == 0 ]] || { refuse "$shown" "rm: ${out//$'\n'/ }"; return; } ;;
@@ -418,6 +428,8 @@ sweep_candidates() {
     else printf '%s\n' "$d"; fi
   done
   ui8_dirs marked
+  # V2-38: a page-test run's work directory, left by a run that was killed
+  for d in "$SCR"/ui8-pages-?*; do [[ -d $d && ! -L $d ]] && printf '%s\n' "$d"; done
 }
 # the disk's use, in percent, where the build output lives
 used_pct() {

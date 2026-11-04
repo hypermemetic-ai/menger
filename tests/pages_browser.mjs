@@ -10,6 +10,10 @@
 // each Svelte component in its section of the rhx board by right-click.
 // `--board` runs one of them.
 //
+// V2-38: the run's work directory (ui8-pages-…, ~80 MB) goes when the run
+// ends — passed, failed, thrown, SIGINT or SIGTERM. KEEP_PAGES_TMP=1 (or
+// --keep, whose server lives in it) keeps it and prints its path.
+//
 // A throwaway server (scripts/ui-throwaway.mjs: OS-assigned ports, its
 // files under /tmp/claude-1000/, `--auth-provider key` with a key made here
 // as `--admin`, a second as `--ui-signer`), seeded `--seed-synthetic N`
@@ -208,8 +212,29 @@ async function test(name, body) {
   }
 }
 
+/** V2-38: the work directory goes with the run, however it ends — the
+ *  exit's handler (a signal is made an exit first); kept under
+ *  KEEP_PAGES_TMP=1 or --keep, its path said. */
+function dropAtExit(work) {
+  const keep = process.env.KEEP_PAGES_TMP === "1" || flag("--keep");
+  const at = { server: null };
+  process.once("exit", () => {
+    if (keep) return console.log(`kept work directory: ${work}`);
+    // the server writes in it: stopped first (stop() is a SIGKILL; once more is nothing)
+    at.server?.stop();
+    try {
+      fs.rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch (e) {
+      console.error(`the work directory ${work} was not removed: ${e.message}`);
+    }
+  });
+  for (const [sig, code] of [["SIGINT", 130], ["SIGTERM", 143]]) process.once(sig, () => process.exit(code));
+  return at;
+}
+
 async function main() {
   const work = workDir("ui8-pages");
+  const dropping = dropAtExit(work);
   console.log(`work: ${work} · seed ${SEED} · ${PROFILE} · target ${TARGET}`);
 
   if (!flag("--no-build")) build(PROFILE);
@@ -237,6 +262,7 @@ async function main() {
   const server = new Throwaway(work, PROFILE);
   const t0 = Date.now();
   server.keep = flag("--keep");
+  if (!server.keep) dropping.server = server;
   // EDITOR-10: a local server standing in for the internet — a page with its
   // card's tags, its image, a picture and a PDF — let through by the media
   // service's hidden --media-fetch-allow (tests/pages/editor.mjs's cards).
