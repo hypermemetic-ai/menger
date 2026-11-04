@@ -2883,6 +2883,9 @@ pub struct Store {
     /// ACCESS-9: the one [`System`] this store mints at its open, until
     /// whoever opened it takes it ([`Store::system`]).
     system: StdMutex<Option<System>>,
+    /// V2-37: seconds added to now when a write keeps its revisions — a
+    /// test's clock ([`Store::shift_revision_clock`]); 0 otherwise.
+    revision_clock: Arc<std::sync::atomic::AtomicI64>,
 }
 
 /// MENGER-15: the default cap on a ticket body — 8 MiB, room for a whole
@@ -3005,6 +3008,7 @@ impl Store {
             write_serial: Arc::new(AsyncMutex::new(())),
             body_max: BODY_MAX_DEFAULT,
             system: StdMutex::new(Some(System::minted())),
+            revision_clock: Arc::default(),
         })
     }
 
@@ -3167,10 +3171,10 @@ impl Store {
         // for a caller to be dropped at.
         committing.fetch_add(1, Ordering::SeqCst);
         // TICKETS-7: the write keeps its revisions, as its caller.
-        let by = revisions::caller_act();
+        let (by, now) = (revisions::caller_act(), self.revision_now());
         tokio::task::spawn_blocking(move || {
             let _serial = serial;
-            let _kept = revisions::Writing::begin(by);
+            let _kept = revisions::Writing::begin(by, now);
             let durable = {
                 let mut conn = db.lock().expect("db lock poisoned");
                 conn.transaction()

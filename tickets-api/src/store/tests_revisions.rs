@@ -43,6 +43,12 @@ async fn count(store: &Store, id: &str) -> usize {
     revs(store, id).await.len()
 }
 
+/// V2-37: past the window a write would replace its revision in — for a
+/// test of one revision per write.
+fn later(store: &Store) {
+    store.shift_revision_clock(revisions::COALESCE_WINDOW + 1);
+}
+
 fn bodies(store: &Store) -> i64 {
     store.db.lock().unwrap().query_row("SELECT count(*) FROM revision_bodies", [], |r| r.get(0)).unwrap()
 }
@@ -73,21 +79,31 @@ async fn every_write_keeps_one_revision_per_ticket_it_changed_and_none_for_a_no_
     let mut rx = store.subscribe_revisions();
     // amend: title and body, one revision.
     store.amend(SYS.permit("R-2"), Some("two, renamed".into()), Some("a new body\nsecond line\n".into())).await.unwrap();
+    later(&store);
     assert_eq!(drained(&mut rx), vec![("R-2".into(), 2, vec!["title".into(), "body".into()])]);
     let r = revs(&store, "R-2").await;
     assert_eq!((r[1].added, r[1].removed), (1, 1));
     // the same again: nothing.
     store.amend(SYS.permit("R-2"), Some("two, renamed".into()), None).await.unwrap();
+    later(&store);
     assert!(drained(&mut rx).is_empty());
     // set_status, set_kind, label, link, set_parent, update — each one.
     store.set_status(SYS.permit("R-2"), Status::Ready).await.unwrap();
+    later(&store);
     store.set_kind(SYS.permit("R-2"), Kind::Gap, None).await.unwrap();
+    later(&store);
     store.label(SYS.permit("R-2"), vec!["needs-you".into()], vec![]).await.unwrap();
+    later(&store);
     store.label(SYS.permit("R-2"), vec!["needs-you".into()], vec![]).await.unwrap();
+    later(&store);
     store.link_commits(SYS.permit("R-2"), vec!["77df9a0".into()]).await.unwrap();
+    later(&store);
     store.set_parent(SYS.moving("R-2", "R-3")).await.unwrap();
+    later(&store);
     store.update(SYS.updating("R-2"), Update { severity: Some(Some(Severity::High)), ..Update::default() }).await.unwrap();
+    later(&store);
     store.update(SYS.updating("R-2"), Update { block: vec!["R-4".into()], ..Update::default() }).await.unwrap();
+    later(&store);
     let said: Vec<Vec<String>> = drained(&mut rx).into_iter().map(|(t, _, f)| {
         assert_eq!(t, "R-2", "a blocker's unlocks and a parent's count keep no revision");
         f
@@ -97,6 +113,7 @@ async fn every_write_keeps_one_revision_per_ticket_it_changed_and_none_for_a_no_
     assert_eq!(count(&store, "R-4").await, 1, "the blocker's own fields did not move");
     // one write of several aspects: one revision.
     store.update(SYS.updating("R-2"), Update { title: Some("t".into()), status: Some(Status::Coding), label: vec!["x".into()], ..Update::default() }).await.unwrap();
+    later(&store);
     assert_eq!(drained(&mut rx), vec![("R-2".into(), 10, vec!["title".into(), "status".into(), "labels".into()])]);
     // an archive's mark is no field of a revision.
     store.archive_by(Selection::Ids(vec!["R-4".into()]), Act::default(), false, |ids| Ok(SYS.permits(ids))).await.unwrap();
@@ -165,7 +182,9 @@ async fn a_body_shared_by_revisions_is_stored_once() {
     }
     assert_eq!(bodies(&store), before, "a label change costs a row, not a body");
     store.amend(SYS.permit("R-2"), None, Some("x".into())).await.unwrap();
+    later(&store);
     store.amend(SYS.permit("R-2"), None, Some("the body of two\nsecond line\n".into())).await.unwrap();
+    later(&store);
     assert_eq!(bodies(&store), before + 1, "the old body came back: kept once");
     let r = revs(&store, "R-2").await;
     assert_eq!(r.first().unwrap().body_hash, r.last().unwrap().body_hash);
@@ -175,7 +194,9 @@ async fn a_body_shared_by_revisions_is_stored_once() {
 async fn a_revision_is_the_ticket_as_it_was_and_a_diff_says_what_moved() {
     let store = store().await;
     store.amend(SYS.permit("R-2"), Some("renamed".into()), Some("---\ntheme: ocean\n---\nthe body of two\nsecond LINE\n".into())).await.unwrap();
+    later(&store);
     store.label(SYS.permit("R-2"), vec!["x".into()], vec![]).await.unwrap();
+    later(&store);
     let (rev, t) = store.revision(SYS, "R-2", 1).await.unwrap();
     assert_eq!((rev.rev, t.title.as_str(), t.body.as_str(), t.labels.len()), (1, "two", "the body of two\nsecond line\n", 0));
     assert_eq!(t.parent.as_deref(), Some("R-1"));
@@ -196,22 +217,28 @@ async fn a_revision_is_the_ticket_as_it_was_and_a_diff_says_what_moved() {
 async fn restore_round_trips_and_is_itself_a_revision() {
     let store = store().await;
     store.amend(SYS.permit("R-2"), Some("renamed".into()), Some("new".into())).await.unwrap();
+    later(&store);
     store.label(SYS.permit("R-2"), vec!["x".into()], vec![]).await.unwrap();
+    later(&store);
     store.set_status(SYS.permit("R-2"), Status::Ready).await.unwrap();
+    later(&store);
     let r = store.restoring(SYS, "R-2", 1, None).await.unwrap();
     assert_eq!(r.fields, ["title", "body", "status", "labels"]);
     store.update(SYS.updating("R-2"), r.update).await.unwrap();
+    later(&store);
     let (_, was) = store.revision(SYS, "R-2", 1).await.unwrap();
     let now = store.get(SYS, "R-2").await.unwrap();
     assert_eq!((now.title, now.body, now.status, now.labels), (was.title, was.body, was.status, was.labels));
     assert_eq!(count(&store, "R-2").await, 5, "the restore is a new revision");
     // Only the body.
     store.amend(SYS.permit("R-2"), Some("again".into()), Some("again".into())).await.unwrap();
+    later(&store);
     let r = store.restoring(SYS, "R-2", 2, Some(vec!["body".into()])).await.unwrap();
     assert_eq!(r.fields, ["body"]);
     assert_eq!(r.update.body.as_deref(), Some("new"));
     // Nothing differs: nothing to write.
     store.update(SYS.updating("R-2"), r.update).await.unwrap();
+    later(&store);
     assert!(store.restoring(SYS, "R-2", 2, Some(vec!["body".into()])).await.unwrap().fields.is_empty());
 }
 
@@ -221,9 +248,13 @@ async fn restore_is_refused_where_the_write_rules_refuse() {
     // R-4 blocks on R-3; then R-3 blocks on R-4 — restoring R-4's first
     // revision is fine, but a cycle is refused by update's rules.
     store.update(SYS.updating("R-3"), Update { block: vec!["R-4".into()], ..Update::default() }).await.unwrap();
+    later(&store);
     store.update(SYS.updating("R-4"), Update { title: Some("t".into()), ..Update::default() }).await.unwrap();
+    later(&store);
     store.update(SYS.updating("R-3"), Update { unblock: vec!["R-4".into()], ..Update::default() }).await.unwrap();
+    later(&store);
     store.update(SYS.updating("R-4"), Update { block: vec!["R-3".into()], ..Update::default() }).await.unwrap();
+    later(&store);
     // R-3 at its revision 2 waited on R-4, which now waits on R-3.
     let r = store.restoring(SYS, "R-3", 2, Some(vec!["blocked_by".into()])).await.unwrap();
     let e = store.update(SYS.updating("R-3"), r.update).await.unwrap_err();
@@ -232,6 +263,7 @@ async fn restore_is_refused_where_the_write_rules_refuse() {
     store.create(SYS, new("Q", "q root", Kind::Scope, None, &[])).await.unwrap();
     assert!(store.restoring(SYS, "Q-1", 1, Some(vec!["parent".into()])).await.unwrap().fields.is_empty(), "nothing differs");
     store.set_parent(SYS.moving("Q-1", "R-1")).await.unwrap();
+    later(&store);
     let e = store.restoring(SYS, "Q-1", 1, Some(vec!["parent".into()])).await.err().unwrap();
     assert!(e.to_string().contains("never cleared"), "{e}");
     // Commits are never restored.
@@ -279,6 +311,7 @@ async fn paging_is_newest_first() {
     let store = store().await;
     for i in 0..5 {
         store.amend(SYS.permit("R-2"), Some(format!("t{i}")), None).await.unwrap();
+        later(&store);
     }
     let p = store.revisions(SYS, "R-2", None, Some(2)).await.unwrap();
     assert_eq!((p.count, p.latest, p.next), (6, 6, Some(5)));
@@ -303,4 +336,49 @@ async fn verify_holds_the_revisions_to_the_tickets() {
         Verdict::Differs(lines) => assert!(lines.iter().any(|l| l.contains("revisions of V-1")), "{lines:?}"),
         other => panic!("{other:?}"),
     }
+}
+
+/// V2-37: an editor's autosaves within the window are one revision — the
+/// bodies between let go; a gap past the window, another writer, or a
+/// status, kind or parent moved keeps another.
+#[tokio::test]
+async fn autosaves_within_the_window_coalesce_into_one_revision() {
+    let store = store().await;
+    let ada = || Act { actor: "idp:ada".into(), ..Act::default() };
+    let save = |body: String| revisions::acting(ada(), store.amend(SYS.permit("R-2"), None, Some(body)));
+    let before = bodies(&store);
+    // 25 different bodies, two seconds apart: under a minute.
+    for i in 0..25 {
+        save(format!("the body of two\nsecond line\nsave {i}\n")).await.unwrap();
+        store.shift_revision_clock(2);
+    }
+    let r = revs(&store, "R-2").await;
+    assert_eq!(r.iter().map(|r| r.rev).collect::<Vec<_>>(), [1, 2], "the birth and one for the sitting");
+    assert_eq!((r[1].actor.as_str(), r[1].fields.clone(), r[1].added, r[1].removed), ("idp:ada", vec!["body".to_string()], 1, 0));
+    assert_eq!(r[1].body_hash, revisions::hash("the body of two\nsecond line\nsave 24\n"));
+    assert_eq!(bodies(&store), before + 1, "only the last save's body is kept");
+    // A title in the same sitting folds in too.
+    revisions::acting(ada(), store.amend(SYS.permit("R-2"), Some("two, titled".into()), None)).await.unwrap();
+    assert_eq!(revs(&store, "R-2").await[1].fields, ["title", "body"]);
+    // Past the window: another.
+    store.shift_revision_clock(revisions::COALESCE_WINDOW + 1);
+    save("after a pause\n".into()).await.unwrap();
+    assert_eq!(count(&store, "R-2").await, 3);
+    // Another writer: another, and Ada's next save does not fold into theirs.
+    revisions::acting(Act { actor: "key:bob".into(), ..Act::default() }, store.amend(SYS.permit("R-2"), None, Some("bob's\n".into()))).await.unwrap();
+    save("ada again\n".into()).await.unwrap();
+    let actors: Vec<String> = revs(&store, "R-2").await.into_iter().skip(1).map(|r| r.actor).collect();
+    assert_eq!(actors, ["idp:ada", "idp:ada", "key:bob", "idp:ada"]);
+    // A status moved keeps its own, and the save after it its own.
+    revisions::acting(ada(), store.set_status(SYS.permit("R-2"), Status::Ready)).await.unwrap();
+    save("ada after ready\n".into()).await.unwrap();
+    let r = revs(&store, "R-2").await;
+    assert_eq!((r.len(), r[5].fields.clone(), r[6].fields.clone()), (7, vec!["status".to_string()], vec!["body".to_string()]));
+    // A write that says why (a restore always does) keeps its own.
+    revisions::acting(Act { message: Some("why".into()), ..ada() }, store.amend(SYS.permit("R-2"), None, Some("with a reason\n".into()))).await.unwrap();
+    save("and after it\n".into()).await.unwrap();
+    assert_eq!(count(&store, "R-2").await, 9);
+    // The store holds itself to the tickets: the numbers run 1..9, every body kept.
+    let (_, problems) = revisions::check(&store.db.lock().unwrap()).unwrap().unwrap();
+    assert!(problems.is_empty(), "{problems:?}");
 }

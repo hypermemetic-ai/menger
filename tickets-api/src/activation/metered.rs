@@ -12,7 +12,9 @@
 //! reserves the delta: a new content's bytes, plus the new body's size —
 //! less the old one's when it was the writer's own, else the old body's
 //! writer is credited it back. A write that leaves the body as it was
-//! counts nothing.
+//! counts nothing. V2-37: a write that replaces its author's latest
+//! revision (`COALESCE_WINDOW`) lets go of the body that revision alone
+//! held, and its keeper is credited those bytes back.
 
 use super::*;
 use menger_quota::{Hold, Meter, Refusal};
@@ -79,12 +81,14 @@ pub(super) async fn born(access: &Access, user: &VerifiedUser, store: &Store, at
 pub(super) struct Rewrite {
     held: Held,
     credit: Option<(String, u64)>,
+    /// V2-37: the body the write may let go of — its hash, bytes and keeper.
+    freeable: Option<(String, u64, String)>,
 }
 
 /// `amend`'s and `update`'s body (none: nothing to count) on the ticket
 /// `id`, held against `user`'s allowance by what it adds to what is kept.
 pub(super) async fn rewrite(access: &Access, user: &VerifiedUser, store: &Store, id: &str, body: Option<&str>) -> Result<Rewrite, Failed> {
-    let Some(body) = body else { return Ok(Rewrite { held: hold(access, user, &[]).await?, credit: None }) };
+    let Some(body) = body else { return Ok(Rewrite { held: hold(access, user, &[]).await?, credit: None, freeable: None }) };
     let (me, len) = (user.principal_text(), body.len() as u64);
     let c = store.body_charge(Some(id), body).await?;
     let content = if c.kept { 0 } else { len };
@@ -93,18 +97,24 @@ pub(super) async fn rewrite(access: &Access, user: &VerifiedUser, store: &Store,
         Some(w) => (content + len, Some((w, c.old))),
         None => (content + len, None),
     };
-    Ok(Rewrite { held: hold(access, user, &[("tickets.bytes", ask)]).await?, credit: credit.filter(|(_, n)| *n > 0) })
+    Ok(Rewrite { held: hold(access, user, &[("tickets.bytes", ask)]).await?, credit: credit.filter(|(_, n)| *n > 0), freeable: c.freeable })
 }
 
 impl Rewrite {
     /// The write's outcome settles it: landed with its body changed, all
     /// held counts and the old body's writer gets its bytes back; landed
     /// with the body as it was, nothing counts; refused, all is released.
-    pub(super) async fn settle<T>(self, access: &Access, r: Result<T, StoreError>, body_moved: impl Fn(&T) -> bool) -> Result<T, StoreError> {
+    /// A body the write let go of (V2-37) is credited to its keeper.
+    pub(super) async fn settle<T>(self, access: &Access, store: &Store, r: Result<T, StoreError>, body_moved: impl Fn(&T) -> bool) -> Result<T, StoreError> {
         let moved = r.as_ref().is_ok_and(&body_moved);
         let r = self.held.settle(r, |_, _| if moved { None } else { Some(0) }).await;
         if let (true, Some((who, n))) = (moved, self.credit) {
             access.meter().get().credit(&who, "tickets.bytes", n).await;
+        }
+        if let (true, Some((hash, n, who))) = (moved, self.freeable) {
+            if !store.body_kept(hash).await.unwrap_or(true) {
+                access.meter().get().credit(&who, "tickets.bytes", n).await;
+            }
         }
         r
     }

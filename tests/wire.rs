@@ -2713,17 +2713,19 @@ async fn revisions_over_the_wire() {
     collect(call(&client, "tickets.amend", json!({"id": "REV-1", "title": "renamed"})).await).await;
     watch_until(&mut watch, "revised").await;
 
+    // V2-37: the title, by the same hand within the window, folds into the
+    // body's revision.
     let listed = collect(call(&client, "tickets.revisions.list", json!({"id": "rev-1"})).await).await;
     let revs: Vec<i64> = listed.iter().filter(|e| e["type"] == "revision").map(|e| e["revision"]["rev"].as_i64().unwrap()).collect();
-    assert_eq!(revs, [3, 2, 1], "{listed:?}");
-    assert_eq!(listed[1]["revision"]["fields"], json!(["body"]));
-    assert_eq!((listed[1]["revision"]["added"].clone(), listed[1]["revision"]["removed"].clone()), (json!(2), json!(1)));
-    assert_eq!((listed[3]["type"].as_str(), listed[3]["count"].clone(), listed[3]["latest"].clone()), (Some("revisions_end"), json!(3), json!(3)));
+    assert_eq!(revs, [2, 1], "{listed:?}");
+    assert_eq!(listed[0]["revision"]["fields"], json!(["title", "body"]));
+    assert_eq!((listed[0]["revision"]["added"].clone(), listed[0]["revision"]["removed"].clone()), (json!(2), json!(1)));
+    assert_eq!((listed[2]["type"].as_str(), listed[2]["count"].clone(), listed[2]["latest"].clone()), (Some("revisions_end"), json!(2), json!(2)));
 
     let at = collect(call(&client, "tickets.revisions.get", json!({"id": "REV-1", "rev": 1})).await).await;
     assert_eq!((at[0]["type"].as_str(), at[0]["ticket"]["title"].as_str(), at[0]["ticket"]["body"].as_str()), (Some("revision_at"), Some("root"), Some("one\ntwo\n")));
 
-    let d = collect(call(&client, "tickets.revisions.diff", json!({"id": "REV-1", "from": 1, "to": 3})).await).await;
+    let d = collect(call(&client, "tickets.revisions.diff", json!({"id": "REV-1", "from": 1, "to": 2})).await).await;
     let diff = &d[0]["diff"];
     assert_eq!(d[0]["type"], "revision_diff");
     assert_eq!(diff["fields"].as_array().unwrap().iter().map(|f| f["field"].as_str().unwrap()).collect::<Vec<_>>(), ["title", "body"]);
@@ -2731,10 +2733,10 @@ async fn revisions_over_the_wire() {
     assert!(lines.as_array().unwrap().iter().any(|l| l["op"] == "add" && l["text"] == "TWO" && l["words"][0]["text"] == "TWO"), "{lines}");
 
     let restored = collect(call(&client, "tickets.revisions.restore", json!({"id": "REV-1", "rev": 1, "message": "back to the start"})).await).await;
-    assert_eq!((restored[0]["type"].as_str(), restored[0]["changed"].clone(), restored[0]["rev"].clone()), (Some("revision_restored"), json!(["title", "body"]), json!(4)), "{restored:?}");
+    assert_eq!((restored[0]["type"].as_str(), restored[0]["changed"].clone(), restored[0]["rev"].clone()), (Some("revision_restored"), json!(["title", "body"]), json!(3)), "{restored:?}");
     assert_eq!(restored[0]["ticket"]["body"], "one\ntwo\n");
     let seen = watch_until(&mut watch, "revised").await;
-    assert_eq!(seen.last().unwrap()["rev"], json!(4));
+    assert_eq!(seen.last().unwrap()["rev"], json!(3), "a restore says why: its own revision");
     let listed = collect(call(&client, "tickets.revisions.list", json!({"id": "REV-1", "limit": 1})).await).await;
     assert_eq!(listed[0]["revision"]["message"], "restored title, body from revision 1: back to the start");
     let message = invalid(&client, "tickets.revisions.restore", json!({"id": "REV-1", "rev": 1, "fields": ["commits"]})).await;
