@@ -46,6 +46,7 @@ pub(crate) fn failed(e: StoreError) -> DocsEvent {
         StoreError::NoThread(t) => DocsEvent::NotFound { id: None, revision: None, org: None, thread: Some(t) },
         StoreError::BadRange(m) => DocsEvent::Error { message: format!("{m} (nothing was written)") },
         StoreError::Quota(m) => DocsEvent::Refused { reason: "quota".into(), message: format!("{m} (nothing was written)") },
+        StoreError::Allowance(r) => DocsEvent::Refused { reason: r.reason, message: format!("{} (nothing was written)", r.message) },
         e @ StoreError::BadUpdate(_) => DocsEvent::Error { message: format!("{e} (nothing was written)") },
         StoreError::Db(m) => DocsEvent::Error { message: m },
     }

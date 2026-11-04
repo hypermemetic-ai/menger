@@ -629,7 +629,7 @@ name is refused, so a new input registers one):
 | `docs.count` | count | total | a document is made (`docs.create`) |
 | `tickets.bytes` | bytes | total | **what the store keeps**, not every write: each body's content the first time it is kept as a revision (a copy of one kept already costs nothing) is its first writer's, and each ticket's current body its last writer's. A write reserves the delta — the new content's bytes, plus the new body less the old when the old was the writer's own (else the old body's writer is credited it back); a write that leaves the body as it was counts nothing; a write that replaces its author's latest revision (V2-37, below) lets go of the body that revision alone held, and its keeper is credited it back |
 | `tickets.count` | count | total | a ticket is created |
-| `questions.count` | count | total | registered; nothing asks it yet |
+| `questions.count` | count | total | a question is asked on a document (`docs.ask`, V2-39): one held for the asker before it is kept, committed after, released when the ask is refused; past the cap `refused { over_allowance }`. Not recounted: no store counts it yet |
 
 **The effective cap** of a principal on a source: their own allowance, else
 the largest of their teams' (unlimited the largest), else the default for
