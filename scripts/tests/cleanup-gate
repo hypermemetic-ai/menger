@@ -459,6 +459,24 @@ out=$(CLEANUP_GATE_ROOT=$T2 "$CG" --yes --path "$T2/home/ui8-x" 2>&1); [[ $? == 
 has "ui8: … by path, no shape" "$out" "not a leftover shape"
 CLEANUP_GATE_LOG=/dev/null "$CG" --yes --path "$T2" >/dev/null || bad "ui8: the second test root $T2 was not removed"
 
+# ── V2-38: a page-test run's work directory below /tmp/claude-UID/ ─────────
+# tests/pages_browser.mjs removes its own; a killed run's is pages-tmp: by
+# --path at once, by the sweep once nothing in it moved for an hour.
+mkdir -p "$SCR/ui8-pages-old" "$SCR/ui8-pages-new" "$SCR/ui8-pages-now"
+echo x >"$SCR/ui8-pages-old/tickets.db"; echo x >"$SCR/ui8-pages-new/tickets.db"; echo x >"$SCR/ui8-pages-now/tickets.db"
+aged '2 hours ago' "$SCR/ui8-pages-old"; aged '20 minutes ago' "$SCR/ui8-pages-new"
+cg "pages-tmp: the sweep, dry run" 0 --sweep
+has "pages-tmp: an old one" "$out" "would remove  pages-tmp  $SCR/ui8-pages-old"
+has "pages-tmp: a young one kept" "$out" "kept     pages-tmp   $SCR/ui8-pages-new — modified within 1h"
+hasnt "pages-tmp: still no session swept" "$out" "session"
+cg "pages-tmp: the sweep" 0 --yes --sweep
+gone "pages-tmp: the old one swept" "$SCR/ui8-pages-old"; there "pages-tmp: the young one stays" "$SCR/ui8-pages-new/tickets.db"
+has "pages-tmp: logged" "$(<"$LOG")" "removed pages-tmp $SCR/ui8-pages-old"
+cg "pages-tmp: by path, at once" 0 --yes --path "$SCR/ui8-pages-now"
+gone "pages-tmp: by path" "$SCR/ui8-pages-now"
+cg "pages-tmp: --list names it" 2 --list
+has "pages-tmp: --list" "$out" "pages-tmp  $SCR/ui8-pages-new"
+
 # a ui8 dir that is a mount point is never emptied (an unprivileged mount namespace, where there is one)
 mkdir -p "$PS/ui8-pages-mnt"
 if unshare -rm true 2>/dev/null; then

@@ -17,6 +17,8 @@
 // DIR`; in a scratch root — a $TMPDIR of ~/.cache/menger-perf-scratch, or
 // one MENGER_SCRATCH_DIRS names — scripts/cleanup-gate.sh takes a ui8-*
 // directory nothing holds once idle an hour, at the next hourly sweep (RUN-34).
+// tests/pages_browser.mjs removes its own ui8-pages-… when its run ends
+// (V2-38); one a killed run left below /tmp/claude-UID/ the sweep takes too.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
