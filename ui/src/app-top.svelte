@@ -113,6 +113,12 @@
     .top-links, .top-jump, .top-edit { display: none; }
     .top-search input { width: 140px; }
   }
+  /* EDITOR-12: on a phone the bar fits the width: the search gives way first. */
+  @media (max-width: 640px) {
+    .app-top { gap: 8px; min-width: 0; }
+    .top-search { flex: 0 1 140px; min-width: 0; }
+    .top-search input { width: 100%; min-width: 0; }
+  }
   @media (prefers-reduced-motion: reduce) {
     .brand, .top-links a, .top-search input, .top-jump, .top-edit { transition: none; }
   }

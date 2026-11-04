@@ -109,6 +109,7 @@
 [space]
 "--pitch"  = ['28px', '28px', 'a row']
 "--border" = ['1px', '1px', 'every hairline']
+"--ind"    = ['0', '0', 'EDITOR-12: the indent of a code line in columns, set on the line; wrapped, its rows hang past it']
 
 [shape]
 "--radius-xs"   = ['2px', '2px', 'a mark']

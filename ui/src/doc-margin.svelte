@@ -189,4 +189,10 @@
     .doc-margin[data-beside] .card { position: static; margin-bottom: 8px; }
     .doc-margin[data-beside] .count { position: static; }
   }
+  /* EDITOR-12: on a phone a card is the column's width and its words break: the quote wraps to two lines. */
+  @media (max-width: 640px) {
+    .card { overflow-wrap: anywhere; min-width: 0; }
+    .quote { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: normal; }
+    .acts { flex-wrap: wrap; }
+  }
 </style>
