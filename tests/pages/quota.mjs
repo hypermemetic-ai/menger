@@ -63,16 +63,18 @@ export default async (ctx) => {
     try {
       await eventually("a row per source", async () => (await root.locator("[data-id]").count()) === 9);
       const tickets = root.locator('[data-id="tickets.bytes"]');
-      assert((await text(tickets.locator("[data-field=used]"))) === "4.3 KB", `tickets used: ${await text(tickets.locator("[data-field=used]"))}`);
+      // V2-40: one 4,321-byte ticket is kept twice — its current body (the
+      // tickets row) and its first revision's copy (revision_bodies) — 8.6 KB.
+      assert((await text(tickets.locator("[data-field=used]"))) === "8.6 KB", `tickets used: ${await text(tickets.locator("[data-field=used]"))}`);
       assert((await text(tickets.locator("[data-field=cap]"))) === "50 MB", "the free tier's 50 MB");
       assert((await text(tickets.locator("[data-field=from]"))) === "the default", "from the default");
       assert((await text(root.locator('[data-id="tickets.count"] [data-field=cap]'))) === "unlimited", "a count unlimited");
       assert((await root.locator('[data-id="media.fetch.calls"]').getAttribute("data-window")) === "day", "a day's counter");
       // Capped near what is used: the bar fills and says so, live after a reload.
-      sy("quota", "set", "--principal", editor, "--source", "tickets.bytes", "--cap", "5000");
+      sy("quota", "set", "--principal", editor, "--source", "tickets.bytes", "--cap", "10000");
       await page.reload();
       await eventually("the bar near its cap", async () => (await tickets.locator("[data-bar]").getAttribute("data-state")) === "near");
-      assert(Number(await tickets.locator("[data-bar]").getAttribute("data-fill")) === 86, "4321 of 5000: 86%");
+      assert(Number(await tickets.locator("[data-bar]").getAttribute("data-fill")) === 86, "8642 of 10000: 86%");
       assert((await text(tickets.locator("[data-field=from]"))) === "yours", "their own now");
       await shoot(page, "usage");
     } finally {
@@ -104,7 +106,7 @@ export default async (ctx) => {
       const ids = await root.locator(".tr[data-id]").evaluateAll((rs) => rs.map((r) => r.getAttribute("data-id")));
       assert(JSON.stringify(ids) === JSON.stringify([...ids].sort()), `in order: ${ids}`);
       const cell = root.locator(`[data-id="${editor}"] [data-cell="tickets.bytes"]`);
-      assert((await text(cell.locator("[data-field=used]"))) === "4.3 KB", "the editor's tickets");
+      assert((await text(cell.locator("[data-field=used]"))) === "8.6 KB", "the editor's tickets: the body and its revision's copy");
       await cell.locator("[data-action='quota.set']").click();
       const input = cell.locator("input[data-cap-input]");
       await input.fill("1 MB");
