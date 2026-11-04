@@ -18,6 +18,7 @@ use crate::caller::{Caller, Callers, DocsRequest};
 use crate::events::DocsEvent;
 use crate::seam::Seam;
 use crate::store::DocsStore;
+use crate::streams::{many, once};
 use crate::vocab::{AgentName, ThreadId, ThreadText, DocAwareness, DocBody, DocId, DocQuery, DocSession, DocTitle, DocUpdate, DocVector};
 use futures::Stream;
 use menger_tickets_api::address::OrgId;
@@ -62,15 +63,6 @@ impl DocsActivation {
     pub fn store(&self) -> &Arc<DocsStore> {
         &self.store
     }
-}
-
-fn once(ev: impl std::future::Future<Output = DocsEvent> + Send + 'static) -> impl Stream<Item = DocsEvent> + Send + 'static {
-    futures::stream::once(ev)
-}
-
-fn many(evs: impl std::future::Future<Output = Vec<DocsEvent>> + Send + 'static) -> impl Stream<Item = DocsEvent> + Send + 'static {
-    use futures::StreamExt;
-    futures::stream::once(evs).flat_map(futures::stream::iter)
 }
 
 /// Documents: writing on its own, written by many hands at once — make one, read it, write it live (a Yjs CRDT), see who is on it, replay how it was built.
@@ -499,18 +491,8 @@ impl DocsActivation {
         /// true: every principal (the only reading there is).
         everyone: Option<bool>,
     ) -> impl Stream<Item = DocsEvent> + Send + 'static {
-        use futures::StreamExt;
         let _ = everyone;
         let (store, seam) = (self.store.clone(), self.seam.clone());
-        futures::stream::once(async move {
-            if !seam.everywhere(user.context(), "quota.set") {
-                return vec![DocsEvent::Error { message: "every principal's usage is an admin of *'s".into() }];
-            }
-            match store.usage_by_principal().await {
-                Ok(rows) => rows.into_iter().map(|(principal, count, bytes)| DocsEvent::Usage { principal, count, bytes }).collect(),
-                Err(e) => vec![DocsEvent::Error { message: e.to_string() }],
-            }
-        })
-        .flat_map(futures::stream::iter)
+        many(crate::streams::usage(store, seam, user))
     }
 }
