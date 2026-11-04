@@ -162,31 +162,47 @@ impl DocsStore {
         let (id, question) = (id.to_string(), question.to_string());
         let thread = self
             .blocking(move |s| {
-                let conn = s.lock();
-                let doc = live_doc(&conn, &id)?;
-                let crdt = s.crdt(&conn, &id)?;
-                let crdt = crdt.lock().unwrap_or_else(|p| p.into_inner());
-                let text = text_of(&crdt);
-                let n = text.chars().count() as u32;
-                let (from, to) = (from.min(n), to.min(n));
-                if from > to {
-                    return Err(StoreError::BadRange(format!("from {from} is past to {to}")));
+                // V2-39: one question held for the asker before it is kept,
+                // committed once it is, released if it is not.
+                let quota = s.quota();
+                let held = quota.reserve_question(&hand.principal).map_err(StoreError::Allowance)?;
+                let kept = (|| {
+                    let conn = s.lock();
+                    let doc = live_doc(&conn, &id)?;
+                    let crdt = s.crdt(&conn, &id)?;
+                    let crdt = crdt.lock().unwrap_or_else(|p| p.into_inner());
+                    let text = text_of(&crdt);
+                    let n = text.chars().count() as u32;
+                    let (from, to) = (from.min(n), to.min(n));
+                    if from > to {
+                        return Err(StoreError::BadRange(format!("from {from} is past to {to}")));
+                    }
+                    let (fb, tb) = (byte_at(&text, from as usize), byte_at(&text, to as usize));
+                    let body = crdt.get_or_insert_text(BODY);
+                    let (from_rel, to_rel) = {
+                        let txn = crdt.transact();
+                        let at = |b: usize, assoc| body.sticky_index(&txn, b as u32, assoc).map(|s| s.encode_v1());
+                        (at(fb, Assoc::After), at(tb, Assoc::Before))
+                    };
+                    let (from_rel, to_rel) = from_rel.zip(to_rel).ok_or_else(|| StoreError::BadRange(format!("{from}..{to} is not in the text")))?;
+                    let thread = crate::vocab::mint(|t| conn.query_row("SELECT 1 FROM doc_threads WHERE thread = ?1", [t], |_| Ok(())).optional().ok().flatten().is_some());
+                    conn.execute(
+                        &format!("INSERT INTO doc_threads ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, NULL)"),
+                        params![thread, doc.id, from_rel, to_rel, text[fb..tb].to_string(), question, to_whom, hand.name, hand.principal, now_ms()],
+                    )?;
+                    let row = conn.query_row(&format!("SELECT {COLUMNS} FROM doc_threads WHERE thread = ?1"), [&thread], row_of)?;
+                    Ok((s.dressed(&conn, &crdt, row)?, doc.org))
+                })();
+                match kept {
+                    Ok(k) => {
+                        quota.commit(held);
+                        Ok(k)
+                    }
+                    Err(e) => {
+                        quota.release(held);
+                        Err(e)
+                    }
                 }
-                let (fb, tb) = (byte_at(&text, from as usize), byte_at(&text, to as usize));
-                let body = crdt.get_or_insert_text(BODY);
-                let (from_rel, to_rel) = {
-                    let txn = crdt.transact();
-                    let at = |b: usize, assoc| body.sticky_index(&txn, b as u32, assoc).map(|s| s.encode_v1());
-                    (at(fb, Assoc::After), at(tb, Assoc::Before))
-                };
-                let (from_rel, to_rel) = from_rel.zip(to_rel).ok_or_else(|| StoreError::BadRange(format!("{from}..{to} is not in the text")))?;
-                let thread = crate::vocab::mint(|t| conn.query_row("SELECT 1 FROM doc_threads WHERE thread = ?1", [t], |_| Ok(())).optional().ok().flatten().is_some());
-                conn.execute(
-                    &format!("INSERT INTO doc_threads ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, NULL)"),
-                    params![thread, doc.id, from_rel, to_rel, text[fb..tb].to_string(), question, to_whom, hand.name, hand.principal, now_ms()],
-                )?;
-                let row = conn.query_row(&format!("SELECT {COLUMNS} FROM doc_threads WHERE thread = ?1"), [&thread], row_of)?;
-                Ok((s.dressed(&conn, &crdt, row)?, doc.org))
             })
             .await?;
         self.said(Change::Asked { org: thread.1, thread: thread.0.clone() });

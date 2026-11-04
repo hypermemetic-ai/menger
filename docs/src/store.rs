@@ -130,6 +130,8 @@ pub enum StoreError {
     BadUpdate(String),
     /// The quota refused the write (its words).
     Quota(String),
+    /// V2-39: the quota refused it, with its reason (`over_allowance`, …).
+    Allowance(crate::quota::Refused),
     /// The file.
     Db(String),
 }
@@ -143,6 +145,7 @@ impl std::fmt::Display for StoreError {
             StoreError::BadRange(e) => write!(f, "not a range of the text: {e}"),
             StoreError::BadUpdate(e) => write!(f, "not a Yjs v1 update: {e}"),
             StoreError::Quota(e) => write!(f, "{e}"),
+            StoreError::Allowance(r) => write!(f, "{}", r.message),
             StoreError::Db(e) => write!(f, "the docs file: {e}"),
         }
     }

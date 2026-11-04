@@ -489,6 +489,38 @@ async fn a_document_is_counted_against_its_writer_and_refused_past_the_cap() {
     assert_eq!(r.last().unwrap()["not_counted"], json!([]), "every store answers now");
 }
 
+/// V2-39: `questions.count` counts — `docs.ask` reserves one for the asker
+/// before the question is kept and commits it after; a refused ask (a range
+/// not in the text) releases it; past the cap the ask is `refused {
+/// over_allowance }` with the numbers and no thread is kept.
+#[tokio::test]
+async fn a_question_is_counted_against_its_asker_and_refused_past_the_cap() {
+    let port = start(None).await;
+    let admin = support::connect(port).await;
+    grant(&admin, &OTHER, "editor", "*").await;
+    let asker = connect_key(&OTHER, port).await;
+    let me = support::principal_of(&OTHER);
+    one(&admin, "quota.set", json!({"principal": me, "source": "questions.count", "cap": "1"})).await;
+    let made = one(&asker, "docs.create", json!({"title": "kiln notes", "body": "Fire twice a week."})).await;
+    let id = made["doc"]["id"].as_str().unwrap().to_string();
+    let questions = || async { let u = one(&asker, "quota.usage", json!({})).await; (source(&u, "questions.count")["used"].as_u64(), source(&u, "questions.count")["held"].as_u64()) };
+    // A refused ask holds nothing.
+    let bad = one(&asker, "docs.ask", json!({"id": id, "from": 10, "to": 2, "text": "backwards?"})).await;
+    assert_eq!(bad["type"], "error", "{bad}");
+    assert_eq!(questions().await, (Some(0), Some(0)), "released");
+    // The first: kept and counted.
+    let asked = one(&asker, "docs.ask", json!({"id": id, "from": 0, "to": 4, "text": "Twice?"})).await;
+    assert_eq!(asked["type"], "asked", "{asked}");
+    assert_eq!(questions().await, (Some(1), Some(0)));
+    // The second: over the cap, typed, nothing kept.
+    let over = one(&asker, "docs.ask", json!({"id": id, "from": 5, "to": 10, "text": "Which days?"})).await;
+    assert_eq!((over["type"].as_str(), over["reason"].as_str()), (Some("refused"), Some("over_allowance")), "{over}");
+    assert!(over["message"].as_str().unwrap().contains("nothing was written"), "{over}");
+    let threads = all(&asker, "docs.threads", json!({"id": id})).await;
+    assert_eq!(threads.iter().filter(|t| t["type"] == "thread").count(), 1, "{threads:?}");
+    assert_eq!(questions().await, (Some(1), Some(0)));
+}
+
 /// `docs.bytes` is the update log as stored: a squash folds changes into a
 /// snapshot, shares its bytes among the authors by what each wrote, and
 /// credits back what the log shrank by; the recount agrees.

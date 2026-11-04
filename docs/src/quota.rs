@@ -17,6 +17,14 @@ pub struct Reserved {
     pub hold: Option<String>,
 }
 
+/// V2-39: a refusal with its reason — `over_allowance`, `box_full`,
+/// `too_many_at_once` — and its words with the numbers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refused {
+    pub reason: String,
+    pub message: String,
+}
+
 /// What meters the docs service's writes.
 pub trait Quota: Send + Sync {
     /// Reserve `bytes` of `docs.bytes` for `author`; `Err` refuses the
@@ -33,6 +41,14 @@ pub trait Quota: Send + Sync {
     /// (a credit: the log shrank) or, rarely, more (their share of the
     /// snapshot past what was folded). Never refused: the squash is done.
     fn moved(&self, _author: &str, _delta: i64) {}
+    /// V2-39: one question asked (`questions.count`) for `author`, before
+    /// it is kept; refused with its reason. Every one allowed unless the
+    /// meter says.
+    fn reserve_question(&self, author: &str) -> Result<Reserved, Refused> {
+        Ok(Reserved { author: author.to_string(), bytes: 0, hold: None })
+    }
+    /// V2-39: the write the reservation was for was refused: nothing counts.
+    fn release(&self, _reserved: Reserved) {}
 }
 
 /// Every write allowed — the meter until V2-31's.

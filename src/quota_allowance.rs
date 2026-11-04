@@ -12,6 +12,16 @@
 use menger_media::allowance::{Denied, Reservation};
 use menger_quota::{Hold, MeterSlot, Refusal};
 
+/// A refusal's reason, as a typed `refused` says it.
+fn reason_of(r: &Refusal) -> &'static str {
+    match r {
+        Refusal::OverAllowance { .. } => "over_allowance",
+        Refusal::TooManyAtOnce { .. } => "too_many_at_once",
+        Refusal::BoxFull { .. } => "box_full",
+        _ => "over_allowance",
+    }
+}
+
 /// The quota service's meter, as the media service asks it.
 #[derive(Clone, Debug)]
 pub struct Metered(pub MeterSlot);
@@ -23,12 +33,7 @@ pub fn denied(r: Refusal) -> Denied {
         Refusal::OverAllowance { used, cap, .. } => Some(cap.saturating_sub(*used)),
         _ => None,
     };
-    let reason = match &r {
-        Refusal::OverAllowance { .. } => "over_allowance",
-        Refusal::TooManyAtOnce { .. } => "too_many_at_once",
-        Refusal::BoxFull { .. } => "box_full",
-        _ => "over_allowance",
-    };
+    let reason = reason_of(&r);
     Denied { remaining, message: format!("{reason}: {r}") }
 }
 
@@ -95,6 +100,21 @@ impl menger_docs::quota::Quota for DocsMetered {
     }
     fn reserve_count(&self, author: &str) -> Result<menger_docs::quota::Reserved, String> {
         self.hold(author, "docs.count", 1)
+    }
+    /// V2-39: `questions.count`, one per question asked; refused with its reason.
+    fn reserve_question(&self, author: &str) -> Result<menger_docs::quota::Reserved, menger_docs::quota::Refused> {
+        let meter = self.0.get();
+        match Self::wait(meter.reserve(author, "questions.count", 1)) {
+            Some(Ok(h)) => Ok(menger_docs::quota::Reserved { author: author.to_string(), bytes: 1, hold: h.ticket }),
+            Some(Err(r)) => Err(menger_docs::quota::Refused { reason: reason_of(&r).to_string(), message: format!("{}: {r}", reason_of(&r)) }),
+            None => Ok(menger_docs::quota::Reserved { author: author.to_string(), bytes: 1, hold: None }),
+        }
+    }
+    fn release(&self, reserved: menger_docs::quota::Reserved) {
+        if let Some(t) = reserved.hold {
+            let meter = self.0.get();
+            Self::wait(meter.release(Hold { ticket: Some(t), remaining: None }));
+        }
     }
     fn commit(&self, reserved: menger_docs::quota::Reserved) {
         if let Some(t) = reserved.hold {
