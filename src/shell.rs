@@ -88,51 +88,13 @@ pub struct ShellConfig {
 /// under their hash (the framework's [`IMMUTABLE`]); a miss is never kept.
 pub const MEDIA_ROUTE: &str = "/media/{hash}";
 
-/// EDITOR-14: **a full page in a body** (an `<m-mockup>`, a ```` ```mockup ````
-/// fence, an html page) is drawn in `<iframe sandbox="allow-scripts">` — an
-/// opaque origin: no cookie, no storage, no socket, no `top`. Not as a
-/// `srcdoc`: a srcdoc inherits its parent's policy ([`PAGE_CSP`]: no inline
-/// script but the page's hashed own), so a page's scripts would be refused
-/// (v1 found it, ACCESS-28). So the frame loads [`FRAME_DOC`] from here,
-/// under [`FRAME_CSP`] alone; it says it is up (`menger:boot` on its
-/// channel, the URL's fragment) and takes its document from its parent
-/// (`menger:doc`, ui/src/page-frame.svelte), which it writes over itself.
-/// Public: the same bytes for everyone, no data in them.
-pub const FRAME_ROUTE: &str = "/frame";
-
-/// EDITOR-14: what [`FRAME_ROUTE`] is served under. Its scripts, styles,
-/// images and faces load as the page wrote them; it opens no connection
-/// (`connect-src 'none'`: no fetch, no socket) and submits no form; only
-/// this origin frames it; and its `sandbox` (scripts, forms, a link's tab —
-/// the iframe's own attribute narrows it further) makes it an opaque
-/// origin even opened on its own, outside the app's frame.
-pub const FRAME_CSP: &str = "connect-src 'none'; form-action 'none'; object-src 'none'; frame-ancestors 'self'; sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox";
-
-/// EDITOR-14: the document every page frame starts as — it takes its page
-/// from its own parent only, on its own channel, once.
-pub const FRAME_DOC: &str = concat!(
-    "<!doctype html><meta charset=\"utf-8\"><script>(function(){",
-    "var c=location.hash.slice(1);",
-    "addEventListener(\"message\",function t(e){var d=e.data;",
-    "if(e.source!==parent||!d||d.type!==\"menger:doc\"||d.channel!==c||typeof d.html!==\"string\")return;",
-    "removeEventListener(\"message\",t);document.open();document.write(d.html);document.close();});",
-    "parent.postMessage({type:\"menger:boot\",channel:c},\"*\");",
-    "})();</script>",
-);
-
-/// EDITOR-14: [`FRAME_DOC`] under [`FRAME_CSP`], framed by this origin alone.
-async fn frame_doc() -> Response {
-    (
-        [
-            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
-            (header::CONTENT_SECURITY_POLICY, FRAME_CSP),
-            (header::X_FRAME_OPTIONS, "SAMEORIGIN"),
-            (header::CACHE_CONTROL, "no-cache"),
-        ],
-        FRAME_DOC,
-    )
-        .into_response()
-}
+/// EDITOR-14, COMPS-2: **a full page in a body** (an `<m-mockup>`, a
+/// ```` ```mockup ```` fence, an html page) is drawn in a frame — the
+/// framework's (`plexus_ui_service::frame`): the ui routes serve its
+/// document at [`FRAME_ROUTE`] under its own policy, and the engine's
+/// `bus.frame` draws it (ui/src/page-frame.svelte). Public: the same bytes
+/// for everyone, no data in them — [`is_public_asset`] lets it through.
+pub use plexus_ui_service::frame::{FRAME_CSP, FRAME_ROUTE};
 
 /// STUDIO-2: who opens `/studio/`, and the module the studio compiles in.
 #[derive(Clone)]
@@ -395,8 +357,6 @@ async fn router(cfg: ShellConfig, at: std::net::SocketAddr) -> Router {
     if let Some(mcp) = cfg.mcp {
         app = app.merge(mcp);
     }
-    // EDITOR-14: the page frames' first document — public, no data in it.
-    app = app.route(FRAME_ROUTE, get(frame_doc));
     // DESIGN-40: a framed body's document has an opaque origin, so the
     // house faces it loads from `/app/fonts/` are cross-origin fetches —
     // answered with CORS (`*`: public files, no data).
@@ -464,7 +424,8 @@ async fn require_session(
 }
 
 /// IDENTITY-38 / DESIGN-40: the app's files a ticket body's frame loads
-/// from its opaque origin — public code and faces, no data. APP-64: and the
+/// from its opaque origin — public code and faces, no data. COMPS-2: and
+/// the frame's own document (`/frame`, the framework's). APP-64: and the
 /// home-screen icons and manifest, at the root and under `/app/`. APP-92:
 /// and the app's code itself — its script, wasm and stylesheet, every file
 /// of the build but a page — so it downloads behind the sign-in page; the
@@ -472,6 +433,7 @@ async fn require_session(
 fn is_public_asset(path: &str) -> bool {
     let root_file = |p: &str| ROOT_FILES.contains(&p);
     path.starts_with("/app/vendor/")
+        || path == FRAME_ROUTE
         || is_font(path)
         || path.strip_prefix("/app/").or(path.strip_prefix('/')).is_some_and(root_file)
         || is_app_code(path)
@@ -529,28 +491,15 @@ async fn host_is_ours(State(hosts): State<Arc<Vec<String>>>, req: Request, next:
 mod tests {
     use super::*;
 
-    /// EDITOR-14: the frames' document is served under its own policy —
-    /// scripts run, nothing connects, a sandbox even opened alone, framed by
-    /// this origin only — and takes its page from its parent alone.
-    #[tokio::test]
-    async fn the_frame_document_is_sandboxed_and_connects_nowhere() {
-        let app = Router::new().route(FRAME_ROUTE, get(frame_doc)).layer(axum::middleware::from_fn(plexus_webapp::harden));
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
-        let at = listener.local_addr().unwrap();
-        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let r = reqwest::get(format!("http://{at}{FRAME_ROUTE}")).await.unwrap();
-        assert_eq!(r.status(), 200);
-        let h = r.headers().clone();
-        assert_eq!(h["content-security-policy"], FRAME_CSP);
-        assert_eq!(h["x-frame-options"], "SAMEORIGIN");
-        assert_eq!(h["x-content-type-options"], "nosniff");
-        for d in ["connect-src 'none'", "form-action 'none'", "frame-ancestors 'self'", "sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox"] {
-            assert!(FRAME_CSP.split(';').any(|x| x.trim() == d), "{d}");
-        }
-        assert!(!FRAME_CSP.contains("allow-same-origin") && !FRAME_CSP.contains("script-src"), "{FRAME_CSP}");
-        let body = r.text().await.unwrap();
-        assert!(body.contains("e.source!==parent") && body.contains("d.channel!==c") && body.contains("menger:boot"), "{body}");
-        // The app's own policy is not loosened: the frame is its own origin's, which `frame-src 'self'` already admits.
+    /// EDITOR-14, COMPS-2: the frames' document is the framework's, and
+    /// public here — a frame's opaque origin carries no session — while
+    /// the app's own policy is not loosened: the frame is its own origin's,
+    /// which `frame-src 'self'` already admits.
+    #[test]
+    fn the_frame_document_is_the_frameworks_and_public() {
+        assert_eq!(FRAME_ROUTE, "/frame");
+        assert!(is_public_asset(FRAME_ROUTE) && !is_public_asset("/frame/x") && !is_public_asset("/app/"));
+        assert!(FRAME_CSP.contains("connect-src 'none'") && !FRAME_CSP.contains("allow-same-origin"), "{FRAME_CSP}");
         assert!(PAGE_CSP.contains("frame-src 'self' ") && !PAGE_CSP.contains("'unsafe-eval'"));
     }
 

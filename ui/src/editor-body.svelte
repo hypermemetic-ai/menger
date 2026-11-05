@@ -133,7 +133,7 @@
 </script>
 
 <script>
-  import { mount, tick, unmount, untrack } from "svelte";
+  import { getAllContexts, mount, tick, unmount, untrack } from "svelte";
   import { bus, live } from "plexus-ui/host";
   import { ticketHref } from "./ticket-links.svelte";
   import TicketView, { blocks, pieceClass, refDefs } from "./ticket-view.svelte";
@@ -158,6 +158,8 @@
   // Yjs CRDT, live). Fixed at mount, as the document is.
   const isDoc = untrack(() => kind === "doc");
   const b = bus();
+  // COMPS-2: the blocks it mounts draw their pages through the bus (page-frame), so they get its context.
+  const contexts = getAllContexts();
   const PAUSE = 600;
 
   const ticket = live({ snapshot: "tickets.get", params: () => ({ id: doc_id }), changes: "tickets.watch", key: "id", when: () => !isDoc,
@@ -415,7 +417,7 @@
       if (this.piece.wrap) d.setAttribute("data-tag", this.piece.wrap.tag);
       if (this.hand) { d.classList.add("eb-hand"); d.setAttribute("data-hand", this.hand); }
       // ticket-view itself, drawing this piece alone: the drawing #/ticket/:id makes of it.
-      d.view = mount(TicketView, { target: d, props: { body: this.text, piece: this.piece, defs: this.defs, block: true } });
+      d.view = mount(TicketView, { target: d, props: { body: this.text, piece: this.piece, defs: this.defs, block: true }, context: contexts });
       // EDITOR-10: a lone file or URL drawn as its kind — a player, a viewer, a card.
       drawAll(d, b);
       d.addEventListener("mousedown", (ev) => {

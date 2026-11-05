@@ -344,10 +344,18 @@ HTML) — each in `<iframe sandbox>` with no `allow-same-origin`: an opaque
 origin, no cookie, no storage, no socket, no `top`. A `live` fence or
 `<m-live route>` frames the test app (`--live-origin`, APP-110). Not a
 `srcdoc`, which inherits the app's policy and would refuse the page's
-scripts: the frame loads the shell's public **`GET /frame`** (`FRAME_CSP`:
+scripts. **The frames are plexus-ui's** (COMPS-2; `../plexus-ui/CONTRACT.md`
+"Frames"): the ui routes serve the public **`GET /frame`** (`FRAME_CSP`:
 `connect-src 'none'; form-action 'none'; frame-ancestors 'self'; sandbox …`),
-which says `menger:boot` on its channel and is handed the page by
-`postMessage`, from its own parent only (`ui/src/page-frame.svelte`, real Svelte: `svelte/1`).
+which says `plexus:boot` on its channel and is handed the page by
+`postMessage`, from its own parent only, and `ui/src/page-frame.svelte` (real Svelte:
+`svelte/1`) draws each through the engine's `bus.frame` — the handshake, its height, the theme,
+the double buffer. A framed page reads the tracker through the bridge
+(EDITOR-15): `plexus.call("tickets.get", { id })` is answered as the reader,
+held to `tickets.get`, `tickets.list` and `tickets.search` and to what the
+component drawing the ticket holds; anything else, a write above all, is
+refused in words. A ```` ```mermaid ```` fence in a raw body is drawn before the
+body is handed over, so it draws inside the frame as outside.
 
 The docs service (V2-29) asks two things through its seam (`docs/src/seam.rs`),
 never another's file: the gate, whether the caller holds a method's grant

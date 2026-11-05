@@ -99,7 +99,8 @@
   }
 
   const esc = (t) => String(t).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  /** The frame's own sheet for a raw body: the body's type on the app's tokens (sent in by page-frame). */
+  /** The frame's own sheet for a raw body: the body's type on the app's tokens (put in by the engine's frame,
+   *  COMPS-2), and a diagram drawn before it was handed over (`drawDiagrams`) on Pele's variables. */
   const RAW_SHEET = `html,body{margin:0;background:transparent}body{color:var(--ink,#1d1b16);font:14px/1.6 var(--sans,system-ui,sans-serif);overflow-wrap:anywhere}
 a{color:var(--accent,#2f5fb3)}h1,h2,h3,h4{margin:14px 0 4px;font-family:var(--font-display,inherit);line-height:1.3}h1{font-size:20px}h2{font-size:16px}h3,h4{font-size:14px}
 p{margin:6px 0}ul,ol{margin:4px 0;padding-left:20px}img{max-width:100%;height:auto}
@@ -109,6 +110,7 @@ table{border-collapse:collapse;margin:6px 0}th,td{padding:4px 14px 4px 0;text-al
 blockquote{margin:6px 0;padding-left:14px;color:var(--muted,#777);border-left:2px solid var(--line,#ddd)}hr{border:0;border-top:1px solid var(--line,#ddd)}
 :is(m-summary,m-decision,m-input,m-cases,m-beat,m-status,m-diagram,m-results,m-walk,m-code,m-compare,m-callout,m-acceptance,m-cards,m-card,m-dag,m-details,m-step,m-question,m-answer){display:block;margin:6px 0}
 m-step::before{content:attr(date) " · " attr(status) " · " attr(by) "  ";font-size:11px;color:var(--muted,#777)}
+.m-diagram{margin:6px 0;overflow-x:auto;--pele-bg:transparent;--pele-fg:var(--ink);--pele-muted:var(--muted);--pele-line:var(--muted);--pele-surface:var(--panel);--pele-surface-alt:var(--hover);--pele-border:var(--line);--pele-accent:var(--accent);--pele-font:var(--sans);--pele-radius:var(--radius);--pele-series-1:var(--accent);--pele-series-2:var(--kind-scope);--pele-series-3:var(--kind-execution);--pele-series-4:var(--kind-spike);--pele-series-5:var(--kind-gap);--pele-series-6:var(--live);--pele-series-7:var(--warn);--pele-series-8:var(--kind-doc)}.m-diagram svg{display:block;max-width:100%;height:auto;margin:0 auto}
 .m-page{margin:8px 0}.m-page figcaption{margin:0 0 6px;font-size:12px;font-weight:600}.m-page iframe{display:block;width:100%;border:1px solid var(--line,#ddd);border-radius:6px;background:var(--panel,#f2f1ec)}.m-note{font-size:12px;color:var(--muted,#777)}`;
 
   /** A page block inside a raw body: a nested frame (it inherits the frame's own policy, so its scripts run), or a note. */
@@ -303,7 +305,7 @@ m-step::before{content:attr(date) " · " attr(status) " · " attr(by) "  ";font-
 
   /** EDITOR-14: a raw body's frame document — its markdown (each piece through the host's render, as drawn
    *  here) around its raw HTML (a piece holding some, as written), a page block a nested frame; the theme's
-   *  tokens go in at `menger-theme` (page-frame), and a link opens a tab. */
+   *  tokens go in by the engine's frame (COMPS-2: `theme`), and a link opens a tab. */
   function rawDoc(src) {
     const d = refDefs(src), out = [];
     for (const p of blocks(src, false)) {
@@ -312,13 +314,49 @@ m-step::before{content:attr(date) " · " attr(status) " · " attr(by) "  ";font-
       else out.push(markdown(mediaLinks(pieceSource(p)) + d));
     }
     return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base target="_blank">`
-      + `<style id="menger-theme">/*menger-theme*/</style><style>${RAW_SHEET}</style></head><body>\n${out.join("\n")}\n</body></html>`;
+      + `<style>${RAW_SHEET}</style></head><body>\n${out.join("\n")}\n</body></html>`;
+  }
+  /** EDITOR-15, COMPS-2: a raw body's ```mermaid fences drawn before the frame is handed it — each by the diagram's
+   *  own component, in `within` (page-frame's stage, unseen), its SVG put in place of the fence's `<pre>` in the frame's
+   *  document — so a diagram draws inside the frame as outside (the frame loads no module of the app's). The SVG is
+   *  Pele's own drawing (it escapes the diagram's text, filters links and styles) and goes only into the sandboxed
+   *  frame, never into the page. A fence Pele refuses stays its source. */
+  const FENCE_HTML = /<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/g;
+  const unescaped = (t) => t.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
+  async function drawn1(source, within) {
+    const at = document.createElement("div");
+    at.setAttribute("aria-hidden", "true");
+    at.style.cssText = "position:absolute;left:0;top:0;width:100%;opacity:0;pointer-events:none;z-index:-1";
+    within.appendChild(at);
+    const app = mount(Diagram, { target: at, props: { source } });
+    try {
+      for (const t0 = Date.now(); Date.now() - t0 < 8000; await new Promise((r) => setTimeout(r, 50))) {
+        const fig = at.querySelector("[data-surface=mermaid-diagram]");
+        if (fig?.dataset.state === "refused") return null;
+        const svg = fig?.dataset.state === "drawn" ? fig.querySelector("svg") : null;
+        if (svg) return new XMLSerializer().serializeToString(svg);
+      }
+      return null;
+    } finally {
+      unmount(app);
+      at.remove();
+    }
+  }
+  async function drawDiagrams(html, within) {
+    const fences = [...html.matchAll(FENCE_HTML)];
+    if (!fences.length) return html;
+    const svgs = await Promise.all(fences.map((m) => drawn1(unescaped(m[1]), within ?? document.body)));
+    let k = 0;
+    return html.replace(FENCE_HTML, (whole) => {
+      const svg = svgs[k++];
+      return svg ? `<div class="m-diagram">${svg}</div>` : whole;
+    });
   }
   const parts = $derived(edit || block ? [] : blocks(body));
   const defs = $derived(block ? given ?? "" : edit ? "" : refDefs(body));
 </script>
 
-{#snippet drawn(p)}{#if p.raw}<div class="blk-in"><PageFrame source={p.text} doc={rawDoc(p.text)}/></div>{:else if p.page}<div class="blk-in"><PageFrame source={p.text}/></div>{:else}<div class="blk-in" use:enhance={p.text}>{@html markdown(mediaLinks(pieceSource(p)) + defs)}</div>{/if}{/snippet}
+{#snippet drawn(p)}{#if p.raw}<div class="blk-in"><PageFrame source={p.text} doc={rawDoc(p.text)} prepare={drawDiagrams}/></div>{:else if p.page}<div class="blk-in"><PageFrame source={p.text}/></div>{:else}<div class="blk-in" use:enhance={p.text}>{@html markdown(mediaLinks(pieceSource(p)) + defs)}</div>{/if}{/snippet}
 
 {#if block}{@render drawn(piece ?? { text: body })}{:else}
 <article class="ticket-view" data-surface="ticket-view" data-editing={edit ? "" : undefined}>
