@@ -627,9 +627,11 @@ question.
 - Plexus crates come from the **0.7 line by published version**
   (PLEXUS-16): `plexus-core`, `plexus-macros`, `plexus-client`,
   `plexus-transport`, `plexus-auth-core`, `plexus-webapp`. What is
-  unpublished stays by sibling path: `../plexus-login`, `../plexus-ui` and
-  tether's `../plexus-substrate`; a clone of menger alone does not build
-  until those are decided. Every activation is `impl FooActivation` (MACRO-13,
+  unpublished stays by sibling path: `../plexus-login` and `../plexus-ui`
+  (FRAME-1's rule, `tests/apart.rs`); a clone of menger alone does not build
+  until those are decided. tether takes plexus-substrate and plexus-login
+  from their public repositories, each at a revision (PLEXUS-13, V2-44), the
+  plexus-login being the one substrate names. Every activation is `impl FooActivation` (MACRO-13,
   MACRO-21): the stem names the namespace, the trait and the client.
 - **Workspace members** (`Cargo.toml`): `.`, `tickets-api`, `media`, `quota`;
   `tether/` is its own workspace. Three repositories

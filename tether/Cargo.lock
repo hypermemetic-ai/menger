@@ -2752,6 +2752,7 @@ dependencies = [
 [[package]]
 name = "plexus-substrate"
 version = "0.6.3"
+source = "git+https://github.com/hypermemetic-ai/plexus-substrate?rev=7b6c9afe07f1be71c9a8e76941ceb999dad8826f#7b6c9afe07f1be71c9a8e76941ceb999dad8826f"
 dependencies = [
  "anyhow",
  "async-stream",
