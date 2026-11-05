@@ -323,7 +323,7 @@ macro_rules! summary_fields {
 }
 
 summary_fields!(
-    Uid => "uid", Id => "id", Epic => "epic", Shortcode => "shortcode", Address => "address", Seq => "seq", Title => "title",
+    Uid => "uid", UidOf => "uid_of", Id => "id", Epic => "epic", Shortcode => "shortcode", Address => "address", Seq => "seq", Title => "title",
     Status => "status", Kind => "kind", Severity => "severity", Parent => "parent", ParentHidden => "parent_hidden",
     ChildCount => "child_count", BlockedBy => "blocked_by", Unlocks => "unlocks", HiddenBlockedBy => "hidden_blocked_by",
     HiddenUnlocks => "hidden_unlocks", Commits => "commits", Path => "path", Placement => "placement", Labels => "labels",

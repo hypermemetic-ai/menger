@@ -163,7 +163,7 @@ pub(super) fn list_stream(store: Arc<Store>, caller: VerifiedUser, ask: ListAsk)
             let keep = filter.is_some().then(|| keep.map(String::from)).flatten();
             let q = Filtered { lens, epic, status, parent, keep };
             if summary.unwrap_or(false) {
-                for ev in page_events(store.filtered_page(&caller, &q, after.as_deref(), at, limit), fields.as_deref()) {
+                for ev in page_events(&store, store.filtered_page(&caller, &q, after.as_deref(), at, limit), fields.as_deref()) {
                     yield ev;
                 }
             } else {
@@ -183,7 +183,7 @@ pub(super) fn list_stream(store: Arc<Store>, caller: VerifiedUser, ask: ListAsk)
                 after: after.as_deref(),
                 limit,
             });
-            for ev in page_events(page, fields.as_deref()) {
+            for ev in page_events(&store, page, fields.as_deref()) {
                 yield ev;
             }
         } else {
@@ -238,7 +238,7 @@ pub(super) fn ready_stream(store: Arc<Store>, caller: VerifiedUser, ask: ReadyAs
             Ok(Some(q)) => {
                 let q = Filtered { lens: q.lens.with_clock(clock), ..q };
                 if summary.unwrap_or(false) {
-                    for ev in page_events(store.ready_filtered_page(&caller, &q, after.as_deref(), limit), fields.as_deref()) {
+                    for ev in page_events(&store, store.ready_filtered_page(&caller, &q, after.as_deref(), limit), fields.as_deref()) {
                         yield ev;
                     }
                 } else {
@@ -253,7 +253,7 @@ pub(super) fn ready_stream(store: Arc<Store>, caller: VerifiedUser, ask: ReadyAs
             Ok(None) => {}
         }
         if summary.unwrap_or(false) {
-            for ev in page_events(store.ready_page(&caller, epic.as_deref(), after.as_deref(), limit), fields.as_deref()) {
+            for ev in page_events(&store, store.ready_page(&caller, epic.as_deref(), after.as_deref(), limit), fields.as_deref()) {
                 yield ev;
             }
         } else {
@@ -286,7 +286,7 @@ pub(super) fn find_stream(
         Some(lens) => store.find_filtered(&caller, &query, &lens, after.as_deref(), limit),
         None => store.find_page(&caller, &query, after.as_deref(), limit),
     });
-    futures::stream::iter(page_events(page, fields.as_deref()))
+    futures::stream::iter(page_events(&store, page, fields.as_deref()))
 }
 
 /// `search` — SEARCH-2's hits in the caller's reach (PERF-15: one `rows`),

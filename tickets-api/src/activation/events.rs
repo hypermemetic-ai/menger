@@ -39,7 +39,7 @@ pub(super) fn rows_events(items: Vec<Row>) -> Vec<TicketsEvent> {
 /// instead, with no page event: nothing was walked, so there is nowhere to
 /// resume from. SCALE-14: the `summary` shape — a page of the cache's rows,
 /// as they are; whole tickets come from [`walk_events`].
-pub(super) fn page_events(page: Result<Page, StoreError>, fields: Option<&[SummaryField]>) -> Box<dyn Iterator<Item = TicketsEvent> + Send> {
+pub(super) fn page_events(store: &Store, page: Result<Page, StoreError>, fields: Option<&[SummaryField]>) -> Box<dyn Iterator<Item = TicketsEvent> + Send> {
     let page = match page {
         Ok(page) => page,
         Err(e) => {
@@ -48,7 +48,8 @@ pub(super) fn page_events(page: Result<Page, StoreError>, fields: Option<&[Summa
             }))
         }
     };
-    let items = page.tickets.into_iter().map(|row| Row::Summary { summary: SummaryRow::of(row, fields) }).collect();
+    // TICKETS-35 (V2-42): each row its `uid_of` before `fields` thins it.
+    let items = page.tickets.into_iter().map(|row| Row::Summary { summary: SummaryRow::of(store.dressed_summary(row), fields) }).collect();
     let mut events = rows_events(items);
     events.push(TicketsEvent::Page { next: page.next, remaining: page.remaining, first: page.first });
     Box::new(events.into_iter())

@@ -216,6 +216,16 @@ impl Store {
         candidates.iter().map(|c| cache.choice(c, &sees)).collect()
     }
 
+    /// V2-42: one summary given its `uid_of`, as [`Store::dressed`] gives
+    /// it — before a page thins its rows by `fields`, so `uid_of` is one.
+    pub fn dressed_summary(&self, mut row: crate::types::TicketSummary) -> crate::types::TicketSummary {
+        let cache = self.tickets.read().expect("store lock poisoned");
+        let named = row.named();
+        *named.uid_of = cache.uid_of(named.names(), |_| true);
+        drop(cache);
+        row
+    }
+
     /// TICKETS-35: `ev` as it goes out — each ticket and summary it carries
     /// given `uid_of`: the uids of the tickets it names, from the store as
     /// it stands. What a row names is what its reader may see already (a

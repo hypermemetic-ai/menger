@@ -135,7 +135,7 @@ export default async (ctx) => {
     const { tp: tp2, context: ctx2 } = await open(kids[0]);
     try {
       const head = tp2.locator("[data-surface=ticket-head]");
-      await eventually("next › the second child", async () => (await head.locator("[data-sib=next]").getAttribute("href", { timeout: 1000 })) === `${ROUTE}${kids[1]}`, 5_000);
+      await eventually("next › the second child", async () => { const h = (await head.locator("[data-sib=next]").getAttribute("href", { timeout: 1000 })) ?? ""; return h.startsWith(`${ROUTE.replace("ticket/", "t/")}${c2.ticket.uid}/`) && ticketAt(h, kids[1]); }, 5_000);
       assert((await head.locator("[data-sib=prev]").count()) === 0, "no ‹ prev for the first");
     } finally {
       await ctx2.close();
@@ -419,14 +419,14 @@ export default async (ctx) => {
     const alone = bundle(path.dirname(session), "view-alone", {
       engine: v1.engine,
       edit: (ui) => {
-        for (const f of fs.readdirSync(path.join(ui, "src"))) if (f !== "ticket-view.svelte" && f !== "mermaid-diagram.svelte" && f !== "page-frame.svelte" && !f.startsWith("code-")) fs.rmSync(path.join(ui, "src", f));
+        for (const f of fs.readdirSync(path.join(ui, "src"))) if (f !== "ticket-view.svelte" && f !== "mermaid-diagram.svelte" && f !== "page-frame.svelte" && f !== "ticket-links.svelte" && !f.startsWith("code-")) fs.rmSync(path.join(ui, "src", f));
         fs.writeFileSync(path.join(ui, "src", "view-host.svelte"), host);
         fs.writeFileSync(path.join(ui, "routes.json"), JSON.stringify({ "#/": "view-host" }));
         fs.writeFileSync(path.join(ui, "slots.json"), "{}");
       },
     });
     const m = JSON.parse(alone.manifest);
-    const drawers = Object.keys(m.components).filter((c) => c === "mermaid-diagram" || c === "page-frame" || c.startsWith("code-"));
+    const drawers = Object.keys(m.components).filter((c) => c === "mermaid-diagram" || c === "page-frame" || c === "ticket-links" || c.startsWith("code-"));
     assert(JSON.stringify(Object.keys(m.components).filter((c) => !drawers.includes(c)).sort()) === JSON.stringify(["ticket-view", "view-host"]) && drawers.includes("mermaid-diagram") && drawers.includes("page-frame") && drawers.includes("code-card") && drawers.includes("code-rust"), `the bundle holds the view, what draws its diagrams and code, and its page: ${Object.keys(m.components)}`);
     assert(Object.values(m.components).every((c) => c.uses.length === 0), "uses empty, every one");
     const was = live();
