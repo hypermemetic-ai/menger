@@ -62,10 +62,15 @@ edge. README "Run".
 ## What v2 is
 
 **menger is a tenant of the framework** (FRAME-7): the stored-UI framework
-is `../plexus-ui` — the ui service, the compiler, the engine, the routes a
+is plexus-ui — the ui service, the compiler, the engine, the routes a
 tenant mounts, the `plexus-ui` tool and the contract — and menger links it
-as any Plexus service may: its own code is `tickets-api/`, `src/` and the
-components in `ui/`, nothing of the framework's.
+as any Plexus service may, **by published version** (V2-47): its own code is
+`tickets-api/`, `src/` and the components in `ui/`, nothing of the
+framework's. The framework's repository is read at the tag of the version
+menger takes, `plexus-ui-v<version>`, the checkout `scripts/plexus-ui-src`
+prints (cloned once into `~/.cache/plexus-ui`); `../plexus-ui` below means
+that checkout. A plexus-ui change ships through `scripts/plexus-ui-release
+VERSION --ui DIR` — publish, tag, and menger's bump, one step.
 
 **The services registered** (`src/builder.rs`, one process): `tickets`
 (children `commits`, `filters`, `inputs`, `nav`, `revisions`, `subtasks`, `work`),
@@ -94,7 +99,7 @@ language. `tickets-api/tests/cut.rs` holds the cut: no module of a service
 that went, no flag for one, and README and this file naming none of them.
 
 **The ui service** (UI-3, UI-7, UI-9) is the framework's (FRAME-5):
-`plexus-ui-service` in `../plexus-ui/service`, by sibling path, with no
+`plexus-ui-service` (plexus-ui's `service/`), by published version, with no
 menger type in it — its caller the one plexus-core's gate admitted, its
 `ui.watch` held by the gate's grants generation (menger hands the store's
 count to the gate, `AuthSetup::with_generation` in `src/builder.rs`), its
@@ -146,12 +151,12 @@ native and as a wasm module with no imports) and drawn by its
 sections, the sanitized `{@html markdown()}`). The contract between them is
 `../plexus-ui/CONTRACT.md` (it was ticket **UI-4** on the tracker); README
 "The component contract" has the bundle's layout. The two crates and the
-tool that builds, signs and pushes a bundle — `plexus-ui` (FRAME-8) — live
-in the sibling checkout `../plexus-ui` (FRAME-3); the lines below build
-them from there into this checkout's target.
+tool that builds, signs and pushes a bundle — `plexus-ui` (FRAME-8) — are
+plexus-ui's (FRAME-3), built from the checkout `scripts/plexus-ui-src` names
+(V2-47) into this checkout's target by the lines below.
 
 ```sh
-../plexus-ui/scripts/ui-compiler-wasm.sh dist/ui-compiler.wasm   # (rustup's wasm32-unknown-unknown)
+"$(scripts/plexus-ui-src)"/scripts/ui-compiler-wasm.sh dist/ui-compiler.wasm   # (rustup's wasm32-unknown-unknown)
 scripts/plexus-ui build ui -o dist/ui.tar            # the bundle a deploy pushes (scripts/plexus-ui --help)
 ```
 
@@ -165,7 +170,7 @@ plexus-ui-compiler --test golden` in `../plexus-ui`.
 
 From an idea to a component on app-test, top to bottom. The dialect is
 rhx (Rhai in markup, `ui/src/<name>.rhx`, profile `rhx/1`), the
-framework's contract's, `../plexus-ui/CONTRACT.md` (it was UI-4): a `<script>` of Rhai — `prop()`,
+framework's contract's, plexus-ui's `CONTRACT.md` (it was UI-4): a `<script>` of Rhai — `prop()`,
 `state()`, `live()`, and handlers as folds `fn name(state, ev) { …; state }`
 — and a template of `{expr}`, `{#if}`, `{#each … as x (key)}`,
 `on:event={handler}`, another component as `<name prop={…}/>`, and in a
@@ -209,14 +214,14 @@ push: `ui slots set` (or the right-click menu on a section), which is how two
 versions of one component are swapped (`--version` names the other);
 `ui slots clear` puts the default back.
 
-**3. Build.** With the framework's tool, `plexus-ui` (`../plexus-ui`'s
+**3. Build.** With the framework's tool, `plexus-ui` (plexus-ui's
 `cli/`, FRAME-8; `scripts/plexus-ui` builds it into this checkout's target
 and runs it). Once, the compiler module and the engine — what needs cargo;
 then the bundle, every time — the components compiled in-process, the
 manifest, the tar:
 
 ```sh
-../plexus-ui/scripts/ui-compiler-wasm.sh dist/ui-compiler.wasm   # dist/ui-compiler.wasm
+"$(scripts/plexus-ui-src)"/scripts/ui-compiler-wasm.sh dist/ui-compiler.wasm   # dist/ui-compiler.wasm
 scripts/plexus-ui build --prebuild --engine dist/engine           # the engine (wasm32, wasm-bindgen)
 scripts/plexus-ui build ui --engine dist/engine -o dist/ui.tar    # the bundle; `--contract HASH` to stamp one
 ```
@@ -289,7 +294,8 @@ deploy/pipeline releases                      # every release: its suite, tested
   **the perf build** (RUN-39: `[profile.perf]`, the one build perf runs and
   releases use; `RELEASE` says `profile: perf`). A tree
   with no `frontend/` builds `cargo build --profile perf -p menger`, the
-  `plexus-ui` tool from `../plexus-ui` (FRAME-8; the release carries it as
+  `plexus-ui` tool from the tag of the plexus-ui version the tree takes
+  (FRAME-8, V2-47: `scripts/plexus-ui-src`; the release carries it as
   `bin/plexus-ui`), the engine (`plexus-ui build --prebuild`), the bundle
   (`plexus-ui build --contract HASH` → `dist/ui.tar`) and
   `dist/ui-compiler.wasm`, all on this machine — no container. The image runs
@@ -626,22 +632,25 @@ question.
 
 - Plexus crates come from the **0.7 line by published version**
   (PLEXUS-16): `plexus-core`, `plexus-macros`, `plexus-client`,
-  `plexus-transport`, `plexus-auth-core`, `plexus-webapp`. What is
-  unpublished stays by sibling path: `../plexus-login` and `../plexus-ui`
-  (FRAME-1's rule, `tests/apart.rs`); a clone of menger alone does not build
-  until those are decided. tether takes plexus-substrate and plexus-login
+  `plexus-transport`, `plexus-auth-core`, `plexus-webapp`, and since V2-47
+  `plexus-login` and plexus-ui's `plexus-ui-service` and `plexus-ui-compiler`
+  (at one version; FRAME-1's rule, `tests/apart.rs`), so a clone of menger
+  alone builds. Developing against a framework worktree is `PLEXUS_UI_SRC`
+  for the tool and an uncommitted `[patch.crates-io]` for the crates, never a
+  committed path. tether takes plexus-substrate and plexus-login
   from their public repositories, each at a revision (PLEXUS-13, V2-44), the
   plexus-login being the one substrate names. Every activation is `impl FooActivation` (MACRO-13,
   MACRO-21): the stem names the namespace, the trait and the client.
 - **Workspace members** (`Cargo.toml`): `.`, `tickets-api`, `media`, `quota`;
   `tether/` is its own workspace. Three repositories
   hold what menger lifted out: `plexus-webapp` (FRAME-4; published),
-  `../plexus-login` (FRAME-4; by path) and `../plexus-ui`,
+  `plexus-login` (FRAME-4; published) and plexus-ui,
   of which menger takes `plexus-ui-service` (FRAME-5: a dependency, its
   routes mounted on the shell) and `plexus-ui-compiler` (FRAME-3: a
-  dev-dependency) by path. The engine, `plexus-ui-engine`, is in no graph of
+  dev-dependency) by published version. The engine, `plexus-ui-engine`, is in no graph of
   menger's: the framework's `plexus-ui` tool builds it (FRAME-8), and
-  `scripts/plexus-ui` and `deploy/pipeline` build the tool from there.
+  `scripts/plexus-ui` and `deploy/pipeline` build the tool from the
+  version's tag (`scripts/plexus-ui-src`).
 - The `tickets` activation lives ONCE, in `tickets-api/`
   (`menger-tickets-api`, MFE-11): the vocabulary, the store, and
   `activation/mod.rs`'s `#[activation]` on `impl TicketsActivation` (its

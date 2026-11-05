@@ -523,7 +523,7 @@ plexus_ui_src() { # TREE LOG [keep] → PUI, the framework's checkout (keep: PLE
   local tree=$1 lg=$2 unset=(-u PLEXUS_UI_SRC)
   [[ ${3:-} == keep ]] && unset=()
   if [[ ! -x $tree/scripts/plexus-ui-src ]]; then
-    PUI=$(dirname "$tree")/plexus-ui
+    PUI=$tree/../plexus-ui
     [[ -f $PUI/Cargo.toml ]] || die "plexus-ui: no ../plexus-ui beside $tree (a tree before V2-47 takes the framework by sibling path)"
     say "plexus-ui: $PUI — by sibling path (a tree before V2-47)"; return 0
   fi

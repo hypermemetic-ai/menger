@@ -1,9 +1,17 @@
 //! FRAME-1's acceptance 2, held line by line as FRAME-2's waves land: the
 //! stored-UI framework, and the shell and the login it is served with, live
 //! apart from menger. menger's tree holds no copy of them, it takes each
-//! from its sibling checkout (MFE-10's way), no manifest names a directory
-//! that left, nothing in it reads a path that moved, and nothing names the
-//! crates by their old names.
+//! from crates.io by its published version (V2-47; MFE-10's sibling
+//! checkouts before it), no manifest names a directory that left, nothing in
+//! it reads a path that moved, and nothing names the crates by their old
+//! names.
+//!
+//! - V2-47 (the owner, 2026-11-05, "B"): `plexus-ui-service`,
+//!   `plexus-ui-compiler` and `plexus-login` by published version, the two
+//!   plexus-ui crates at one version; the tool, the engine and the compiler
+//!   module built from the framework checkout `scripts/plexus-ui-src` names —
+//!   the tag `plexus-ui-v<version>` of the version menger takes, never
+//!   `../plexus-ui`'s working tree — so a clone of menger alone builds.
 //!
 //! - FRAME-3 (wave 1): the compiler and the engine, out whole to
 //!   `../plexus-ui` as `plexus-ui-compiler` and `plexus-ui-engine`. menger
@@ -85,11 +93,6 @@ fn root() -> PathBuf {
     canonical(Path::new(env!("CARGO_MANIFEST_DIR")))
 }
 
-/// Where a sibling checkout lives: beside menger's root.
-fn sibling(dir: &str) -> PathBuf {
-    root().parent().expect("menger has a parent").join(dir)
-}
-
 /// A path made canonical where it exists, else as given.
 fn canonical(p: &Path) -> PathBuf {
     p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
@@ -113,14 +116,28 @@ const GONE: &[&str] = &[
     "ui/golden",
 ];
 
-/// The crates menger's cargo graph takes from a sibling checkout: the
-/// package, and the sibling it must resolve from (the engine and the tool
-/// are not: the tool is built from the sibling, below, and builds the engine).
-const SIBLINGS: &[(&str, &str)] = &[
-    ("plexus-ui-compiler", "plexus-ui"),
-    ("plexus-ui-service", "plexus-ui"),
-    ("plexus-login", "plexus-login"),
-];
+/// The crates menger's cargo graph takes of the framework and the login,
+/// each by its published version from crates.io (V2-47; the engine and the
+/// tool are not in the graph: the tool is built from the framework's
+/// checkout at the version's tag, below, and builds the engine).
+const PUBLISHED: &[&str] = &["plexus-ui-compiler", "plexus-ui-service", "plexus-login"];
+
+/// The framework's crates menger takes, which move together: one version.
+const ONE_RELEASE: &[&str] = &["plexus-ui-compiler", "plexus-ui-service"];
+
+/// crates.io, as a lock or `cargo metadata` names it.
+fn from_crates_io(source: &str) -> bool {
+    source == "registry+https://github.com/rust-lang/crates.io-index" || source == "sparse+https://index.crates.io/"
+}
+
+/// The plexus-ui checkout the framework is read from — what
+/// `scripts/plexus-ui-src` names: the tag of the version menger takes
+/// (cloned once), or `PLEXUS_UI_SRC`.
+fn framework() -> PathBuf {
+    let out = Command::new(root().join("scripts/plexus-ui-src")).arg(root()).output().expect("scripts/plexus-ui-src runs");
+    assert!(out.status.success(), "V2-47: scripts/plexus-ui-src names no framework checkout:\n{}", String::from_utf8_lossy(&out.stderr));
+    canonical(Path::new(String::from_utf8_lossy(&out.stdout).trim()))
+}
 
 /// The packages the graph may no longer hold: the crates' old names, as a
 /// manifest writes them. Spelled in two halves so this file does not name
@@ -279,58 +296,71 @@ fn metadata() -> Value {
     serde_json::from_slice(&out.stdout).expect("cargo metadata answers JSON")
 }
 
-/// What the graph `pkgs` breaks of the rule: every crate of `siblings`
-/// present, each from under its sibling directory in `parent` (canonical),
-/// and no package named in `old`.
-fn breaks(pkgs: &[(String, PathBuf)], parent: &Path, siblings: &[(&str, &str)], old: &[String]) -> Vec<String> {
+/// Each package of `cargo metadata`'s answer: its name, version and source
+/// (`None`: a path, this repository's or another's).
+fn sources(metadata: &Value) -> Vec<(String, String, Option<String>)> {
+    metadata["packages"]
+        .as_array()
+        .map(|ps| ps.iter().filter_map(|p| Some((p["name"].as_str()?.to_string(), p["version"].as_str()?.to_string(), p["source"].as_str().map(str::to_string)))).collect())
+        .unwrap_or_default()
+}
+
+/// What the graph `pkgs` breaks of the rule: every crate of `wanted`
+/// present, each from crates.io; the crates of `together` at one version;
+/// no package named in `old`.
+fn breaks(pkgs: &[(String, String, Option<String>)], wanted: &[&str], together: &[&str], old: &[String]) -> Vec<String> {
     let mut out = Vec::new();
-    for (want, dir) in siblings {
-        let checkout = canonical(&parent.join(dir));
-        let found: Vec<&PathBuf> = pkgs.iter().filter(|(n, _)| n == want).map(|(_, d)| d).collect();
+    for want in wanted {
+        let found: Vec<_> = pkgs.iter().filter(|(n, _, _)| n == want).collect();
         if found.is_empty() {
             out.push(format!("{want}: not in the graph"));
         }
-        for d in found {
-            if !d.starts_with(&checkout) {
-                out.push(format!("{want}: from {}, not from {}", d.display(), checkout.display()));
+        for (_, v, src) in found {
+            match src {
+                Some(s) if from_crates_io(s) => {}
+                Some(s) => out.push(format!("{want} {v}: from {s}, not crates.io")),
+                None => out.push(format!("{want} {v}: by path, not by published version")),
             }
         }
     }
-    for (name, d) in pkgs {
+    let mut versions: Vec<&str> = pkgs.iter().filter(|(n, _, _)| together.contains(&n.as_str())).map(|(_, v, _)| v.as_str()).collect();
+    versions.sort();
+    versions.dedup();
+    if versions.len() > 1 {
+        out.push(format!("{together:?} at {versions:?}: one release, one version"));
+    }
+    for (name, v, _) in pkgs {
         if old.contains(name) {
-            out.push(format!("{name}: an old name, still in the graph ({})", d.display()));
+            out.push(format!("{name}: an old name, still in the graph ({v})"));
         }
     }
     out
 }
 
-/// The line of `script` that builds the tool from the sibling: cargo with
-/// `--manifest-path` into `../plexus-ui/` and `-p plexus-ui-cli`.
+/// The line of `script` that builds the tool from the framework's checkout:
+/// cargo with `--manifest-path` and `-p plexus-ui-cli`, never into
+/// `../plexus-ui` (V2-47: the checkout `scripts/plexus-ui-src` names).
 fn tool_build_line(script: &str) -> Option<(usize, &str)> {
     script
         .lines()
         .enumerate()
-        .find(|(_, l)| l.contains("--manifest-path") && l.contains("../plexus-ui") && l.contains("-p plexus-ui-cli"))
+        .find(|(_, l)| l.contains("--manifest-path") && l.contains("-p plexus-ui-cli") && !l.contains("../plexus-ui"))
         .map(|(n, l)| (n + 1, l))
 }
 
 #[test]
-fn the_framework_is_a_sibling() {
+fn the_framework_is_published() {
     let root = root();
-    let parent = root.parent().expect("menger has a parent").to_path_buf();
-    for dir in ["plexus-ui", "plexus-login"] {
-        assert!(sibling(dir).join("Cargo.toml").is_file(), "FRAME-1: no checkout at {} (clone {dir} beside menger)", sibling(dir).display());
-    }
-    let broken = breaks(&packages(&metadata()), &parent, SIBLINGS, &old_packages());
-    assert!(broken.is_empty(), "FRAME-1: the framework, the shell and the login are not taken from their sibling checkouts:\n  {}", broken.join("\n  "));
+    let broken = breaks(&sources(&metadata()), PUBLISHED, ONE_RELEASE, &old_packages());
+    assert!(broken.is_empty(), "V2-47: the framework and the login are not taken by published version:\n  {}", broken.join("\n  "));
 
     for file in ["scripts/plexus-ui", "deploy/pipeline"] {
         let script = std::fs::read_to_string(root.join(file)).unwrap_or_else(|e| panic!("{file}: {e}"));
         let cargo_lines: Vec<String> =
             script.lines().enumerate().filter(|(_, l)| l.contains("cargo build")).map(|(n, l)| format!("{file}:{}: {}", n + 1, l.trim())).collect();
         assert!(
-            tool_build_line(&script).is_some(),
-            "FRAME-8: {file} does not build the tool from ../plexus-ui (`--manifest-path …/../plexus-ui/… -p plexus-ui-cli`); its cargo lines:\n  {}",
+            tool_build_line(&script).is_some() && script.contains("plexus-ui-src"),
+            "V2-47: {file} does not build the tool from the checkout scripts/plexus-ui-src names (`--manifest-path … -p plexus-ui-cli`, no ../plexus-ui); its cargo lines:\n  {}",
             cargo_lines.join("\n  ")
         );
     }
@@ -506,14 +536,13 @@ fn member_names(metadata: &Value) -> Vec<String> {
 #[test]
 fn menger_links_the_framework_and_nothing_of_its_own() {
     let root = root();
-    let parent = root.parent().expect("menger has a parent").to_path_buf();
     let metadata = metadata();
     let pkgs = packages(&metadata);
-    // The framework's service, the shell and the login, and the compiler
-    // (a dev-dependency: the ui tests compile natively), each from its
-    // sibling; the engine is in no graph of menger's — the tool builds it
-    // from its own checkout (`the_framework_is_a_sibling` holds the tool).
-    let mut broken = breaks(&pkgs, &parent, SIBLINGS, &old_packages());
+    // The framework's service, the login, and the compiler (a
+    // dev-dependency: the ui tests compile natively), each by published
+    // version; the engine is in no graph of menger's — the tool builds it
+    // from the framework's checkout (`the_framework_is_published` holds the tool).
+    let mut broken = breaks(&sources(&metadata), PUBLISHED, ONE_RELEASE, &old_packages());
     broken.extend(tenant_breaks(&pkgs, &member_names(&metadata), &root));
     assert!(broken.is_empty(), "FRAME-7: menger links the framework and holds nothing of it:\n  {}", broken.join("\n  "));
 }
@@ -622,10 +651,10 @@ fn the_docs_say_menger_is_a_tenant() {
         &docs,
         &[
             // README's "The services" is its "What v2 is".
-            ("README.md", "The services", &["../plexus-ui", "tenant"]),
-            ("AGENTS.md", "What v2 is", &["../plexus-ui", "tenant"]),
+            ("README.md", "The services", &["plexus-ui", "tenant", "by published version"]),
+            ("AGENTS.md", "What v2 is", &["plexus-ui", "tenant", "by published version"]),
             // The framework's tool and its contract, kept with its code.
-            ("AGENTS.md", "Adding a component", &["plexus-ui build", "plexus-ui push", "../plexus-ui/CONTRACT.md"]),
+            ("AGENTS.md", "Adding a component", &["plexus-ui build", "plexus-ui push", "CONTRACT.md"]),
         ],
     );
     // No path that left, named as menger's — the same walk as
@@ -651,22 +680,22 @@ fn names_in(dir: &Path) -> Vec<String> {
 #[test]
 fn no_script_of_mengers_duplicates_the_frameworks() {
     let root = root();
-    let theirs = names_in(&sibling("plexus-ui").join("scripts"));
-    assert!(theirs.iter().any(|n| n == "ui-compiler-wasm.sh"), "FRAME-7: ../plexus-ui/scripts holds no ui-compiler-wasm.sh: {theirs:?}");
-    let twins: Vec<String> = names_in(&root.join("scripts")).into_iter().filter(|n| theirs.contains(n)).map(|n| format!("scripts/{n} (../plexus-ui/scripts/{n} is the framework's)")).collect();
+    let theirs = names_in(&framework().join("scripts"));
+    assert!(theirs.iter().any(|n| n == "ui-compiler-wasm.sh"), "FRAME-7: the framework's scripts/ holds no ui-compiler-wasm.sh: {theirs:?}");
+    let twins: Vec<String> = names_in(&root.join("scripts")).into_iter().filter(|n| theirs.contains(n)).map(|n| format!("scripts/{n} (the framework's scripts/{n} is its own)")).collect();
     assert!(twins.is_empty(), "FRAME-7: menger keeps a copy of the framework's scripts:\n  {}", twins.join("\n  "));
     let pipeline = std::fs::read_to_string(root.join("deploy/pipeline")).expect("deploy/pipeline");
     let calls: Vec<(usize, &str)> = code_lines(&pipeline).into_iter().filter(|(_, l)| !l.trim_start().starts_with('#') && l.contains("ui-compiler-wasm.sh")).collect();
     assert!(
-        !calls.is_empty() && calls.iter().all(|(_, l)| l.contains("../plexus-ui/scripts/ui-compiler-wasm.sh")),
-        "FRAME-7: deploy/pipeline does not build the compiler module with ../plexus-ui/scripts/ui-compiler-wasm.sh; its lines naming the script: {calls:?}"
+        calls.iter().any(|(_, l)| l.contains("$PUI/scripts/ui-compiler-wasm.sh")) && calls.iter().all(|(_, l)| l.contains("scripts/ui-compiler-wasm.sh") && !l.contains("../plexus-ui")),
+        "FRAME-7, V2-47: deploy/pipeline does not build the compiler module with the framework checkout's ($PUI) scripts/ui-compiler-wasm.sh; its lines naming the script: {calls:?}"
     );
 }
 
 #[test]
 fn the_engines_test_lives_with_the_engine() {
     let root = root();
-    assert!(sibling("plexus-ui").join("tests/engine_browser.mjs").is_file(), "FRAME-7: ../plexus-ui/tests/engine_browser.mjs is missing — the engine's own smoke");
+    assert!(framework().join("tests/engine_browser.mjs").is_file(), "FRAME-7: the framework's tests/engine_browser.mjs is missing — the engine's own smoke");
     assert!(!root.join("tests/engine_browser.mjs").exists(), "FRAME-7: tests/engine_browser.mjs is the engine's test in menger; it lives with the engine (../plexus-ui's npm test)");
 }
 
@@ -691,23 +720,35 @@ fn the_checks_read_what_they_are_given() {
     assert_eq!(pkgs.len(), 6, "a package with no manifest path is skipped: {pkgs:?}");
     assert_eq!(pkgs[1], ("plexus-ui-compiler".to_string(), PathBuf::from("/w/plexus-ui/compiler")));
 
-    // Every sibling present and where it should be; an old name named.
-    assert!(breaks(&pkgs[..4], parent, SIBLINGS, &old_packages()).is_empty(), "the graph after FRAME-5");
-    assert_eq!(
-        breaks(&pkgs, parent, SIBLINGS, &old_packages()),
-        [
-            format!("{old_service}: an old name, still in the graph (/w/menger/ui-service)"),
-            format!("{old_engine}: an old name, still in the graph (/w/menger/ui-engine)"),
-        ]
-    );
-    assert!(!old_packages().contains(&"plexus-ui-service".to_string()) && old_packages().contains(&old_compiler));
+    // V2-47: every crate present and from crates.io, the framework's two at
+    // one version; an old name named.
+    let io = Some("registry+https://github.com/rust-lang/crates.io-index".to_string());
+    let src = |n: &str, v: &str, s: Option<String>| (n.to_string(), v.to_string(), s);
+    let good = [src("menger", "0.6.2", None), src("plexus-ui-compiler", "0.1.0", io.clone()), src("plexus-ui-service", "0.1.0", io.clone()), src("plexus-login", "0.2.3", io.clone())];
+    assert!(breaks(&good, PUBLISHED, ONE_RELEASE, &old_packages()).is_empty(), "the graph after V2-47");
+    let sparse = [src("plexus-login", "0.2.3", Some("sparse+https://index.crates.io/".into()))];
+    assert!(breaks(&sparse, &["plexus-login"], &[], &[]).is_empty(), "the sparse index is crates.io");
+    let mut old = good.to_vec();
+    old.push(src(&old_service, "0.6.2", None));
+    assert_eq!(breaks(&old, PUBLISHED, ONE_RELEASE, &old_packages()), [format!("{old_service}: an old name, still in the graph (0.6.2)")]);
+    assert!(!old_packages().contains(&"plexus-ui-service".to_string()) && old_packages().contains(&old_compiler) && old_packages().contains(&old_engine));
 
-    // Missing is named; a near sibling, a copy in menger and the registry's are not the sibling.
-    assert_eq!(breaks(&pkgs[..1], parent, &SIBLINGS[1..2], &[]), ["plexus-ui-service: not in the graph"]);
-    for elsewhere in ["/w/plexus-ui-old/service", "/w/menger/service", "/w/menger/plexus-login", "/home/u/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/plexus-ui-service-0.1.0"] {
-        let one = [("plexus-ui-service".to_string(), PathBuf::from(elsewhere)), ("plexus-login".to_string(), PathBuf::from(elsewhere))];
-        assert_eq!(breaks(&one, parent, &[SIBLINGS[1], SIBLINGS[2]], &[]).len(), 2, "{elsewhere} taken for a sibling");
-    }
+    // Missing is named; a path (a sibling's or menger's) and a git revision are not a published version;
+    // the two framework crates at two versions are two releases.
+    assert_eq!(breaks(&good[..1], &["plexus-ui-service"], &[], &[]), ["plexus-ui-service: not in the graph"]);
+    let path = [src("plexus-ui-service", "0.1.0", None), src("plexus-login", "0.2.2", None)];
+    assert_eq!(
+        breaks(&path, &["plexus-ui-service", "plexus-login"], &[], &[]),
+        ["plexus-ui-service 0.1.0: by path, not by published version", "plexus-login 0.2.2: by path, not by published version"]
+    );
+    let git = [src("plexus-login", "0.2.3", Some("git+https://github.com/hypermemetic-ai/plexus-login?rev=23b9e2c8#23b9e2c8".into()))];
+    assert_eq!(breaks(&git, &["plexus-login"], &[], &[]).len(), 1, "a git revision taken for a published version");
+    let split = [src("plexus-ui-compiler", "0.1.0", io.clone()), src("plexus-ui-service", "0.1.1", io.clone())];
+    assert_eq!(breaks(&split, ONE_RELEASE, ONE_RELEASE, &[]), ["[\"plexus-ui-compiler\", \"plexus-ui-service\"] at [\"0.1.0\", \"0.1.1\"]: one release, one version"]);
+    // And the real graph's sources: menger by path, plexus-core from crates.io.
+    let real = sources(&metadata());
+    assert!(real.iter().any(|(n, _, s)| n == "menger" && s.is_none()) && real.iter().any(|(n, _, s)| n == "plexus-core" && s.as_deref().is_some_and(from_crates_io)));
+    let _ = (parent, &pkgs);
 
     // The manifest reader: members over lines, `path =` values, comments ignored.
     let text = "[workspace]\n# members = [\"commented\"]\nmembers = [\".\", \"a\",\n  \"ui-service\"]\n\
@@ -723,11 +764,12 @@ fn the_checks_read_what_they_are_given() {
     // And the real graph: menger itself is where it is.
     assert_eq!(packages(&metadata()).iter().filter(|(n, _)| n == "menger").map(|(_, d)| d.clone()).collect::<Vec<_>>(), [root]);
 
-    // The tool's build line.
-    let script = "x\n  cargo build --quiet --manifest-path \"$root/../plexus-ui/Cargo.toml\" -p plexus-ui-cli --target-dir \"$target\"\n";
+    // The tool's build line: from the checkout plexus-ui-src names, never ../plexus-ui.
+    let script = "x\n  cargo build --quiet --manifest-path \"$src/Cargo.toml\" -p plexus-ui-cli --target-dir \"$target\"\n";
     assert_eq!(tool_build_line(script).map(|(n, _)| n), Some(2));
     assert!(tool_build_line("cargo build -p plexus-ui-cli\n").is_none());
-    assert!(tool_build_line("cargo build --manifest-path ../plexus-ui/Cargo.toml -p plexus-ui-compiler\n").is_none());
+    assert!(tool_build_line("cargo build --manifest-path \"$root/../plexus-ui/Cargo.toml\" -p plexus-ui-cli\n").is_none(), "the sibling's working tree");
+    assert!(tool_build_line("cargo build --manifest-path $PUI/Cargo.toml -p plexus-ui-compiler\n").is_none());
 
     // The builders of ui-sign.
     let mjs = "  run(\"cargo\", [\"build\", \"--manifest-path\", path.join(REPO, \"../plexus-ui/Cargo.toml\"), \"-p\", \"plexus-ui-service\", \"--bin\", \"ui-sign\"]);\nx\n  run(\"cargo\", [\"build\", \"-p\", \"OLD\", \"--bin\", \"ui-sign\"]);\nnode deploy/ui-sign.mjs\n";
@@ -928,17 +970,17 @@ fn tether_check_reads_what_it_is_given() {
 
 // ── FRAME-6: the binary ────────────────────────────────────────────────────
 
-/// `cargo metadata` of the sibling `../plexus-ui`'s workspace, its members
-/// alone (each with the dependencies its manifest declares), offline.
+/// `cargo metadata` of the framework checkout's workspace (`framework()`),
+/// its members alone (each with the dependencies its manifest declares), offline.
 fn framework_metadata() -> Result<Value, String> {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     let out = Command::new(cargo)
         .args(["metadata", "--format-version", "1", "--no-deps", "--offline", "--manifest-path"])
-        .arg(sibling("plexus-ui").join("Cargo.toml"))
+        .arg(framework().join("Cargo.toml"))
         .output()
         .map_err(|e| format!("cargo metadata: {e}"))?;
     if !out.status.success() {
-        return Err(format!("cargo metadata of ../plexus-ui failed:\n{}", String::from_utf8_lossy(&out.stderr)));
+        return Err(format!("cargo metadata of the framework's checkout failed:\n{}", String::from_utf8_lossy(&out.stderr)));
     }
     serde_json::from_slice(&out.stdout).map_err(|e| format!("cargo metadata answers JSON: {e}"))
 }
@@ -1015,7 +1057,7 @@ fn the_binary_is_the_frameworks() {
 
     // Then the real graphs.
     let theirs = framework_metadata();
-    let broken = binary_breaks(&metadata(), theirs.as_ref().map_err(String::as_str), &root(), &canonical(&sibling("plexus-ui")));
+    let broken = binary_breaks(&metadata(), theirs.as_ref().map_err(String::as_str), &root(), &framework());
     assert!(broken.is_empty(), "FRAME-6: the plexus-ui binary is the framework's, and serves:\n  {}", broken.join("\n  "));
 }
 

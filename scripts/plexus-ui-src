@@ -63,12 +63,17 @@ repo=${PLEXUS_UI_REPO:-https://github.com/hypermemetic-ai/plexus-ui}
 dir=${PLEXUS_UI_CHECKOUTS:-$HOME/.cache/plexus-ui}/$tag
 if [[ ! -e $dir ]]; then
   mkdir -p "$(dirname "$dir")"
-  tmp=$(mktemp -d "$dir.XXXXXX")
-  say "cloning $tag from $repo"
-  git clone --quiet --depth 1 --branch "$tag" "$repo" "$tmp/plexus-ui" >&2 || die "no tag $tag at $repo (plexus-ui-service $ver, $tree/Cargo.lock)"
-  # a racing clone of the same tag leaves the first in place
-  mv -T "$tmp/plexus-ui" "$dir" 2>/dev/null || true
-  rmdir "$tmp" 2>/dev/null || true
+  # one clone at a time (parallel tests ask at once): the first clones, the rest find it there
+  exec 9>"$(dirname "$dir")/.$tag.lock"
+  flock 9
+  if [[ ! -e $dir ]]; then
+    tmp=$(mktemp -d "$dir.XXXXXX")
+    say "cloning $tag from $repo"
+    git clone --quiet --depth 1 --branch "$tag" "$repo" "$tmp/plexus-ui" >&2 || { rmdir "$tmp" 2>/dev/null; die "no tag $tag at $repo (plexus-ui-service $ver, $tree/Cargo.lock)"; }
+    mv -T "$tmp/plexus-ui" "$dir"
+    rmdir "$tmp"
+  fi
+  exec 9>&-
 fi
 want=$(git -C "$dir" rev-parse --verify --quiet "refs/tags/$tag^{commit}") || die "$dir holds no tag $tag"
 have=$(git -C "$dir" rev-parse HEAD)
