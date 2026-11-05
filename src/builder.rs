@@ -535,6 +535,7 @@ where
     purge_daily(Arc::clone(&store), Arc::clone(&system));
     // ACCESS-24: grants planted while open, gone before anything is served.
     purge_planted(&store, &system, &access.admins()).await?;
+    personal_orgs(&store, &system, &access.admins()).await?;
     // IDENTITY-21: the members that decide, from the same store.
     access.attach_with(Arc::clone(&store), system);
     // UI-7: the activation registered as `tickets` is the caller's to make
@@ -652,6 +653,19 @@ async fn purge_planted(store: &Store, system: &System, admins: &[String]) -> any
             tracing::info!("ACCESS-24: grants planted while open purged — {} removed, {} kept (recorded in open_purge)", removed.len(), kept.len());
         }
         Err(e) => anyhow::bail!("ACCESS-24: the purge of grants planted while open failed ({e}); refusing to serve them"),
+    }
+    Ok(())
+}
+
+/// V2-41: every person accepted — holding a grant, or an `--admin` — given
+/// an organization of their own when they have none
+/// ([`Store::ensure_personal_orgs`]); the first start of this build is the
+/// backfill. One that fails stops the start, as any write at open does.
+async fn personal_orgs(store: &Store, system: &System, admins: &[String]) -> anyhow::Result<()> {
+    match store.ensure_personal_orgs(system, admins).await {
+        Ok(made) if made.is_empty() => {}
+        Ok(made) => tracing::info!("V2-41: {} personal organization(s) made for people accepted before: {}", made.len(), made.iter().map(|o| o.as_str()).collect::<Vec<_>>().join(", ")),
+        Err(e) => anyhow::bail!("V2-41: the personal organizations could not be made ({e})"),
     }
     Ok(())
 }

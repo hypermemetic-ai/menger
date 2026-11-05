@@ -722,6 +722,27 @@
     return true;
   }
 
+  // EDITOR-13: the editor's commands are declared to the engine (FRAME-36's bus.keys), which takes
+  // the press at the window before anything else — CodeMirror, the page, the browser — hears it, in
+  // every focus; from there each is dispatched into CodeMirror when the caret is in it. So ctrl+s
+  // saves whatever has focus (the browser's save dialog never opens), ctrl+b / ctrl+i / ctrl+k are
+  // never the browser's bookmarks or address bar, and ctrl+k off the text is the palette's jump.
+  // `meta+` twins are CodeMirror's `Mod-` on macOS. Plain keys (the arrows, escape, typing) stay
+  // CodeMirror's own keymap.
+  const inText = () => (view?.hasFocus ? view : null);
+  const save = () => { flush(); flushTitle(); };
+  const inEditor = (run) => () => { const v = inText(); if (v) run(v); };
+  const link = () => { const v = inText(); if (v) linkKey(v); else b.emit("palette.open", {}); };
+  const commands = {};
+  for (const mod of ["ctrl", "meta"]) {
+    commands[`${mod}+s`] = { to: save, label: "save now", only: true };
+    commands[`${mod}+b`] = { to: inEditor(wrapWith("**")), label: "bold" };
+    commands[`${mod}+i`] = { to: inEditor(wrapWith("*")), label: "italic" };
+    commands[`${mod}+k`] = { to: link, label: "a link (in the text; elsewhere, jump to a ticket)", only: true };
+    commands[`${mod}+enter`] = { to: inEditor(() => openAsk()), label: "ask an agent about the selection" };
+  }
+  b.keys(commands);
+
   // ── EDITOR-5, EDITOR-10: anything from outside ───────────────────────────
   // A file of any kind and size, a URL alone, pasted HTML, an image from another tab: media-ingest's,
   // kept for the doc (V2-29) or the ticket this surface writes.
@@ -831,11 +852,7 @@
           isDoc ? keymap.of(yUndoManagerKeymap) : [],
           isDoc ? threadMarks : [],
           keymap.of([
-            { key: "Mod-s", run: () => { flush(); return true; } },
-            { key: "Mod-Enter", run: openAsk },
-            { key: "Mod-b", run: wrapWith("**") },
-            { key: "Mod-i", run: wrapWith("*") },
-            { key: "Mod-k", run: linkKey },
+            // EDITOR-13: no modified key here — save, bold, italic, a link and ask are the engine's (`commands`).
             { key: "ArrowDown", run: (v) => vertical(v, true) },
             { key: "ArrowUp", run: (v) => vertical(v, false) },
             { key: "Escape", run: (v) => { v.contentDOM.blur(); return true; } },

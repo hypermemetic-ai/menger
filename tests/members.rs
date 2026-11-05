@@ -227,7 +227,9 @@ async fn a_member_sees_and_changes_only_what_their_roles_cover() {
     // ORG-4: refused by the ticket as written — the same words for one out
     // of reach as for none; held on IDENTITY in its organization.
     assert_eq!(refused(&no), ("tickets.amend".to_string(), "OUGHT-2".to_string()), "AUTH-7: was \"needs editor on OUGHT\"");
-    assert_eq!(no[0]["held_on"], json!(["hypermemetic:IDENTITY"]), "{no:?}");
+    // V2-41: and in her own organization, made with her first grant.
+    let home = menger_tickets_api::store::personal_name(&format!("idp:{ALICE}"), 10);
+    assert_eq!(no[0]["held_on"], json!(["hypermemetic:IDENTITY", format!("{home}:")]), "{no:?}");
     assert_eq!(call(&alice, "tickets.set_status", json!({ "id": "PLEXUS-2", "status": "Ready" })).await[0]["type"], "error");
     assert_eq!(call(&alice, "tickets.create", json!({ "epic": "IDENTITY", "title": "new", "parent": "IDENTITY-1" })).await[0]["type"], "created");
     assert_eq!(call(&alice, "tickets.create", json!({ "epic": "OUGHT", "title": "no" })).await[0]["type"], "error");
@@ -240,7 +242,7 @@ async fn a_member_sees_and_changes_only_what_their_roles_cover() {
     assert_eq!(seen, set(&["PLEXUS-1", "PLEXUS-2", "IDENTITY-1", "IDENTITY-2", "IDENTITY-3"]));
     let mine = call(&alice, "members.mine", json!({})).await;
     assert_eq!(mine[0]["type"], "me");
-    assert_eq!(mine.len(), 3, "me, then IDENTITY editor and PLEXUS viewer: {mine:?}");
+    assert_eq!(mine.len(), 4, "me, then IDENTITY editor, PLEXUS viewer and (V2-41) editor in her own: {mine:?}");
 }
 
 /// NOTE-2 under login: a note is on no shortcode, so any member's — added,
@@ -385,15 +387,16 @@ async fn a_watch_follows_the_grants_as_they_stand_and_ends_when_nothing_is_left(
     assert_eq!((amended(&heard), ended), (vec!["IDENTITY-2".to_string()], false), "{heard:?}");
     assert!(!heard.iter().any(|e| e.to_string().contains("secret")), "{heard:?}");
 
-    // Nothing left: it ends, in band.
+    // Nothing left but his own organization (V2-41: a person accepted keeps
+    // it): IDENTITY leaves, the watch stays, nothing of it is heard. An
+    // agent left with nothing is ended typed (access::tests, as a key).
     call(&ada, "members.revoke", json!({ "principal": format!("idp:{BOB}"), "scope": "IDENTITY" })).await;
     call(&ada, "tickets.amend", json!({ "id": "IDENTITY-2", "title": "gone" })).await;
     let (heard, ended) = drain(&mut watch, Duration::from_millis(800)).await;
-    assert!(ended, "the watch ends: {heard:?}");
+    assert!(!ended, "his own organization is still his: {heard:?}");
     assert!(amended(&heard).is_empty(), "{heard:?}");
-    assert!(heard.last().unwrap()["message"].as_str().unwrap().contains("your access changed"), "{heard:?}");
-    // ACCESS-12: typed — the reason beside the words.
-    assert_eq!((heard.last().unwrap()["type"].as_str(), heard.last().unwrap()["reason"].as_str()), (Some("watch_closed"), Some("revoked")), "{heard:?}");
+    let left: Vec<&str> = heard.iter().filter(|e| e["type"] == "left").filter_map(|e| e["id"].as_str()).collect();
+    assert_eq!(left, ["IDENTITY-1", "IDENTITY-2"], "{heard:?}");
 }
 
 /// ACCESS-12's acceptance: a viewer's watches (tickets, a filtered
@@ -447,14 +450,14 @@ async fn a_revoke_stops_a_watch_at_once_and_a_regrant_resumes_it() {
     let (heard, _) = drain(&mut watch, Duration::from_millis(400)).await;
     assert_eq!(typed(&heard, "created"), ["OUGHT-5"], "{heard:?}");
 
-    // Every grant revoked: each watch ends at once, typed.
+    // Every grant revoked but his own organization's (V2-41): each watch
+    // hears what left at once, and stays.
     call(&ada, "members.revoke", json!({ "principal": format!("idp:{BOB}"), "scope": "OUGHT" })).await;
     call(&ada, "members.revoke", json!({ "principal": format!("idp:{BOB}"), "scope": "IDENTITY" })).await;
     for w in [&mut watch, &mut builds] {
         let (heard, ended) = drain(w, Duration::from_millis(600)).await;
-        assert!(ended, "{heard:?}");
-        let last = heard.last().unwrap();
-        assert_eq!((last["type"].as_str(), last["reason"].as_str()), (Some("watch_closed"), Some("revoked")), "{heard:?}");
+        assert!(!ended, "{heard:?}");
+        assert!(!typed(&heard, "left").is_empty(), "{heard:?}");
     }
 }
 
@@ -566,8 +569,9 @@ async fn org_4_a_reader_of_one_org_sees_nothing_of_the_other() {
 
     let bob = as_(&w, BOB, "bob").await;
     let orgs: Vec<String> = call(&bob, "orgs.list", json!({})).await.iter().filter_map(|e| e["org"]["name"].as_str().map(str::to_string)).collect();
-    assert_eq!(orgs, ["acme"], "Bob holds a role in acme alone");
-    // No --org: Bob's only organization — and acme has a root MENGER of its own.
+    let home = menger_tickets_api::store::personal_name(&format!("idp:{BOB}"), 10).to_string();
+    assert_eq!(orgs, ["acme".to_string(), home], "Bob holds a role in acme, and his own (V2-41)");
+    // No --org: Bob's only shared organization — and acme has a root MENGER of its own.
     let root = call(&bob, "tickets.create", json!({ "epic": "MENGER", "title": "acme's menger", "kind": "scope" })).await;
     assert_eq!(root[0]["ticket"]["address"], "acme:MENGER-1", "{root:?}");
     let build = call(&bob, "tickets.create", json!({ "epic": "acme:MENGER", "title": "acme's build" })).await;
@@ -814,8 +818,10 @@ async fn access_22_a_team_s_members_hold_what_it_holds() {
     assert_eq!(ids(&call(&alice, "tickets.list", json!({})).await), set(&["OUGHT-1", "OUGHT-2"]));
     let mine = call(&alice, "members.mine", json!({})).await;
     let kinds: Vec<&str> = mine.iter().filter_map(|e| e["type"].as_str()).collect();
-    assert_eq!(kinds, ["me", "team", "grant"], "{mine:?}");
-    assert_eq!((mine[1]["team"]["name"].as_str(), mine[2]["grant"]["principal"].as_str()), (Some("crew"), Some("team:crew")));
+    // V2-41: and her editor in her own organization, made as the team took her.
+    assert_eq!(kinds, ["me", "team", "grant", "grant"], "{mine:?}");
+    assert_eq!((mine[1]["team"]["name"].as_str(), mine[3]["grant"]["principal"].as_str()), (Some("crew"), Some("team:crew")));
+    assert_eq!(mine[2]["grant"]["granted_by"], "personal-org", "{mine:?}");
     let shown = call(&ada, "members.teams.show", json!({ "team": "crew" })).await;
     let kinds: Vec<&str> = shown.iter().filter_map(|e| e["type"].as_str()).collect();
     assert_eq!(kinds, ["team", "team_member", "grant"], "{shown:?}");
@@ -951,4 +957,34 @@ async fn access_57_everyone_s_grant_reaches_a_principal_holding_nothing_of_their
     let gone = call(&ada, "members.revoke", json!({ "everyone": true, "scope": "IDENTITY" })).await;
     assert_eq!((gone[0]["type"].clone(), gone[0]["existed"].clone()), (json!("revoked"), json!(true)), "{gone:?}");
     assert_eq!(call(&bob, "tickets.list", json!({})).await[0]["type"], "error", "nothing again");
+}
+
+/// V2-41: a person accepted has an organization of their own — made with
+/// their first grant, named by their principal, theirs to file in as editor,
+/// and theirs for good: their editor there is not revoked, nor it deleted.
+#[tokio::test]
+async fn an_accepted_person_has_an_organization_of_their_own() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    tickets(&ada).await;
+    let bob = as_(&w, BOB, "bob").await;
+    let me = format!("idp:{BOB}");
+    let home = menger_tickets_api::store::personal_name(&me, 10).to_string();
+    let named = |orgs: &[Value]| orgs.iter().find(|o| o["org"]["name"] == home.as_str()).cloned();
+    assert!(named(&call(&ada, "orgs.list", json!({})).await).is_none(), "waiting: none yet");
+
+    assert_eq!(call(&ada, "members.grant", grant(BOB, "OUGHT", "viewer")).await[0]["type"], "grant");
+    let mine = named(&call(&bob, "orgs.list", json!({})).await).expect("his own, in his list");
+    assert_eq!(mine["org"]["owner"], me.as_str());
+    let made = call(&bob, "tickets.create", json!({ "epic": format!("{home}:NOTES"), "kind": "scope", "title": "notes" })).await;
+    assert_eq!(made[0]["type"], "created", "editor in it roots a shortcode: {made:?}");
+
+    let no = call(&ada, "members.revoke", json!({ "principal": me, "scope": format!("{home}:") })).await;
+    assert!(no[0]["message"].as_str().is_some_and(|m| m.contains("always editor")), "{no:?}");
+    let no = call(&ada, "orgs.delete", json!({ "name": home })).await;
+    assert!(no[0]["message"].as_str().is_some_and(|m| m.contains("never deleted")), "{no:?}");
+    // A second grant makes no second one.
+    call(&ada, "members.grant", grant(BOB, "IDENTITY", "viewer")).await;
+    let owned = call(&ada, "orgs.list", json!({})).await.iter().filter(|o| o["org"]["owner"] == me.as_str()).count();
+    assert_eq!(owned, 1);
 }

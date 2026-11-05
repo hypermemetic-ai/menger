@@ -428,7 +428,7 @@ whole. synapse `-j` prints the `rows` event as one line (SYNAPSE-36).
 | `members requests` | | who signed in holding nothing (admin of `*`) |
 | `members pairing` | `--code` | the machines waiting on a pairing code (TETHER-12) |
 | `members teams list` · `show` · `create` · `rename` · `delete` · `add` · `remove` | `[--org]` · `--team` · `--name [--org]` · `--team --to` · `--team` · `--team --principal` · `--team --principal` | teams (ACCESS-22) |
-| `orgs list` · `create` · `rename` · `delete` | — · `--name [--admin]` · `--name --to` · `--name` | organizations (ORG-4) |
+| `orgs list` · `create` · `rename` · `delete` | — · `--name [--admin]` · `--name --to` · `--name` | organizations (ORG-4); each person's own, its `owner` (V2-41) |
 | `session whoami` · `providers` · `login` · `logout` | — · — · `[--ttl-secs] [--scope]` · — | the connection's identity; an agent's session |
 | `auth providers` · `login` · `signup` · `whoami` · `logout` · `requires` | — · `--flow` · `[--via]` · — · — · `--method` | the door (AUTH-7) |
 | `auth roles` · `role_set` · `grant` · `revoke` · `waiting` | — · `--role --grants` · `--principal --role --scope` · `--principal --scope [--role]` · — | roles and grants (admin) |
@@ -933,7 +933,26 @@ shortcode (ORG-5): `create --kind scope --epic NEW --parent X`.
 
 Every ticket and shortcode is in one organization (`hypermemetic`).
 `orgs create --name N --admin P` (admin on `*`), `rename` (the old name an
-alias), `delete` (only empty). A grant's scope is `*`, `org:`, a shortcode
+alias), `delete` (only empty).
+
+**A person's own organization** (V2-41; owner, 2026-11-04: "users can join
+other orgs but they always have their personal org, and they are always
+editor inside it"). The write that accepts a person — their first grant, by
+name (`members grant`, `auth grant`, `orgs create --admin`), through a team,
+or being added to a team that holds one — also makes theirs, in the same
+transaction: `u-` and the first 10 hex of the SHA-256 of their principal
+(`u-3f9a02c1d4`; longer if taken), their `editor` on it signed
+`personal-org`, and `orgs list` naming them its `owner`. A person is an
+`idp`, `oidc` or `nostr` principal; an agent's `key` gets none. In it they
+stay editor: a grant to them there below editor is refused, a revoke of
+their editor refused, of their admin puts editor back; it is renamed like
+any, never deleted. So a person once accepted always holds a grant, and never
+waits again. It is named, never defaulted to: a `tickets create` of a new
+shortcode or a `teams create` with no `--org` goes to the caller's one
+organization that is no person's own (`--epic u-3f9a02c1d4:NOTES` or `--org`
+files in theirs). Every start gives one to each person who holds a grant (or is an
+`--admin`) and has none — the first start of this build is the backfill
+(`tickets-api/src/store/personal.rs`). A grant's scope is `*`, `org:`, a shortcode
 (`org:SHORTCODE`, with those hosted under it), a ticket alone (`MNG-40`) or
 a subtree (`under MNG-40`, ACCESS-21). A reader sees only the organizations
 it holds a role in.

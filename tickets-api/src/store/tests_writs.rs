@@ -204,5 +204,6 @@ async fn a_grant_takes_admin_on_its_scope() {
     assert!(mismatched(&s.grant(AdminOf::for_tests(scope(&s, "OTHER")), g(&open)).await.unwrap_err()));
     let admin = holding(Role::Admin, &["OPEN"]).admin_of(&open, &s).unwrap();
     s.grant(admin, g(&open)).await.unwrap();
-    assert_eq!(s.grants_of(SYS, SOMEONE).len(), 1);
+    // V2-41: and their editor in their own organization, made with it.
+    assert_eq!(s.grants_of(SYS, SOMEONE).len(), 2);
 }

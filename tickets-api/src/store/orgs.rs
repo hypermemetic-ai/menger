@@ -33,7 +33,8 @@
 //! name, and every grant on the org is rewritten in the same transaction.
 //! **Deleted** ([`Store::delete_org`]): refused while it holds a shortcode
 //! — a ticket, or a deleted one's tombstone, which `undelete` can bring
-//! back — and never the first; its grants and aliases go with it.
+//! back — and never the first; its grants and aliases go with it. V2-41:
+//! nor a person's own ([`super::personal`]), which is never deleted.
 
 use super::shortcodes::{Entry, Found, OrgReach, Registry};
 use super::*;
@@ -89,7 +90,7 @@ impl Registry {
 
     /// Why `name` cannot be a new organization's name, if it cannot: an
     /// organization has it, or had it (it still names that one).
-    fn taken_name(&self, name: &OrgId) -> Option<String> {
+    pub(super) fn taken_name(&self, name: &OrgId) -> Option<String> {
         if self.orgs.values().any(|o| o == name) {
             return Some(format!("an organization `{name}` is already there: an organization's name is unique (nothing was changed)"));
         }
@@ -117,7 +118,8 @@ fn org_card(cache: &Cache, row: i64, org: &OrgId) -> Org {
             roots.push(e.address.clone());
         }
     }
-    Org { name: org.clone(), aliases: r.aliases_of(row), roots, shortcodes, tickets: tickets.min(u64::from(u32::MAX)) as u32 }
+    let owner = r.owners.get(&row).and_then(|p| p.parse().ok());
+    Org { name: org.clone(), aliases: r.aliases_of(row), roots, shortcodes, tickets: tickets.min(u64::from(u32::MAX)) as u32, owner }
 }
 
 /// A grant's scope moved from `old:` to `new:` — `None` for a scope not in
@@ -202,7 +204,14 @@ impl Store {
             granted_by: by,
             at: chrono::Utc::now().timestamp(),
         });
-        let (name, stored, kept) = (org.clone(), grant.clone(), grant.clone());
+        // V2-41: an admin named who is a person with no organization of their
+        // own is accepted here — theirs is made beside this one.
+        let making = {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            let who = grant.as_ref().map(|g| personal::reached(&cache, &g.principal)).unwrap_or_default();
+            personal::plan(&cache, who, row + 1, std::slice::from_ref(&org))
+        };
+        let (name, stored, kept, mine) = (org.clone(), grant.clone(), grant.clone(), making.clone());
         // ORG-13: the row its first epic takes (ensure_eras inserts it next).
         let era_born = {
             let cache = self.tickets.read().expect("store lock poisoned");
@@ -218,9 +227,9 @@ impl Store {
                 if let Some(g) = &stored {
                     members::store(tx, g)?;
                 }
-                Ok(())
+                Ok(personal::keep(tx, &mine)?)
             },
-            move |cache, ()| {
+            move |cache, made| {
                 cache.shortcodes.orgs.insert(row, org.clone());
                 if let Some((id, era)) = era_born.clone() {
                     cache.shortcodes.eras.insert(id, era);
@@ -228,9 +237,10 @@ impl Store {
                 if let Some(g) = kept {
                     cache.members.put(g);
                 }
+                personal::put(cache, making, made);
                 org_card(cache, row, &org)
             },
-            move |(), org, _| (org, grant),
+            move |_, org, _| (org, grant),
         )
         .await
     }
@@ -333,6 +343,10 @@ impl Store {
                 return Err(StoreError::Invalid(format!(
                     "{org} is the first organization — where every shortcode nobody placed is — and is not deleted (nothing was changed)"
                 )));
+            }
+            // V2-41: a person's own organization is theirs for good.
+            if let Some(owner) = r.owners.get(&row) {
+                return Err(StoreError::Invalid(format!("{org} is {owner}'s own organization and is never deleted (nothing was changed)")));
             }
             let held: Vec<&Entry> = r.in_org(&org).collect();
             if !held.is_empty() {

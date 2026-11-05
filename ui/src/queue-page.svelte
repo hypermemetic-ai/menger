@@ -68,10 +68,14 @@
       if (a.ok) asking = null;
     });
   }
-  function typed(ev) {
-    if (ev.key === "Enter" && ev.ctrlKey) send(ev);
-    if (ev.key === "Escape") asking = null;
-  }
+  // EDITOR-13: the open request's keys are the engine's, bound while it is open.
+  $effect(() => {
+    if (asking == null) return;
+    return b.keys({
+      "ctrl+enter": { to: () => send(), label: "send the change request", in_inputs: true, only: true },
+      escape: { to: () => (asking = null), label: "close the change request", in_inputs: true, only: true },
+    });
+  });
   b.keys({
     j: { to: () => (at = Math.min(at + 1, rows.length - 1)), label: "next in the queue" },
     k: { to: () => (at = Math.max(at - 1, 0)), label: "previous in the queue" },
@@ -118,7 +122,7 @@
         </div>
         {#if asking === r.id}
           <form class="q-changes" data-form="tickets.request_changes" bind:this={form} onsubmit={send}>
-            <textarea class="q-in" name="body" rows="2" spellcheck="false" placeholder="what to change" aria-label="what to change" bind:value={words} onkeydown={typed}></textarea>
+            <textarea class="q-in" name="body" rows="2" spellcheck="false" placeholder="what to change" aria-label="what to change" bind:value={words}></textarea>
             <button class="q-act" data-idle={words.trim() === "" ? "true" : "false"}>send</button>
           </form>
         {/if}
