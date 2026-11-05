@@ -22,11 +22,16 @@ const ALICE: &str = "idp:c952acd3-60aa-4534-b2e3-83634591fee1";
 
 /// Alice's identity, stamped with her principal as every adapter stamps it.
 fn ctx(meta: serde_json::Value) -> AuthContext {
+    ctx_of(ALICE, meta)
+}
+
+/// `principal`'s identity, stamped the same way.
+fn ctx_of(principal: &str, meta: serde_json::Value) -> AuthContext {
     let mut meta = meta;
     if let Some(m) = meta.as_object_mut() {
-        m.entry("principal").or_insert(ALICE.into());
+        m.entry("principal").or_insert(principal.into());
     }
-    AuthContext::new(ALICE.into(), "s".into(), vec![], meta)
+    AuthContext::new(principal.into(), "s".into(), vec![], meta)
 }
 
 fn grant(principal: &str, scope: &str, role: Role) -> Grant {
@@ -130,11 +135,13 @@ async fn reads_are_anded_with_where_the_grant_is_held() {
     a.attach(s);
     let me = ctx(json!({}));
     let c = a.verify_call(Some(&me), &reach_of(&a, &me, "tickets.list")).unwrap();
-    // The language's canonical spelling of (under IDENTITY or under OUGHT).
-    assert_eq!(c.scoped(None).unwrap().unwrap().format(), "under in (IDENTITY, OUGHT)");
-    assert_eq!(c.scoped(Some("status Ready")).unwrap().unwrap().format(), "status Ready and under in (IDENTITY, OUGHT)");
-    // set_status is held on IDENTITY alone.
-    assert_eq!(c.filter_for(&GateGrant::new("tickets.set_status")).unwrap().unwrap().format(), "under IDENTITY");
+    // The language's canonical spelling of (under IDENTITY or under OUGHT)
+    // — V2-41: or in her own organization, made with her first grant.
+    let home = crate::store::personal_name(ALICE, 10);
+    assert_eq!(c.scoped(None).unwrap().unwrap().format(), format!("under in (IDENTITY, OUGHT, {home}:)"));
+    assert_eq!(c.scoped(Some("status Ready")).unwrap().unwrap().format(), format!("status Ready and under in (IDENTITY, OUGHT, {home}:)"));
+    // set_status is held on IDENTITY, and in her own organization.
+    assert_eq!(c.filter_for(&GateGrant::new("tickets.set_status")).unwrap().unwrap().format(), format!("under in (IDENTITY, {home}:)"));
     assert!(a.waiting().is_empty(), "a member does not wait");
 }
 
@@ -546,7 +553,8 @@ async fn team_grants_add_to_direct_ones() {
     assert!(u.permit::<Editor>(&t("IDENTITY-2"), &s).is_ok(), "the team's grant");
     assert!(u.permit::<Viewer>(&t("OUGHT-2"), &s).is_ok(), "and still the direct one");
     assert!(u.permit::<Editor>(&t("OUGHT-2"), &s).is_err(), "each at its own role");
-    assert_eq!(u.reach().grants().len(), 2);
+    // V2-41: and her editor in her own organization.
+    assert_eq!(u.reach().grants().len(), 3);
     assert!(s.remove_from_team(SYS, &crew, &alice()).await.unwrap());
     assert!(a.verify_now(&me).unwrap().permit::<Viewer>(&t("IDENTITY-2"), &s).is_err(), "left the team");
 }
@@ -719,13 +727,15 @@ async fn wakes(f: &mut Following, ms: u64) -> bool {
     tokio::time::timeout(std::time::Duration::from_millis(ms), f.changed()).await.is_ok()
 }
 
+/// V2-41: as an agent's key — a person keeps their own organization, so
+/// never has every grant revoked.
 #[tokio::test]
 async fn a_followed_caller_is_verified_again_only_when_the_grants_move() {
     let a = login(vec![]);
     let s = store().await;
-    s.grant(SYS, grant(ALICE, "OUGHT", Role::Viewer)).await.unwrap();
+    s.grant(SYS, grant(KEY_AGENT, "OUGHT", Role::Viewer)).await.unwrap();
     a.attach(s.clone());
-    let me = ctx(json!({}));
+    let me = ctx_of(KEY_AGENT, json!({}));
     let mut f = Following::open(&a, &s, Some(&me), &reach_of(&a, &me, "tickets.list")).unwrap();
     // Nothing moved: no wake, the same caller.
     assert!(!wakes(&mut f, 50).await);
@@ -734,7 +744,7 @@ async fn a_followed_caller_is_verified_again_only_when_the_grants_move() {
     s.amend(SYS.permit("OUGHT-2"), Some("t".into()), None).await.unwrap();
     assert!(!wakes(&mut f, 50).await);
     // A grant: woken, verified again, the reach moved.
-    s.grant(SYS, grant(ALICE, "IDENTITY", Role::Viewer)).await.unwrap();
+    s.grant(SYS, grant(KEY_AGENT, "IDENTITY", Role::Viewer)).await.unwrap();
     assert!(wakes(&mut f, 500).await, "a grant wakes the watch");
     assert!(matches!(f.again(), Ok(Followed::Moved { .. })));
     assert_eq!(f.user().reach_filter().unwrap().unwrap().format(), "under in (IDENTITY, OUGHT)");
@@ -745,8 +755,8 @@ async fn a_followed_caller_is_verified_again_only_when_the_grants_move() {
     assert!(wakes(&mut f, 500).await);
     assert!(matches!(f.again(), Ok(Followed::Same)), "the same reach: nothing to recompute");
     // Every grant revoked: the watch ends, typed.
-    s.revoke(SYS, ALICE.parse().unwrap(), kept_scope("OUGHT")).await.unwrap();
-    s.revoke(SYS, ALICE.parse().unwrap(), kept_scope("IDENTITY")).await.unwrap();
+    s.revoke(SYS, KEY_AGENT.parse().unwrap(), kept_scope("OUGHT")).await.unwrap();
+    s.revoke(SYS, KEY_AGENT.parse().unwrap(), kept_scope("IDENTITY")).await.unwrap();
     assert!(wakes(&mut f, 500).await);
     let closed = f.again().unwrap_err();
     assert_eq!(closed.reason, crate::types::WatchEnd::Revoked, "{closed:?}");
@@ -794,7 +804,9 @@ async fn access_21_a_ticket_alone_or_its_subtree_and_the_grant_follows_it() {
     let u = a.verify_now(&ctx(json!({}))).unwrap();
     assert_eq!(permitted(&u, &s), ["PLEXUS-2"], "not its parent, not its child");
     assert_eq!(readable(&u, &s), ["PLEXUS-2"]);
-    assert_eq!(u.orgs(), Some(vec![org()]), "in its ticket's organization");
+    // V2-41: and her own, made with that first grant.
+    let home = crate::store::personal_name(ALICE, 10);
+    assert_eq!(u.orgs(), Some(vec![org(), home.clone()]), "in its ticket's organization, and her own");
     let set = GateGrant::new("tickets.set_status");
     let me = ctx(json!({}));
     assert!(a.gate().check(Some(&me), &set, Some("PLEXUS-2")).is_ok());
@@ -821,7 +833,7 @@ async fn access_21_a_ticket_alone_or_its_subtree_and_the_grant_follows_it() {
     assert!(u.permit_below::<Viewer>(&t("PLEXUS-2"), &s).is_ok());
     // The grants read back as kept, by text.
     let texts: Vec<String> = a.grants_of(ALICE).into_iter().map(|g| g.scope.text()).collect();
-    assert_eq!(texts, ["PLEXUS-2", "under PLEXUS-2"]);
+    assert_eq!(texts, ["PLEXUS-2".to_string(), format!("{home}:"), "under PLEXUS-2".to_string()]);
 }
 
 /// ACCESS-21: admin on a ticket's scope is admin on a scope that covers the

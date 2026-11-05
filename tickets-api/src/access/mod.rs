@@ -659,7 +659,8 @@ impl Access {
         let (store, system) = self.book.writer().map_err(|e| e.to_string())?;
         let named: Vec<Scope> = grants.iter().map(|(_, s)| store.scope_named(s).map_err(|e| e.to_string())).collect::<Result<_, _>>()?;
         for g in self.book.stored_grants(principal) {
-            if !named.contains(&g.scope) {
+            // V2-41: a person's editor in their own organization stays.
+            if !named.contains(&g.scope) && g.granted_by != crate::vocab::GrantedBy::Personal {
                 store.revoke(system, g.principal, g.scope).await.map_err(|e| e.to_string())?;
             }
         }
