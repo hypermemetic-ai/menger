@@ -4,7 +4,7 @@ A plan is a program whose leaves are prose. menger is a Plexus RPC
 ticketing service and the seed of a Plexus-native reactive web framework.
 This is **v2**: the tickets service, the ui service, the media service, the docs service and the quota service, nothing else.
 
-v1 is tag `v0.0.1`; v2 cut its chats, comments, deployments, themes, notes, assignees and components, the Leptos app (trunk) and the frames' SDK (sdk-codegen), mockups and the diagrams service — read v1 there, never here. Media came back as a service of its own (V2-24, `media/`).
+v1 is tag `v0.0.1`; v2 cut its chats, comments, deployments, themes, notes, assignees and components, the Leptos app (trunk) and the frames' SDK (sdk-codegen), mockups and the diagrams service — read v1 there, never here. Media came back as a service of its own (V2-24, `media/`), and a body's pages as sandboxed frames (EDITOR-14, `ui/src/page-frame.svelte`).
 
 README.md is the reference: the services and their methods ("Surface"),
 the flags ("Run" → Every flag), the rules each ticket set down. This file is
@@ -646,7 +646,9 @@ question.
   `src/shell.rs`'s `PAGE_CSP`): no inline script but the page's own blocks,
   hashed; nothing from another origin; connections only to itself, its
   socket and loopback. Something a page needs from elsewhere is a change to
-  that policy, made deliberately.
+  that policy, made deliberately. A page in a body (a mockup, a raw-HTML
+  body, EDITOR-14) runs in a sandboxed frame of the shell's `/frame`, under
+  `FRAME_CSP` alone — never a `srcdoc`, which would inherit `PAGE_CSP`.
 - Every RPC method returns `impl Stream<Item = …Event> + Send + 'static`;
   event enums use `#[serde(tag = "type", rename_all = "snake_case")]` with an
   in-band `Error { message }` variant.

@@ -8,6 +8,8 @@
      served for; the engine's files are that version's, immutable. -->
 <meta name="menger-ws-port" content="{{WS_PORT}}">
 <meta name="menger-ui-version" content="{{UI_VERSION}}">
+<!-- EDITOR-14, APP-110: the test app's origin a body's live view frames (`--live-origin`), empty when none. -->
+<meta name="menger-live-origin" content="{{LIVE_ORIGIN}}">
 <!-- FRAME-16: what the boot needs, asked with the HTML; host.js's start
      makes the socket and reads the manifest and the components while the
      wasm downloads and instantiates, then hands them over. -->

@@ -297,6 +297,20 @@ image was put for. Its seam is `media/src/seam.rs`; it never opens the
 tickets file either. The shell's `GET /media/<hash>` is a client of the
 media service in turn (`menger_media::fetch`, as the request's session).
 
+**Pages in a body** (EDITOR-14) draw in frames, as v1 drew them: an
+`<m-mockup widths title description>…a page…</m-mockup>`, a ```` ```mockup ````
+(or ```` ```page ````, or ```` ```html ```` with a page's attributes) fence, a body
+that is a whole `<!doctype html>` page, and a body holding raw HTML the
+page's sanitizer cannot draw (then the whole body, its markdown around the
+HTML) — each in `<iframe sandbox>` with no `allow-same-origin`: an opaque
+origin, no cookie, no storage, no socket, no `top`. A `live` fence or
+`<m-live route>` frames the test app (`--live-origin`, APP-110). Not a
+`srcdoc`, which inherits the app's policy and would refuse the page's
+scripts: the frame loads the shell's public **`GET /frame`** (`FRAME_CSP`:
+`connect-src 'none'; form-action 'none'; frame-ancestors 'self'; sandbox …`),
+which says `menger:boot` on its channel and is handed the page by
+`postMessage`, from its own parent only (`ui/src/page-frame.svelte`).
+
 The docs service (V2-29) asks two things through its seam (`docs/src/seam.rs`),
 never another's file: the gate, whether the caller holds a method's grant
 (`docs.save`) on the document's organization (`acme:`) — `DynamicHub::gate()`
