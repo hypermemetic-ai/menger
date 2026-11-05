@@ -78,9 +78,15 @@ export default async (ctx) => {
       const form = edit.locator("[data-form='tickets.amend']");
       assert(await form.locator("[data-action='tickets.amend']").isDisabled(), "save body waits for an edit");
       await form.locator("textarea[data-field=body]").fill("# The heading\n\nsome *words* and a [link](https://example.com)\n\n<script>window.__pwned = 1</script>");
-      await eventually("the preview draws the markdown", async () => (await form.locator("[data-preview] h1").textContent({ timeout: 500 })) === "The heading");
-      assert((await form.locator("[data-preview] em").textContent()) === "words", "the preview's emphasis");
-      assert((await form.locator("[data-preview] script").count()) === 0, "the preview draws no script");
+      // COMPS-5 (the owner: "all tickets are the same surface"): the preview is ticket-view's, as the page
+      // draws the body — a body holding raw HTML (the script) is drawn whole in its sandboxed frame there too.
+      const inPreviewFrame = async (sel) => {
+        const f = await form.locator("[data-preview] iframe").first().elementHandle({ timeout: 500 }).then((h) => h?.contentFrame()).catch(() => null);
+        return f ? await f.locator(sel).first().textContent({ timeout: 500 }).catch(() => null) : null;
+      };
+      await eventually("the preview draws the markdown, in the page's frame for raw HTML", async () => (await inPreviewFrame("h1")) === "The heading");
+      assert((await inPreviewFrame("em")) === "words", "the preview's emphasis");
+      assert((await form.locator("[data-preview] script").count()) === 0, "the preview puts no script in the page");
       // FRAME-30: the form's sheet is the theme's, light and dark.
       const ground = (theme) => page.evaluate((theme) => {
         document.querySelector("[data-surface=ticket-edit]").parentElement.setAttribute("data-plexus-theme", theme);

@@ -63,9 +63,16 @@ export default async (ctx) => {
     return (await def.locator("[data-field=line]").textContent()) ?? "";
   };
   const ticketPage = async (id, as = null) => {
-    const { context, page } = await openPage(`#/ticket/${id}`, { as });
+    const { context, page, seen } = await openPage(`#/ticket/${id}`, { as });
     await eventually(`#/ticket/${id} draws its body`, async () => (await page.locator("[data-surface=ticket-view] [data-ticket-body]").count()) > 0, 15_000);
-    return { context, page };
+    return { context, page, seen };
+  };
+  // COMPS-5: a page's effects never loop — the tag table's listeners ran inside its effect, and the
+  // definition line's `tick++` made that effect depend on what it wrote (`effect_update_depth_exceeded`,
+  // Svelte's flush aborted, the effects queued behind it dropped: a tag left undrawn by the order things mounted).
+  const noLoop = (seen, where) => {
+    const looped = seen.console.filter((l) => /effect_update_depth_exceeded/.test(l));
+    assert(!looped.length, `${where}: no effect loops (${looped.length} effect_update_depth_exceeded)`);
   };
 
   const hello = (w) => "```component x-hello\n<script>\n  prop(\"words\");\n</script>\n<p class=\"x-hello\">{\"" + w + " \" + words}</p>\n```\n";
@@ -207,11 +214,49 @@ export default async (ctx) => {
     const runs = await f.evaluate(() => ({ drawn: window.__drawn, cleaned: window.__cleaned }));
     assert(runs.drawn === 2 && runs.cleaned === 1, `the cleanup ran before the second draw: ${JSON.stringify(runs)}`);
     assert(await view.page.evaluate(() => !document.querySelector(".tok")), "nothing of it is in the page");
+    noLoop(view.seen, "the defining ticket");
     await shoot(view.page, "comps5-v1");
     await view.context.close();
     const other = await ticketPage(b);
     await eventually("another ticket's tag draws it too", async () => (await text(other.page, ".who")) === "label=Glaze", 20_000);
+    noLoop(other.seen, "the ticket using it");
     await other.context.close();
+  });
+
+  // COMPS-5, the owner (2026-11-05): "all tickets are the same surface. doc or not. they all need the exact same
+  // rendering capabilites". One body, opened as a doc (the docs service's, `#/doc/<id>`, drawn by the editor)
+  // and as a ticket (`#/ticket/<id>`): both draw the same things — the house's card, a code card, a definition's
+  // line (v1's element), the tag drawn framed by plexus-ui, raw HTML — through the one renderer, ticket-view.
+  await test("a_body_draws_the_same_as_a_doc_and_as_a_ticket", async () => {
+    const SAME = "Intro.\n\n<m-summary>\n\n<m-answer data-field=\"answer\">**One surface.**</m-answer>\n\n</m-summary>\n\n"
+      + "```rust\nfn main() {}\n```\n\n```component x-film\n" + FILM + "```\n\n<x-film label=\"Same\"></x-film>\n\nA line with <b>raw HTML</b> the sanitizer keeps.\n";
+    const t = make("one body, as a ticket", SAME);
+    const docId = sy("docs", "create", "--title", "one body, as a doc", "--body", bodyFile("same-doc", SAME)).find((e) => e.type === "created")?.doc.id;
+    assert(docId, "the doc made");
+    const drawn = async (page) => page.evaluate(() => ({
+      card: document.querySelectorAll("m-summary").length > 0,
+      code: [...document.querySelectorAll("[data-surface=code-card]")].map((c) => c.dataset.lang).sort(),
+      defs: [...document.querySelectorAll("[data-surface=component-def]")].map((d) => `${d.dataset.name}:${d.hasAttribute("data-v1") ? "v1" : "-"}`).sort(),
+      tags: [...document.querySelectorAll("[data-surface=tag-component]")].map((h) => `${h.dataset.name}:${h.dataset.mode}:${h.querySelectorAll("iframe").length}`).sort(),
+      raw: [...document.querySelectorAll("[data-surface=ticket-view] b, [data-surface=editor-body] b")].some((b) => b.textContent === "raw HTML"),
+    }));
+    const settled = async (page, what) => {
+      let got = null;
+      await eventually(`${what} draws the film`, async () => { got = await drawn(page); return got.tags.length === 1 && got.tags[0] === "x-film:framed:1"; }, 20_000)
+        .catch((e) => { throw new Error(`${e.message}: drew ${JSON.stringify(got)}`); });
+      return got;
+    };
+    const asTicket = await ticketPage(t);
+    const ticketDrew = await settled(asTicket.page, "the ticket");
+    noLoop(asTicket.seen, "the ticket");
+    const asDoc = await openPage(`#/doc/${docId}`);
+    await eventually("the doc's editor is drawn", async () => (await asDoc.page.locator(`${BODY} .cm-content`).count()) === 1, 15_000);
+    const docDrew = await settled(asDoc.page, "the doc");
+    noLoop(asDoc.seen, "the doc");
+    assert(JSON.stringify(ticketDrew) === JSON.stringify(docDrew), `the same drawing: ticket ${JSON.stringify(ticketDrew)} · doc ${JSON.stringify(docDrew)}`);
+    assert(ticketDrew.card && ticketDrew.raw && ticketDrew.code.includes("rust") && ticketDrew.defs.includes("x-film:v1"), `every capability drawn: ${JSON.stringify(ticketDrew)}`);
+    await asTicket.context.close();
+    await asDoc.context.close();
   });
 
   await test("a_tag_nothing_names_keeps_its_words", async () => {
