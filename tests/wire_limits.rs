@@ -5,6 +5,8 @@
 
 
 /// ACCESS-24: the test provider — every server runs `key`, every client is its `--admin`.
+#[path = "support/ports.rs"]
+mod ports;
 mod support;
 use jsonrpsee::core::client::{Subscription, SubscriptionClientT};
 use jsonrpsee::core::params::ObjectParams;
@@ -15,8 +17,7 @@ use serde_json::{json, Value};
 use std::time::Duration;
 
 async fn free_port() -> u16 {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    listener.local_addr().unwrap().port()
+    ports::free_port()
 }
 
 /// menger on a free port, its `menger.call` held to `limits`, its sockets to

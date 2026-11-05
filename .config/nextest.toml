@@ -10,3 +10,9 @@ scripts = { max-threads = 1 }
 [[profile.default.overrides]]
 filter = 'binary(scripts)'
 test-group = 'scripts'
+
+# The long poles start first, so the run's wall is theirs, not theirs added to whatever ran
+# before them (nextest runs tests in order otherwise: these came last, past the 3-minute mark).
+[[profile.default.overrides]]
+filter = 'binary(scripts) | test(/^store::tests_reading::(every_shape_at_the_cap|a_refusal_names_the_limit)/) | test(/on_a_seeded_store$|_on_a_nested_seed/) | binary(derived)'
+priority = 100

@@ -6,6 +6,8 @@
 //! to start, naming the flag. And prod is untouched: deploy/ names its
 //! database and ports.
 
+#[path = "support/ports.rs"]
+mod ports;
 use jsonrpsee::core::client::SubscriptionClientT;
 use jsonrpsee::core::params::ObjectParams;
 use jsonrpsee::ws_client::WsClientBuilder;
@@ -39,7 +41,7 @@ impl Drop for Server {
 }
 
 fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    ports::free_port()
 }
 
 fn menger(home: &Path) -> Command {

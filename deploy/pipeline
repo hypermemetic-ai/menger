@@ -1421,7 +1421,7 @@ cmd_suite() {
   mark_release "$rel" SUITE "running $(date -u +%FT%TZ) — deploy/pipeline suite (pid $$)"
   SUITE_REL=$rel GATE_ON_RED=suite_red
   # a suite killed half-way is not a pass: whatever ends the run, a `running` mark left becomes `failed`
-  trap 'rc=$?; [[ $(suite_of "$SUITE_REL") == running ]] && mark_release "$SUITE_REL" SUITE "failed $(date -u +%FT%TZ) — the suite did not finish (exit $rc)"; on_exit' EXIT
+  trap 'rc=$?; [[ $(suite_of "$SUITE_REL") == running ]] && mark_release "$SUITE_REL" SUITE "failed $(date -u +%FT%TZ) — the suite did not finish (exit $rc)"; (exit $rc); on_exit' EXIT
   git -C "$REPO" cat-file -e "$sha^{commit}" 2>/dev/null || die "$rel's commit $short is not in $REPO"
   checkout "$SUITE_CHECKOUT" "$sha"
   run_gate "$SUITE_CHECKOUT" "$short"

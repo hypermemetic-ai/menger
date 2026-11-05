@@ -4,6 +4,8 @@
 //! plexus-wire's reference child, `conformance/examples/stub_child.py`.
 //! V2-44: main's test, on v2 — beside v2's services.
 
+#[path = "support/ports.rs"]
+mod ports;
 mod support;
 
 use jsonrpsee::core::client::{Subscription, SubscriptionClientT};
@@ -39,7 +41,7 @@ impl Drop for Server {
 }
 
 fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    ports::free_port()
 }
 
 fn menger(db: &Path, port: u16, extra: &[String]) -> Command {

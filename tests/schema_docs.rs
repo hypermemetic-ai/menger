@@ -31,6 +31,8 @@
 //! Its own throwaway database and a free port; prod and test are never
 //! touched.
 
+#[path = "support/ports.rs"]
+mod ports;
 mod support;
 use jsonrpsee::core::client::{Subscription, SubscriptionClientT};
 use jsonrpsee::core::params::ObjectParams;
@@ -234,8 +236,7 @@ fn offences(all: &[(&str, Value)]) -> Vec<String> {
 }
 
 async fn free_port() -> u16 {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    listener.local_addr().unwrap().port()
+    ports::free_port()
 }
 
 /// A server as the wire reference starts one: the service as `main` builds

@@ -144,8 +144,10 @@ fn heavy() -> Vec<(&'static str, String)> {
     ]
 }
 
-#[test]
-fn every_shape_at_the_cap_ends() {
+/// CI-9: one test per shape, so the runner reads them side by side (one test reading all twenty
+/// in turn was the workspace's longest, 1m55s unoptimised). Each is held to the same bound: a
+/// plain read of a body at the cap, timed here, times `READS_AT_MOST`.
+fn the_shape_at_the_cap_ends(n: usize) {
     // What one plain read of a body at the cap costs here, now: an input, then prose.
     let mut plain = String::from("<m-input id=\"x\" kind=\"text\"></m-input>\n\n");
     while plain.len() + 40 <= CAP {
@@ -157,18 +159,34 @@ fn every_shape_at_the_cap_ends() {
     assert_eq!(found.len(), 1, "the plain body's one input");
     let at_most = once * READS_AT_MOST;
     eprintln!("one plain read: {once:?}; a shape may take {at_most:?}");
-    let mut worst = Duration::ZERO;
-    for (what, body) in heavy() {
-        assert!(body.len() <= CAP + 8192, "{what}: {}", body.len());
-        let t = thread_cpu();
-        let (found, problems) = read(&body);
-        let took = thread_cpu() - t;
-        eprintln!("{what}: {took:?}, {} found, {:?}", found.len(), problems.first());
-        assert!(took < at_most, "{what}: {took:?}, past {READS_AT_MOST} plain reads ({at_most:?})");
-        worst = worst.max(took);
-    }
-    eprintln!("the worst shape: {worst:?}");
+    let (what, body) = heavy().swap_remove(n);
+    assert!(body.len() <= CAP + 8192, "{what}: {}", body.len());
+    let t = thread_cpu();
+    let (found, problems) = read(&body);
+    let took = thread_cpu() - t;
+    eprintln!("{what}: {took:?}, {} found, {:?}", found.len(), problems.first());
+    assert!(took < at_most, "{what}: {took:?}, past {READS_AT_MOST} plain reads ({at_most:?})");
 }
+
+macro_rules! every_shape_at_the_cap_ends {
+    ($($name:ident = $n:expr),* $(,)?) => {
+        $( #[test] fn $name() { the_shape_at_the_cap_ends($n) } )*
+        /// Every shape `heavy` holds has its test: none added there and left unread.
+        #[test]
+        fn every_shape_at_the_cap_has_its_test() {
+            assert_eq!(heavy().len(), [$($n),*].len(), "a shape in heavy() with no test of its own");
+        }
+    };
+}
+every_shape_at_the_cap_ends!(
+    every_shape_at_the_cap_ends_00 = 0, every_shape_at_the_cap_ends_01 = 1, every_shape_at_the_cap_ends_02 = 2,
+    every_shape_at_the_cap_ends_03 = 3, every_shape_at_the_cap_ends_04 = 4, every_shape_at_the_cap_ends_05 = 5,
+    every_shape_at_the_cap_ends_06 = 6, every_shape_at_the_cap_ends_07 = 7, every_shape_at_the_cap_ends_08 = 8,
+    every_shape_at_the_cap_ends_09 = 9, every_shape_at_the_cap_ends_10 = 10, every_shape_at_the_cap_ends_11 = 11,
+    every_shape_at_the_cap_ends_12 = 12, every_shape_at_the_cap_ends_13 = 13, every_shape_at_the_cap_ends_14 = 14,
+    every_shape_at_the_cap_ends_15 = 15, every_shape_at_the_cap_ends_16 = 16, every_shape_at_the_cap_ends_17 = 17,
+    every_shape_at_the_cap_ends_18 = 18, every_shape_at_the_cap_ends_19 = 19,
+);
 
 /// Past what a body may hold, a write is refused in band, naming why.
 #[test]

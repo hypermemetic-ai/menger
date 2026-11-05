@@ -28,7 +28,7 @@ has()  { [[ $2 == *"$3"* ]] && ok || bad "$1: wanted '$3' in: $2"; }
 export HOME=$SCRATCH/home
 unset MENGER_DEPLOY_HOME MENGER_DEPLOY_OUTBOX MENGER_DEPLOY_TRACKER_HOST MENGER_DEPLOY_TRACKER_TOKEN DEPLOY_SMOKE_FAIL MENGER_DEPLOY_KEY MENGER_DEPLOY_KEY_FILE MENGER_CALL \
   MENGER_APP_TEST_URL MENGER_APP_URL MENGER_SUITE_CHECKOUT MENGER_APP_YML IMAGE_STORE MENGER_BUILD_CHECKOUT MENGER_BUILD_TARGET MENGER_PLEXUS_UI MENGER_DEPLOY_LOGS MENGER_CONTRACT_WAIT \
-  PLEXUS_UI_SRC PLEXUS_UI_CHECKOUTS PLEXUS_UI_REPO MENGER_BENCH_DIR
+  PLEXUS_UI_SRC PLEXUS_UI_CHECKOUTS PLEXUS_UI_REPO MENGER_BENCH_DIR MENGER_GATE_RUNNER MENGER_PLEXUS_UI_CACHE
 export MENGER_DEPLOY_TRACKER_PORT=4769
 # DEPLOY-28: the tracker is app.menger.sh by default; `local` is :4769, the stand-ins
 # below (DEPLOY-28's own checks unset it, and dial app.menger.sh's stand-in)
@@ -816,11 +816,15 @@ same "no-gate: no test ran" "$(<"$SCRATCH/ci6/cargo-args")" ""
 CSHA=$(git -C "$CR" rev-parse HEAD)
 SR=$(id=20261023T000000Z-${CSHA:0:7}; r=$D/releases/$id; mkdir -p "$r/app"
   printf 'release:   %s\ncommit:    %s\nsubject:   ci6\ngate:      none — the suite runs after the deploy\n' "$id" "$CSHA" >"$r/RELEASE"; chmod -R a-w "$r"; echo "$id")
+sleep 1.2 # CI-9: a stamp of its own, apart from the red build above (a run's stamp is its second)
 ci6 suite "$SR"
 # V2-15: the lock a suite holds (.suite.lock, flock) is not inherited by the gate's children —
 # an orphan of a nested run kept the fifth suite's lock and the sixth waited on it for 17 minutes.
 [[ ! -s ${STUB_SUITE_FDS:-/nonexistent} ]] && ok || bad "V2-15: the gate's cargo inherited the suite lock: $(cat "$STUB_SUITE_FDS")"
 same "suite: green exits 0" "$code" 0
+# CI-9: a green suite is no red run — its EXIT trap handed on_exit the status of its own last test
+st=$(sed -n 's|^log: .*/\([0-9]*T[0-9]*Z\)-suite-.*|\1|p' <<<"$err" | head -n 1)
+[[ -n $st && ! -e $LOGD/$st.red ]] && ok || bad "suite: a green suite marked its run red (stamp '$st')"
 has "suite: in its own checkout, beside the repository" "$(git -C "$SCRATCH/ci6/menger-suite" rev-parse HEAD 2>/dev/null)" "$CSHA"
 [[ ! -e $SCRATCH/ci6/menger-build/.git || $(git -C "$SCRATCH/ci6/menger-build" rev-parse HEAD) != "$CSHA" || true ]] && ok
 has "suite: the whole workspace" "$(<"$SCRATCH/ci6/cargo-args")" "test --workspace --no-fail-fast"
