@@ -17,7 +17,7 @@
 use crate::meter::{Hold, Meter, Refusal};
 use crate::vocab::QuotaEvent;
 use crate::QuotaClient;
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use plexus_core::plexus::{AuthContext, DynamicHub, HubTransport, PlexusStreamItem};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -228,7 +228,7 @@ impl QuotaSeam {
 impl Meter for QuotaSeam {
     async fn reserve(&self, principal: &str, source: &str, amount: u64) -> Result<Hold, Refusal> {
         let (p, s) = (Self::principal(principal)?, Self::source(source)?);
-        let events = self.client()?.reserve_all(p, s, amount).await.map_err(|e| Refusal::Failed(format!("quota.reserve: {e}")))?;
+        let events = self.client()?.reserve(p, s, amount).try_collect::<Vec<_>>().await.map_err(|e| Refusal::Failed(format!("quota.reserve: {e}")))?;
         match events.as_slice() {
             [QuotaEvent::Reserved { ticket, remaining, .. }] => Ok(Hold { ticket: Some(ticket.clone()), remaining: *remaining }),
             [QuotaEvent::OverAllowance { source, used, cap, asked, .. }] => Err(Refusal::OverAllowance { source: source.clone(), used: *used, cap: *cap, asked: *asked }),
@@ -242,7 +242,7 @@ impl Meter for QuotaSeam {
     async fn commit(&self, hold: Hold, amount: Option<u64>) {
         let Some(t) = hold.ticket.as_deref().and_then(Self::ticket) else { return };
         match self.client() {
-            Ok(c) => match c.commit_all(t, amount).await.as_deref() {
+            Ok(c) => match c.commit(t, amount).try_collect::<Vec<_>>().await.as_deref() {
                 Ok([QuotaEvent::Committed { .. }]) => {}
                 other => tracing::warn!("V2-31: quota.commit answered {other:?}"),
             },
@@ -253,7 +253,7 @@ impl Meter for QuotaSeam {
     async fn release(&self, hold: Hold) {
         let Some(t) = hold.ticket.as_deref().and_then(Self::ticket) else { return };
         if let Ok(c) = self.client() {
-            if let Err(e) = c.release_all(t).await {
+            if let Err(e) = c.release(t).try_collect::<Vec<_>>().await {
                 tracing::warn!("V2-31: quota.release: {e}");
             }
         }
@@ -262,7 +262,7 @@ impl Meter for QuotaSeam {
     async fn credit(&self, principal: &str, source: &str, amount: u64) {
         let (Ok(p), Ok(s)) = (Self::principal(principal), Self::source(source)) else { return };
         if let Ok(c) = self.client() {
-            if let Err(e) = c.credit_all(p, s, amount).await {
+            if let Err(e) = c.credit(p, s, amount).try_collect::<Vec<_>>().await {
                 tracing::warn!("V2-31: quota.credit: {e}");
             }
         }

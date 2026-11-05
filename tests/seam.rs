@@ -11,7 +11,7 @@
 //! nothing on another (`ELSE`). Its own throwaway database.
 
 use async_stream::stream;
-use futures::Stream;
+use futures::{Stream, TryStreamExt};
 use menger::auth_backend::MengerAuth;
 use menger_tickets_api::access::Access;
 use menger_tickets_api::members::{Grant, Role};
@@ -79,7 +79,7 @@ impl ProbeActivation {
                     return;
                 }
             };
-            match tickets.get_all(r#ref).await {
+            match tickets.get(r#ref).try_collect::<Vec<_>>().await {
                 Ok(events) => match events.as_slice() {
                     [TicketsEvent::Ticket { ticket }] => yield ProbeEvent::Ticket { id: ticket.id.to_string(), asked_as },
                     [TicketsEvent::NotFound { .. }] => yield ProbeEvent::NotFound { id, asked_as },
@@ -150,7 +150,7 @@ fn reader() -> AuthContext {
 
 /// The probe's answer to `read { id }`, called as [`READER`].
 async fn probe(service: &Arc<DynamicHub>, id: &str) -> Vec<ProbeEvent> {
-    ProbeClient::new(HubTransport::as_(Arc::clone(service), reader())).read_all(id.to_string()).await.expect("the probe answers")
+    ProbeClient::new(HubTransport::as_(Arc::clone(service), reader())).read(id.to_string()).try_collect::<Vec<_>>().await.expect("the probe answers")
 }
 
 #[tokio::test]

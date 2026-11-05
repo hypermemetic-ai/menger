@@ -22,11 +22,11 @@ menger-tickets-api = { path = "../tickets-api", version = "0.6.2" }
 # image put for a document, asked through the seam as the caller.
 menger-docs = { path = "../docs", version = "0.6.2" }
 # The 0.7 line, by published version (PLEXUS-16), as the server takes it.
-plexus-core = "0.7.0"
-plexus-macros = "0.7.0"
-plexus-client = { version = "0.7.0", default-features = false }
+plexus-core = "0.8.0"
+plexus-macros = "0.8.0"
+plexus-client = { version = "0.8.0", default-features = false }
 # The gate's types: where a caller holds a grant (`held_on`).
-plexus-auth-core = "0.2.2"
+plexus-auth-core = "0.3.0"
 async-trait = "0.1"
 async-stream = "0.3"
 futures = "0.3"

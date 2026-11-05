@@ -467,7 +467,7 @@ impl DocsActivation {
     /// `refused`); each write is asked of the gate on its organization as it
     /// stands then. `lagged { missed }` when it fell behind: read again
     /// (`state` with your vector). Viewer.
-    #[plexus_macros::method(group = "read", streaming)]
+    #[plexus_macros::method(group = "read")]
     pub async fn watch(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,

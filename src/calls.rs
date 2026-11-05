@@ -43,7 +43,7 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use jsonrpsee::RpcModule;
-use plexus_core::plexus::{error_item, AuthContext, DynamicHub, PlexusContext, PlexusStreamItem, StreamMetadata};
+use plexus_core::plexus::{error_item, AuthContext, DynamicHub, PlexusContext, PlexusStreamItem, RemoteError, StreamMetadata};
 use plexus_transport::websocket::Connection;
 use serde_json::Value;
 
@@ -230,6 +230,8 @@ fn too_many(ns: &str, max: usize) -> Value {
         message: format!("too many calls open on this connection (at most {max}): close one (a watch) or open another connection"),
         code: Some(TOO_MANY_CALLS.into()),
         recoverable: true,
+        // V2-58: plexus-core 0.8's typed error (RETURNS-36), beside spec/05's keys.
+        error: RemoteError::TooManyCalls { max: max as u64, child: None },
         // plexus-core 0.6.2 (POLYGLOT-5): a typed error carries fields; this one has none.
         fields: Default::default(),
     };
@@ -257,6 +259,15 @@ pub fn limit_for(principal: &str, limits: &CallLimits) -> u32 {
     }
 }
 
+/// V2-58: a refusal of a kind plexus-core's vocabulary does not name, as its
+/// typed error (`RemoteError::Other`: the kind and its one field).
+fn other_error(kind: &str, field: &str, value: Value) -> RemoteError {
+    let mut fields = serde_json::Map::new();
+    fields.insert("kind".into(), kind.into());
+    fields.insert(field.into(), value);
+    serde_json::from_value(Value::Object(fields)).unwrap_or_else(|e| RemoteError::Execution { message: format!("{kind}: {e}") })
+}
+
 /// The refusal past a principal's connections, before the connection closes.
 fn crowded(ns: &str, max: u32, principal: &str) -> Value {
     let item = PlexusStreamItem::Error {
@@ -264,6 +275,7 @@ fn crowded(ns: &str, max: u32, principal: &str) -> Value {
         message: format!("too many connections as {principal} (at most {max}): close one; this one closes"),
         code: Some(TOO_MANY_CONNECTIONS.into()),
         recoverable: true,
+        error: other_error(TOO_MANY_CONNECTIONS, "max", max.into()),
         fields: Default::default(),
     };
     let mut v = serde_json::to_value(&item).unwrap_or(Value::Null);
@@ -282,6 +294,7 @@ fn too_fast(ns: &str, wait: Duration, rate: f64) -> Value {
         message: format!("too many writes ({rate:.0} a second sustained): try again in {ms} ms; nothing was written"),
         code: Some(TOO_MANY_WRITES.into()),
         recoverable: true,
+        error: other_error(TOO_MANY_WRITES, "retry_after_ms", ms.into()),
         fields: Default::default(),
     };
     let mut v = serde_json::to_value(&item).unwrap_or(Value::Null);

@@ -21,10 +21,10 @@
 
 /// ACCESS-24: the test provider — every server runs `key`, every client is its `--admin`.
 mod support;
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use menger_tickets_api::vocab::TicketRef;
 use menger_tickets_api::{Group, Kind, Status, Ticket, TicketsClient, TicketsEvent};
-use plexus_client::{ClientEvent, MethodRef, StreamItem, Transport, WsTransport};
+use plexus_client::{MethodRef, StreamItem, Transport, WsTransport};
 use plexus_core::plexus::DynamicHub;
 use plexus_transport::TransportServer;
 use serde_json::json;
@@ -221,7 +221,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     let client = TicketsClient::new(&transport);
 
     // -- health -------------------------------------------------------------
-    match one(client.health_all().await.expect("health")) {
+    match one(client.health().try_collect::<Vec<_>>().await.expect("health")) {
         TicketsEvent::Health {
             ticket_count,
             version,
@@ -257,7 +257,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // The subscribe frame is written by `call`, not by the first poll; the
     // round trip flushes it past the server's dispatcher.
     let mut watch = client.watch(None, None, None, None, None);
-    let _ = client.health_all().await.expect("round trip");
+    let _ = client.health().try_collect::<Vec<_>>().await.expect("round trip");
     tokio::time::sleep(Duration::from_millis(250)).await;
 
     // -- create -------------------------------------------------------------
@@ -265,7 +265,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // its scope; MNG-14: the root is top-level.
     let ticket = created(
         client
-            .create_all(
+            .create(
                 p("WIRE"),
                 p("first over the wire"),
                 Some(p("scope")),
@@ -274,7 +274,7 @@ async fn the_wire_assertions_through_the_generated_client() {
                 None,
                 None, None,
                 None,
-            )
+            ).try_collect::<Vec<_>>()
             .await
             .expect("create"),
     );
@@ -287,7 +287,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // The rule itself, typed: a build first is the activation's own Error.
     match one(
         client
-            .create_all(p("FRESH"), p("a build first"), None, None, None, None, None, None, None)
+            .create(p("FRESH"), p("a build first"), None, None, None, None, None, None, None).try_collect::<Vec<_>>()
             .await
             .expect("the call succeeds; the activation says no"),
     ) {
@@ -298,7 +298,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // -- set_status ---------------------------------------------------------
     match one(
         client
-            .set_status_all(p("WIRE-1"), p("Ready"), None, None, None)
+            .set_status(p("WIRE-1"), p("Ready"), None, None, None).try_collect::<Vec<_>>()
             .await
             .expect("set_status"),
     ) {
@@ -312,7 +312,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // -- list replays current state, paged (MNG-9) ---------------------------
     let listed = rows(
         client
-            .list_all(Some(p("WIRE")), None, None, None, None, None, None, None, None, None, None)
+            .list(Some(p("WIRE")), None, None, None, None, None, None, None, None, None, None).try_collect::<Vec<_>>()
             .await
             .expect("list"),
     );
@@ -321,7 +321,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // -- find (SCALE-6) -----------------------------------------------------
     // The generated client's `find`: typed `summary` rows, then the page.
     let found = client
-        .find_all(p(" OVER the "), None, None, None, None, None)
+        .find(p(" OVER the "), None, None, None, None, None).try_collect::<Vec<_>>()
         .await
         .expect("find");
     match flat(found).as_slice() {
@@ -332,20 +332,20 @@ async fn the_wire_assertions_through_the_generated_client() {
         other => panic!("expected one `summary` and the page, got {other:?}"),
     }
     assert!(
-        rows(client.find_all(p("zzz"), None, Some(2), None, None, None).await.expect("find")).is_empty(),
+        rows(client.find(p("zzz"), None, Some(2), None, None, None).try_collect::<Vec<_>>().await.expect("find")).is_empty(),
         "nothing matches"
     );
 
     // -- FILTER-15: find under a filter, and member -------------------------
     // WIRE-1 is Ready: a filter that does not admit it hides it from find.
     assert!(
-        rows(client.find_all(p(" OVER the "), None, None, Some(p("status Draft")), None, None).await.expect("find")).is_empty(),
+        rows(client.find(p(" OVER the "), None, None, Some(p("status Draft")), None, None).try_collect::<Vec<_>>().await.expect("find")).is_empty(),
         "the filter does not admit it"
     );
-    assert_eq!(rows(client.find_all(p(" OVER the "), None, None, Some(p("ready")), None, None).await.expect("find")).len(), 1);
+    assert_eq!(rows(client.find(p(" OVER the "), None, None, Some(p("ready")), None, None).try_collect::<Vec<_>>().await.expect("find")).len(), 1);
     let members = client
         .nav()
-        .member_all(vec![p("WIRE-1"), p("NOPE-1"), p("wire-1")], p("status Ready"), None)
+        .member(vec![p("WIRE-1"), p("NOPE-1"), p("wire-1")], p("status Ready"), None).try_collect::<Vec<_>>()
         .await
         .expect("member");
     match members.as_slice() {
@@ -358,7 +358,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // -- a dangling blocker -------------------------------------------------
     created(
         client
-            .create_all(
+            .create(
                 p("DG"),
                 p("C"),
                 Some(p("scope")),
@@ -367,22 +367,22 @@ async fn the_wire_assertions_through_the_generated_client() {
                 None,
                 None, None,
                 None,
-            )
+            ).try_collect::<Vec<_>>()
             .await
             .expect("create DG-1"),
     );
     client
-        .set_status_all(p("DG-1"), p("Ready"), None, None, None)
+        .set_status(p("DG-1"), p("Ready"), None, None, None).try_collect::<Vec<_>>()
         .await
         .expect("promote DG-1");
     let ready = rows(
         client
-            .work().ready_all(Some(p("DG")), None, None, None, None, None, None)
+            .work().ready(Some(p("DG")), None, None, None, None, None, None).try_collect::<Vec<_>>()
             .await
             .expect("ready_set"),
     );
     assert!(ready.is_empty(), "DG-1 must not be ready: {ready:?}");
-    match one(client.work().blockers_all(p("DG-1")).await.expect("blockers")) {
+    match one(client.work().blockers(p("DG-1")).try_collect::<Vec<_>>().await.expect("blockers")) {
         TicketsEvent::DanglingBlocker { id } => assert_eq!(id, "DG-99"),
         other => panic!("expected `dangling_blocker`, got {other:?}"),
     }
@@ -390,14 +390,14 @@ async fn the_wire_assertions_through_the_generated_client() {
     // -- parent / children (AGS-19, MNG-14, MNG-12's set_parent) ------------
     let parent = created(
         client
-            .create_all(p("PA"), p("P"), Some(p("scope")), None, None, None, None, None, None)
+            .create(p("PA"), p("P"), Some(p("scope")), None, None, None, None, None, None).try_collect::<Vec<_>>()
             .await
             .expect("create PA-1"),
     );
     assert_eq!(parent.id, "PA-1");
     let child = created(
         client
-            .create_all(
+            .create(
                 p("PA"),
                 p("C"),
                 Some(p("execution")),
@@ -406,7 +406,7 @@ async fn the_wire_assertions_through_the_generated_client() {
                 None,
                 Some(p("PA-1")), None,
                 None,
-            )
+            ).try_collect::<Vec<_>>()
             .await
             .expect("create PA-2"),
     );
@@ -415,19 +415,19 @@ async fn the_wire_assertions_through_the_generated_client() {
     // No parent named: the shortcode root (MNG-14).
     let third = created(
         client
-            .create_all(p("PA"), p("loose"), None, None, None, None, None, None, None)
+            .create(p("PA"), p("loose"), None, None, None, None, None, None, None).try_collect::<Vec<_>>()
             .await
             .expect("create PA-3"),
     );
     assert_eq!(third.parent.as_deref(), Some("PA-1"), "defaulted to the root");
 
-    match one(client.get_all(p("PA-1")).await.expect("get PA-1")) {
+    match one(client.get(p("PA-1")).try_collect::<Vec<_>>().await.expect("get PA-1")) {
         TicketsEvent::Ticket { ticket } => assert_eq!(ticket.child_count, 2),
         other => panic!("expected `ticket`, got {other:?}"),
     }
     let children = ids(rows(
         client
-            .list_all(None, None, Some(p("PA-1")), None, None, None, None, None, None, None, None)
+            .list(None, None, Some(p("PA-1")), None, None, None, None, None, None, None, None).try_collect::<Vec<_>>()
             .await
             .expect("list by parent"),
     ));
@@ -436,7 +436,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // The MNG-12 verb through the generated client: move PA-3 under PA-2.
     match one(
         client
-            .set_parent_all(p("PA-3"), p("PA-2"))
+            .set_parent(p("PA-3"), p("PA-2")).try_collect::<Vec<_>>()
             .await
             .expect("set_parent"),
     ) {
@@ -446,7 +446,7 @@ async fn the_wire_assertions_through_the_generated_client() {
         }
         other => panic!("expected `parent_changed`, got {other:?}"),
     }
-    match one(client.get_all(p("PA-2")).await.expect("get PA-2")) {
+    match one(client.get(p("PA-2")).try_collect::<Vec<_>>().await.expect("get PA-2")) {
         TicketsEvent::Ticket { ticket } => assert_eq!(ticket.child_count, 1),
         other => panic!("expected `ticket`, got {other:?}"),
     }
@@ -454,13 +454,13 @@ async fn the_wire_assertions_through_the_generated_client() {
     // -- an unlocks edge ----------------------------------------------------
     created(
         client
-            .create_all(p("RS"), p("A"), Some(p("scope")), None, None, None, None, None, None)
+            .create(p("RS"), p("A"), Some(p("scope")), None, None, None, None, None, None).try_collect::<Vec<_>>()
             .await
             .expect("create RS-1"),
     );
     created(
         client
-            .create_all(
+            .create(
                 p("RS"),
                 p("B"),
                 None,
@@ -469,7 +469,7 @@ async fn the_wire_assertions_through_the_generated_client() {
                 None,
                 None, None,
                 None,
-            )
+            ).try_collect::<Vec<_>>()
             .await
             .expect("create RS-2"),
     );
@@ -478,17 +478,17 @@ async fn the_wire_assertions_through_the_generated_client() {
     // A doc collection's root made a scope, through the emitted client.
     created(
         client
-            .create_all(p("KD"), p("identity"), Some(p("doc")), None, None, None, None, None, None)
+            .create(p("KD"), p("identity"), Some(p("doc")), None, None, None, None, None, None).try_collect::<Vec<_>>()
             .await
             .expect("create KD-1"),
     );
-    match one(client.set_kind_all(p("KD-1"), p("scope"), None, None, None).await.expect("set_kind")) {
+    match one(client.set_kind(p("KD-1"), p("scope"), None, None, None).try_collect::<Vec<_>>().await.expect("set_kind")) {
         TicketsEvent::KindChanged { ticket, previous } => {
             assert_eq!((ticket.kind, ticket.status, previous), (Kind::Scope, Status::Epic, Kind::Doc));
         }
         other => panic!("expected `kind_changed`, got {other:?}"),
     }
-    match one(client.set_kind_all(p("KD-1"), p("build"), Some(p("Ready")), None, None).await.expect("set_kind")) {
+    match one(client.set_kind(p("KD-1"), p("build"), Some(p("Ready")), None, None).try_collect::<Vec<_>>().await.expect("set_kind")) {
         TicketsEvent::Error { message } => assert!(message.contains("'KD-1' is the root of KD"), "{message}"),
         other => panic!("expected the in-band `error`, got {other:?}"),
     }
@@ -503,15 +503,13 @@ async fn the_wire_assertions_through_the_generated_client() {
         match tokio::time::timeout(Duration::from_millis(1500), watch.next()).await {
             Err(_) => break, // quiet: every change has arrived
             Ok(None) => panic!("the watch stream ended"),
-            Ok(Some(event)) => match event.expect("no client error on watch") {
-                ClientEvent::Data(event) => {
-                    if let TicketsEvent::StatusChanged { previous, .. } = &event {
-                        first_transition.get_or_insert(*previous);
-                    }
-                    kinds.push(apply(&mut mirror, &mut group_copy, &event));
+            Ok(Some(event)) => {
+                let event = event.expect("no client error on watch");
+                if let TicketsEvent::StatusChanged { previous, .. } = &event {
+                    first_transition.get_or_insert(*previous);
                 }
-                ClientEvent::Progress { .. } => {}
-            },
+                kinds.push(apply(&mut mirror, &mut group_copy, &event));
+            }
         }
     }
     for expected in [
@@ -538,7 +536,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // Server and watch-only mirror agree on the ready set, computed two ways.
     let server_ready = ids(rows(
         client
-            .work().ready_all(Some(p("WIRE")), None, None, None, None, None, None)
+            .work().ready(Some(p("WIRE")), None, None, None, None, None, None).try_collect::<Vec<_>>()
             .await
             .expect("ready_set"),
     ));
@@ -566,7 +564,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // holds the same roll-ups, built from `GroupChanged` alone.
     let groups: Vec<Group> = client
         .nav()
-        .groups_all()
+        .groups().try_collect::<Vec<_>>()
         .await
         .map(flat)
         .expect("groups")
@@ -601,7 +599,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // typed, in shortcode order — the same numbers the watch mirror holds.
     let extents: Vec<(String, u32)> = client
         .nav()
-        .extents_all()
+        .extents().try_collect::<Vec<_>>()
         .await
         .map(flat)
         .expect("extents")
@@ -628,7 +626,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     drop(watch);
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert!(!transport.is_closed(), "the unsubscribe did not disturb the socket");
-    match one(client.health_all().await.expect("health after unsubscribe")) {
+    match one(client.health().try_collect::<Vec<_>>().await.expect("health after unsubscribe")) {
         TicketsEvent::Health { ticket_count, .. } => assert_eq!(ticket_count, 8),
         other => panic!("expected `health`, got {other:?}"),
     }
@@ -652,12 +650,12 @@ async fn waves_decode_typed_through_the_generated_client() {
     ] {
         created(
             client
-                .create_all(p(epic), p("t"), Some(p(kind)), None, blocked_by, None, None, None, None)
+                .create(p(epic), p("t"), Some(p(kind)), None, blocked_by, None, None, None, None).try_collect::<Vec<_>>()
                 .await
                 .expect("create"),
         );
     }
-    let events = client.work().waves_all(vec![p("ty")], None).await.expect("waves");
+    let events = client.work().waves(vec![p("ty")], None).try_collect::<Vec<_>>().await.expect("waves");
     let placed: Vec<(String, Placement, Vec<String>)> = events
         .iter()
         .filter_map(|e| match e {
@@ -696,7 +694,7 @@ async fn placements_and_paths_decode_typed_through_the_generated_client() {
     let client = TicketsClient::new(&transport);
     let mut watch = client.watch(None, None, None, None, None);
     let make = |kind: &str, blocked_by: Option<Vec<TicketRef>>, path: Option<&str>| {
-        client.create_all(p("PT"), p("t"), Some(p(kind)), None, blocked_by, None, None, path.map(p), None)
+        client.create(p("PT"), p("t"), Some(p(kind)), None, blocked_by, None, None, path.map(p), None).try_collect::<Vec<_>>()
     };
     created(make("scope", None, None).await.expect("create")); // PT-1
     let y = created(make("build", None, None).await.expect("create")); // PT-2
@@ -705,15 +703,15 @@ async fn placements_and_paths_decode_typed_through_the_generated_client() {
     assert_eq!((y.placement, x.placement, doc.placement), (Some(Placement::Wave { n: 1 }), Some(Placement::Wave { n: 2 }), None));
     assert_eq!(doc.path.as_deref(), Some("_MENGER/board"));
 
-    match one(client.get_all(p("pt/_MENGER/board")).await.expect("get")) {
+    match one(client.get(p("pt/_MENGER/board")).try_collect::<Vec<_>>().await.expect("get")) {
         TicketsEvent::Ticket { ticket } => assert_eq!(ticket.id, "PT-4"),
         other => panic!("expected the ticket, got {other:?}"),
     }
-    client.set_status_all(p("PT-2"), p("Complete"), None, None, None).await.expect("set_status");
+    client.set_status(p("PT-2"), p("Complete"), None, None, None).try_collect::<Vec<_>>().await.expect("set_status");
     let mut changes = None;
     while changes.is_none() {
         let ev = tokio::time::timeout(Duration::from_secs(5), watch.next()).await.expect("watch").expect("open");
-        if let Ok(plexus_client::ClientEvent::Data(TicketsEvent::PlacementsChanged { changes: c })) = ev {
+        if let Ok(TicketsEvent::PlacementsChanged { changes: c }) = ev {
             changes = Some(c);
         }
     }
@@ -725,7 +723,7 @@ async fn placements_and_paths_decode_typed_through_the_generated_client() {
         ]
     );
     let rows: Vec<_> = client
-        .list_all(Some(p("PT")), None, None, None, None, Some(true), None, None, None, None, None)
+        .list(Some(p("PT")), None, None, None, None, Some(true), None, None, None, None, None).try_collect::<Vec<_>>()
         .await
         .map(flat)
         .expect("list")
@@ -751,7 +749,7 @@ async fn reshortcode_moves_three_and_every_old_id_still_reaches_its_ticket() {
     let client = TicketsClient::new(&transport);
     let mut watch = client.watch(None, None, None, None, None);
     let make = |epic: &str, kind: &str, blocked_by: Option<Vec<TicketRef>>, body: Option<&str>| {
-        client.create_all(p(epic), p("t"), Some(p(kind)), None, blocked_by, body.map(p), None, None, None)
+        client.create(p(epic), p("t"), Some(p(kind)), None, blocked_by, body.map(p), None, None, None).try_collect::<Vec<_>>()
     };
     created(make("RS", "scope", None, None).await.expect("create")); // RS-1
     created(make("RS", "build", None, None).await.expect("create")); // RS-2
@@ -761,7 +759,7 @@ async fn reshortcode_moves_three_and_every_old_id_still_reaches_its_ticket() {
     // A body that cites one of them by the id it has now.
     let citing = created(make("RS", "doc", None, Some(r#"See <m-ticket ref="RS-3"></m-ticket>."#)).await.expect("create"));
     let moved = client
-        .reshortcode_all(vec![p("RS-2"), p("RS-3"), p("RS-4")], p("TO"), None, None, None, Some(p("wire")), None)
+        .reshortcode(vec![p("RS-2"), p("RS-3"), p("RS-4")], p("TO"), None, None, None, Some(p("wire")), None).try_collect::<Vec<_>>()
         .await
         .expect("reshortcode");
     match one(moved) {
@@ -773,7 +771,7 @@ async fn reshortcode_moves_three_and_every_old_id_still_reaches_its_ticket() {
         other => panic!("expected reshortcoded, got {other:?}"),
     }
     for (old, new) in [("RS-2", "TO-2"), ("RS-3", "TO-3"), ("rs-4", "TO-4")] {
-        match one(client.get_all(p(old)).await.expect("get")) {
+        match one(client.get(p(old)).try_collect::<Vec<_>>().await.expect("get")) {
             TicketsEvent::Ticket { ticket } => {
                 assert_eq!(ticket.id, new, "{old}");
                 assert_eq!(ticket.moved_from, [old.to_ascii_uppercase()], "{old}");
@@ -783,18 +781,18 @@ async fn reshortcode_moves_three_and_every_old_id_still_reaches_its_ticket() {
         }
     }
     // The chip's ref, as the body still writes it, reaches the moved ticket.
-    let body = match one(client.get_all(p(&citing.id)).await.expect("get")) {
+    let body = match one(client.get(p(&citing.id)).try_collect::<Vec<_>>().await.expect("get")) {
         TicketsEvent::Ticket { ticket } => ticket.body,
         other => panic!("{other:?}"),
     };
     let cited = body.split("ref=\"").nth(1).and_then(|r| r.split('"').next()).expect("a ref").to_string();
-    match one(client.get_all(p(&cited)).await.expect("get")) {
+    match one(client.get(p(&cited)).try_collect::<Vec<_>>().await.expect("get")) {
         TicketsEvent::Ticket { ticket } => assert_eq!(ticket.id, "TO-3"),
         other => panic!("{other:?}"),
     }
     let mut heard = false;
     while !heard {
         let ev = tokio::time::timeout(Duration::from_secs(5), watch.next()).await.expect("watch").expect("open");
-        heard = matches!(ev, Ok(ClientEvent::Data(TicketsEvent::Reshortcoded { .. })));
+        heard = matches!(ev, Ok(TicketsEvent::Reshortcoded { .. }));
     }
 }
