@@ -90,7 +90,9 @@ plexus-webapp = "0.2.0"
 # never by path outside this repository, so the graph resolves exactly one
 # of each; only what is unpublished (plexus-login, plexus-ui's crates) stays
 # by sibling path, and those take the same published versions.
-plexus-core = "0.7.0"
+# POLYGLOT-5 (V2-44): `clap` — plexus-core's ChildArgs, `--child` and its
+# flags spelled as every service spells them.
+plexus-core = { version = "0.7.0", features = ["clap"] }
 # Slim: default features off keeps the rmcp/MCP stack out (default-off as
 # of 0.5.0 anyway); http-gateway enables the REST + SSE bridge (MNG-8).
 plexus-transport = { version = "0.6.0", default-features = false, features = ["http-gateway"] }

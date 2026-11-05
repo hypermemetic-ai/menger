@@ -187,6 +187,13 @@ struct Args {
     #[arg(long, help_heading = RUN, hide_short_help = true)]
     no_shell: bool,
 
+    // POLYGLOT-5 (V2-44): activations in other processes, mounted under a
+    // name — `--child NAME=stdio:CMD | NAME=ws://…`, `--child-timeout`,
+    // `--child-max-calls`, `--child-env`, `--child-key` (plexus-core's, so
+    // every service spells them the same).
+    #[command(flatten)]
+    children: plexus_core::plexus::ChildArgs,
+
     // IDENTITY-14 / IDENTITY-42 / IDENTITY-30. ACCESS-24: menger has no open
     // mode; DIST-14: with none on loopback, the local admin signs in by a
     // one-time link. Login is always required (`--require-login` went).
@@ -656,7 +663,17 @@ async fn run(args: Args) -> anyhow::Result<()> {
         None => menger_quota::Plan::built_in(),
     };
     let quota = menger::QuotaSetup::open(&quota_db_path, &plan)?;
-    let hub = build_rpc_services(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, ui, media, docs, quota, |store, access| {
+    // POLYGLOT-5: each `--child` started (or dialed) and its schema asked
+    // before anything is served; one that does not answer stops the start,
+    // named, exit 2.
+    let children = match args.children.connect_all("menger").await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("menger: --child refused: {e}");
+            std::process::exit(2);
+        }
+    };
+    let hub = build_rpc_services(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, ui, media, docs, quota, children, |store, access| {
         menger::TicketsActivation::with_access(store, access)
     })
     .await?;
