@@ -19,7 +19,7 @@ pub(super) fn get_stream(store: Arc<Store>, caller: VerifiedUser, id: String) ->
             Ok(ticket) => yield TicketsEvent::Ticket { ticket },
             // ACT-5: a deleted ticket answers its tombstone.
             Err(StoreError::NotFound(_)) => yield store.tombstone(&caller, &id).map_or(TicketsEvent::NotFound { id: Asked::stored(id.as_str()) }, |t| TicketsEvent::Deleted { ids: vec![t.id.clone()], tombstones: vec![t] }),
-            Err(e) => yield veiled(&caller, e),
+            Err(e) => yield veiled(&store, &caller, e),
         }
     }
 }
@@ -75,7 +75,7 @@ pub(super) fn blockers_stream(store: Arc<Store>, caller: VerifiedUser, id: Strin
                 }
             }
             Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: Asked::stored(id.as_str()) },
-            Err(e) => yield veiled(&caller, e),
+            Err(e) => yield veiled(&store, &caller, e),
         }
     }
 }
@@ -101,7 +101,7 @@ pub(super) fn history_stream(store: Arc<Store>, caller: VerifiedUser, id: String
                 yield TicketsEvent::HistoryEnd { began_unix: h.began, restorable: h.restorable, status_since_unix, status_since_exact, deletions: h.deletions };
             }
             Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: Asked::stored(id.as_str()) },
-            Err(e) => yield veiled(&caller, e),
+            Err(e) => yield veiled(&store, &caller, e),
         }
     }
 }
@@ -149,7 +149,7 @@ pub(super) fn list_stream(store: Arc<Store>, caller: VerifiedUser, ask: ListAsk)
             let lens = match store.lens_or_all(filter.as_ref()) {
                 Ok(lens) => lens,
                 Err(e) => {
-                    yield veiled(&caller, e);
+                    yield veiled(&store, &caller, e);
                     return;
                 }
             };
@@ -232,7 +232,7 @@ pub(super) fn ready_stream(store: Arc<Store>, caller: VerifiedUser, ask: ReadyAs
         // FILTER-15: from the cells.
         match store.narrowing(filter.as_ref()).and_then(|f| f.map(|f| ready_and(&f, epic.clone())).transpose()) {
             Err(e) => {
-                yield veiled(&caller, e);
+                yield veiled(&store, &caller, e);
                 return;
             }
             Ok(Some(q)) => {
@@ -313,7 +313,7 @@ pub(super) fn search_stream(
         let lens = match zoned_lens(&store, &caller, filter.as_ref(), tz.as_deref()) {
             Ok(lens) => lens,
             Err(e) => {
-                yield veiled(&caller, e);
+                yield veiled(&store, &caller, e);
                 return;
             }
         };
@@ -326,7 +326,7 @@ pub(super) fn search_stream(
                 }
                 yield TicketsEvent::Searched { matched, next, words };
             }
-            Err(e) => yield veiled(&caller, e),
+            Err(e) => yield veiled(&store, &caller, e),
         }
     }
 }
@@ -344,7 +344,7 @@ pub(super) fn member_events(store: &Store, caller: &VerifiedUser, named: Vec<Tic
     }
     let lens = match zoned_lens(store, caller, Some(&filter), tz.as_deref()) {
         Ok(lens) => lens.unwrap_or_else(Lens::all),
-        Err(e) => return vec![veiled(caller, e)],
+        Err(e) => return vec![veiled(store, caller, e)],
     };
     let matched = store.member(caller, &ids, &lens);
     named.into_iter().zip(matched).map(|(id, matched)| TicketsEvent::Member { id, matched }).collect()
@@ -371,7 +371,7 @@ pub(super) fn tree_events(store: &Store, caller: &VerifiedUser, ask: TreeAsk) ->
     };
     let lens = match store.lens_of(&filter) {
         Ok(lens) => lens,
-        Err(e) => return vec![veiled(caller, e)],
+        Err(e) => return vec![veiled(store, caller, e)],
     };
     let lens = match clock_of(caller, tz.as_deref()) {
         Ok(clock) => lens.with_clock(clock),
@@ -388,7 +388,8 @@ pub(super) fn tree_events(store: &Store, caller: &VerifiedUser, ask: TreeAsk) ->
 pub(super) fn listed(store: &Store, caller: &VerifiedUser, f: impl FnOnce(&Store, &VerifiedUser) -> Vec<Row>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     let events = match caller.read_filter() {
         Err(message) => vec![TicketsEvent::Error { message }],
-        Ok(_) => rows_events(f(store, caller)),
+        // TICKETS-35: each row naming the uids of the tickets it names.
+        Ok(_) => rows_events(f(store, caller)).into_iter().map(|ev| store.dressed(ev)).collect(),
     };
     futures::stream::iter(events)
 }
@@ -416,7 +417,7 @@ pub(super) fn inputs_events(store: &Store, caller: &VerifiedUser, ask: InputsLis
     };
     let lens = match zoned_lens(store, caller, filter.as_ref(), tz.as_deref()) {
         Ok(lens) => lens,
-        Err(e) => return vec![veiled(caller, e)],
+        Err(e) => return vec![veiled(store, caller, e)],
     };
     let page = crate::store::InputsAsk {
         ticket: ticket.as_ref().map(|t| t.to_string()),
@@ -433,6 +434,6 @@ pub(super) fn inputs_events(store: &Store, caller: &VerifiedUser, ask: InputsLis
         }
         // ACCESS-10: a ticket out of reach is not found, as one not there.
         Err(StoreError::NotFound(id)) => vec![TicketsEvent::NotFound { id: ticket.map_or_else(|| Asked::stored(id), Asked::from) }],
-        Err(e) => vec![veiled(caller, e)],
+        Err(e) => vec![veiled(store, caller, e)],
     }
 }

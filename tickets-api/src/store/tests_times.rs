@@ -30,6 +30,8 @@ fn row(epic: &str, seq: u32, status: Status, created: i64, updated: i64) -> Row 
     Row {
         hidden_blocked_by: 0,
         hidden_unlocks: 0,
+        uid: Default::default(),
+        uid_of: Default::default(),
         parent_hidden: false,
         archived: None,
         frozen: false,

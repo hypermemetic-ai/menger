@@ -191,6 +191,7 @@ type Row = TicketSummary;
 /// compile error here until it is carried over.
 fn whole(row: Row, body: String) -> Ticket {
     let Row {
+        uid,
         id,
         epic,
         shortcode,
@@ -207,6 +208,7 @@ fn whole(row: Row, body: String) -> Ticket {
         unlocks,
         hidden_blocked_by,
         hidden_unlocks,
+        uid_of,
         commits,
         path,
         placement,
@@ -218,6 +220,7 @@ fn whole(row: Row, body: String) -> Ticket {
         updated_unix,
     } = row;
     Ticket {
+        uid,
         id,
         epic,
         shortcode,
@@ -231,6 +234,7 @@ fn whole(row: Row, body: String) -> Ticket {
         unlocks,
         hidden_blocked_by,
         hidden_unlocks,
+        uid_of,
         parent,
         parent_hidden,
         child_count,
@@ -1759,6 +1763,9 @@ struct Cache {
     /// FILTER-46: every saved filter ([`filters::SavedFilters`]) — read from
     /// its table at open, moved by `tickets filters`' writes.
     saved: filters::SavedFilters,
+    /// TICKETS-35: each uid → its ticket's key, live or deleted
+    /// ([`uids::Uids`]) — built at open, a birth adds one.
+    uids: uids::Uids,
     written: u64,
 }
 
@@ -2117,6 +2124,8 @@ impl Cache {
             shortcodes: Default::default(),
             // FILTER-36: read beside the cache, from the bodies.
             saved: Default::default(),
+            // TICKETS-35: indexed beside the tombstones ([`Store::load_cache`]).
+            uids: Default::default(),
             written: 0,
         }
     }
@@ -2191,6 +2200,8 @@ impl Cache {
             shortcodes: Default::default(),
             // FILTER-36: read beside the cache, from the bodies.
             saved: Default::default(),
+            // TICKETS-35: indexed beside the tombstones ([`Store::load_cache`]).
+            uids: Default::default(),
             written: 0,
         }
     }
@@ -2277,6 +2288,9 @@ impl Cache {
     /// mutation-shaped methods below, which call this.
     fn insert(&mut self, ticket: Row) {
         self.log.retime(&ticket);
+        // TICKETS-35: its uid names it (a birth's is new; a row's own
+        // again otherwise).
+        self.uids.put(ticket.uid, &ticket.id);
         let key = OrderKey::of(&ticket);
         self.at.insert(ticket.id.to_string(), key.clone());
         self.order.insert(key, ticket);
@@ -2977,6 +2991,11 @@ impl Store {
         history::migrate(&mut conn)?;
         // ACT-5: and one without the tombstones table gains it, empty.
         delete::migrate(&mut conn)?;
+        // TICKETS-35: and every ticket and tombstone without a uid is given
+        // one — a file from before uids, once; a row a server before them
+        // wrote since (V2-42: v2 on prod before it took uids). One
+        // transaction, the count in the log.
+        uids::migrate(&mut conn)?;
         // TICKETS-7: and one without the revisions gains them, empty.
         revisions::migrate(&mut conn)?;
         // INPUT-3: and one without the inputs' tables gains them, with every
@@ -3074,6 +3093,8 @@ impl Store {
         let mut cache = cache;
         cache.place_all();
         cache.tombstones = delete::load(conn)?;
+        // TICKETS-35: every uid, a ticket's or a tombstone's, to its key.
+        cache.uids = uids::Uids::of(cache.order.values(), &cache.tombstones);
         // IDENTITY-21: the members, as stored — ACCESS-48: their rows, read
         // as grants once ORG-4 has settled them (below).
         let grant_rows = members::rows(conn)?;
@@ -3424,10 +3445,12 @@ impl Store {
     }
 
     /// ORG-3: the row any address names, and the cache's count of writes —
-    /// [`Store::row`] through the resolver.
+    /// [`Store::row`] through the resolver. TICKETS-35 (TICKETS-32): a write
+    /// names its ticket by its permit's key, which is read as the key and
+    /// never again as a name ([`Cache::keyed`]).
     fn addressed(&self, address: &str) -> Result<(Row, u64), StoreError> {
         let cache = self.tickets.read().expect("store lock poisoned");
-        let key = cache.resolve(address)?;
+        let key = cache.keyed(address)?;
         let row = cache.get(&key).cloned().ok_or_else(|| StoreError::NotFound(address.trim().to_string()))?;
         Ok((row, cache.written))
     }
@@ -3438,6 +3461,12 @@ impl Store {
     /// [`StoreError::Ambiguous`] as `get` answers.
     pub(crate) fn resolve(&self, address: &str) -> Result<String, StoreError> {
         self.tickets.read().expect("store lock poisoned").resolve(address)
+    }
+
+    /// TICKETS-35 (TICKETS-32): the key a write's permit names — a key read
+    /// as a key, never again as a name ([`Cache::keyed`]).
+    pub(crate) fn keyed(&self, key: &str) -> Result<String, StoreError> {
+        self.tickets.read().expect("store lock poisoned").keyed(key)
     }
 
     /// ORG-3: the shortcode an address names — its identity, letters and
@@ -3974,15 +4003,14 @@ impl Store {
     /// that moved since refuses), a root's re-hosting admin on both hosts.
     pub async fn set_parent(&self, mv: Move) -> Result<Change, StoreError> {
         let (id, parent) = mv.ids();
-        let id = self.resolve(id)?;
+        // TICKETS-35 (TICKETS-32): both by the permits' keys, read as keys.
+        let id = self.keyed(id)?;
         let parent = {
             let cache = self.tickets.read().expect("store lock poisoned");
-            match cache.find_ticket(parent, shortcodes::OrgReach::All) {
-                shortcodes::Found::One(key) => key,
-                shortcodes::Found::Many(candidates) => {
-                    return Err(StoreError::Ambiguous { text: parent.trim().to_string(), candidates })
-                }
-                shortcodes::Found::None => parent.trim().to_ascii_uppercase(),
+            match cache.keyed(parent) {
+                Ok(key) => key,
+                Err(e @ StoreError::Ambiguous { .. }) => return Err(e),
+                Err(_) => parent.trim().to_ascii_uppercase(),
             }
         };
         let serial = self.serial().await;
@@ -4395,6 +4423,11 @@ impl Store {
             }
             Some(out)
         };
+        // TICKETS-35: a uid names its ticket (bare, or in a link) — a word
+        // that would otherwise read as a shortcode's letters.
+        if let Some(key) = cache.uid_key(t) {
+            return ticket_chain(key);
+        }
         let parsed = Address::parse(t).ok();
         if parsed.as_ref().is_none_or(Address::names_ticket) {
             match cache.find_ticket(t, shortcodes::OrgReach::All) {
@@ -4999,6 +5032,9 @@ mod tests_filters;
 /// ORG-3: the shortcodes — each one's namespace, stored; the orgs; the pins;
 /// and the one resolver from what a reader writes to what the store keys on.
 mod shortcodes;
+// TICKETS-35: every ticket's uid — minted, kept, indexed, resolved.
+mod uids;
+pub use uids::Minted;
 // ORG-4: organizations — made, renamed, deleted; a grant's scopes in them,
 // and where a target lives as the gate asks it.
 mod orgs;
@@ -5021,6 +5057,8 @@ pub use shortcodes::OrgReach;
 /// that mints or moves one; the resolver; a file from before ORG-3.
 #[cfg(test)]
 mod tests_shortcodes;
+#[cfg(test)]
+mod tests_uid;
 
 /// SCALE-28: the derived state, stored — the tables beside the tickets,
 /// what a write's transaction writes to them ([`stored::Changes`]), a start

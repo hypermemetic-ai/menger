@@ -1753,9 +1753,13 @@ fn read_field(rest: &str) -> Result<Field, String> {
         // `under`'s is; the store resolves it to its key.
         "ticket" => {
             let v = value()?;
+            // TICKETS-35: or its uid, as the store keeps it (lower case).
+            if let Ok(uid) = v.parse::<crate::vocab::Uid>() {
+                return Ok(Field::Ticket(uid.into_string()));
+            }
             match crate::address::Address::parse(v) {
                 Ok(a) if a.names_ticket() => Ok(Field::Ticket(crate::address::folded(v))),
-                _ => Err(format!("`ticket` takes a ticket's id or address, as `ticket SCALE-13` — not `{v}`")),
+                _ => Err(format!("`ticket` takes a ticket's id, address or uid, as `ticket SCALE-13` — not `{v}`")),
             }
         }
         // MENGER-13: the transition log.

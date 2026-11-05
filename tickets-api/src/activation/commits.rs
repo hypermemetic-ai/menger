@@ -79,7 +79,7 @@ impl CommitsActivation {
         commits: Vec<CommitRef>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         // AUTH-7: the gate held the grant on `id`; `ids` are asked there.
-        cells_stream(self.store.clone(), user, id, ids, CellWrite::Commits(commits))
+        dressing(self.store.clone(), cells_stream(self.store.clone(), user, id, ids, CellWrite::Commits(commits)))
     }
 
     /// Unlink commits from a ticket; yields commits_unlinked { ticket, removed }.

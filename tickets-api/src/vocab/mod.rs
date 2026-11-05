@@ -253,11 +253,13 @@ macro_rules! closed_schema {
 mod choices;
 mod names;
 mod prose;
+mod uid;
 mod who;
 
 pub use choices::*;
 pub use names::*;
 pub use prose::*;
+pub use uid::*;
 pub use who::*;
 
 #[cfg(test)]
