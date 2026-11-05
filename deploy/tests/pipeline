@@ -301,6 +301,13 @@ same "remote prod, suite red: exits 1" "$code" 1
 has "remote prod, suite red: said" "$err" "$R1's suite FAILED (failed 2026-10-23T06:30:00Z — workspace red; log /x.log) — a release whose suite is red never reaches prod"
 same "remote prod, refused: infra never asked" "$(<"$STUB_INFRA_LOG")" ""
 suite_mark "$R1" "passed 2026-10-23T06:30:00Z — workspace 3 passed, 0 failed; frontend 1 passed, 0 failed"
+# CI-9: a fast release (test's quick build) never reaches prod, its suite passed or not
+chmod u+w "$D/releases/$R1" "$D/releases/$R1/RELEASE"; echo "profile:   fast (CI-9: test's quick build — never a prod candidate)" >>"$D/releases/$R1/RELEASE"
+run remote prod
+same "remote prod, a fast release: exits 1" "$code" 1
+has "remote prod, a fast release: said" "$err" "$R1 is a fast build (CI-9: test's quick build, never a prod candidate) — prod takes the perf build"
+same "remote prod, a fast release: infra never asked" "$(<"$STUB_INFRA_LOG")" ""
+sed -i '/^profile:/d' "$D/releases/$R1/RELEASE"; chmod a-w "$D/releases/$R1/RELEASE" "$D/releases/$R1"
 m=$(mark); run remote prod
 same "remote prod, suite passed: exits 0" "$code" 0
 same "remote prod: promote.yml only" "$(<"$STUB_INFRA_LOG")" "promote.yml -e app_dir=$(dirname "$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)")"
@@ -830,6 +837,45 @@ ci6 suite --status "$SR"; same "suite --status: failed" "$(<"$SCRATCH/out")" "su
 [[ $(grep -c $'\tbuild\ttest\t' "$D/deployments.log") == 0 || $(tail -n 1 "$D/deployments.log") != *$'build\ttest'* ]] && ok || bad "a red suite logged as a build's gate"
 ci6 suite nonesuch
 same "suite: no such release" "$code" 1
+
+# ── CI-9: the gate under cargo-nextest — every test of every binary at once, then the doc-tests ──
+# cargo a stand-in that has nextest: `nextest run` prints nextest's Summary (STUB_CARGO_RED=1: two
+# FAIL lines and a summary with 2 failed), `test --doc` libtest's doc-test result.
+mkdir -p "$SCRATCH/ci6/bin-nx"
+cat >"$SCRATCH/ci6/bin-nx/cargo" <<'NX'
+#!/usr/bin/env bash
+echo "$*" >>"$STUB_NX_ARGS"
+case "$1 $2" in
+  "nextest --version") echo "cargo-nextest 0.9.151 (stand-in)"; echo "release: 0.9.151"; exit 0 ;;
+  "nextest run")
+    if [[ ${STUB_CARGO_RED:-} == 1 ]]; then
+      printf '        FAIL [   0.010s] menger::wire a_one\n     TIMEOUT [ 600.0s] menger::scripts b_two\n------------\n     Summary [  12.000s] 40 tests run: 38 passed, 1 failed, 1 timed out, 2 skipped\n' >&2; exit 100
+    fi
+    printf '        PASS [   0.010s] menger::wire a_one\n------------\n     Summary [  12.000s] 40 tests run: 40 passed, 2 skipped\n' >&2; exit 0 ;;
+  "test --workspace") [[ " $* " == *" --doc "* ]] && echo "test result: ok. 2 passed; 0 failed; 0 ignored" || echo "test result: ok. 3 passed; 0 failed"; exit 0 ;;
+  "test --no-fail-fast") echo "test result: ok. 1 passed; 0 failed"; exit 0 ;; # the fixture's frontend/ (tracked)
+esac
+exit 1
+NX
+chmod +x "$SCRATCH/ci6/bin-nx/cargo"
+export STUB_NX_ARGS=$SCRATCH/ci6/nx-args
+ci6nx() { PATH=$SCRATCH/ci6/bin-nx:$PATH DISK_CHECK_USED_PCT=10 DISK_CHECK_AVAIL_GB=900 "$CR/deploy/pipeline" "$@" >"$SCRATCH/out" 2>"$SCRATCH/err"; code=$?; err=$(<"$SCRATCH/err"); }
+: >"$STUB_NX_ARGS"; sleep 1.2
+ci6nx suite "$SR"
+same "nextest: green exits 0" "$code" 0
+has "nextest: the workspace under nextest" "$(<"$STUB_NX_ARGS")" "nextest run --workspace --no-fail-fast"
+has "nextest: then the doc-tests" "$(<"$STUB_NX_ARGS")" "test --workspace --doc --no-fail-fast"
+has "nextest: the counts, nextest's and the doc-tests' (skipped is not passed)" "$(<"$D/releases/$SR/SUITE")" "workspace 42 passed, 0 failed"
+: >"$STUB_NX_ARGS"; sleep 1.2
+MENGER_GATE_RUNNER=cargo ci6nx suite "$SR"
+same "nextest: MENGER_GATE_RUNNER=cargo is libtest's cargo test" "$(head -n 1 "$STUB_NX_ARGS")" "test --workspace --no-fail-fast"
+has "nextest: MENGER_GATE_RUNNER=cargo: libtest's counts" "$(<"$D/releases/$SR/SUITE")" "workspace 3 passed, 0 failed"
+sleep 1.2
+STUB_CARGO_RED=1 ci6nx suite "$SR"
+same "nextest: red exits 1" "$code" 1
+has "nextest: red names the failing test" "$err" "FAILED menger::wire a_one"
+has "nextest: red names the test that timed out" "$err" "FAILED menger::scripts b_two"
+has "nextest: the release marked failed" "$(<"$D/releases/$SR/SUITE")" "failed "
 
 # ── PERF-6: plexus-bench beside the suite; a red bench marks the release failed ──
 # A stand-in plexus-bench beside the scratch repository: its scripts/gate.sh keeps
@@ -1382,6 +1428,36 @@ bb suite "$SR5"
 same "$T1: suite of a v2 release exits 0" "$code" 0
 same "$T1: suite: cargo test --workspace, nothing else" "$(sed -n 's/^.*: cargo \(test.*\)$/\1/p' "$STUB_CARGO_LOG" | paste -sd'|')" "test --workspace --no-fail-fast"
 has "$T1: suite: the release marked passed" "$(cat "$D5/releases/$SR5/SUITE" 2>/dev/null)" "passed "
+# CI-9: an untracked frontend/target/ left in the suite's checkout (git clean spares it) is no
+# frontend — `cargo test` there walked up to the workspace's manifest and ran the root package's
+# tests a second time, 8 of the suite's 17½ minutes
+mkdir -p "$B/menger-suite/frontend/target/debug" && : >"$B/menger-suite/frontend/target/debug/stale"
+bb suite "$SR5"
+same "$T1: suite beside an untracked frontend/ exits 0" "$code" 0
+[[ -d $B/menger-suite/frontend/target ]] && ok || bad "$T1: (setup) the untracked frontend/target in the suite checkout is gone — the check below proves nothing"
+same "$T1: suite beside an untracked frontend/: cargo test --workspace, nothing else" "$(sed -n 's/^.*: cargo \(test.*\)$/\1/p' "$STUB_CARGO_LOG" | paste -sd'|')" "test --workspace --no-fail-fast"
+has "$T1: suite beside an untracked frontend/: said, no frontend suite" "$err" "(no frontend/)"
+# CI-9: build --fast — test's quick build, [profile.fast]; never a prod candidate. A tree with no
+# [profile.fast] (v2's tip here) builds perf, and says so; one that defines it builds it and says fast.
+bb build --branch v2 --no-gate --fast
+same "$T1: --fast, no [profile.fast] in the tree: exits 0" "$code" 0
+same "$T1: --fast, no [profile.fast]: the perf profile" "$(grep -o 'cargo build --profile .*' "$STUB_CARGO_LOG")" "cargo build --profile perf -p menger"
+has "$T1: --fast, no [profile.fast]: said" "$err" "the tree defines no [profile.fast] — the perf profile"
+gitf checkout -q -b fast v2 && printf '\n[profile.fast]\ninherits = "release"\nlto = false\n' >>"$BR/Cargo.toml" && gitf commit -qam "fast: [profile.fast]" && gitf checkout -q main
+bb build --branch fast --no-gate --fast
+same "$T1: --fast: exits 0" "$code" 0
+FR=$(tail -n 1 "$SCRATCH/out")
+same "$T1: --fast: cargo build --profile fast" "$(grep -o 'cargo build --profile .*' "$STUB_CARGO_LOG")" "cargo build --profile fast -p menger"
+same "$T1: --fast: the release says fast, never a prod candidate" "$(field profile "$D5/releases/$FR/RELEASE")" "fast (CI-9: test's quick build — never a prod candidate)"
+[[ -x $D5/releases/$FR/bin/menger ]] && ok || bad "$T1: --fast: the release carries bin/menger"
+bb build --branch fast --no-gate
+same "$T1: no --fast on a tree with [profile.fast]: the perf profile" "$(grep -o 'cargo build --profile .*' "$STUB_CARGO_LOG")" "cargo build --profile perf -p menger"
+# the suite of a fast release runs no bench: the goldens are the perf build's
+mkdir -p "$B/plexus-bench/scripts" && printf '#!/usr/bin/env bash\necho ran >>"%s"\nexit 0\n' "$B/bench-ran" >"$B/plexus-bench/scripts/gate.sh" && chmod +x "$B/plexus-bench/scripts/gate.sh"
+MENGER_BENCH_DIR=$B/plexus-bench bb suite "$FR"
+same "$T1: suite of a fast release exits 0" "$code" 0
+has "$T1: suite of a fast release: no bench, said" "$(cat "$D5/releases/$FR/SUITE" 2>/dev/null)" "bench not run (a fast release, CI-9: the goldens are the perf build's)"
+[[ ! -e $B/bench-ran ]] && ok || bad "$T1: suite of a fast release ran the bench"
 
 # ── V2-47 a_tree_by_published_version_builds_the_framework_from_its_tag ─────
 # A tree whose Cargo.lock takes plexus-ui-service from crates.io (and carries scripts/plexus-ui-src)

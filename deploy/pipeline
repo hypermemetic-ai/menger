@@ -9,7 +9,9 @@
 # against the release's own tree, and a release whose suite is red never
 # reaches prod.
 #
-#   deploy/pipeline build [REV] [--branch B] [--no-gate]  gate + release (default REV: B, else main;
+#   deploy/pipeline build [REV] [--branch B] [--no-gate] [--fast]  gate + release (default REV: B, else main;
+#                                           CI-9: --fast builds [profile.fast], test's quick build, which
+#                                           remote prod refuses — a prod candidate is the perf build;
 #                                           V2-7: B named in the release; a tree with no frontend/ builds
 #                                           its UI with plexus-ui's tool at the tag of the version its
 #                                           Cargo.lock takes, FRAME-8, V2-47); --no-gate: the
@@ -156,7 +158,8 @@ gate_red() { # LABEL LOGFILE SHORT — the gate failed: marked, recorded, every 
   local label=$1 f=$2
   red_run
   if [[ -n $GATE_ON_RED ]]; then "$GATE_ON_RED" "$label" "$f"; else record build test "$3" "gate failed"; fi
-  grep -E '^test .* \.\.\. FAILED$' "$f" | sort -u | sed 's/^test \(.*\) \.\.\. FAILED$/FAILED \1/' >&2 || true
+  { grep -E '^test .* \.\.\. FAILED$' "$f" | sed 's/^test \(.*\) \.\.\. FAILED$/FAILED \1/'
+    grep -E '^ *(FAIL|TIMEOUT) \[' "$f" | sed -E 's/^ *(FAIL|TIMEOUT) \[[^]]*\] +/FAILED /'; } | sort -u >&2 || true
   die "$label gate failed — $f"
 }
 need() { command -v "$1" >/dev/null || die "needs $1 on PATH"; }
@@ -354,15 +357,42 @@ GATE_WS="" GATE_FE=""
 # V2-15: in a subshell, close the suite's lock (cmd_suite's SUITE_LOCK_FD) so no child inherits it.
 close_suite_lock() { [[ -n ${SUITE_LOCK_FD:-} ]] && eval "exec $SUITE_LOCK_FD>&-"; return 0; }
 SUITE_LOCK_FD=
+# CI-9: the counts of a gate's log — libtest's `test result:` lines (each binary's, the doc-tests')
+# and cargo-nextest's `Summary` line (`N tests run: P passed, F failed, …`; a test timed out is failed)
+gate_counts() {
+  awk '/^test result/ {p+=$4; f+=$6}
+       /^ *Summary \[/ { for (i=1;i<=NF;i++) { w=$(i+1); sub(/,$/,"",w)
+                          if (w=="passed") p+=$i; if (w=="failed") f+=$i; if (w=="timed" ) f+=$i } }
+       END {print p+0 " passed, " f+0 " failed"}'
+}
+# CI-9: the workspace under cargo-nextest when it is installed (MENGER_GATE_RUNNER=cargo: libtest's
+# cargo test, as before): every test of every binary in parallel, each its own process, where cargo
+# test ran the 56 binaries one after another; then the doc-tests, which nextest does not run.
+# .config/nextest.toml holds what must not run at once.
+gate_workspace() { # DIR — the gate's command, its exit 0 only if every part passed
+  local dir=$1 r1 r2
+  if [[ ${MENGER_GATE_RUNNER:-nextest} == nextest ]] && [[ $(cargo nextest --version 2>/dev/null) == "cargo-nextest "* ]]; then
+    echo "gate: cargo nextest run --workspace --no-fail-fast, then cargo test --workspace --doc"
+    CARGO_TARGET_DIR=$dir/target cargo nextest run --workspace --no-fail-fast --color never 2>&1; r1=$?
+    CARGO_TARGET_DIR=$dir/target cargo test --workspace --doc --no-fail-fast 2>&1; r2=$?
+    [[ $r1 == 0 && $r2 == 0 ]]
+  else
+    CARGO_TARGET_DIR=$dir/target cargo test --workspace --no-fail-fast 2>&1
+  fi
+}
 run_gate() {
   local dir=$1 short=$2 lw lf
-  step "gate: cargo test --workspace --no-fail-fast"
+  step "gate: the workspace's tests, --no-fail-fast"
   lw=$(log_path gate-workspace); say "log: $lw"
-  GATE_WS=$(close_suite_lock; cd "$dir" && CARGO_TARGET_DIR=$dir/target cargo test --workspace --no-fail-fast 2>&1 | tee "$lw" | grep -E '^test result' \
-            | awk '{p+=$4; f+=$6} END {print p+0 " passed, " f+0 " failed"}') || gate_red workspace "$lw" "$short"
-  grep -q '^test result: FAILED' "$lw" && gate_red workspace "$lw" "$short"
-  # V2-7: a tree with no frontend/ (v2) has no frontend suite: the workspace is the whole of it
-  if [[ ! -d $dir/frontend ]]; then GATE_FE=""; say "gate: workspace $GATE_WS (no frontend/)"; return 0; fi
+  GATE_WS=$(close_suite_lock; cd "$dir" && gate_workspace "$dir" | tee "$lw" | gate_counts) || gate_red workspace "$lw" "$short"
+  grep -qE '^test result: FAILED|^ *Summary \[.* [1-9][0-9]* (failed|timed out)' "$lw" && gate_red workspace "$lw" "$short"
+  [[ $GATE_WS == "0 passed, "* ]] && gate_red workspace "$lw" "$short"
+  # V2-7: a tree with no frontend/ (v2) has no frontend suite: the workspace is the whole of it.
+  # CI-9: a frontend is one the commit tracks, as cmd_build asks — the checkout keeps an
+  # untracked frontend/target/ across commits (git clean spares it), and `cargo test` in a
+  # frontend/ with no manifest of its own walks up to the workspace's and ran the root
+  # package's tests a second time (351 of the 1170, 8 minutes of the suite's 17½).
+  if [[ -z $(git -C "$dir" ls-files -- frontend | head -n 1) ]]; then GATE_FE=""; say "gate: workspace $GATE_WS (no frontend/)"; return 0; fi
   step "gate: frontend tests"
   lf=$(log_path gate-frontend); say "log: $lf"
   GATE_FE=$(close_suite_lock; cd "$dir/frontend" && CARGO_TARGET_DIR=$dir/frontend/target cargo test --no-fail-fast 2>&1 | tee "$lf" | grep -E '^test result' \
@@ -407,12 +437,18 @@ release_packages() {
 # build that perf runs and releases use" — so the binary test and prod run is the one the suite's
 # bench holds to its goldens, which were taken from that build. A tree older than PERF-6 defines
 # no perf profile, and builds --release as it did; RELEASE's `profile:` says which.
-REL_PROFILE="" REL_OUT=""
+# CI-9 (owner, 2026-11-05: "sub 5 minutes into test"): `build --fast` is test's quick build —
+# `[profile.fast]`, no LTO, many codegen units, incremental, in the build's warm target — never a
+# prod candidate: `remote prod` refuses a fast release, and its suite runs no bench (the goldens
+# are the perf build's). A tree with no [profile.fast] builds perf, and says so.
+REL_PROFILE="" REL_OUT="" FAST=0
 cargo_release() { # LOG — cargo build --profile perf (or --release) of WS_PKGS → REL_OUT; dies red, naming the log
   local lr=$1 p args=()
   release_packages "$lr" || { red_run; die "release build failed — $lr (cargo metadata names no menger among the workspace's packages)"; }
   for p in $WS_PKGS; do args+=(-p "$p"); done
-  if grep -qx '\[profile\.perf\]' "$BUILD/Cargo.toml" 2>/dev/null; then REL_PROFILE=perf; else REL_PROFILE=release; fi
+  if [[ $FAST == 1 ]] && grep -qx '\[profile\.fast\]' "$BUILD/Cargo.toml" 2>/dev/null; then REL_PROFILE=fast
+  elif grep -qx '\[profile\.perf\]' "$BUILD/Cargo.toml" 2>/dev/null; then REL_PROFILE=perf; else REL_PROFILE=release; fi
+  [[ $FAST == 1 && $REL_PROFILE != fast ]] && say "release build: --fast, and the tree defines no [profile.fast] — the $REL_PROFILE profile"
   REL_OUT=$CARGO_TARGET_DIR/$REL_PROFILE
   say "release build: the $REL_PROFILE profile"
   (cd "$BUILD" && cargo build --profile "$REL_PROFILE" "${args[@]}" >> "$lr" 2>&1) || { red_run; die "release build failed — $lr"; }
@@ -538,15 +574,29 @@ plexus_ui_src() { # TREE LOG [keep] → PUI, the framework's checkout (keep: PLE
 # the build's target; MENGER_PLEXUS_UI names one built already. The release carries it
 # (bin/plexus-ui): a deploy pushes the release's bundle with the release's own tool.
 UI_TOOL=""
+TOOL_CACHE=${MENGER_PLEXUS_UI_CACHE:-$HOME/.cache/menger-deploy/plexus-ui-tool}
 ui_tool_build() { # LOG → UI_TOOL
   local lg=$1
   if [[ -n ${MENGER_PLEXUS_UI:-} ]]; then
     [[ -x $MENGER_PLEXUS_UI ]] || die "plexus-ui: MENGER_PLEXUS_UI=$MENGER_PLEXUS_UI is no executable"
     UI_TOOL=$MENGER_PLEXUS_UI; say "plexus-ui: $UI_TOOL (MENGER_PLEXUS_UI)"; return 0
   fi
+  # CI-9: the tool is a published version's — built once per framework commit and kept in
+  # TOOL_CACHE/<commit>/plexus-ui, never rebuilt per release (1m39s each time its build-dir
+  # had been swept). Only a clean checkout is kept: a working tree's edits name no version.
+  local key="" cached=""
+  if [[ $(git -C "$PUI" rev-parse --show-toplevel 2>/dev/null) == "$(cd "$PUI" && pwd -P)" && -z $(git -C "$PUI" status --porcelain 2>/dev/null) ]]; then key=$(git -C "$PUI" rev-parse --verify -q HEAD 2>/dev/null || true); fi
+  [[ -n $key ]] && cached=$TOOL_CACHE/$key/plexus-ui
+  if [[ -n $cached && -x $cached ]]; then
+    UI_TOOL=$cached; say "plexus-ui: the tool of ${key:0:9}, built once and kept ($cached)"; echo "plexus-ui: cached $cached" >>"$lg"; return 0
+  fi
   (cd "$BUILD" && cargo build --release --manifest-path "$PUI/Cargo.toml" -p plexus-ui-cli >>"$lg" 2>&1) || { red_run; die "plexus-ui: the tool's build failed — $lg"; }
   UI_TOOL=$CARGO_TARGET_DIR/release/plexus-ui
   [[ -x $UI_TOOL ]] || die "plexus-ui: no $UI_TOOL after its build — $lg"
+  if [[ -n $cached ]]; then
+    mkdir -p "${cached%/*}" && cp "$UI_TOOL" "$cached.tmp.$$" && mv -f "$cached.tmp.$$" "$cached" && UI_TOOL=$cached \
+      && say "plexus-ui: the tool of ${key:0:9} kept for the next build ($cached)"
+  fi
 }
 # The app's bundle and the studio's, built by the tool — CONTRACT empty: unstamped (manifest.contract
 # unknown), the build that says the bundle's uses (SURFACE-11); else stamped --contract CONTRACT.
@@ -561,7 +611,7 @@ V2_STEPS=""
 build_v2() { # V2-7, FRAME-8: every step on this machine — the release, the tool, the engine, the contract, the bundle, the compiler module
   local lr f
   V2_STEPS="cargo build"
-  step "release build (the perf profile, RUN-39)"
+  if [[ $FAST == 1 ]]; then step "release build (--fast: the fast profile, CI-9 — test's alone)"; else step "release build (the perf profile, RUN-39)"; fi
   lr=$(log_path build-release); say "log: $lr"
   cargo_release "$lr"
   [[ -d $BUILD/ui/src ]] || die "ui-build: no ui/src at $short — a v2 tree's UI is its components' sources"
@@ -644,6 +694,7 @@ cmd_build() {
   while [[ $# -gt 0 ]]; do
     case $1 in
       --no-gate) gated=0 ;;
+      --fast) FAST=1 ;;
       --branch) [[ $# -ge 2 ]] || die "--branch needs a value"; branch=$2; shift ;;
       --branch=*) branch=${1#--branch=} ;;
       -*) die "unknown flag $1" ;;
@@ -699,7 +750,11 @@ cmd_build() {
     echo "subject:   $(git -C "$REPO" log -1 --format=%s "$sha")"
     echo "built:     $(date -u +%FT%TZ)"
     echo "rustc:     $(rustc --version)"
-    if [[ $REL_PROFILE == perf ]]; then echo "profile:   perf (RUN-39: the build the bench measures)"; else echo "profile:   $REL_PROFILE"; fi
+    case $REL_PROFILE in
+      perf) echo "profile:   perf (RUN-39: the build the bench measures)" ;;
+      fast) echo "profile:   fast (CI-9: test's quick build — never a prod candidate)" ;;
+      *) echo "profile:   $REL_PROFILE" ;;
+    esac
     echo "steps:     $steps"
     echo "gate:      $gate"
   } > "$stage/RELEASE"
@@ -1121,6 +1176,8 @@ cmd_remote() {
     # and only once that release's suite has passed (DEPLOY-52)
     local rel good s; rel=$(last_good test); good=$(last_good app-prod)
     [[ -n $rel ]] || die "test runs no release this log knows — nothing to promote (deploy/pipeline remote test first)"
+    # CI-9: a fast build is test's alone — prod takes the perf build, the one the bench holds
+    [[ $(release_profile "$rel") == fast ]] && die "$rel is a fast build (CI-9: test's quick build, never a prod candidate) — prod takes the perf build: deploy/pipeline build --branch B (no --fast), image, remote test, suite, then remote prod"
     s=$(suite_of "$rel")
     case $s in
       passed) ;;
@@ -1284,6 +1341,7 @@ mark_release() {
   chmod u+w "$r"; [[ -e $r/$2 ]] && chmod u+w "$r/$2"
   printf '%s\n' "$3" >"$r/$2"; chmod a-w "$r/$2" "$r"
 }
+release_profile() { sed -n 's/^profile: *\([a-z]*\).*/\1/p' "$RELEASES/$1/RELEASE" 2>/dev/null | head -n 1; } # REL → perf | fast | release | empty
 suite_of() { # REL → passed | failed | running | none
   local r=$RELEASES/$1 g
   if [[ -f $r/SUITE ]]; then sed -n 's/^\(passed\|failed\|running\)\b.*/\1/p' "$r/SUITE" | head -n 1; return; fi
@@ -1312,6 +1370,7 @@ GATE_BENCH=""
 run_bench() { # REL SHORT
   local rel=$1 short=$2 lb lc counts target=${MENGER_BENCH_TARGET:-$HOME/.cache/cargo-target/plexus-bench}
   if [[ $BENCH_DIR == none ]]; then GATE_BENCH="not run (MENGER_BENCH_DIR=none)"; say "bench: $GATE_BENCH"; return 0; fi
+  if [[ $(release_profile "$rel") == fast ]]; then GATE_BENCH="not run (a fast release, CI-9: the goldens are the perf build's)"; say "bench: $GATE_BENCH"; return 0; fi
   if [[ ! -x $BENCH_DIR/scripts/gate.sh ]]; then GATE_BENCH="not run (no plexus-bench at $BENCH_DIR)"; say "bench: $GATE_BENCH"; return 0; fi
   step "counts: plexus-bench — every scenario's instructions and allocations against goldens/ci"
   lc=$(log_path counts); say "log: $lc"

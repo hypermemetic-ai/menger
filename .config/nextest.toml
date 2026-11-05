@@ -1,0 +1,12 @@
+# CI-9: the suite's runner (deploy/pipeline's gate, `cargo nextest run --workspace`). Every
+# test is a process of its own and runs beside every other; what must not is said here.
+
+[test-groups]
+# tests/scripts.rs: the scripts share the machine's /tmp/claude-UID roots and PATH stand-ins —
+# one at a time, as the binary's own lock held them under cargo test (a lock nextest's
+# process-per-test does not share).
+scripts = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'binary(scripts)'
+test-group = 'scripts'
