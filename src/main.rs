@@ -17,6 +17,9 @@ const SIGN_IN: &str = "Sign-in";
 const LIMITS: &str = "Limits";
 const MAINTENANCE: &str = "Maintenance and testing";
 
+/// V2-54: the largest socket message by default — a UI bundle, base64, with room to grow.
+const MAX_MESSAGE_BYTES: usize = 32 << 20;
+
 #[derive(Parser, Debug)]
 #[command(name = "menger", version)]
 #[command(about = "menger — a plan is a program whose leaves are prose. The tickets service.")]
@@ -396,6 +399,11 @@ struct Args {
     #[arg(long, env = "MENGER_MAX_CALLS_PER_CONNECTION", default_value_t = menger::calls::CALLS_PER_CONNECTION, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
     max_calls_per_connection: usize,
 
+    /// V2-54: the largest message one socket takes, in bytes (default 32 MiB). A UI bundle is pushed in one
+    /// message, base64; plexus-transport's own default, 10 MiB, dropped a 7.9 MB bundle with no answer.
+    #[arg(long, env = "MENGER_MAX_MESSAGE_BYTES", default_value_t = MAX_MESSAGE_BYTES, value_name = "BYTES", help_heading = LIMITS, hide_short_help = true)]
+    max_message_bytes: usize,
+
     /// Close a connection with no call open for this long (0: never).
     #[arg(long, env = "MENGER_IDLE_TIMEOUT_SECS", default_value_t = menger::calls::IDLE_SECS, value_name = "SECS", help_heading = LIMITS, hide_short_help = true)]
     idle_timeout_secs: u64,
@@ -742,7 +750,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
         // RPC-5 (PERF-20): --idle-timeout-secs reaches the socket that never
         // makes a call too — the transport closes it; menger's sweep keeps
         // the ones that did (src/calls.rs). Pings find a dead peer.
-        .with_socket_limits(plexus_transport::SocketLimits { idle_timeout: limits.idle, ..Default::default() })
+        .with_socket_limits(plexus_transport::SocketLimits { idle_timeout: limits.idle, max_message_size: args.max_message_bytes, ..Default::default() })
         .with_allowed_hosts(hosts(ws_port));
     tracing::info!("WebSocket: ws://{}", std::net::SocketAddr::new(args.bind, ws_port));
     // IDENTITY-29: only menger's own pages may open the socket from a
