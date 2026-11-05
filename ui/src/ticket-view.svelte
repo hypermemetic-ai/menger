@@ -248,6 +248,12 @@ m-step::before{content:attr(date) " · " attr(status) " · " attr(by) "  ";font-
   import Diagram from "plexus-ui:mermaid-diagram";
   import CodeCard from "./code-card.svelte";
   import PageFrame from "./page-frame.svelte";
+  // COMPS-4: a tag in a body drawn by its component (ours natively, anyone else's framed), and a
+  // ```component definition's save said under its block.
+  // tag-components' table (no markup) reads what names resolve to, once a tag or a definition asks.
+  import TagTable, { drawTags, defLines, houseOwns } from "./tag-components.svelte";
+  import DefLine from "./component-def.svelte";
+  houseOwns([...CARDS, ...INLINE]);
 
   // EDITOR-9: what the markdown drew, finished. Each ```mermaid fence (a bare one, or one inside a
   // house mark) gets the diagram's bound mark before it — its own module, fetched the first time one is
@@ -255,10 +261,11 @@ m-step::before{content:attr(date) " · " attr(status) " · " attr(by) "  ";font-
   // with no card of its own (an unknown `m-*`, a custom tag kept as `m-el`, a known inline mark used as
   // a box) is marked `any`: its words drawn in a neutral box, captioned by its label, name, title or
   // field — the tag's own name when it holds no words at all; inline among words, a caption beside them.
-  function enhance(node) {
+  function enhance(node, src) {
     let placed = [];
-    const clear = () => { for (const p of placed) { unmount(p.app); p.at.remove(); } placed = []; };
-    const place = () => {
+    let tags = null;
+    const clear = () => { tags?.destroy(); tags = null; for (const p of placed) { unmount(p.app); p.at.remove(); } placed = []; };
+    const place = (text) => {
       clear();
       const top = !node.parentElement?.matches?.(".h-mid, .h-close"); // a card's caption once, on its top piece
       for (const e of node.querySelectorAll("*")) {
@@ -296,8 +303,11 @@ m-step::before{content:attr(date) " · " attr(status) " · " attr(by) "  ";font-
         const props = { code: code.textContent.replace(/\n$/, ""), info, path: mc?.getAttribute("path") || "", why: mc?.getAttribute("why") || "" };
         placed.push({ at, app: mount(CodeCard, { target: at, props }) });
       }
+      // COMPS-4: each ```component fence's save, said under its card; each tag drawn by its component.
+      placed.push(...defLines(node, text, (at, d) => mount(DefLine, { target: at, props: { name: d.name, source: d.source, html: d.html } })));
+      tags = drawTags(node);
     };
-    place();
+    place(src);
     return { update: place, destroy: clear };
   }
 
@@ -358,7 +368,7 @@ m-step::before{content:attr(date) " · " attr(status) " · " attr(by) "  ";font-
 
 {#snippet drawn(p)}{#if p.raw}<div class="blk-in"><PageFrame source={p.text} doc={rawDoc(p.text)} prepare={drawDiagrams}/></div>{:else if p.page}<div class="blk-in"><PageFrame source={p.text}/></div>{:else}<div class="blk-in" use:enhance={p.text}>{@html markdown(mediaLinks(pieceSource(p)) + defs)}</div>{/if}{/snippet}
 
-{#if block}{@render drawn(piece ?? { text: body })}{:else}
+<TagTable/>{#if block}{@render drawn(piece ?? { text: body })}{:else}
 <article class="ticket-view" data-surface="ticket-view" data-editing={edit ? "" : undefined}>
   {#if title != null || status != null || titleEdit}
     <header class="head">

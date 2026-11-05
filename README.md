@@ -233,7 +233,27 @@ group or others is refused, naming its mode); a start naming its public key
 as a `--ui-signer` too is refused. On a server whose `editor` role an admin
 ever changed with `auth role_set` (app-test included), the stored role wins:
 `ui.author` and `ui.routes.set|clear` are not in it until it is set again
-with them (`auth roles` says what it holds).
+with them (`auth roles` says what it holds). The same holds for COMPS-4's
+`ui.components` in `viewer`: a stored viewer role lacks it until it is set
+again with it.
+
+**Components in tickets** (COMPS-4; plexus-ui's CONTRACT.md "An author's own
+namespace"). A body defines a component in a fence, ```` ```component x-name ````
+holding rhx, or ```` ```component x-name html ```` holding a custom element's
+HTML and script (only ever drawn framed); the name is a tag's (lower case,
+with a hyphen). The ticket's save is its definitions' — the editor's amend,
+the edit form's body, a doc at a pause (`ui/src/tag-components.svelte`,
+real Svelte, svelte/1: `authorChanged`): each definition whose text changed is `ui.author`ed, into
+the live bundle for a saver holding `ui.author` on `*`, else into their own
+namespace (`own: true`: stored, versioned, signed by the service, never in
+the bundle); the answer (saved, or the refusal with its line) is said under
+the block. Any tag in any body (`<x-name attr="…">`, or an `m-*` the house
+draws no card for) is resolved by `ui.components` — the live bundle first,
+drawn natively (a bound mark), then the newest authored, drawn in a frame
+(`bus.frame`, its calls the viewer's held to its `uses`); its attributes are
+its props, its children its `body`, and the table follows `ui.watch`, so a
+definition edited redraws every ticket using it. A tag nothing names keeps
+its words, "no component named x" on hover. `tests/pages/components.mjs`.
 
 `menger login [--agent]` prints a one-time link (or the agent's `_login`
 line) for the server running on `--data-dir`.

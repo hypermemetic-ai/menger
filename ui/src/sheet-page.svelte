@@ -75,6 +75,8 @@
   import MermaidDiagram from "plexus-ui:mermaid-diagram";
   import CodeCard from "plexus-ui:code-card";
   import PageFrame from "plexus-ui:page-frame";
+  import TagComponents from "plexus-ui:tag-components";
+  import ComponentDef from "plexus-ui:component-def";
   import CodePaint from "plexus-ui:code-paint";
   import CodeRust from "plexus-ui:code-rust";
   import CodeJavascript from "plexus-ui:code-javascript";
@@ -214,6 +216,9 @@
       ["code-card", CodeCard, (t) => ({ code: "fn main() {\n    println!(\"{}\", 42);\n}", info: "rust", path: "src/main.rs", why: "the entry" }), ["hover", "focus"], {}],
       // EDITOR-14: a page in a body, framed — two widths, so the width switch shows.
       ["page-frame", PageFrame, (t) => ({ source: "<m-mockup label=\"a page\" widths=\"390,1440\"><!doctype html><title>a page</title><p>a page in a frame</p></m-mockup>" }), [], {}],
+      // COMPS-4: a tag's table (no markup of its own), and a ```component definition's line under its block.
+      ["tag-components", TagComponents, (t) => ({}), [], {}],
+      ["component-def", ComponentDef, (t) => ({ name: "x-hello", source: "<p class=\"x-hello\">hello</p>\n" }), [], { html: { name: "x-card", source: "<div>a card</div>\n", html: true } }],
       ["code-paint", CodePaint, (t) => ({ code: "plain text, no language" }), [], {}],
       ["code-rust", CodeRust, (t) => ({ code: "fn main() { let x: u32 = 1; }" }), [], {}],
       ["code-javascript", CodeJavascript, (t) => ({ code: "const n = 1; // a comment", lang: "typescript" }), [], {}],

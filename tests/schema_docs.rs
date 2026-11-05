@@ -396,6 +396,8 @@ const UI_ROLES: &[(&str, &str, &str)] = &[
     ("ui", "redo", "editor"),
     // UI-15: a release to prod is a pointer move, the deployer's as the push is.
     ("ui", "promote", "deployer"),
+    // COMPS-4: what a tag names, every page's read.
+    ("ui", "components", "viewer"),
 ];
 
 /// V2-11, acceptance (the table's second row): `ui push --help` says the

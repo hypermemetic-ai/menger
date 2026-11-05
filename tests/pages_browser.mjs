@@ -58,7 +58,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { makeKey, readToken, sessionCookies, writeSession } from "../scripts/throwaway-login.mjs";
-import { INIT, TARGET, Throwaway, build, bundle, playwright, push, sentCalls, sleep, synapse, workDir } from "../scripts/ui-throwaway.mjs";
+import { INIT, TARGET, Throwaway, build, bundle, compilerModule, playwright, push, sentCalls, sleep, synapse, workDir } from "../scripts/ui-throwaway.mjs";
 
 const args = process.argv.slice(2);
 const flag = (name) => args.includes(name);
@@ -276,6 +276,10 @@ async function main() {
   // service's hidden --media-fetch-allow (tests/pages/editor.mjs's cards).
   const fake = await fakeInternet();
   server.fetchAllow = [`127.0.0.1:${fake.port}`];
+  // COMPS-4: ui.author runs — the compiler module and an author key (made at start), so a ticket's
+  // ```component definitions save (tests/pages/components.mjs).
+  server.uiCompiler = compilerModule(work);
+  server.authorKey = path.join(work, "author.key");
   const session = path.join(work, "session");
   let browser;
   // FRAME-14: from the start on, a failure anywhere stops the server.
@@ -299,9 +303,10 @@ async function main() {
 
     /** A page (signed in unless `signedIn` is false), its console kept; the
      *  engine's frames counted from INIT. */
-    async function openPage(route = "", { signedIn = true } = {}) {
+    async function openPage(route = "", { signedIn = true, as = null } = {}) {
       const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-      if (signedIn) await context.addCookies(sessionCookies(server.origin, token));
+      // COMPS-4: `as`, another principal's session token (tests/pages/components.mjs).
+      if (signedIn) await context.addCookies(sessionCookies(server.origin, as ?? token));
       await context.addInitScript(INIT);
       const page = await context.newPage();
       const seen = { sockets: 0, console: [], requests: [] };
