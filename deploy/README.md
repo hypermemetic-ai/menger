@@ -120,9 +120,14 @@ the owner's.
      profile and builds the release profile, said `profile: release`. A tree
      with no `ui/src` is refused;
    - `plexus-ui` — the framework's tool, `cargo build --release
-     --manifest-path ../plexus-ui/Cargo.toml -p plexus-ui-cli` from the
-     framework's checkout beside the build checkout (`MENGER_PLEXUS_UI`
-     names one built already);
+     --manifest-path $PUI/Cargo.toml -p plexus-ui-cli`, `$PUI` the
+     framework's checkout the tree's `scripts/plexus-ui-src` names (V2-47):
+     the tag `plexus-ui-v<version>` of the `plexus-ui-service` version its
+     Cargo.lock takes, cloned once into `~/.cache/plexus-ui` and refused when
+     no longer the tag's — never `../plexus-ui`'s working tree, and never
+     `PLEXUS_UI_SRC`; a tree before V2-47 (no `scripts/plexus-ui-src`) builds
+     from `../plexus-ui` as it did (`MENGER_PLEXUS_UI` names a tool built
+     already);
    - `ui-prebuild` — `plexus-ui build --prebuild --engine dist/engine`: the
      engine (wasm32, wasm-bindgen);
    - `ui-uses` (SURFACE-11) — the bundle built once unstamped
@@ -154,11 +159,11 @@ the owner's.
      `dist/ui.tar` (`../plexus-ui/CONTRACT.md`'s bytes), which must hold
      `index.html`; no socket asked;
    - `studio-build` (STUDIO-2) — the framework's studio,
-     `plexus-ui build ../plexus-ui/studio --name studio --contract HASH`
+     `plexus-ui build $PUI/studio --name studio --contract HASH`
      with its own contract over its own uses (over `ui` today), or with no
      `--contract` when its components name no service, `dist/studio.tar`;
      a deploy pushes it `--no-live`;
-   - `ui-compiler-wasm` — the framework's `../plexus-ui/scripts/ui-compiler-wasm.sh
+   - `ui-compiler-wasm` — the framework's `$PUI/scripts/ui-compiler-wasm.sh
      dist/ui-compiler.wasm` (rustup's `wasm32-unknown-unknown`; FRAME-7):
      the compiler module. A release of v2 always carries it: no script, a
      failed one, or no module after it fails the build, named.

@@ -11,7 +11,8 @@
 #
 #   deploy/pipeline build [REV] [--branch B] [--no-gate]  gate + release (default REV: B, else main;
 #                                           V2-7: B named in the release; a tree with no frontend/ builds
-#                                           its UI with ../plexus-ui's plexus-ui, FRAME-8); --no-gate: the
+#                                           its UI with plexus-ui's tool at the tag of the version its
+#                                           Cargo.lock takes, FRAME-8, V2-47); --no-gate: the
 #                                           release alone, the suite to run after the deploy
 #                                           (DEPLOY-52); refused up front on a low disk (CI-2:
 #                                           scripts/disk-check.sh — under 50 GB free or 90% used);
@@ -88,7 +89,7 @@ set -euo pipefail
 # ── where things are ────────────────────────────────────────────────────────
 REPO=$(git -C "$(dirname "$(readlink -f "$0")")" rev-parse --show-toplevel)
 # The build checkout is a sibling of the repo: of menger's plexus dependencies,
-# what is unpublished is by relative path (../plexus-login, ../plexus-ui; PLEXUS-16), so a checkout anywhere else cannot build.
+# a tree before V2-47 took plexus-login and plexus-ui by relative path (PLEXUS-16), so a checkout anywhere else could not build it.
 # V2-7: MENGER_BUILD_CHECKOUT names another sibling (a worktree's own build, beside the runner's)
 BUILD=${MENGER_BUILD_CHECKOUT:-$(dirname "$REPO")/menger-build}
 HOME_DIR=${MENGER_DEPLOY_HOME:-$HOME/.local/share/menger-deploy}
@@ -508,8 +509,32 @@ contract_read() { # LOG BINARY WHAT USES [WHAT USES…] → CONTRACTS (a hash pe
   contract_stop
   CONTRACT=${CONTRACTS[0]:-}
 }
-# FRAME-8: the plexus-ui tool a v2 build makes its bundle with — ../plexus-ui's cli/
-# (plexus-ui-cli), beside the build checkout as the framework's crates are, built with cargo into
+# V2-47 (the owner, 2026-11-05, "B"): the framework a v2 build makes its tool, engine, studio and
+# compiler module with is the plexus-ui release the tree's Cargo.lock takes plexus-ui-service at —
+# a checkout of its tag, plexus-ui-v<version>, never ../plexus-ui's working tree, so the ui service
+# in bin/menger and the tool, engine and wasm beside it come from one revision. The tree's own
+# scripts/plexus-ui-src finds it (cloned once under ~/.cache/plexus-ui, refused when it is no longer
+# the tag's; npm ci there when a svelte/1 bundle needs svelte and esbuild); PLEXUS_UI_SRC, a
+# checkout named on purpose, is never taken by a build. A tree with no scripts/plexus-ui-src
+# (before V2-47) builds from ../plexus-ui beside it, as it did.
+PUI=""
+pui_red() { [[ -z $LOG_STAMP ]] || red_run; } # a build's run is marked red; `ui` keeps no run
+plexus_ui_src() { # TREE LOG [keep] → PUI, the framework's checkout (keep: PLEXUS_UI_SRC is taken)
+  local tree=$1 lg=$2 unset=(-u PLEXUS_UI_SRC)
+  [[ ${3:-} == keep ]] && unset=()
+  if [[ ! -x $tree/scripts/plexus-ui-src ]]; then
+    PUI=$tree/../plexus-ui
+    [[ -f $PUI/Cargo.toml ]] || die "plexus-ui: no ../plexus-ui beside $tree (a tree before V2-47 takes the framework by sibling path)"
+    say "plexus-ui: $PUI — by sibling path (a tree before V2-47)"; return 0
+  fi
+  PUI=$(env "${unset[@]}" "$tree/scripts/plexus-ui-src" "$tree" 2>>"$lg") || { pui_red; die "plexus-ui: $(tail -n 1 "$lg" 2>/dev/null) — $lg"; }
+  if compgen -G "$tree/ui/src/*.svelte" >/dev/null || compgen -G "$PUI/studio/src/*.svelte" >/dev/null; then
+    PUI=$(env "${unset[@]}" "$tree/scripts/plexus-ui-src" --node-modules "$tree" 2>>"$lg") || { pui_red; die "plexus-ui: $(tail -n 1 "$lg" 2>/dev/null) — $lg"; }
+  fi
+  say "plexus-ui: $PUI — $(grep '^plexus-ui-src: /' "$lg" 2>/dev/null | tail -n 1 | sed 's/^plexus-ui-src: [^ ]* //')"
+}
+# FRAME-8: the plexus-ui tool a v2 build makes its bundle with — the framework checkout's cli/
+# (plexus-ui-cli, $PUI: plexus_ui_src), built with cargo into
 # the build's target; MENGER_PLEXUS_UI names one built already. The release carries it
 # (bin/plexus-ui): a deploy pushes the release's bundle with the release's own tool.
 UI_TOOL=""
@@ -519,8 +544,7 @@ ui_tool_build() { # LOG → UI_TOOL
     [[ -x $MENGER_PLEXUS_UI ]] || die "plexus-ui: MENGER_PLEXUS_UI=$MENGER_PLEXUS_UI is no executable"
     UI_TOOL=$MENGER_PLEXUS_UI; say "plexus-ui: $UI_TOOL (MENGER_PLEXUS_UI)"; return 0
   fi
-  [[ -f $BUILD/../plexus-ui/Cargo.toml ]] || die "plexus-ui: no ../plexus-ui beside $BUILD (FRAME-3: the framework's checkout)"
-  (cd "$BUILD" && cargo build --release --manifest-path "$BUILD/../plexus-ui/Cargo.toml" -p plexus-ui-cli >>"$lg" 2>&1) || { red_run; die "plexus-ui: the tool's build failed — $lg"; }
+  (cd "$BUILD" && cargo build --release --manifest-path "$PUI/Cargo.toml" -p plexus-ui-cli >>"$lg" 2>&1) || { red_run; die "plexus-ui: the tool's build failed — $lg"; }
   UI_TOOL=$CARGO_TARGET_DIR/release/plexus-ui
   [[ -x $UI_TOOL ]] || die "plexus-ui: no $UI_TOOL after its build — $lg"
 }
@@ -528,10 +552,10 @@ ui_tool_build() { # LOG → UI_TOOL
 # unknown), the build that says the bundle's uses (SURFACE-11); else stamped --contract CONTRACT.
 # SURFACE-10: --strict-colours — a literal colour in a component's <style> refuses the build.
 ui_bundle() { # LOG CONTRACT → dist/ui.tar
-  (cd "$BUILD" && "$UI_TOOL" build "$BUILD/ui" --strict-colours --engine "$BUILD/dist/engine" ${2:+--contract "$2"} --commit "menger@$short" -o "$BUILD/dist/ui.tar" --node-modules "$BUILD/../plexus-ui/node_modules") >>"$1" 2>&1
+  (cd "$BUILD" && "$UI_TOOL" build "$BUILD/ui" --strict-colours --engine "$BUILD/dist/engine" ${2:+--contract "$2"} --commit "menger@$short" -o "$BUILD/dist/ui.tar" --node-modules "$PUI/node_modules") >>"$1" 2>&1
 }
 studio_bundle() { # LOG CONTRACT PLEXUS_UI_SHORT → dist/studio.tar
-  (cd "$BUILD" && "$UI_TOOL" build "$BUILD/../plexus-ui/studio" --strict-colours --engine "$BUILD/dist/engine" --name studio ${2:+--contract "$2"} --commit "plexus-ui@$3" -o "$BUILD/dist/studio.tar" --node-modules "$BUILD/../plexus-ui/node_modules") >>"$1" 2>&1
+  (cd "$BUILD" && "$UI_TOOL" build "$PUI/studio" --strict-colours --engine "$BUILD/dist/engine" --name studio ${2:+--contract "$2"} --commit "plexus-ui@$3" -o "$BUILD/dist/studio.tar" --node-modules "$PUI/node_modules") >>"$1" 2>&1
 }
 V2_STEPS=""
 build_v2() { # V2-7, FRAME-8: every step on this machine — the release, the tool, the engine, the contract, the bundle, the compiler module
@@ -541,8 +565,9 @@ build_v2() { # V2-7, FRAME-8: every step on this machine — the release, the to
   lr=$(log_path build-release); say "log: $lr"
   cargo_release "$lr"
   [[ -d $BUILD/ui/src ]] || die "ui-build: no ui/src at $short — a v2 tree's UI is its components' sources"
-  step "plexus-ui (the tool, from ../plexus-ui)"
+  step "plexus-ui (the tool, from the plexus-ui release the tree takes)"
   lr=$(log_path build-plexus-ui); say "log: $lr"
+  plexus_ui_src "$BUILD" "$lr"
   ui_tool_build "$lr"
   V2_STEPS+=", plexus-ui"
   # the engine is cargo's (wasm32, wasm-bindgen): built here, into dist/engine
@@ -552,14 +577,14 @@ build_v2() { # V2-7, FRAME-8: every step on this machine — the release, the to
   V2_STEPS+=", ui-prebuild"
   # the bundle: the components compiled in-process, the manifest, the tar — no cargo, no container.
   # FRAME-13: a svelte/1 component (ui/src/<name>.svelte, real Svelte) is compiled by the tool in Node 22+
-  # with svelte and esbuild from ../plexus-ui's node_modules — its package.json pins them, `npm ci` in
-  # ../plexus-ui installs them; an rhx-only UI needs neither (FRAME-14: the board's real-Svelte twins, ui/src/*-sv.svelte)
+  # with svelte and esbuild from the framework checkout's node_modules — its package.json pins them, `npm ci`
+  # there installs them (plexus_ui_src, for a tagged checkout); an rhx-only UI needs neither (FRAME-14: the board's real-Svelte twins, ui/src/*-sv.svelte)
   if compgen -G "$BUILD/ui/src/*.svelte" >/dev/null; then command -v node >/dev/null || die "ui-build: ui/src holds svelte/1 components (.svelte), built in Node, and there is no node on PATH — install Node 22 or newer"; say "svelte/1: node $(node --version)"; fi
-  if compgen -G "$BUILD/ui/src/*.svelte" >/dev/null; then [[ -f $BUILD/../plexus-ui/node_modules/svelte/package.json && -f $BUILD/../plexus-ui/node_modules/esbuild/package.json ]] || die "ui-build: ui/src holds svelte/1 components (.svelte) and ../plexus-ui has no node_modules/svelte and node_modules/esbuild — run npm ci in ../plexus-ui"; fi
+  if compgen -G "$BUILD/ui/src/*.svelte" >/dev/null; then [[ -f $PUI/node_modules/svelte/package.json && -f $PUI/node_modules/esbuild/package.json ]] || die "ui-build: ui/src holds svelte/1 components (.svelte) and $PUI has no node_modules/svelte and node_modules/esbuild — run npm ci in $PUI"; fi
   # SURFACE-11: each bundle built once unstamped — its manifest says the methods its components use —
   # then stamped with ui.contract's hash over the services they name, and built again
   local app_uses studio_uses="" studio=0 pu=""
-  [[ -d $BUILD/../plexus-ui/studio ]] && { studio=1; pu=$(git -C "$BUILD/../plexus-ui" rev-parse --short HEAD 2>/dev/null || echo unknown); }
+  [[ -d $PUI/studio ]] && { studio=1; pu=$(git -C "$PUI" rev-parse --short HEAD 2>/dev/null || echo unknown); }
   step "ui-uses (plexus-ui build, unstamped: the methods the bundle's components use)"
   lr=$(log_path build-ui-uses); say "log: $lr"
   ui_bundle "$lr" "" || { red_run; die "ui-build failed — $lr"; }
@@ -583,23 +608,23 @@ build_v2() { # V2-7, FRAME-8: every step on this machine — the release, the to
   # DEPLOY-6: no -q under pipefail (b82f5bd's rule) — grep reads the whole listing, or tar dies of SIGPIPE
   tar -tf "$BUILD/dist/ui.tar" 2>/dev/null | grep -x 'index.html' >/dev/null || die "ui-build: $BUILD/dist/ui.tar is no tar holding index.html"
   V2_STEPS+=", ui-build"
-  # STUDIO-2: the studio — the framework's own bundle (../plexus-ui/studio), built by the same tool
+  # STUDIO-2: the studio — the framework's own bundle ($PUI/studio), built by the same tool
   # with --name studio; a deploy pushes it --no-live, kept as bundle:studio and served at /studio/.
   if [[ $studio == 1 ]]; then
-    step "studio-build (plexus-ui build ../plexus-ui/studio --name studio${studio_contract:+ --contract $studio_contract})"
+    step "studio-build (plexus-ui build $PUI/studio --name studio${studio_contract:+ --contract $studio_contract})"
     lr=$(log_path build-studio); say "log: $lr"
     studio_bundle "$lr" "$studio_contract" "$pu" || { red_run; die "studio-build failed — $lr"; }
     V2_STEPS+=", studio-build"
   fi
-  # FRAME-7: the compiler module is the framework's script's — ../plexus-ui/scripts/ui-compiler-wasm.sh
+  # FRAME-7: the compiler module is the framework's script's — $PUI/scripts/ui-compiler-wasm.sh
   # OUT, cargo's (wasm32-unknown-unknown), on this machine into the build's target. A release of v2
   # always carries it: no script, a failed one, or no module after it fails the build, named.
-  step "ui-compiler-wasm (../plexus-ui/scripts/ui-compiler-wasm.sh, on this machine)"
+  step "ui-compiler-wasm (the framework's scripts/ui-compiler-wasm.sh, on this machine)"
   lr=$(log_path build-ui-compiler); say "log: $lr"
-  local wasm_sh=$BUILD/../plexus-ui/scripts/ui-compiler-wasm.sh
-  [[ -f $wasm_sh ]] || { red_run; die "ui-compiler-wasm: no ../plexus-ui/scripts/ui-compiler-wasm.sh beside $BUILD (FRAME-7: the framework's) — no release without the compiler module"; }
+  local wasm_sh=$PUI/scripts/ui-compiler-wasm.sh
+  [[ -f $wasm_sh ]] || { red_run; die "ui-compiler-wasm: no scripts/ui-compiler-wasm.sh in $PUI (FRAME-7: the framework's) — no release without the compiler module"; }
   (cd "$BUILD" && bash "$wasm_sh" "$BUILD/dist/ui-compiler.wasm") >"$lr" 2>&1 || { red_run; die "ui-compiler-wasm failed — $lr"; }
-  [[ -s $BUILD/dist/ui-compiler.wasm ]] || { red_run; die "ui-compiler-wasm: no $BUILD/dist/ui-compiler.wasm after ../plexus-ui/scripts/ui-compiler-wasm.sh — $lr"; }
+  [[ -s $BUILD/dist/ui-compiler.wasm ]] || { red_run; die "ui-compiler-wasm: no $BUILD/dist/ui-compiler.wasm after $PUI/scripts/ui-compiler-wasm.sh — $lr"; }
   V2_STEPS+=", ui-compiler-wasm"
   id=$(date -u +%Y%m%dT%H%M%SZ)-$short
   stage=$RELEASES/$id.tmp
@@ -1619,7 +1644,7 @@ ui_once() { # WS TOOL ENGINE TAR — one build and push; says what happened; 1 w
   commit=menger@$(git -C "$REPO" rev-parse --short HEAD)
   [[ -n $(git -C "$REPO" status --porcelain -- ui) ]] && commit+=-dirty
   if ! out=$(env -u MENGER_DEPLOY_KEY "$tool" build "$REPO/ui" --strict-colours --engine "$engine" \
-        --node-modules "$REPO/../plexus-ui/node_modules" --contract-from "$ws" --service menger \
+        --node-modules "$PUI/node_modules" --contract-from "$ws" --service menger \
         --key-file "$DEPLOY_KEY_FILE" --as pipeline --commit "$commit" -o "$tar" 2>&1); then
     say "red  $commit: the build refused it — nothing moved"; say "$out"
     grep -q unknown_method <<<"$out" && say "     a method test's server does not have: this change needs a release (deploy/pipeline build)"
@@ -1649,8 +1674,9 @@ cmd_ui() {
   rel=$(last_good test); [[ -n $rel ]] && release_bundle "$rel" || die "test runs no release with a bundle (${rel:-none}): deploy one first"
   tool=$(ui_tool "$rel"); [[ -n $tool ]] || die "no plexus-ui (the release carries none; MENGER_PLEXUS_UI, or PATH)"
   engine=$(ui_engine "$rel") || die "no engine in $rel's bundle"
+  local uilog; uilog=$(mktemp); plexus_ui_src "$REPO" "$uilog" keep   # V2-47: svelte/1's node_modules, of the plexus-ui this tree takes
   ws=$(app_url test); ws=wss://${ws#https://}; ws=${ws%/}/ws
-  tar=$(mktemp --suffix=.tar); trap "rm -f '$tar'" EXIT
+  tar=$(mktemp --suffix=.tar); trap "rm -f '$tar' '$uilog'" EXIT
   if [[ $watch == 0 ]]; then ui_once "$ws" "$tool" "$engine" "$tar"; return; fi
   say "watching $REPO/ui → $ws (release $rel); Ctrl-C ends it"
   stamp=$(ui_stamp); ui_once "$ws" "$tool" "$engine" "$tar" || true

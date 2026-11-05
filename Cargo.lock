@@ -2716,7 +2716,9 @@ dependencies = [
 
 [[package]]
 name = "plexus-login"
-version = "0.2.2"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2368649f31960f190462cc0bb6d8ec3af91ffd64d0a7d6359573217ebcd5c70b"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2806,7 +2808,9 @@ dependencies = [
 
 [[package]]
 name = "plexus-ui-compiler"
-version = "0.1.0"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08a8da586bf5f1bcd6428136acf129781cb01291c2511d39624dfe4de4a56f34"
 dependencies = [
  "rhai",
  "serde",
@@ -2816,7 +2820,9 @@ dependencies = [
 
 [[package]]
 name = "plexus-ui-service"
-version = "0.1.0"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f96dfef0dcd245a2445697c6447f6c814bf5144349e0f6bc808425487eae4bb0"
 dependencies = [
  "async-stream",
  "async-trait",

@@ -6,14 +6,16 @@
 # still never needs the wasm toolchain.
 #
 # FRAME-4: the shell (`plexus-webapp`, SCAFFOLD-5, published) and the login
-# (`plexus-login`, SCAFFOLD-9, by sibling path until it is published) are
+# (`plexus-login`, SCAFFOLD-9; published, V2-47) are
 # repositories of their own, taken below — not members here.
 # FRAME-5: the ui service (UI-3's activation and its own file, `ui.db`) is
-# `../plexus-ui`'s `plexus-ui-service`, by sibling path below.
+# plexus-ui's `plexus-ui-service`, by published version below (V2-47).
 # FRAME-3: the component compiler and the engine (UI-5, UI-6) are
-# `../plexus-ui`'s (`plexus-ui-compiler`, `plexus-ui-engine`), by sibling
-# path: the compiler a dev-dependency below, the engine built into the
-# bundle by ../plexus-ui's plexus-ui tool (FRAME-8; scripts/plexus-ui).
+# plexus-ui's (`plexus-ui-compiler`, `plexus-ui-engine`): the compiler a
+# dev-dependency below at the service's version, the engine built into the
+# bundle by plexus-ui's tool (FRAME-8) from that version's tag,
+# plexus-ui-v<version> (scripts/plexus-ui-src). scripts/plexus-ui-release
+# publishes plexus-ui and moves both lines in one step.
 # V2-24: `media/` is the media service — menger-media, a service of v2's own
 # beside `tickets` and `ui`, its images in a file of its own (`media.db`).
 # V2-29: `docs/` is the docs service — menger-docs, documents on their own
@@ -73,10 +75,11 @@ menger-docs = { path = "docs", version = "0.6.2" }
 # its own file (`quota.db`); the meter the tickets service's writes reserve
 # through; the write-rate bucket the call layer keeps.
 menger-quota = { path = "quota", version = "0.6.2" }
-# UI-3, FRAME-5: the ui service — the framework's (`../plexus-ui/service`):
+# UI-3, FRAME-5: the ui service — the framework's (plexus-ui's `service/`):
 # its activation registered beside `tickets`, its routes mounted on the
 # shell, serving `/`, `/app/` and `/app/<hash>/…` from its store.
-plexus-ui-service = { path = "../plexus-ui/service" }
+# V2-47: by published version; scripts/plexus-ui-release moves it.
+plexus-ui-service = "0.1.1"
 
 # SCAFFOLD-5: the shell (the app's build as a table, stamped and served) and
 # the local server (`menger::local`'s serving) — plexus-webapp, a repository
@@ -88,8 +91,8 @@ plexus-webapp = "0.2.0"
 # plexus-transport 0.6.0 (the REST bridge fixes ported to HEAD, pinned to
 # core 0.7). PLEXUS-16: every one by its published version from crates.io,
 # never by path outside this repository, so the graph resolves exactly one
-# of each; only what is unpublished (plexus-login, plexus-ui's crates) stays
-# by sibling path, and those take the same published versions.
+# of each — plexus-login and plexus-ui's crates too (V2-47), so a clone of
+# menger alone builds.
 # POLYGLOT-5 (V2-44): `clap` — plexus-core's ChildArgs, `--child` and its
 # flags spelled as every service spells them.
 plexus-core = { version = "0.7.0", features = ["clap"] }
@@ -103,9 +106,9 @@ plexus-transport = { version = "0.6.0", default-features = false, features = ["h
 plexus-auth-core = { version = "0.2.2", features = ["adapters"] }
 # SCAFFOLD-3/SCAFFOLD-9: the login — providers, the page, sessions, the
 # gate, the auth backend, the wiring — its own crate and repository
-# (FRAME-4), by sibling path; menger implements its `LoginAccess` over
+# (FRAME-4), by published version (V2-47); menger implements its `LoginAccess` over
 # `Access` (src/login_access.rs) and `main` runs on its `Wiring`.
-plexus-login = { path = "../plexus-login", version = "0.2.2" }
+plexus-login = "0.2.3"
 # IDENTITY-19: the login page — the shell asks the provider itself (discovery,
 # token endpoint), keeps sessions keyed by a random id (hashed), and runs the
 # code flow with PKCE. All already in the lock through plexus-auth-core.
@@ -186,8 +189,8 @@ tar = { version = "0.4", default-features = false }
 # natively (the same bytes as the module, UI-5), and registers a reduced
 # `tickets` — a probe activation (plexus-macros, schemars, async-stream:
 # V2-4's, above) — to show the lint reads the running service.
-# FRAME-3: from the sibling checkout, unpublished (PLEXUS-16).
-plexus-ui-compiler = { path = "../plexus-ui/compiler" }
+# FRAME-3, V2-47: by published version, the service's; scripts/plexus-ui-release moves it.
+plexus-ui-compiler = "0.1.1"
 # UI-7: the in-process tests' stub compiler modules, written as text.
 wat = "1"
 # V2-29: tests/wire_docs.rs types into a document as two browsers would — two

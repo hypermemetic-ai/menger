@@ -92,11 +92,17 @@ export function build(profile) {
   run(TOOL, ["--help"], quiet);
 }
 
-/** FRAME-14: where the tool finds svelte and esbuild for a svelte/1 build — ../plexus-ui's (`npm ci` there);
- *  V2-29: `PLEXUS_UI_NODE_MODULES` names another (a plexus-ui worktree's, before its dependencies merge). */
-export const NODE_MODULES = process.env.PLEXUS_UI_NODE_MODULES || path.join(REPO, "..", "plexus-ui", "node_modules");
+/** FRAME-14: where the tool finds svelte and esbuild for a svelte/1 build — the framework checkout's
+ *  (V2-47: scripts/plexus-ui-src --node-modules, the tag of the plexus-ui version menger takes, `npm ci`
+ *  there once); V2-29: `PLEXUS_UI_NODE_MODULES` names another (a plexus-ui worktree's, before its
+ *  dependencies merge). Asked the first time a bundle is built. */
+let nodeModules = process.env.PLEXUS_UI_NODE_MODULES || "";
+export function NODE_MODULES() {
+  if (!nodeModules) nodeModules = path.join(run(path.join(REPO, "scripts", "plexus-ui-src"), ["--node-modules", REPO]).trim(), "node_modules");
+  return nodeModules;
+}
 
-/** The plexus-ui tool (FRAME-8): ../plexus-ui's cli/, built into this checkout's target by scripts/plexus-ui. */
+/** The plexus-ui tool (FRAME-8): the framework's cli/, built into this checkout's target by scripts/plexus-ui. */
 export const TOOL = path.join(REPO, "scripts", "plexus-ui");
 
 /** ui/ (or a copy `edit` changed) built into `<work>/<name>.tar` by
@@ -117,9 +123,9 @@ export function bundle(work, name, { edit, engine } = {}) {
     if (!fs.existsSync(path.join(engine, "engine.wasm"))) run(TOOL, ["build", "--prebuild", "--engine", engine], quiet);
   }
   // FRAME-14: ui/src holds svelte/1 components, compiled in Node with
-  // ../plexus-ui's svelte and esbuild (`npm ci` there); a copy `edit` made
+  // the framework checkout's svelte and esbuild (`npm ci` there); a copy `edit` made
   // under the work directory finds no node_modules above it.
-  run(TOOL, ["build", ui, "--engine", engine, "--node-modules", NODE_MODULES, "-o", tar], quiet);
+  run(TOOL, ["build", ui, "--engine", engine, "--node-modules", NODE_MODULES(), "-o", tar], quiet);
   const manifest = run("tar", ["-xOf", tar, "manifest.json"]);
   return { tar, engine, manifest, version: run("sha256sum", [tar]).split(" ")[0] };
 }

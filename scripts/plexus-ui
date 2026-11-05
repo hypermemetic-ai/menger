@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# FRAME-8: the plexus-ui tool — ../plexus-ui's cli/ (plexus-ui-cli), the
-# sibling checkout menger takes the framework from — built into this
+# FRAME-8: the plexus-ui tool — the framework's cli/ (plexus-ui-cli), from the
+# checkout scripts/plexus-ui-src names (V2-47: the tag of the plexus-ui
+# version menger's Cargo.lock takes, cloned once) — built into this
 # checkout's target ($CARGO_TARGET_DIR, else ./target) and run with the
 # arguments given: `scripts/plexus-ui build ui -o dist/ui.tar`, `sign`,
 # `push`, … (`scripts/plexus-ui --help`). What scripts/ui-build.sh and
@@ -8,11 +9,13 @@
 # same checkout. FRAME-20: `PLEXUS_UI_SRC` (the tool's own variable: the
 # checkout it builds the engine from) names the checkout the tool is built
 # from too — the svelte/1 face is compiled into the tool — so a framework
-# worktree is measured whole.
+# worktree is measured whole; scripts/plexus-ui-src takes it as named.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 target=${CARGO_TARGET_DIR:-$root/target}
-cargo build --quiet --manifest-path "${PLEXUS_UI_SRC:-$root/../plexus-ui}/Cargo.toml" -p plexus-ui-cli --target-dir "$target" >&2
+src=$("$root/scripts/plexus-ui-src" "$root" 2>/dev/null) || exec "$root/scripts/plexus-ui-src" "$root" # says why
+export PLEXUS_UI_SRC=$src # the engine `build --prebuild` makes comes from the same checkout
+cargo build --quiet --manifest-path "$src/Cargo.toml" -p plexus-ui-cli --target-dir "$target" >&2
 # SURFACE-10: menger's bundle paints with ui/theme.toml's tokens alone — a
 # literal colour in a component's <style> refuses the build, naming its file
 # and line, where the tool alone only warns.

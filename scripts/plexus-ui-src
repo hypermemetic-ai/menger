@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# V2-47 (the owner, 2026-11-05, "B"): the plexus-ui checkout a menger tree
+# builds the framework's tool, engine, studio and compiler module from.
+#
+#   scripts/plexus-ui-src [--node-modules] [TREE]
+#
+# prints its absolute path on stdout and what it is on stderr. menger takes
+# plexus-ui-service and plexus-ui-compiler from crates.io by version; the
+# checkout is that version's tag, plexus-ui-v<version> (the version TREE's
+# Cargo.lock takes plexus-ui-service at; TREE: this checkout), so the ui
+# service linked into menger and the tool, engine and wasm beside it come
+# from one revision. It is kept, one per version, under PLEXUS_UI_CHECKOUTS
+# (~/.cache/plexus-ui), cloned from PLEXUS_UI_REPO (GitHub's plexus-ui) the
+# first time, and refused, named, when it is no longer the tag's.
+#
+#   --node-modules   svelte and esbuild too, for a svelte/1 build: `npm ci`
+#                    in the checkout when its node_modules lacks them
+#   PLEXUS_UI_SRC    a checkout named on purpose (FRAME-20: a framework
+#                    worktree measured whole) — printed as it is, said so;
+#                    deploy/pipeline's build never takes it
+#
+# A tree whose Cargo.lock still takes plexus-ui-service by path (before
+# V2-47) prints ../plexus-ui beside it, as it was built then.
+set -euo pipefail
+nm=0
+[[ ${1:-} == --node-modules ]] && { nm=1; shift; }
+here=$(cd "$(dirname "$0")/.." && pwd)
+tree=$(cd "${1:-$here}" && pwd)
+say() { echo "plexus-ui-src: $*" >&2; }
+die() { say "$*"; exit 1; }
+
+node_modules() { # DIR — svelte and esbuild, by the checkout's own lock
+  [[ $nm == 1 ]] || return 0
+  [[ -f $1/node_modules/svelte/package.json && -f $1/node_modules/esbuild/package.json ]] && return 0
+  command -v npm >/dev/null || die "svelte/1 needs svelte and esbuild in $1/node_modules, and there is no npm on PATH"
+  say "npm ci in $1 (svelte and esbuild for svelte/1)"
+  (cd "$1" && npm ci --ignore-scripts --no-audit --no-fund >&2) || die "npm ci in $1 failed"
+}
+
+if [[ -n ${PLEXUS_UI_SRC:-} ]]; then
+  src=$(cd "$PLEXUS_UI_SRC" && pwd) || die "PLEXUS_UI_SRC=$PLEXUS_UI_SRC is no directory"
+  [[ -f $src/Cargo.toml ]] || die "PLEXUS_UI_SRC=$src holds no Cargo.toml"
+  say "$src (PLEXUS_UI_SRC, named on purpose — not the published version's tag)"
+  node_modules "$src"; echo "$src"; exit 0
+fi
+
+# plexus-ui-service in the lock: its version, and its source (none: a path)
+read -r ver source < <(awk '/^\[\[package\]\]/{n="";v="";s=""} /^name = /{n=$3} /^version = /{v=$3} /^source = /{s=$3}
+  /^$/ && n=="\"plexus-ui-service\"" {gsub(/"/,"",v); gsub(/"/,"",s); print v, (s==""?"path":s); found=1; exit}
+  END{ if (!found && n=="\"plexus-ui-service\"") {gsub(/"/,"",v); gsub(/"/,"",s); print v, (s==""?"path":s)} }' "$tree/Cargo.lock" 2>/dev/null) || true
+[[ -n ${ver:-} ]] || die "$tree/Cargo.lock names no plexus-ui-service"
+
+if [[ $source == path ]]; then
+  src=$(dirname "$tree")/plexus-ui
+  [[ -f $src/Cargo.toml ]] || die "$tree takes plexus-ui-service by path (a tree before V2-47) and there is no ../plexus-ui beside it"
+  say "$src (by sibling path: a tree before V2-47)"
+  node_modules "$src"; echo "$src"; exit 0
+fi
+[[ $source == registry+* || $source == sparse+* ]] || die "plexus-ui-service $ver comes from $source — menger takes it from crates.io (V2-47)"
+
+tag=plexus-ui-v$ver
+repo=${PLEXUS_UI_REPO:-https://github.com/hypermemetic-ai/plexus-ui}
+dir=${PLEXUS_UI_CHECKOUTS:-$HOME/.cache/plexus-ui}/$tag
+if [[ ! -e $dir ]]; then
+  mkdir -p "$(dirname "$dir")"
+  # one clone at a time (parallel tests ask at once): the first clones, the rest find it there
+  exec 9>"$(dirname "$dir")/.$tag.lock"
+  flock 9
+  if [[ ! -e $dir ]]; then
+    tmp=$(mktemp -d "$dir.XXXXXX")
+    say "cloning $tag from $repo"
+    git clone --quiet --depth 1 --branch "$tag" "$repo" "$tmp/plexus-ui" >&2 || { rmdir "$tmp" 2>/dev/null; die "no tag $tag at $repo (plexus-ui-service $ver, $tree/Cargo.lock)"; }
+    mv -T "$tmp/plexus-ui" "$dir"
+    rmdir "$tmp"
+  fi
+  exec 9>&-
+fi
+want=$(git -C "$dir" rev-parse --verify --quiet "refs/tags/$tag^{commit}") || die "$dir holds no tag $tag"
+have=$(git -C "$dir" rev-parse HEAD)
+[[ $have == "$want" ]] || die "$dir is at ${have:0:9}, not $tag (${want:0:9}) — move it away and run again"
+[[ -z $(git -C "$dir" status --porcelain --untracked-files=no) ]] || die "$dir is $tag edited — move it away and run again"
+say "$dir ($tag, ${want:0:9}: the version $tree/Cargo.lock takes)"
+node_modules "$dir"
+echo "$dir"

@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+# V2-47 (the owner, 2026-11-05, "B": "since menger and plexus-ui change
+# together, one script publishes and bumps them in a single step"): a
+# plexus-ui release and menger's bump to it.
+#
+#   scripts/plexus-ui-release VERSION [--ui DIR] [--menger DIR] [--dry-run] [--no-check]
+#
+#   VERSION     the release, x.y.z — the same for plexus-ui-compiler,
+#               plexus-ui-engine and plexus-ui-service (and the unpublished
+#               plexus-ui-cli), which move together
+#   --ui DIR    the plexus-ui checkout to release (default ../plexus-ui beside
+#               this checkout): clean, its HEAD holding origin/main — the
+#               change merged there first, `--no-ff`; a worktree, never
+#               another builder's working tree
+#   --menger DIR  the menger checkout the bump is committed in (default: this
+#               one), on the branch the bump goes to; clean
+#   --dry-run   the bump and every `cargo publish --dry-run`, then the files
+#               put back: nothing committed, pushed, published or tagged
+#   --no-check  skip `cargo check --workspace --all-targets` of menger on the
+#               new version
+#
+# In order, stopping at the first refusal:
+#   1. plexus-ui: VERSION written to each crate's [package] and to the
+#      in-repository dependencies' `version`, Cargo.lock updated, committed
+#      `plexus-ui VERSION` (nothing to commit when it is the version already)
+#   2. `cargo publish --dry-run` of the three crates together
+#   3. the commit pushed to origin main — a fast-forward, or nothing is
+#      published
+#   4. published to crates.io: compiler, engine, service — each skipped when
+#      crates.io has that version already, so a run after a failure resumes
+#   5. tagged plexus-ui-vVERSION (lightweight, as PLEXUS-13's tags) and the
+#      tag pushed — the revision deploy/pipeline builds the tool, the engine
+#      and the compiler module from (scripts/plexus-ui-src)
+#   6. menger: plexus-ui-service and plexus-ui-compiler at VERSION in
+#      Cargo.toml and Cargo.lock, checked, committed `plexus-ui VERSION` for
+#      its builder to merge (`--no-ff`, as every change)
+#
+# Credentials are cargo's own (~/.cargo); PLEXUS_UI_RELEASE_CARGO_FLAGS adds
+# flags to `cargo publish` — on a machine whose credential provider is not
+# the token file: '--config registry.global-credential-providers=["cargo:token"]'.
+set -euo pipefail
+here=$(cd "$(dirname "$0")/.." && pwd)
+CRATES=(plexus-ui-compiler plexus-ui-engine plexus-ui-service)
+MANIFESTS=(compiler/Cargo.toml engine/Cargo.toml service/Cargo.toml cli/Cargo.toml)
+say() { echo "plexus-ui-release: $*" >&2; }
+die() { say "$*"; exit 1; }
+usage() { sed -n '/^#   scripts/,/^#   --no-check/p' "$0" | sed 's/^# \{0,1\}//'; }
+
+ver="" ui="" menger=$here dry=0 check=1
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --ui) [[ $# -ge 2 ]] || die "--ui needs a directory"; ui=$2; shift ;;
+    --menger) [[ $# -ge 2 ]] || die "--menger needs a directory"; menger=$2; shift ;;
+    --dry-run) dry=1 ;;
+    --no-check) check=0 ;;
+    -h|--help) usage; exit 0 ;;
+    -*) die "unknown flag $1 (--help)" ;;
+    *) [[ -z $ver ]] || die "one VERSION"; ver=$1 ;;
+  esac; shift
+done
+[[ $ver =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { usage; die "VERSION is x.y.z, not '${ver}'"; }
+ui=$(cd "${ui:-$here/../plexus-ui}" && pwd) || die "no plexus-ui checkout"
+menger=$(cd "$menger" && pwd)
+tag=plexus-ui-v$ver
+[[ -f $ui/service/Cargo.toml && -f $ui/compiler/Cargo.toml ]] || die "$ui is no plexus-ui checkout"
+[[ -f $menger/Cargo.toml && -x $menger/scripts/plexus-ui-src ]] || die "$menger is no menger checkout that takes plexus-ui by version"
+for d in "$ui" "$menger"; do
+  [[ -z $(git -C "$d" status --porcelain --untracked-files=no) ]] || die "$d has uncommitted changes — commit them on their branch first"
+done
+
+# ── plexus-ui: the bump ────────────────────────────────────────────────────
+git -C "$ui" fetch --quiet origin
+git -C "$ui" merge-base --is-ancestor origin/main HEAD || die "$ui's HEAD does not hold origin/main — merge it (or the change into main) first"
+# shellcheck disable=SC2016
+bump() { # MANIFEST — [package]'s version, and `version` on a dependency by path into this repository
+  python3 - "$1" "$ver" <<'PY'
+import re, sys
+p, v = sys.argv[1], sys.argv[2]
+s = open(p).read()
+out, in_pkg, done = [], False, False
+for line in s.splitlines(keepends=True):
+    t = line.strip()
+    if t.startswith('['):
+        in_pkg = t == '[package]'
+    if in_pkg and not done and re.match(r'version\s*=\s*"', t):
+        line = re.sub(r'"[^"]*"', f'"{v}"', line, count=1); done = True
+    elif re.match(r'plexus-ui-[a-z]+\s*=\s*\{[^}]*path\s*=\s*"\.\./', t):
+        line = re.sub(r'(version\s*=\s*)"[^"]*"', rf'\g<1>"{v}"', line)
+    out.append(line)
+if not done: sys.exit(f"{p}: no [package] version")
+open(p, 'w').write(''.join(out))
+PY
+}
+for m in "${MANIFESTS[@]}"; do bump "$ui/$m"; done
+(cd "$ui" && cargo update --workspace --offline --quiet) || die "cargo update --workspace in $ui failed"
+bumped=0
+[[ -n $(git -C "$ui" status --porcelain --untracked-files=no) ]] && bumped=1
+restore() { git -C "$ui" checkout --quiet -- "${MANIFESTS[@]}" Cargo.lock; }
+
+# ── the dry runs: the three together (a dependency on an unpublished one resolves locally) ──
+publish_flags=()
+# shellcheck disable=SC2206
+[[ -n ${PLEXUS_UI_RELEASE_CARGO_FLAGS:-} ]] && publish_flags=($PLEXUS_UI_RELEASE_CARGO_FLAGS)
+say "cargo publish --dry-run: ${CRATES[*]} at $ver"
+pk=(); for c in "${CRATES[@]}"; do pk+=(-p "$c"); done
+if ! (cd "$ui" && cargo publish --dry-run --allow-dirty "${pk[@]}" >&2); then
+  [[ $bumped == 1 ]] && restore
+  die "a dry run failed — nothing committed or published"
+fi
+if [[ $dry == 1 ]]; then
+  [[ $bumped == 1 ]] && restore
+  say "dry run: green; nothing kept (plexus-ui at ${ver}: $([[ $bumped == 1 ]] && echo "a bump" || echo "already"))"
+  exit 0
+fi
+
+if [[ $bumped == 1 ]]; then
+  git -C "$ui" commit --quiet -m "plexus-ui $ver — plexus-ui-compiler, plexus-ui-engine and plexus-ui-service at $ver (scripts/plexus-ui-release, V2-47)" -- "${MANIFESTS[@]}" Cargo.lock
+  say "committed $(git -C "$ui" rev-parse --short HEAD): plexus-ui $ver"
+fi
+rev=$(git -C "$ui" rev-parse HEAD)
+
+# ── push, then publish: never a crate whose revision is not on main ─────────
+if [[ $(git -C "$ui" rev-parse origin/main) != "$rev" ]]; then
+  git -C "$ui" push --quiet origin "$rev:refs/heads/main" || die "the push to origin main was refused (fetch, merge, run again) — nothing published"
+  say "pushed ${rev:0:9} to origin main"
+fi
+published() { # CRATE — crates.io has it at $ver
+  curl -fsS -o /dev/null -A "plexus-ui-release (menger V2-47)" "https://crates.io/api/v1/crates/$1/$ver" 2>/dev/null
+}
+for c in "${CRATES[@]}"; do
+  if published "$c"; then say "$c $ver: on crates.io already — skipped"; continue; fi
+  (cd "$ui" && cargo publish "${publish_flags[@]}" -p "$c" >&2) || die "cargo publish -p $c failed — run again to resume"
+  say "$c $ver: published"
+done
+
+# ── the tag ─────────────────────────────────────────────────────────────────
+if have=$(git -C "$ui" rev-parse --verify --quiet "refs/tags/$tag^{commit}"); then
+  [[ $have == "$rev" ]] || die "$tag is ${have:0:9}, not ${rev:0:9}"
+else
+  git -C "$ui" tag "$tag" "$rev"
+fi
+git -C "$ui" push --quiet origin "refs/tags/$tag" || die "the push of $tag failed"
+say "tagged ${rev:0:9} $tag, pushed"
+
+# ── menger: the bump ────────────────────────────────────────────────────────
+python3 - "$menger/Cargo.toml" "$ver" <<'PY'
+import re, sys
+p, v = sys.argv[1], sys.argv[2]
+s, n = re.subn(r'^(plexus-ui-(?:service|compiler)\s*=\s*)"[^"]*"', rf'\g<1>"{v}"', open(p).read(), flags=re.M)
+if n != 2: sys.exit(f"{p}: {n} line(s) take plexus-ui-service / plexus-ui-compiler by version, not 2")
+open(p, 'w').write(s)
+PY
+# the lock re-resolved for the new requirement (`cargo update -p` cannot name a package the lock
+# held by path), then held to it: both at VERSION, from crates.io
+(cd "$menger" && cargo fetch --quiet) || die "cargo fetch in $menger failed — the bump is left uncommitted there"
+for c in plexus-ui-service plexus-ui-compiler; do
+  grep -A2 -x "name = \"$c\"" "$menger/Cargo.lock" | grep -qx "version = \"$ver\"" || die "$menger/Cargo.lock does not take $c $ver"
+done
+if [[ $check == 1 ]]; then
+  say "cargo check --workspace --all-targets in $menger"
+  (cd "$menger" && cargo check --quiet --workspace --all-targets >&2) || die "menger does not build on plexus-ui $ver — the bump is left uncommitted in $menger"
+fi
+if [[ -n $(git -C "$menger" status --porcelain --untracked-files=no) ]]; then
+  git -C "$menger" commit --quiet -m "plexus-ui $ver — menger takes plexus-ui-service and plexus-ui-compiler at $ver; deploy/pipeline builds the tool, engine and compiler module from $tag (${rev:0:9}) (scripts/plexus-ui-release, V2-47)" -- Cargo.toml Cargo.lock
+  say "committed $(git -C "$menger" rev-parse --short HEAD) in $menger: plexus-ui $ver"
+else
+  say "$menger takes plexus-ui $ver already"
+fi
+echo "plexus-ui $ver: $tag at ${rev:0:9}"

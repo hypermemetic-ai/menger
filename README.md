@@ -278,13 +278,20 @@ a deploy and after any migration.
 
 ## The services
 
-menger is a **tenant** of the stored-UI framework `../plexus-ui` (FRAME-1,
+menger is a **tenant** of the stored-UI framework plexus-ui (FRAME-1,
 FRAME-7): its own code is the tickets service (`tickets-api/`), the server
 that registers it (`src/`) and its UI's components (`ui/`); the ui service,
 the compiler, the engine, the routes that serve a bundle and the tool that
-builds, signs and pushes one are the framework's, taken from the sibling
-checkout as `../plexus-login` is. Any other Plexus
-service ships with the framework the same way.
+builds, signs and pushes one are the framework's, taken
+by published version, as `plexus-login` is (V2-47): `plexus-ui-service` and
+`plexus-ui-compiler` from crates.io at one version, and the tool, the engine
+and the compiler module built from that version's tag, `plexus-ui-v<version>`
+— the checkout `scripts/plexus-ui-src` names (cloned once into
+`~/.cache/plexus-ui`; `PLEXUS_UI_SRC` names a framework worktree on purpose).
+A clone of menger alone builds. `scripts/plexus-ui-release VERSION --ui DIR`
+publishes plexus-ui, tags it and moves menger to it in one step (`--help`;
+plexus-ui's README "Releasing"). Any other Plexus service ships with the
+framework the same way.
 
 A service that would rather not link it runs beside the framework's own
 binary instead (FRAME-6): `plexus-ui serve --child NAME=ws://…` keeps its
@@ -1166,7 +1173,7 @@ A pushed UI is a row by content hash in the ui service's own file, and
 deploy**.
 
 **The service is the framework's** (FRAME-5): `plexus-ui-service` in
-`../plexus-ui/service`, by sibling path, with no menger type in it. menger
+plexus-ui's `service/`, by published version (V2-47), with no menger type in it. menger
 registers its activation beside `tickets` (`src/builder.rs`), attaches its
 seam to the running service as the server's own caller, and mounts its
 routes (`/`, `/app/`, `/app/<hash>/…`: `plexus_ui_service::routes::UiRoutes`)
@@ -1343,12 +1350,12 @@ a `.svelte` is real Svelte, `svelte/1`, FRAME-13), the tree's schema, the
 
 ### The compiler (UI-5)
 
-The compiler is `../plexus-ui`'s `compiler/` (`plexus-ui-compiler`, FRAME-3:
-the framework's own repository, a sibling checkout), a pure function: a component's
+The compiler is plexus-ui's `compiler/` (`plexus-ui-compiler`, FRAME-3:
+the framework's own repository, by published version), a pure function: a component's
 source → its view tree (`components/<name>.json`, keys sorted) and its
 handlers (`<name>.rhai`), folds `(state, event) → state`; the same source
 gives the same bytes natively and as a wasm module that imports nothing
-(`../plexus-ui/scripts/ui-compiler-wasm.sh dist/ui-compiler.wasm`, the
+(`"$(scripts/plexus-ui-src)"/scripts/ui-compiler-wasm.sh dist/ui-compiler.wasm`, the
 framework's script, run from here with the module written into this
 checkout's `dist/` and cargo building into its target; the build fails if
 it imports anything). A refusal names the line. The compiler's golden pairs are
@@ -1497,8 +1504,8 @@ component alone for its browser cases. A placed component keeps its
 behaviour and its look and loses the page's chrome to the page — the board
 link and the jump button (app-top's), the page's title, the palette's mark. No route draws a
 svelte/1 component; `tests/apart.rs` holds it to that.
-`../plexus-ui`'s `plexus-ui` tool (FRAME-8; `scripts/plexus-ui` builds it
-from the sibling into this checkout's target and runs it) builds it into
+plexus-ui's `plexus-ui` tool (FRAME-8; `scripts/plexus-ui` builds it
+from the checkout `scripts/plexus-ui-src` names into this checkout's target and runs it) builds it into
 `dist/ui.tar`: `build --prebuild` the engine (cargo: `wasm32-unknown-unknown`
 and wasm-bindgen), then `build` the components compiled in-process, the
 manifest and the tar — the same inputs, the same bytes, no cargo needed.
@@ -1506,7 +1513,7 @@ The bundle is `../plexus-ui/CONTRACT.md`'s. A deploy pushes it
 (`deploy/README.md`, "v2: a release with no browser toolchain").
 
 ```sh
-../plexus-ui/scripts/ui-compiler-wasm.sh dist/ui-compiler.wasm  # dist/ui-compiler.wasm
+"$(scripts/plexus-ui-src)"/scripts/ui-compiler-wasm.sh dist/ui-compiler.wasm  # dist/ui-compiler.wasm
 scripts/plexus-ui build --prebuild --engine dist/engine          # the engine, once
 scripts/plexus-ui build ui --engine dist/engine -o dist/ui.tar   # dist/ui.tar
 scripts/plexus-ui sign operator.seed dist/ui.tar                 # the signature, base64
