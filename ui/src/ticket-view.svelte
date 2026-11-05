@@ -27,15 +27,15 @@
      EDITOR-14: a full page — `<m-mockup>…</m-mockup>`, a ```mockup / ```page /
      ```live fence, ```html with a page's attributes, `<m-live>`, or a body that
      is a whole `<!doctype html>` page — is one piece, whole (`page: true`),
-     drawn by page-frame (a sibling) in a sandboxed frame rather than through
+     drawn by its tag's component (COMPS-3: `TAGS` — m-mockup, m-live, m-page) rather than through
      the markdown; in the editor it is one widget, its source shown when the
-     caret enters it. And a body holding raw HTML the page cannot draw (page-frame's
+     caret enters it. And a body holding raw HTML the page cannot draw (m-mockup's
      `holdsRaw`, outside fences and page blocks — v1's `is_framed`; the owner: "also
      you know that v1 could just host raw html inside a frame right?") is one piece,
-     `raw: true`, the whole body drawn in one frame: `rawDoc` below renders its
-     markdown around the raw HTML, a page block in it a nested sandboxed frame. -->
+     `raw: true`, the whole body drawn in one frame by m-page (its markdown
+     around the raw HTML, a page block in it a nested sandboxed frame). -->
 <script module>
-  import { PAGE_TAG, WHOLE, fencePage, pageEnd, pageSpec, holdsRaw } from "./page-frame.svelte";
+  import { PAGE_TAG, WHOLE, fencePage, pageEnd, pageSpec, holdsRaw } from "./m-mockup.svelte";
 
   export const uses = [];
 
@@ -96,29 +96,6 @@
       return [{ from, to: text.length, text: text.slice(from), part: false, page: true, raw: true }];
     }
     return out;
-  }
-
-  const esc = (t) => String(t).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  /** The frame's own sheet for a raw body: the body's type on the app's tokens (put in by the engine's frame,
-   *  COMPS-2), and a diagram drawn before it was handed over (`drawDiagrams`) on Pele's variables. */
-  const RAW_SHEET = `html,body{margin:0;background:transparent}body{color:var(--ink,#1d1b16);font:14px/1.6 var(--sans,system-ui,sans-serif);overflow-wrap:anywhere}
-a{color:var(--accent,#2f5fb3)}h1,h2,h3,h4{margin:14px 0 4px;font-family:var(--font-display,inherit);line-height:1.3}h1{font-size:20px}h2{font-size:16px}h3,h4{font-size:14px}
-p{margin:6px 0}ul,ol{margin:4px 0;padding-left:20px}img{max-width:100%;height:auto}
-code{padding:0 3px;font-family:var(--font-text,ui-monospace,monospace);font-size:12.5px;background:var(--panel,#f2f1ec);border-radius:3px}
-pre{overflow-x:auto;padding:10px 12px;font-family:var(--font-text,ui-monospace,monospace);font-size:12.5px;background:var(--panel,#f2f1ec);border-radius:6px}pre code{padding:0;background:none}
-table{border-collapse:collapse;margin:6px 0}th,td{padding:4px 14px 4px 0;text-align:left;vertical-align:top;border-bottom:1px solid var(--line,#ddd)}
-blockquote{margin:6px 0;padding-left:14px;color:var(--muted,#777);border-left:2px solid var(--line,#ddd)}hr{border:0;border-top:1px solid var(--line,#ddd)}
-:is(m-summary,m-decision,m-input,m-cases,m-beat,m-status,m-diagram,m-results,m-walk,m-code,m-compare,m-callout,m-acceptance,m-cards,m-card,m-dag,m-details,m-step,m-question,m-answer){display:block;margin:6px 0}
-m-step::before{content:attr(date) " · " attr(status) " · " attr(by) "  ";font-size:11px;color:var(--muted,#777)}
-.m-diagram{margin:6px 0;overflow-x:auto;--pele-bg:transparent;--pele-fg:var(--ink);--pele-muted:var(--muted);--pele-line:var(--muted);--pele-surface:var(--panel);--pele-surface-alt:var(--hover);--pele-border:var(--line);--pele-accent:var(--accent);--pele-font:var(--sans);--pele-radius:var(--radius);--pele-series-1:var(--accent);--pele-series-2:var(--kind-scope);--pele-series-3:var(--kind-execution);--pele-series-4:var(--kind-spike);--pele-series-5:var(--kind-gap);--pele-series-6:var(--live);--pele-series-7:var(--warn);--pele-series-8:var(--kind-doc)}.m-diagram svg{display:block;max-width:100%;height:auto;margin:0 auto}
-.m-page{margin:8px 0}.m-page figcaption{margin:0 0 6px;font-size:12px;font-weight:600}.m-page iframe{display:block;width:100%;border:1px solid var(--line,#ddd);border-radius:6px;background:var(--panel,#f2f1ec)}.m-note{font-size:12px;color:var(--muted,#777)}`;
-
-  /** A page block inside a raw body: a nested frame (it inherits the frame's own policy, so its scripts run), or a note. */
-  function nested(p) {
-    if (p?.kind !== "page") return `<p class="m-note">${p?.kind === "ref" ? `The page is ${esc(p.attrs.ref)}'s body.` : "A live view draws outside a framed body."}</p>`;
-    const label = p.attrs.label || p.attrs.title || "";
-    const h = Math.min(2000, Number(p.attrs.height) || 600);
-    return `<figure class="m-page">${label ? `<figcaption>${esc(label)}</figcaption>` : ""}<iframe sandbox="allow-scripts allow-forms" title="${esc(label || "a page")}" style="height:${h}px" srcdoc="${esc(p.html)}"></iframe></figure>`;
   }
 
   /** Whether lines [lo, hi) hold a page (EDITOR-14), outside fences. */
@@ -222,6 +199,15 @@ m-step::before{content:attr(date) " · " attr(status) " · " attr(by) "  ";font-
     if (p.h === "open" || p.h === "close") return `${p.wrap.open}\n\n${p.wrap.close}`;
     return `${p.wrap.open}\n\n${p.text}\n\n${p.wrap.close}`;
   }
+  /** COMPS-3: the tag a page piece (`page: true`) is drawn as — `m-page` for a body framed whole (`raw`),
+   *  `m-live` for `<m-live>` and ```live, else `m-mockup` (`<m-mockup>`, the page fences, a whole page). */
+  export const pageTag = (p) => (p.raw ? "m-page" : pageSpec(p.text)?.kind === "live" ? "m-live" : "m-mockup");
+  /** COMPS-3: a raw body's pieces as m-page frames them — each piece's text, whether it is a page, and the
+   *  markdown it draws as here (its mark's lines around it, the body's references and media links). */
+  export function rawPieces(src) {
+    const d = refDefs(src);
+    return blocks(src, false).map((p) => ({ text: p.text, page: !!p.page, md: mediaLinks(pieceSource(p)) + d }));
+  }
   /** A piece's box: `blk`, `part` (a list's next item), `h-open | h-mid | h-close` (a card's piece). */
   export const pieceClass = (p) => ["blk", p.part ? "part" : "", p.h ? `h-${p.h}` : ""].filter(Boolean).join(" ");
 
@@ -247,7 +233,14 @@ m-step::before{content:attr(date) " · " attr(status) " · " attr(by) "  ";font-
   import { markdown } from "plexus-ui/host";
   import Diagram from "plexus-ui:mermaid-diagram";
   import CodeCard from "./code-card.svelte";
-  import PageFrame from "./page-frame.svelte";
+  import MMockup from "./m-mockup.svelte";
+  import MLive from "./m-live.svelte";
+  import MPage from "./m-page.svelte";
+
+  /** COMPS-3: a tag → the component that draws it, mounted where the body has the tag (props: `source`, the
+   *  piece's markdown; `pieces`, m-page's). ticket-view keeps no frame code: a page is these components'.
+   *  COMPS-4 extends this table. */
+  const TAGS = { "m-mockup": MMockup, "m-live": MLive, "m-page": MPage };
 
   // EDITOR-9: what the markdown drew, finished. Each ```mermaid fence (a bare one, or one inside a
   // house mark) gets the diagram's bound mark before it — its own module, fetched the first time one is
@@ -303,60 +296,11 @@ m-step::before{content:attr(date) " · " attr(status) " · " attr(by) "  ";font-
 
   let { body = "", title = null, status = null, edit = null, titleEdit = null, block = false, piece = null, defs: given = null } = $props();
 
-  /** EDITOR-14: a raw body's frame document — its markdown (each piece through the host's render, as drawn
-   *  here) around its raw HTML (a piece holding some, as written), a page block a nested frame; the theme's
-   *  tokens go in by the engine's frame (COMPS-2: `theme`), and a link opens a tab. */
-  function rawDoc(src) {
-    const d = refDefs(src), out = [];
-    for (const p of blocks(src, false)) {
-      if (p.page) out.push(nested(pageSpec(p.text)));
-      else if (!FENCE.test(p.text) && holdsRaw(p.text)) out.push(p.text);
-      else out.push(markdown(mediaLinks(pieceSource(p)) + d));
-    }
-    return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base target="_blank">`
-      + `<style>${RAW_SHEET}</style></head><body>\n${out.join("\n")}\n</body></html>`;
-  }
-  /** EDITOR-15, COMPS-2: a raw body's ```mermaid fences drawn before the frame is handed it — each by the diagram's
-   *  own component, in `within` (page-frame's stage, unseen), its SVG put in place of the fence's `<pre>` in the frame's
-   *  document — so a diagram draws inside the frame as outside (the frame loads no module of the app's). The SVG is
-   *  Pele's own drawing (it escapes the diagram's text, filters links and styles) and goes only into the sandboxed
-   *  frame, never into the page. A fence Pele refuses stays its source. */
-  const FENCE_HTML = /<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/g;
-  const unescaped = (t) => t.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
-  async function drawn1(source, within) {
-    const at = document.createElement("div");
-    at.setAttribute("aria-hidden", "true");
-    at.style.cssText = "position:absolute;left:0;top:0;width:100%;opacity:0;pointer-events:none;z-index:-1";
-    within.appendChild(at);
-    const app = mount(Diagram, { target: at, props: { source } });
-    try {
-      for (const t0 = Date.now(); Date.now() - t0 < 8000; await new Promise((r) => setTimeout(r, 50))) {
-        const fig = at.querySelector("[data-surface=mermaid-diagram]");
-        if (fig?.dataset.state === "refused") return null;
-        const svg = fig?.dataset.state === "drawn" ? fig.querySelector("svg") : null;
-        if (svg) return new XMLSerializer().serializeToString(svg);
-      }
-      return null;
-    } finally {
-      unmount(app);
-      at.remove();
-    }
-  }
-  async function drawDiagrams(html, within) {
-    const fences = [...html.matchAll(FENCE_HTML)];
-    if (!fences.length) return html;
-    const svgs = await Promise.all(fences.map((m) => drawn1(unescaped(m[1]), within ?? document.body)));
-    let k = 0;
-    return html.replace(FENCE_HTML, (whole) => {
-      const svg = svgs[k++];
-      return svg ? `<div class="m-diagram">${svg}</div>` : whole;
-    });
-  }
   const parts = $derived(edit || block ? [] : blocks(body));
   const defs = $derived(block ? given ?? "" : edit ? "" : refDefs(body));
 </script>
 
-{#snippet drawn(p)}{#if p.raw}<div class="blk-in"><PageFrame source={p.text} doc={rawDoc(p.text)} prepare={drawDiagrams}/></div>{:else if p.page}<div class="blk-in"><PageFrame source={p.text}/></div>{:else}<div class="blk-in" use:enhance={p.text}>{@html markdown(mediaLinks(pieceSource(p)) + defs)}</div>{/if}{/snippet}
+{#snippet drawn(p)}{#if p.page}{@const Tag = TAGS[pageTag(p)]}<div class="blk-in"><Tag source={p.text} pieces={p.raw ? rawPieces(p.text) : null}/></div>{:else}<div class="blk-in" use:enhance={p.text}>{@html markdown(mediaLinks(pieceSource(p)) + defs)}</div>{/if}{/snippet}
 
 {#if block}{@render drawn(piece ?? { text: body })}{:else}
 <article class="ticket-view" data-surface="ticket-view" data-editing={edit ? "" : undefined}>
