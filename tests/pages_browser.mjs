@@ -722,8 +722,10 @@ async function main() {
         for (const [chip, other] of [["parent", parent], ["blocker", blocker]]) {
           const c = tp.locator(`[data-chip=${chip}][data-chip-id="${other.id}"]`);
           assert((await c.count()) === 1, `a ${chip} chip for ${other.id}`);
-          // V2-42: by its uid once its `get` answered (`#/t/<uid>/<ID>-<slug>`).
-          await eventually(`the ${chip} chip goes to ${other.id} by its uid`, async () => /^#\/(?:sv\/)?t\/[0-9a-z]{8}\//.test((await c.getAttribute("href")) ?? "") && ticketAt(await c.getAttribute("href"), other.id), 3_000);
+          // V2-42: the Svelte page's chip by its uid once its `get` answered (`#/t/<uid>/<ID>-<slug>`);
+          // the rhx twin's by name (rhx/1 imports no code), which the page it opens rewrites.
+          const byUid = B.name === "sv";
+          await eventually(`the ${chip} chip goes to ${other.id}${byUid ? " by its uid" : ""}`, async () => (!byUid || /^#\/(?:sv\/)?t\/[0-9a-z]{8}\//.test((await c.getAttribute("href")) ?? "")) && ticketAt(await c.getAttribute("href"), other.id), 3_000);
           await eventually(`the ${chip} chip resolves to "${other.title}"`, async () => trimmed(await c.locator("[data-chip-title]").textContent({ timeout: 1000 })) === other.title.trim(), 3_000);
         }
 
