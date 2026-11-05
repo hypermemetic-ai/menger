@@ -202,12 +202,12 @@ the owner's.
    example path V2-9 had removed (V2-12; `tickets-api/tests/leftovers.rs`
    now holds every manifest `path` to a file in the tree). **Beside it,
    plexus-bench** (PERF-6, PERF.115-29; V2-44 brought both to v2). First its
-   `scripts/ci-check.sh`: every scenario's instructions and allocations
+   `../plexus-bench/scripts/ci-check.sh`: every scenario's instructions and allocations
    against `goldens/ci`, under callgrind in the `plexus-bench-ci` image. They
    read no clock, so a count past its line is not noise, and it marks the
    release `failed … — counts red; log …` and logs `suite test <release>
    failed counts`. A check that could not run is red too: a release passes on
-   a count read. Then its `scripts/gate.sh` runs every PERF scenario under
+   a count read. Then its `../plexus-bench/scripts/gate.sh` runs every PERF scenario under
    the perf profile and `plexus-bench check` against the goldens (a red on a
    quiet first pass runs again, three times at most, until a quiet read
    answers it; a red taken on a busy machine is said, not failed), with

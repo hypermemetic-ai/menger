@@ -874,17 +874,23 @@ fn tether_breaks(deps: &[(usize, Option<String>, Option<String>)], found: Result
 /// and rev substrate's manifest names (PLEXUS-26: substrate is on 0.7 by
 /// published versions, plexus-login by `git`, unpublished on that line), so
 /// its graph holds one `plexus-login`, never a second from a sibling path.
-/// Substrate's manifest is read from the sibling checkout tether names.
+/// Substrate's manifest is read where tether takes substrate from (V2-44,
+/// PLEXUS-13: its public repository at a revision, so the checkout cargo
+/// resolved — no sibling needed).
 #[test]
 fn tether_takes_the_login_substrate_names() {
     let root = root();
-    let substrate = sibling("plexus-substrate").join("Cargo.toml");
-    let substrate_text = std::fs::read_to_string(&substrate).unwrap_or_else(|e| panic!("PLEXUS-26: no plexus-substrate beside menger ({}): {e}", substrate.display()));
+    let meta = tether_metadata(&root);
+    let substrate = meta
+        .as_ref()
+        .ok()
+        .and_then(|m| m["packages"].as_array()?.iter().find(|p| p["name"] == "plexus-substrate")?["manifest_path"].as_str().map(PathBuf::from))
+        .unwrap_or_else(|| panic!("PLEXUS-13: tether's graph holds no plexus-substrate: {:?}", meta.as_ref().err()));
+    let substrate_text = std::fs::read_to_string(&substrate).unwrap_or_else(|e| panic!("PLEXUS-26: plexus-substrate's manifest ({}): {e}", substrate.display()));
     let named = git_deps(&substrate_text, "plexus-login");
     let [(_, Some(url), Some(rev))] = named.as_slice() else { panic!("plexus-substrate/Cargo.toml names plexus-login by git and rev once: {named:?}") };
     let text = std::fs::read_to_string(root.join("tether/Cargo.toml")).expect("tether/Cargo.toml");
     let deps = git_deps(&text, "plexus-login");
-    let meta = tether_metadata(&root);
     let found = meta.as_ref().map(|m| sources_of(m, "plexus-login"));
     let broken = tether_breaks(&deps, found.as_deref().map_err(|e| e.as_str()), url, rev);
     assert!(broken.is_empty(), "V2-19: tether does not take plexus-login as substrate does, alone:\n  {}", broken.join("\n  "));
