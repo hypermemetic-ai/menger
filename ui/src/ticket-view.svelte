@@ -23,8 +23,19 @@
      its markdown. `edit` (an action given the body's element) and
      `titleEdit` (one given the title's) are how the editor sits inside. The house's marks (`m-*`, kept by
      the sanitizer since EDITOR-8) are drawn as cards by the rules below,
-     one card per kind, the tokens' colours. -->
+     one card per kind, the tokens' colours.
+     EDITOR-14: a full page — `<m-mockup>…</m-mockup>`, a ```mockup / ```page /
+     ```live fence, ```html with a page's attributes, `<m-live>`, or a body that
+     is a whole `<!doctype html>` page — is one piece, whole (`page: true`),
+     drawn by page-frame (a sibling) in a sandboxed frame rather than through
+     the markdown; in the editor it is one widget, its source shown when the
+     caret enters it. And a body holding raw HTML the page cannot draw (page-frame's
+     `holdsRaw`, outside fences and page blocks — v1's `is_framed`; the owner: "also
+     you know that v1 could just host raw html inside a frame right?") is one piece,
+     `raw: true`, the whole body drawn in one frame: `rawDoc` below renders its
+     markdown around the raw HTML, a page block in it a nested sandboxed frame. -->
 <script module>
+  import { PAGE_TAG, WHOLE, fencePage, pageEnd, pageSpec, holdsRaw } from "./page-frame.svelte";
 
   export const uses = [];
 
@@ -67,14 +78,54 @@
    *  is whole, a house mark is whole from its open line to its close, a comment to its `-->`, and a line
    *  indented, or a list's next item, after blank lines joins the block before it — merging never
    *  changes what the markdown draws; splitting could. */
-  export function blocks(src) {
+  export function blocks(src, raw = true) {
     const text = String(src ?? "");
     const lines = text.split("\n");
     const at = [0];
     for (const l of lines) at.push(at[at.length - 1] + l.length + 1);
     const out = [];
+    // EDITOR-14: a body that is a whole page is one piece, drawn as one frame.
+    if (WHOLE.test(text)) {
+      const from = text.length - text.trimStart().length;
+      return [{ from, to: text.length, text: text.slice(from), part: false, page: true }];
+    }
     scan(lines, at, text, 0, lines.length, null, out);
+    // EDITOR-14: raw HTML anywhere (outside code and page blocks): the body is one piece, framed whole.
+    if (raw && out.some((p) => !p.page && !FENCE.test(p.text) && !/^(?: {4}|\t)/.test(p.text) && holdsRaw(p.text))) {
+      const from = out[0].from;
+      return [{ from, to: text.length, text: text.slice(from), part: false, page: true, raw: true }];
+    }
     return out;
+  }
+
+  const esc = (t) => String(t).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  /** The frame's own sheet for a raw body: the body's type on the app's tokens (sent in by page-frame). */
+  const RAW_SHEET = `html,body{margin:0;background:transparent}body{color:var(--ink,#1d1b16);font:14px/1.6 var(--sans,system-ui,sans-serif);overflow-wrap:anywhere}
+a{color:var(--accent,#2f5fb3)}h1,h2,h3,h4{margin:14px 0 4px;font-family:var(--font-display,inherit);line-height:1.3}h1{font-size:20px}h2{font-size:16px}h3,h4{font-size:14px}
+p{margin:6px 0}ul,ol{margin:4px 0;padding-left:20px}img{max-width:100%;height:auto}
+code{padding:0 3px;font-family:var(--font-text,ui-monospace,monospace);font-size:12.5px;background:var(--panel,#f2f1ec);border-radius:3px}
+pre{overflow-x:auto;padding:10px 12px;font-family:var(--font-text,ui-monospace,monospace);font-size:12.5px;background:var(--panel,#f2f1ec);border-radius:6px}pre code{padding:0;background:none}
+table{border-collapse:collapse;margin:6px 0}th,td{padding:4px 14px 4px 0;text-align:left;vertical-align:top;border-bottom:1px solid var(--line,#ddd)}
+blockquote{margin:6px 0;padding-left:14px;color:var(--muted,#777);border-left:2px solid var(--line,#ddd)}hr{border:0;border-top:1px solid var(--line,#ddd)}
+:is(m-summary,m-decision,m-input,m-cases,m-beat,m-status,m-diagram,m-results,m-walk,m-code,m-compare,m-callout,m-acceptance,m-cards,m-card,m-dag,m-details,m-step,m-question,m-answer){display:block;margin:6px 0}
+m-step::before{content:attr(date) " · " attr(status) " · " attr(by) "  ";font-size:11px;color:var(--muted,#777)}
+.m-page{margin:8px 0}.m-page figcaption{margin:0 0 6px;font-size:12px;font-weight:600}.m-page iframe{display:block;width:100%;border:1px solid var(--line,#ddd);border-radius:6px;background:var(--panel,#f2f1ec)}.m-note{font-size:12px;color:var(--muted,#777)}`;
+
+  /** A page block inside a raw body: a nested frame (it inherits the frame's own policy, so its scripts run), or a note. */
+  function nested(p) {
+    if (p?.kind !== "page") return `<p class="m-note">${p?.kind === "ref" ? `The page is ${esc(p.attrs.ref)}'s body.` : "A live view draws outside a framed body."}</p>`;
+    const label = p.attrs.label || p.attrs.title || "";
+    const h = Math.min(2000, Number(p.attrs.height) || 600);
+    return `<figure class="m-page">${label ? `<figcaption>${esc(label)}</figcaption>` : ""}<iframe sandbox="allow-scripts allow-forms" title="${esc(label || "a page")}" style="height:${h}px" srcdoc="${esc(p.html)}"></iframe></figure>`;
+  }
+
+  /** Whether lines [lo, hi) hold a page (EDITOR-14), outside fences. */
+  function holdsPage(lines, lo, hi) {
+    for (let k = lo; k < hi; k++) {
+      if (PAGE_TAG.test(lines[k])) return true;
+      if (FENCE.test(lines[k])) { if (fencePage(lines[k].replace(FENCE, ""))) return true; k = fenceEnd(lines, k) - 1; }
+    }
+    return false;
   }
 
   /** The pieces of lines [lo, hi) into `out`; `wrap` the house mark around them, when they are inside one
@@ -91,12 +142,16 @@
       if (blank(lines[i])) { i++; continue; }
       const start = i;
       let end;
+      // EDITOR-14: a page element is one piece, from its open tag to its close (the page's blank lines inside it).
+      if (PAGE_TAG.test(lines[i])) { const z = Math.min(pageEnd(lines, i), hi); piece(i, z, { page: true }); i = z; continue; }
       const house = HOUSE_OPEN.exec(lines[i]);
       const closes = house ? houseEnd(lines, i, house[1]) : -1;
-      if (FENCE.test(lines[i])) { piece(i, Math.min(fenceEnd(lines, i), hi)); i = fenceEnd(lines, i); continue; }
+      if (FENCE.test(lines[i])) { piece(i, Math.min(fenceEnd(lines, i), hi), fencePage(lines[i].replace(FENCE, "")) ? { page: true } : undefined); i = fenceEnd(lines, i); continue; }
       if (house && closes > 0 && closes <= hi) {
         const own = { open: lines[i], close: lines[closes - 1], tag: house[1] };
-        if (wrap) { piece(i, closes); i = closes; continue; } // a mark inside a mark: one piece, drawn whole inside its parent
+        // A mark inside a mark: one piece, drawn whole inside its parent — unless it holds a page (a mockup in a
+        // decision's option), which is then its own piece, framed.
+        if (wrap && !holdsPage(lines, i + 1, closes - 1)) { piece(i, closes); i = closes; continue; }
         out.push({ from: at[i], to: at[i + 1] - 1, text: lines[i], part: false, h: "open", wrap: own });
         scan(lines, at, text, i + 1, closes - 1, own, out);
         out.push({ from: at[closes - 1], to: at[closes] - 1, text: lines[closes - 1], part: false, h: "close", wrap: own });
@@ -190,6 +245,7 @@
   import { markdown } from "plexus-ui/host";
   import Diagram from "plexus-ui:mermaid-diagram";
   import CodeCard from "./code-card.svelte";
+  import PageFrame from "./page-frame.svelte";
 
   // EDITOR-9: what the markdown drew, finished. Each ```mermaid fence (a bare one, or one inside a
   // house mark) gets the diagram's bound mark before it — its own module, fetched the first time one is
@@ -244,11 +300,25 @@
   }
 
   let { body = "", title = null, status = null, edit = null, titleEdit = null, block = false, piece = null, defs: given = null } = $props();
+
+  /** EDITOR-14: a raw body's frame document — its markdown (each piece through the host's render, as drawn
+   *  here) around its raw HTML (a piece holding some, as written), a page block a nested frame; the theme's
+   *  tokens go in at `menger-theme` (page-frame), and a link opens a tab. */
+  function rawDoc(src) {
+    const d = refDefs(src), out = [];
+    for (const p of blocks(src, false)) {
+      if (p.page) out.push(nested(pageSpec(p.text)));
+      else if (!FENCE.test(p.text) && holdsRaw(p.text)) out.push(p.text);
+      else out.push(markdown(mediaLinks(pieceSource(p)) + d));
+    }
+    return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><base target="_blank">`
+      + `<style id="menger-theme">/*menger-theme*/</style><style>${RAW_SHEET}</style></head><body>\n${out.join("\n")}\n</body></html>`;
+  }
   const parts = $derived(edit || block ? [] : blocks(body));
   const defs = $derived(block ? given ?? "" : edit ? "" : refDefs(body));
 </script>
 
-{#snippet drawn(p)}<div class="blk-in" use:enhance={p.text}>{@html markdown(mediaLinks(pieceSource(p)) + defs)}</div>{/snippet}
+{#snippet drawn(p)}{#if p.raw}<div class="blk-in"><PageFrame source={p.text} doc={rawDoc(p.text)}/></div>{:else if p.page}<div class="blk-in"><PageFrame source={p.text}/></div>{:else}<div class="blk-in" use:enhance={p.text}>{@html markdown(mediaLinks(pieceSource(p)) + defs)}</div>{/if}{/snippet}
 
 {#if block}{@render drawn(piece ?? { text: body })}{:else}
 <article class="ticket-view" data-surface="ticket-view" data-editing={edit ? "" : undefined}>
@@ -264,7 +334,7 @@
   {:else if !body}
     <p class="empty" data-field="body" data-empty>No body yet.</p>
   {:else}
-    <div class="md" data-field="body" data-ticket-body>{#each parts as p (p.from)}<div class={pieceClass(p)} data-block data-tag={p.wrap?.tag}>{@render drawn(p)}</div>{/each}</div>
+    <div class="md" data-field="body" data-ticket-body>{#each parts as p (p.from)}<div class={pieceClass(p)} data-block data-tag={p.wrap?.tag} data-page={p.page ? "" : undefined}>{@render drawn(p)}</div>{/each}</div>
   {/if}
 </article>{/if}
 
