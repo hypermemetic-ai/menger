@@ -37,6 +37,7 @@
 
 <script>
   import { bus, live } from "plexus-ui/host";
+  import { ticketHref } from "./ticket-links.svelte";
 
   let { id, sheet = null } = $props();
   const b = bus();
@@ -229,7 +230,7 @@
     const r = await write(method, asked, (e) => `moved ${moves(e)}`);
     if (r.ok) msgs[kind] = "";
     const to = r.ok && r.events[0]?.moves?.[0]?.to;
-    if (to) b.navigate("#/ticket/" + to);
+    if (to) b.navigate(ticketHref({ id: to }));
   }
   const renameP = (dryRun) => withWhy("rename", { id, to: renameTo.trim(), ...(dryRun ? { dry_run: true } : {}) });
   const reshortP = (dryRun) => withWhy("reshortcode", { ids: [id], to: rcTo.trim(), ...(dryRun ? { dry_run: true } : {}) });

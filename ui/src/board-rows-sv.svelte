@@ -24,13 +24,14 @@
      beside the rows. -->
 <script module>
   // PERF-15: a row is the four fields drawn, not the whole summary row.
-  const FIELDS = ["id", "title", "kind", "status"];
+  const FIELDS = ["id", "uid", "title", "kind", "status"];
   export const uses = ["tickets.nav.extents", "tickets.watch", "tickets.nav.counts", "tickets.list"];
 </script>
 
 <script>
   import { tick, untrack } from "svelte";
   import { bus, live } from "plexus-ui/host";
+  import { ticketHref } from "./ticket-links.svelte";
 
   let { filter = null } = $props();
   const b = bus();
@@ -118,7 +119,7 @@
     focus(all[Math.max(0, i - 1)]);
   }
   function open() {
-    if (sel != null) b.navigate(base + "ticket/" + sel);
+    if (sel != null) b.navigate(ticketHref(rows.rows.find((r) => r.id === sel) ?? { id: sel }, base));
   }
   function check() {
     if (sel != null) toggle(sel);
@@ -183,7 +184,7 @@
       <div class="board-window" style={"transform:translateY(" + PITCH * first + "px)"}>
       {#each rows.rows as r (r.id)}
         <div class="board-line">
-        <a class="board-row" data-id={r.id} data-status={r.status} href={base + "ticket/" + r.id}
+        <a class="board-row" data-id={r.id} data-status={r.status} href={ticketHref(r, base)}
            data-selected={sel === r.id ? "" : undefined} data-checked={checked.includes(r.id) ? "" : undefined}>
           <i class="kmark" data-kind={r.kind} aria-hidden="true"></i>
           <span class="row-id" data-field="id">{r.id}</span>

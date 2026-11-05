@@ -10,7 +10,7 @@
      palette its `palette` section's; this is the query's lists. -->
 <script module>
   // PERF-15: a row is the four fields drawn, not the whole summary row.
-  const FIELDS = ["id", "title", "kind", "status"];
+  const FIELDS = ["id", "uid", "title", "kind", "status"];
   const LIMIT = 8;
   export const uses = ["tickets.find", "tickets.search"];
 
@@ -24,6 +24,7 @@
 
 <script>
   import { bus, live } from "plexus-ui/host";
+  import { ticketHref } from "./ticket-links.svelte";
 
   let { q = null, filter = null, sheet = null } = $props();
   const b = bus();
@@ -76,7 +77,7 @@
         <h2>ids and titles <b data-count="find">{found.rows.length}</b></h2>
         {#if sheet === "loading" || found.status === "pending"}<div class="sp-loading" data-loading><i></i><i></i><i></i></div>{/if}
         {#each found.rows as f (f.id)}
-          <a class="res" data-result="find" data-id={f.id} data-status={f.status} href={"#/ticket/" + f.id}>
+          <a class="res" data-result="find" data-id={f.id} data-status={f.status} href={ticketHref(f)}>
             <i class="kmark" data-kind={f.kind}></i>
             <span class="row-id" data-field="id">{f.id}</span>
             <span class="row-title" data-field="title">{#each marked(f.title, q) as m, i (i)}{#if m.hit}<mark>{m.text}</mark>{:else}{m.text}{/if}{/each}</span>
@@ -88,7 +89,7 @@
         <h2>in bodies {#if page}<b data-count="search">{page.matched}</b>{/if}<span class="m">best first</span></h2>
         {#if hits.status === "pending"}<div class="sp-loading" data-loading><i></i><i></i><i></i></div>{/if}
         {#each rows as h (h.summary.id)}
-          <a class="res" data-result="search" data-id={h.summary.id} data-status={h.summary.status} data-corrected={h.corrected ? "" : undefined} href={"#/ticket/" + h.summary.id}>
+          <a class="res" data-result="search" data-id={h.summary.id} data-status={h.summary.status} data-corrected={h.corrected ? "" : undefined} href={ticketHref(h.summary)}>
             <i class="kmark" data-kind={h.summary.kind}></i>
             <span class="row-id" data-field="id">{h.summary.id}</span>
             <span class="row-title" data-field="title">{#each h.title as m, i (i)}{#if m.hit}<mark>{m.text}</mark>{:else}{m.text}{/if}{/each}</span>

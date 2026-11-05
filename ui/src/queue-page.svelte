@@ -25,6 +25,7 @@
 <script>
   import { tick } from "svelte";
   import { bus, live } from "plexus-ui/host";
+  import { ticketHref } from "./ticket-links.svelte";
 
   let { sheet = null, sample = null } = $props();
   const b = bus();
@@ -79,7 +80,7 @@
   b.keys({
     j: { to: () => (at = Math.min(at + 1, rows.length - 1)), label: "next in the queue" },
     k: { to: () => (at = Math.max(at - 1, 0)), label: "previous in the queue" },
-    enter: { to: () => here && b.navigate(base + "ticket/" + here.id), label: "open it" },
+    enter: { to: () => here && b.navigate(ticketHref(here.ticket ?? here, base)), label: "open it" },
     s: { to: () => here && snooze(here.id), label: "snooze it an hour" },
     d: { to: () => here && done(here.id), label: "take it out of the queue" },
     c: { to: () => here && changes(here.id), label: "request changes" },
@@ -109,7 +110,7 @@
         <div class="q-row" data-id={r.id} data-now={now} data-urgency={r.entry.urgency} data-selected={i === at ? "true" : "false"}
              data-snoozed={(r.entry.snoozed_until_unix ?? 0) > now ? "true" : "false"}>
           <i class="q-mark" aria-hidden="true"></i>
-          <a class="q-id" href={base + "ticket/" + r.id}>{r.id}</a>
+          <a class="q-id" href={ticketHref(r.ticket ?? r, base)}>{r.id}</a>
           <span class="q-what">
             <span class="q-name" data-field="title">{r.ticket.title}</span>
             <span class="q-why" data-field="reason">{r.entry.reason}</span>

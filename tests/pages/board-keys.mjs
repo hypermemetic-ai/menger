@@ -22,7 +22,7 @@
 import { makeKey, readToken, sessionCookies, writeSession } from "../../scripts/throwaway-login.mjs";
 
 export default async (ctx) => {
-  const { test, assert, eventually, sleep, openPage, sy, main, section, boardUp, BOARDS, server, path } = ctx;
+  const { test, assert, eventually, sleep, openPage, sy, main, section, boardUp, BOARDS, server, path, ticketAt } = ctx;
   const B = BOARDS.sv;
 
   const SPY = () => {
@@ -167,7 +167,7 @@ export default async (ctx) => {
 
     await calm(page);
     await page.keyboard.press("Enter");
-    await eventually(`enter opens #/ticket/${first[1]}`, async () => (await hash(page)) === `#/ticket/${first[1]}`, 3_000);
+    await eventually(`enter opens ${first[1]}'s page`, async () => ticketAt(await hash(page), first[1]), 3_000);
   });
 
   await test("x_checks_rows_and_board_selected_is_emitted", async () => {

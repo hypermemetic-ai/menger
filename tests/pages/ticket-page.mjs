@@ -19,7 +19,7 @@
 import { bundle, push, sentCalls } from "../../scripts/ui-throwaway.mjs";
 
 export default async (ctx) => {
-  const { test, assert, eventually, sleep, openPage, sy, groupsNow, fs, path, session, server, v1 } = ctx;
+  const { test, assert, eventually, sleep, openPage, sy, groupsNow, fs, path, session, server, v1, ticketAt } = ctx;
   const trimmed = (t) => String(t ?? "").trim();
   const text = async (loc) => trimmed(await loc.first().textContent({ timeout: 1000 }));
   const scratch = path.dirname(session);
@@ -235,7 +235,7 @@ export default async (ctx) => {
       // Escape closes the open diff first, and the page stays.
       await page.keyboard.press("Escape");
       await eventually("escape closed the diff", async () => (await r.getAttribute("data-open")) === "false");
-      assert((await page.evaluate(() => location.hash)) === `${ROUTE}${t.id}`, "the first escape stayed on the page");
+      assert(ticketAt(await page.evaluate(() => location.hash), t.id), "the first escape stayed on the page");
     } finally {
       await context.close();
     }
@@ -341,11 +341,11 @@ export default async (ctx) => {
       const head = tp.locator("[data-surface=ticket-head]");
       await eventually("the siblings are known", async () => (await head.locator("[data-sib=next]").count()) === 1, 5_000);
       await page.keyboard.press("]");
-      await eventually(`] goes to ${kids[2]}`, async () => (await page.evaluate(() => location.hash)) === `${ROUTE}${kids[2]}`, 5_000);
+      await eventually(`] goes to ${kids[2]}`, async () => ticketAt(await page.evaluate(() => location.hash), kids[2]), 5_000);
       await eventually(`${kids[2]} is drawn`, async () => (await text(page.locator("[data-surface=ticket-head] [data-field=id]"))) === kids[2], 5_000);
       await eventually("its siblings", async () => (await page.locator("[data-surface=ticket-head] [data-sib=prev]").count()) === 1, 5_000);
       await page.keyboard.press("[");
-      await eventually(`[ goes back to ${kids[1]}`, async () => (await page.evaluate(() => location.hash)) === `${ROUTE}${kids[1]}`, 5_000);
+      await eventually(`[ goes back to ${kids[1]}`, async () => ticketAt(await page.evaluate(() => location.hash), kids[1]), 5_000);
       // STUDIO-12: an rhx page takes a new route by drawing again from its initial state (CONTRACT, rhx/1): count from its new draw.
       await eventually(`the page is ${kids[1]}'s`, async () => (await tp.getAttribute("data-ticket")) === kids[1], 5_000);
       // e says ticket.edit on the bus (SURFACE-4 hears it): the page counts it on its root and the edit mark flashes; no navigation.
@@ -353,10 +353,10 @@ export default async (ctx) => {
       await page.keyboard.press("e");
       await eventually("e asked for the edit", async () => Number(await tp.getAttribute("data-edit-asked")) === asked + 1);
       assert(await tp.locator("[data-mark=ticket-edit]").evaluate((e) => e.classList.contains("heard")), "the edit mark heard it");
-      assert((await page.evaluate(() => location.hash)) === `${ROUTE}${kids[1]}`, "e moved nothing");
+      assert(ticketAt(await page.evaluate(() => location.hash), kids[1]), "e moved nothing");
       await page.keyboard.press("x");
       await page.keyboard.press("Escape");
-      await eventually("escape goes to the board", async () => !(await page.evaluate(() => location.hash)).includes("/ticket/"), 5_000);
+      await eventually("escape goes to the board", async () => !/\/(?:ticket|t)\//.test(await page.evaluate(() => location.hash)), 5_000);
       const seen = await page.evaluate(() => window.__keys);
       assert(seen.includes("x"), `an unbound key reaches the page: ${JSON.stringify(seen)}`);
       for (const k of ["]", "[", "e", "Escape"]) assert(!seen.includes(k), `${k} never reached the page: ${JSON.stringify(seen)}`);
@@ -365,7 +365,7 @@ export default async (ctx) => {
       await eventually(`${kids[0]} is drawn`, async () => (await text(page.locator("[data-surface=ticket-head] [data-field=id]"))) === kids[0], 5_000);
       await page.keyboard.press("g");
       await page.keyboard.press("b");
-      await eventually("g b goes to the board", async () => !(await page.evaluate(() => location.hash)).includes("/ticket/"), 5_000);
+      await eventually("g b goes to the board", async () => !/\/(?:ticket|t)\//.test(await page.evaluate(() => location.hash)), 5_000);
     } finally {
       await context.close();
     }

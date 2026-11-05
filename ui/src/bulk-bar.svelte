@@ -40,6 +40,7 @@
 
 <script>
   import { bus, live } from "plexus-ui/host";
+  import { ticketHref } from "./ticket-links.svelte";
 
   let { ids = null, sheet = null } = $props();
   const b = bus();
@@ -188,7 +189,7 @@
       {:else if sent.archive}
         <span class="landed" data-changed={sent.answer.ids.length}>archived {sent.answer.ids.length}</span>
         <ul class="rows">
-          {#each sent.answer.ids.slice(0, SHOWN) as id (id)}<li><a class="row" data-id={id} href={"#/ticket/" + id}><span class="row-id">{id}</span></a></li>{/each}
+          {#each sent.answer.ids.slice(0, SHOWN) as id (id)}<li><a class="row" data-id={id} href={ticketHref({ id })}><span class="row-id">{id}</span></a></li>{/each}
           {#if sent.answer.ids.length > SHOWN}<li class="more" data-more={sent.answer.ids.length - SHOWN}>+{sent.answer.ids.length - SHOWN}</li>{/if}
         </ul>
       {:else}
@@ -196,7 +197,7 @@
         {#if sent.answer.unchanged.length}<span class="l" data-unchanged={sent.answer.unchanged.length}>{sent.answer.unchanged.length} already so</span>{/if}
         <ul class="rows">
           {#each sent.answer.tickets.filter((t) => sent.answer.ids.includes(t.id)).slice(0, SHOWN) as t (t.id)}
-            <li><a class="row" data-id={t.id} data-status={t.status} href={"#/ticket/" + t.id}><span class="row-id">{t.id}</span> <span class="row-status">{t.status}</span></a></li>
+            <li><a class="row" data-id={t.id} data-status={t.status} href={ticketHref(t)}><span class="row-id">{t.id}</span> <span class="row-status">{t.status}</span></a></li>
           {/each}
           {#if sent.answer.ids.length > SHOWN}<li class="more" data-more={sent.answer.ids.length - SHOWN}>+{sent.answer.ids.length - SHOWN}</li>{/if}
         </ul>

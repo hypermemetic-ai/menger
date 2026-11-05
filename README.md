@@ -915,6 +915,50 @@ an id older than ORG-3 is pinned. A name that fits two is refused in band
 `SYNAPSE-CC-1` is ticket 1 of `SYNAPSE-CC`). A scope roots its own
 shortcode (ORG-5): `create --kind scope --epic NEW --parent X`.
 
+#### A ticket's uid (TICKETS-35; on v2, V2-42)
+
+Every ticket has a **uid** — the one name nothing changes: **8 characters
+of Crockford's base32, lower case** (`7k3mq2xa`; digits and the letters but
+`i`, `l`, `o`, `u`), read case-blind.
+
+- **Minted** at `create` (a subtask, a seed's tickets and a scope
+  `reshortcode --new-scope` makes too): random, never another ticket's (live
+  or deleted), never a shortcode's code. `created`, and every `ticket` and
+  `summary` (a `rows` page's items too), carry it as `uid`; `--fields uid`
+  asks for it on a thinned row.
+- **Kept** through every move: `reshortcode` and `rename` rewrite the key
+  (`id`), never the uid; `set_parent`, an archive and its restore keep it; a
+  `delete` keeps it on the tombstone (`tombstones[].uid`) and `undelete`
+  gives it back.
+- **Names its ticket** wherever a ticket is named — every `--id`, `--ids`,
+  `--parent`, `--blocked-by`, `--block`, `--unblock`, `--ticket`, `--keep`
+  takes it bare, as the app's route to it (`#/t/7k3mq2xa/…`) or as the whole
+  link; what follows the uid is ignored. A deleted ticket's uid answers its
+  tombstone. The filter words take one too: `under 7k3mq2xa`, `ticket
+  7k3mq2xa`. A name is resolved once, where the call names it, and a write
+  holds the key from there (TICKETS-32): `amend --id
+  hypermemetic:MENGER/STORE/PERF-19` lands though the bare `PERF-19` fits two.
+- **`uid_of`**: a ticket or a summary that names others — its `parent`, each
+  of `blocked_by` and `unlocks` — carries each one's uid, keyed as the row
+  names it (`{"PERF-1": "m4c8tz1e"}`); omitted when empty.
+- **`choices`**: `ambiguous` says, beside `candidates`, one choice per
+  candidate — its `uid`, `id`, `address`, `org`, `epic`, `kind`, `status`,
+  `title` and `parent { uid, id, address, title }`; a candidate the caller may
+  not read carries its address alone.
+
+**Stored.** A column of the tickets and of the tombstones, each under a
+unique index — not derived state. A file without it gains it at its first
+open; a file that has it — prod's, made by main, where v2 then wrote
+tickets without one — keeps every uid it holds, and every ticket and
+tombstone without one is given one at the next open, in one transaction,
+the count in the log (`TICKETS-35: minted N uid(s) …`). `--verify-derived`
+holds them: a ticket or a tombstone without a uid, or two with one, is a
+difference.
+
+```sh
+synapse -P 4460 menger tickets get --id 7k3mq2xa
+```
+
 ### Organizations (ORG-4) and epics (ORG-13, ORG-23; out of the surface, V2-25)
 
 Every ticket and shortcode is in one organization (`hypermemetic`).
@@ -1260,13 +1304,33 @@ owns only its tree and its folds.
 The bundle's `index.html` imports `/app/<version>/engine.js` and boots it
 with the stamped version.
 
+### A ticket's link (TICKETS-36; on v2, V2-42)
+
+Every link the UI makes to a ticket is by its uid, from one helper,
+`ui/src/ticket-links.svelte` (`ticketHref`, `editHref`; a svelte/1
+component imports what it needs): `#/t/<uid>/<ID>-<slug>` — the id as a row
+shows it (`PERF.115-19` is `PERF-19`), then the title's words in lower-case
+ASCII joined by `-`, cut at a word to 48 characters — and the editor's
+`#/t/<uid>/<ID>-<slug>/edit`. Only the uid is read: `page-t` opens the
+ticket by it whatever its id is now (a moved ticket's old link lands; a uid
+naming nothing says so), and `page-editor` resolves it the same way. A row
+the UI holds no uid for is linked by its name, `#/ticket/<ID>`
+(`#/edit/<ID>`), which still resolves, as do the old links in bodies and
+bookmarks; once the page has the ticket, the address bar is put in the uid
+form in place (`history.replaceState`: no history entry, no route change),
+and a stale tail is put right the same way. `tests/links_check.mjs` refuses
+a ticket's route spelled anywhere else in `ui/src`; rhx/1 imports no code,
+so the rhx twins (`#/rhx/…`) link by name, the form the helper gives a row
+without a uid. `tests/pages/links.mjs` is the page group.
+
 ### The bundle in the repository
 
 `ui/` is the UI's source: `index.html` (FRAME-30: the page's frame alone,
 `theme.css` loaded first), `theme.toml` (the tokens, light and dark —
 `[colour.paper]` `"--bg" = [light, dark, "what it paints"]`, …; every
 component's `<style>` paints with them, never a literal), `routes.json` (`#/board` and `#/f/:filter`
-→ `board-frame`, `#/` and `#/edit/:id` → `page-editor`, `#/ticket/:id` → `ticket-page`), `slots.json` (the
+→ `board-frame`, `#/` and `#/edit/:id` → `page-editor`, `#/ticket/:id` → `ticket-page`; V2-42: `#/t/:uid` and
+`#/t/:uid/:tail` → `page-t`, `#/t/:uid/:tail/edit` → `page-editor` — "A ticket's link" below), `slots.json` (the
 layouts' default sections), `src/*.rhx` (`board-layout`, `board-rows`,
 `filter-line`, `jump-palette`, `nav-tree`, `nav-flat`, `nav-children`,
 `ticket-page`, `ticket-chip`, `page-shell`, `hello-list`).

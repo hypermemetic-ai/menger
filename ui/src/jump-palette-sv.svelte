@@ -18,7 +18,7 @@
      (#/sheet) — its field not focused, its keys not bound. -->
 <script module>
   // PERF-15: a row is the four fields drawn, not the whole summary row.
-  const FIELDS = ["id", "title", "kind", "status"];
+  const FIELDS = ["id", "uid", "title", "kind", "status"];
   export const uses = ["tickets.find", "tickets.search"];
 
   // [name, route (an argument appended), what the argument is].
@@ -49,6 +49,7 @@
 
 <script>
   import { bus, live } from "plexus-ui/host";
+  import { ticketHref } from "./ticket-links.svelte";
 
   let { sheet = null } = $props();
   const b = bus();
@@ -112,7 +113,7 @@
       return;
     }
     if (!current) return;
-    b.navigate(base + "ticket/" + current.slice(2));
+    b.navigate(ticketHref([...hits, ...best].find((r) => r.id === current.slice(2)) ?? { id: current.slice(2) }, base));
     close();
   }
 
@@ -154,7 +155,7 @@
       {:else if q !== ""}
         <ul class="palette-hits" data-palette-hits>
           {#each hits as f (f.id)}
-            <li><a class="palette-hit" data-palette-hit={f.id} data-selected={current === "f:" + f.id ? "" : undefined} href={base + "ticket/" + f.id} onclick={close}><span class="row-id">{f.id}</span> <span class="row-title">{f.title}</span></a></li>
+            <li><a class="palette-hit" data-palette-hit={f.id} data-selected={current === "f:" + f.id ? "" : undefined} href={ticketHref(f, base)} onclick={close}><span class="row-id">{f.id}</span> <span class="row-title">{f.title}</span></a></li>
           {/each}
         </ul>
         {#if $found.status === "pending"}<div class="palette-loading" data-loading><i></i><i></i></div>{/if}
@@ -162,7 +163,7 @@
         <p class="palette-label">in titles and bodies</p>
         <ul class="palette-hits search" data-search-hits>
           {#each best as h (h.id)}
-            <li><a class="palette-hit" data-search-hit={h.id} data-selected={current === "s:" + h.id ? "" : undefined} href={base + "ticket/" + h.id} onclick={close}><span class="row-id">{h.id}</span> <span class="row-title">{h.title}</span></a></li>
+            <li><a class="palette-hit" data-search-hit={h.id} data-selected={current === "s:" + h.id ? "" : undefined} href={ticketHref(h, base)} onclick={close}><span class="row-id">{h.id}</span> <span class="row-title">{h.title}</span></a></li>
           {/each}
         </ul>
         {#if $found.status === "live" && $searched.status === "live" && hits.length === 0 && best.length === 0}<p class="palette-empty" data-empty>Nothing says “{q}”.</p>{/if}

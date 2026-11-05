@@ -12,7 +12,7 @@
      nothing. The keys are the field's own: they act only while it has the
      focus. -->
 <script module>
-  const FIELDS = ["id", "title", "kind", "status"];
+  const FIELDS = ["id", "uid", "title", "kind", "status"];
   export const uses = ["tickets.find"];
 </script>
 

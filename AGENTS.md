@@ -518,7 +518,11 @@ synapse -P 4460 menger tickets work blockers --id MENGER-30
 A shortcode is unique within its namespace (ORG-3); every `--id`,
 `--parent`, `--blocked-by`, `--epic` and `under` takes any short form of a
 ticket's address (`MENGER/ORG-3`, `ACCESS/ORG-3`, the bare id); a name that
-fits two is refused in band, naming each candidate. A scope roots its own
+fits two is refused in band, naming each candidate. **Every ticket has a
+uid** (TICKETS-35, on v2 V2-42: 8 characters of Crockford's base32,
+`7k3mq2xa`, kept through every move): each of those takes it too, bare or in
+the UI's link, `#/t/<uid>/<ID>-<slug>` — which the UI makes from one helper,
+`ui/src/ticket-links.svelte` (README "A ticket's uid", "A ticket's link"). A scope roots its own
 shortcode (ORG-5). Every ticket is in one organization (ORG-4) and one epic
 (ORG-13; V2-25: the `epics` methods went — a read is the organization's
 whole set, and an epic is named only in an address). A grant's scope is `*`, `org:`, a shortcode, a ticket

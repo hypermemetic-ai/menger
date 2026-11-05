@@ -39,7 +39,7 @@ const STUB = `<script>
 `;
 
 export default async (ctx) => {
-  const { test, assert, eventually, openPage, marked, sameDocument, sy, server, session, v1, v2, path, fs } = ctx;
+  const { test, assert, eventually, openPage, marked, sameDocument, sy, server, session, v1, v2, path, fs, ticketAt } = ctx;
   const one = (events, type) => events.find((e) => e.type === type);
   const ticket = (id) => one(sy("tickets", "get", "--id", id), "ticket")?.ticket;
   const make = (...a) => {
@@ -48,6 +48,8 @@ export default async (ctx) => {
     return t;
   };
   const hash = (page) => page.evaluate(() => location.hash);
+  // V2-42: the ticket made, by the uid route create moves the page to (`#/t/<uid>/CRTA-N-<slug>`).
+  const idIn = (h) => /^#\/t\/[0-9a-z]{8}\/(CRTA-\d+)/.exec(h)[1];
 
   // The tickets the cases work on: CRTA for create and pick, CRTB for the bulk bar.
   const crta = make("--epic", "CRTA", "--title", "the create cases", "--kind", "scope");
@@ -104,9 +106,9 @@ export default async (ctx) => {
       await f.locator('[data-action="tickets.create"]').click();
       const at = await eventually("create moves the page to the ticket made", async () => {
         const h = await hash(page);
-        return /^#\/ticket\/CRTA-\d+$/.test(h) && h;
+        return /^#\/t\/[0-9a-z]{8}\/CRTA-\d+(-|$)/.test(h) && h;
       });
-      const id = at.replace("#/ticket/", "");
+      const id = idIn(at);
       await eventually("the ticket page draws it", async () => (await page.locator("[data-ticket-title]").textContent({ timeout: 500 })) === "a firing log, made from the form");
       await sameDocument(page, origin, "after the create");
       const t = ticket(id);
@@ -165,8 +167,8 @@ export default async (ctx) => {
       await eventually("picked { name: parent } fills the parent", async () => (await f.locator(`[data-field-value=parent] [data-chip-id="${crta.id}"]`).count()) === 1);
       await f.locator("[data-field=title]").fill("picked, then made");
       await f.locator('[data-action="tickets.create"]').click();
-      const at = await eventually("created", async () => { const h = await hash(page); return /^#\/ticket\/CRTA-\d+$/.test(h) && h; });
-      const t = ticket(at.replace("#/ticket/", ""));
+      const at = await eventually("created", async () => { const h = await hash(page); return /^#\/t\/[0-9a-z]{8}\/CRTA-\d+(-|$)/.test(h) && h; });
+      const t = ticket(idIn(at));
       assert(JSON.stringify(t.blocked_by) === JSON.stringify([quartz.id]) && t.parent === crta.id, `the picks are the ticket's: ${JSON.stringify({ blocked_by: t.blocked_by, parent: t.parent })}`);
     } finally {
       await context.close();
@@ -223,9 +225,9 @@ export default async (ctx) => {
         el.addEventListener("keydown", (e) => { if (e.key === "Enter") window.__s5_reached = true; });
       });
       await f.locator("[data-field=title]").press("Control+Enter");
-      const at = await eventually("created", async () => { const h = await hash(page); return /^#\/ticket\/CRTA-\d+$/.test(h) && h; });
+      const at = await eventually("created", async () => { const h = await hash(page); return /^#\/t\/[0-9a-z]{8}\/CRTA-\d+(-|$)/.test(h) && h; });
       assert((await page.evaluate(() => window.__s5_reached)) === false, "ctrl+enter never reached the field: the host took it");
-      const t = ticket(at.replace("#/ticket/", ""));
+      const t = ticket(idIn(at));
       assert(t.parent === zephyr.id && t.title === "a child of zephyr", `filed under the route's parent: ${t.parent}`);
     } finally {
       await context.close();
