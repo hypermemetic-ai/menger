@@ -130,6 +130,44 @@ Content-Security-Policy (ACCESS-28, `PAGE_CSP`): no inline script but the
 page's own blocks, hashed; no script or image from another origin;
 connections only to itself, its socket and loopback.
 
+**MCP** (TRANSPORT-15; on v2, V2-43). menger is an MCP server too: `/mcp`
+on the app's origin (`http://127.0.0.1:4456/mcp` here,
+`https://app.menger.sh/mcp` deployed — the edge needs no route of its own;
+`--no-mcp` / `MENGER_NO_MCP` turns it off), served through
+plexus-transport-mcp's bridge mounted behind the same login. Its tools are
+every method of every service registered — `tickets`, `members`, `orgs`,
+`ui`, `media`, `docs`, `quota`, `auth`, `session` — as the caller may see
+them. Every `tools/call` goes through the gate as the caller the request's
+Bearer names — an agent's session, or a token an `--auth-provider` admits,
+exactly what the WebSocket takes — and `tools/list` is that caller's view; a
+request with no credential is the anonymous view (the `auth.*` door); a
+refused one is `401`. An MCP client that takes a static header signs in
+with the session synapse keeps after `_login` (its keychain item:
+`backend=<host:port>`, `agent=<name>`, `service=plexus-session`; the JSON's
+`token`), which ends with the session (12 h). A key proof will not do: it
+opens one upgrade, and MCP carries the header on every request, so its
+second use is refused.
+
+With `--mcp-authorization-server URL` (repeatable;
+`MENGER_MCP_AUTHORIZATION_SERVERS`, `;`-separated), `/mcp` is an OAuth 2.1
+protected resource: a request with no token is answered `401` naming
+`/.well-known/oauth-protected-resource/mcp`, so an MCP client signs in at
+that server by itself. On app.menger.sh and app-test that server is the
+environment's WorkOS AuthKit domain (TRANSPORT-24, `deploy/env/app-*.env`):
+the same sign-in as the app's, and a third `--auth-provider`, the generic
+`oidc:authkit=<domain>,<public-url>/mcp`, admits the tokens it mints as
+`oidc:authkit/<WorkOS user id>` (one principal with the app's cookie is
+TRANSPORT-20); `MENGER_LOGIN_PASSWORD=none` keeps the generic provider off
+the login page's password form. A person's entry then carries no header —
+Claude Code's `/mcp` shows **Authenticate** and the browser does the rest:
+
+```
+claude mcp add --transport http menger https://app.menger.sh/mcp
+```
+
+`tests/mcp.rs` pins the three callers, v2's services, and the protected
+resource's 401.
+
 **Hosts** (ACCESS-25). Every listener — the WebSocket and the shell —
 answers only its own names, so a page that rebinds its name to 127.0.0.1
 (DNS rebinding) gets nothing: any other `Host` is refused `421 Misdirected
@@ -184,8 +222,8 @@ where it has one (a list in it is `;`-separated).
 
 | group | flags |
 |---|---|
-| run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path`, `--ui-signer`, `--ui-compiler`, `--ui-author-key`, `--media-db-path` (`media.db` beside the database), `--media-store` (`disk`), `--media-blob-dir`, `--media-max-bytes`, `--quota-db-path` (`quota.db` beside the database), `--quota-plan` (the defaults a new quota file starts from; the built-in `free-1k`), `--ui-channel` (UI-15: the live pointer this environment serves in its ui file; default from `--env`: `test`, `prod`, else `default`), `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell` |
-| sign-in | `--auth-provider`, `--admin`, `--public-url`, `--login-button`, `--login-email`, `--login-password`, `--login-forgot`, `--identity`, `--workos-api-key-file`, `--allowed-origin`, `--frame-ancestor` (an origin that may frame the shell's pages; none by default), `--live-origin` (an origin the shell's pages may frame), `--allowed-host`, `--trusted-proxy`, `--return-origin`, `--session-hours` (12), `--session-idle-minutes` (120) |
+| run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path`, `--ui-signer`, `--ui-compiler`, `--ui-author-key`, `--media-db-path` (`media.db` beside the database), `--media-store` (`disk`), `--media-blob-dir`, `--media-max-bytes`, `--quota-db-path` (`quota.db` beside the database), `--quota-plan` (the defaults a new quota file starts from; the built-in `free-1k`), `--ui-channel` (UI-15: the live pointer this environment serves in its ui file; default from `--env`: `test`, `prod`, else `default`), `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell`, `--no-mcp` (V2-43: no `/mcp`) |
+| sign-in | `--auth-provider`, `--admin`, `--public-url`, `--login-button`, `--login-email`, `--login-password`, `--login-forgot`, `--identity`, `--workos-api-key-file`, `--allowed-origin`, `--frame-ancestor` (an origin that may frame the shell's pages; none by default), `--live-origin` (an origin the shell's pages may frame), `--allowed-host`, `--trusted-proxy`, `--return-origin`, `--session-hours` (12), `--session-idle-minutes` (120), `--mcp-authorization-server` (V2-43: `/mcp` a protected resource naming it) |
 | maintenance and testing | `--dev-login`, `--dev-password`, `--dev-idp-ws`, `--dev-user` (all `--env test` only), `--verify-derived`, `--seed-synthetic`, `--seed-value`, `--seed-shape` (`flat`, `nested`), `--seed-into-existing` |
 | limits | `--max-body-bytes` (8 MiB), `--max-calls-per-connection` (256), `--idle-timeout-secs` (900), `--max-connections` (1,024), `--max-connections-per-ip` (256), `--max-connections-per-principal` (4; V2-31: a person's), `--max-connections-per-agent` (64; V2-31: a `key:` principal's), `--max-writes-per-second` (20; V2-31), `--max-anonymous-connections` (128), `--max-anonymous-connections-per-ip` (32) |
 

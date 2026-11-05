@@ -75,6 +75,13 @@ pub struct ShellConfig {
     /// `media.info` as the request's session, the bytes from its blob
     /// store ([`crate::media_route`]). None: no route.
     pub media: Option<crate::media_route::MediaServe>,
+    /// TRANSPORT-15 (V2-43): the MCP endpoint's router — `/mcp` and, under
+    /// OAuth, its RFC 9728 document — on the shell's own origin, so the edge
+    /// needs no route of its own. Public, like the metadata: the bridge's
+    /// identify step names the caller from the request's Bearer and refuses
+    /// with a 401 of its own; the session check never sends it to the login
+    /// page.
+    pub mcp: Option<Router>,
 }
 
 /// V2-24: what `GET /media/<hash>` is served under — the bytes never change
@@ -382,6 +389,11 @@ async fn router(cfg: ShellConfig, at: std::net::SocketAddr) -> Router {
     }
     if let Some(metadata) = cfg.metadata {
         app = app.merge(metadata);
+    }
+    // TRANSPORT-15 (V2-43): `/mcp` beside the metadata — after the session
+    // check, which must not redirect an MCP client to the login page.
+    if let Some(mcp) = cfg.mcp {
+        app = app.merge(mcp);
     }
     // EDITOR-14: the page frames' first document — public, no data in it.
     app = app.route(FRAME_ROUTE, get(frame_doc));

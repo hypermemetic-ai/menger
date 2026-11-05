@@ -51,6 +51,22 @@ struct Args {
     #[arg(long, value_name = "PORT", help_heading = RUN, hide_short_help = true)]
     shell_port: Option<u16>,
 
+    // TRANSPORT-15 (V2-43): MCP through the mounted bridge
+    // (plexus-transport-mcp) on the shell's origin (`<shell>/mcp`), behind the
+    // same login — an agent's session or key proof is the Bearer.
+    /// Serve no MCP endpoint (`/mcp` on the app's origin; none with --no-shell)
+    #[arg(long, env = "MENGER_NO_MCP", action = clap::ArgAction::SetTrue, value_parser = clap::builder::FalseyValueParser::new(), help_heading = RUN, hide_short_help = true)]
+    no_mcp: bool,
+
+    /// An OAuth 2.1 authorization server that mints tokens for <public-url>/mcp
+    ///
+    /// Repeatable; in the env var, separated by `;`. Given, /mcp is a protected
+    /// resource: a request without a token is answered 401 naming its RFC 9728
+    /// metadata, so an MCP client signs in there. Without one, a request with
+    /// no token is the anonymous caller (the auth door).
+    #[arg(long = "mcp-authorization-server", env = "MENGER_MCP_AUTHORIZATION_SERVERS", value_name = "URL", value_delimiter = ';', help_heading = SIGN_IN, hide_short_help = true)]
+    mcp_authorization_server: Vec<String>,
+
     // DIST-14: the data directory — the database (unless --db-path), the
     // local admin key and the one-time links.
     /// Where menger keeps its data (default ~/.local/share/menger)
@@ -656,14 +672,14 @@ async fn run(args: Args) -> anyhow::Result<()> {
         None => menger_quota::Plan::built_in(),
     };
     let quota = menger::QuotaSetup::open(&quota_db_path, &plan)?;
-    let hub = build_rpc_services(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, ui, media, docs, quota, |store, access| {
+    let service = build_rpc_services(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, ui, media, docs, quota, |store, access| {
         menger::TicketsActivation::with_access(store, access)
     })
     .await?;
 
-    local::log_activations(&hub);
-    // STUDIO-2/6: who opens /studio/ is the framework's rule over the hub's gate.
-    let studio_may = hub.gate().cloned().map(plexus_ui_service::routes::may_author);
+    local::log_activations(&service);
+    // STUDIO-2/6: who opens /studio/ is the framework's rule over the service's gate.
+    let studio_may = service.gate().cloned().map(plexus_ui_service::routes::may_author);
 
     // DIST-3: the wiring shared with `menger::local` (the library's
     // no-login server) lives there; the flags' variations stay here.
@@ -691,7 +707,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
     // The per-IP and anonymous-per-IP quotas count the client a
     // --trusted-proxy forwards; a forwarded header from any other peer is
     // ignored. ClientIp and SecureTransport read the same set.
-    let mut builder = TransportServer::builder(hub.clone(), move |hub| menger::calls::rpc_module(hub, limits))
+    let mut builder = TransportServer::builder(service.clone(), move |service| menger::calls::rpc_module(service, limits))
         .bind(args.bind)
         .with_trusted_proxies(plexus_transport::TrustedProxies::parse(&args.trusted_proxy).map_err(anyhow::Error::msg)?)
         .with_websocket(ws_port)
@@ -745,11 +761,35 @@ async fn run(args: Args) -> anyhow::Result<()> {
             // STUDIO-2: /studio/ for a session holding ui.author on * (the gate's answer).
             studio: Some(shell::Studio { may: std::sync::Arc::new(move |ctx| studio_may.as_ref().is_some_and(|may| may(ctx))), compiler: studio_module }),
             // V2-24: /media/<hash> — the media service asked as the session.
-            media: Some(menger::media_route::MediaServe { service: hub.clone(), store: media_serve.store.clone(), allowance: media_serve.allowance.clone() }),
+            media: Some(menger::media_route::MediaServe { service: service.clone(), store: media_serve.store.clone(), allowance: media_serve.allowance.clone() }),
             framing: shell::Framing {
                 ancestors: args.frame_ancestor.iter().map(|o| shell::check_origin(o)).collect::<Result<_, _>>().map_err(|e| anyhow::anyhow!("--frame-ancestor: {e}"))?,
                 live: args.live_origin.as_deref().map(shell::check_origin).transpose().map_err(|e| anyhow::anyhow!("--live-origin: {e}"))?,
             },
+            // TRANSPORT-15 (V2-43): MCP through the mounted bridge on this
+            // origin — the request's Bearer (an agent's session or key proof,
+            // or a token an --auth-provider admits) names the caller to the
+            // gate, as the WebSocket's upgrade does; no credential is the
+            // anonymous view (the door). Every service registered is there:
+            // tickets, members, orgs, ui, media, docs, quota, auth, session.
+            // With --mcp-authorization-server, /mcp is an OAuth 2.1
+            // protected resource and says so on a 401.
+            mcp: (!args.no_mcp).then(|| {
+                let public = wiring_public_url(&args.public_url, shell_port);
+                let mut mcp = plexus_transport::McpConfig::at("/mcp");
+                mcp.allowed_hosts = hosts(shell_port);
+                if !args.mcp_authorization_server.is_empty() {
+                    mcp.oauth = Some(plexus_transport::plexus_transport_mcp::OAuthConfig {
+                        resource: format!("{public}/mcp"),
+                        authorization_servers: args.mcp_authorization_server.clone(),
+                        scopes: None,
+                    });
+                }
+                let validator = wired.gate.clone().map(|g| g as std::sync::Arc<dyn plexus_core::plexus::SessionValidator>);
+                let bridge = plexus_transport::plexus_transport_mcp::McpBridge::new(plexus_transport::ServiceUpstream::new(service.clone(), validator), mcp);
+                tracing::info!("MCP:       {public}/mcp — the login's callers: a session or a key proof as the Bearer");
+                plexus_transport::plexus_transport_mcp::router(bridge)
+            }),
         };
         // DIST-14: bound before the banner, so the link answers when printed.
         let at = std::net::SocketAddr::new(args.bind, shell_port);
