@@ -340,7 +340,7 @@
   .pf-about { flex-basis: 100%; overflow-wrap: anywhere; }
   .pf-widths { display: inline-flex; gap: 4px; }
   .pf-widths button { padding: 0 7px; font: inherit; font-size: 11px; line-height: 18px; color: var(--muted); background: none; border: var(--border) solid var(--line); border-radius: var(--radius-md); cursor: pointer; }
-  .pf-widths button[aria-pressed=true] { color: var(--ink); border-color: var(--muted); background: var(--panel); }
+  .pf-widths button[aria-pressed=true], .pf-widths button:global([data-sheet~=checked]) { color: var(--ink); border-color: var(--muted); background: var(--panel); }
   .pf-stage { width: 100%; min-width: 0; }
   .pf-box { position: relative; max-width: 100%; overflow: hidden; border: var(--border) solid var(--line); border-radius: var(--radius); background: var(--panel); }
   .pf-box.bare { border: 0; border-radius: 0; background: none; }
