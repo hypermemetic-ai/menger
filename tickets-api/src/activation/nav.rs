@@ -15,8 +15,8 @@
 //!
 //! Its roles are declared in its own `roles(...)` (`nav.<method>`); the gate
 //! asks a child's call by its whole path, `tickets.nav.<method>`, which is
-//! how `Tickets::child_roles` hands them to the hub's book (MACRO-20: the
-//! hub indexes no child).
+//! how `Tickets::child_roles` hands them to the service's book (MACRO-20: the
+//! service indexes no child).
 #![allow(clippy::too_many_arguments)]
 
 use crate::types::{Row, TicketsEvent};

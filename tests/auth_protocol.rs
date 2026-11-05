@@ -176,9 +176,9 @@ async fn info(c: &WsClient) -> Value {
 
 /// Each activation the caller's `menger.schema` shows, with its methods.
 async fn view(c: &WsClient) -> BTreeMap<String, BTreeSet<String>> {
-    let hub = one(c, "menger.schema", json!({})).await;
+    let service = one(c, "menger.schema", json!({})).await;
     let mut out = BTreeMap::new();
-    for child in hub["children"].as_array().cloned().unwrap_or_default() {
+    for child in service["children"].as_array().cloned().unwrap_or_default() {
         let ns = child["namespace"].as_str().unwrap().to_string();
         let schema = one(c, &format!("{ns}.schema"), json!({})).await;
         let methods = schema["methods"].as_array().unwrap().iter().map(|m| m["name"].as_str().unwrap().to_string()).filter(|m| m != "schema").collect();
@@ -396,9 +396,9 @@ async fn the_roles_are_what_identity_21_asked_method_by_method() {
     let dir = tmp();
     let sessions = Arc::new(menger::sessions::Sessions::new(3600, &menger::login_names()));
     let access = menger_tickets_api::access::Access::with_login(menger::session_table(&sessions), Vec::new()).minting(menger::session_table(&sessions));
-    let hub = menger::build_rpc_offering(&dir.path().join("t.db"), None, Default::default(), Vec::new(), access).await.unwrap();
+    let service = menger::build_rpc_offering(&dir.path().join("t.db"), None, Default::default(), Vec::new(), access).await.unwrap();
     // MACRO-20: the children's roles are in it, each grant under its path.
-    let declared = hub.declared_roles();
+    let declared = service.declared_roles();
     let viewer: BTreeSet<String> = declared["viewer"].iter().cloned().collect();
     let editor: BTreeSet<String> = declared["editor"].iter().cloned().collect();
     assert!(viewer.is_subset(&editor), "an editor holds every viewer grant");
@@ -408,12 +408,12 @@ async fn the_roles_are_what_identity_21_asked_method_by_method() {
     // ACCESS-15: a child's methods are `tickets.<child>.<method>` on the
     // wire and in the table; its schema says `<child>.<method>`.
     let mut seen = BTreeSet::new();
-    // MACRO-20: the hub lists them by path (`tickets.commits`), each schema
+    // MACRO-20: the service lists them by path (`tickets.commits`), each schema
     // its own (namespace and grants as the macro wrote them).
     let children = plexus_core::plexus::Activation::static_child_schemas(&menger_tickets_api::TicketsActivation::with_access(Arc::new(menger_tickets_api::store::Store::new()), menger_tickets_api::access::Access::with_login(menger::session_table(&sessions), Vec::new())))
         .into_iter()
         .map(|(path, s)| (format!("tickets.{path}"), s));
-    let top = hub.list_plugin_schemas().into_iter().map(|s| (s.namespace.clone(), s));
+    let top = service.list_plugin_schemas().into_iter().map(|s| (s.namespace.clone(), s));
     for (path, schema) in top.chain(children) {
         if !["tickets", "members", "session", "media", "docs", "quota"].contains(&schema.namespace.as_str()) && !path.starts_with("tickets.") {
             continue;
@@ -592,7 +592,7 @@ async fn a_caller_s_view_lists_only_what_it_holds_and_refusals_are_typed() {
 }
 
 /// ACCESS-15 / MACRO-20: a child's methods (`tickets.commits.link` /
-/// `unlink`) are gated by their whole path — the grant the hub checks, on
+/// `unlink`) are gated by their whole path — the grant the service checks, on
 /// the method's own target, what the editor role holds — and reach the
 /// child with the caller whole (principal, session, ceiling): an editor on
 /// A links and unlinks there, is refused on B, a viewer is refused naming

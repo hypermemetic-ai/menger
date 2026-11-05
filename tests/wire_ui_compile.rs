@@ -394,7 +394,7 @@ where
     let signers = plexus_ui_service::Signers::parse(&[support::public_hex(&support::UI_SIGNER)]).expect("the test signer");
     let compiler = plexus_ui_service::Compiler::new(&module).expect("the module is taken");
     let ui = menger::UiSetup::open(&dir.join("ui.db"), signers).unwrap().compiling(Some(compiler));
-    let hub = menger::build_rpc_ui_over(
+    let service = menger::build_rpc_ui_over(
         &dir.join("t.db"),
         None,
         Default::default(),
@@ -412,7 +412,7 @@ where
     let conv = |arc: Arc<DynamicHub>| menger::calls::rpc_module(arc, Default::default()).map_err(|e| anyhow::anyhow!("{e}"));
     tokio::spawn(async move {
         let _keep = login;
-        TransportServer::builder(hub, conv)
+        TransportServer::builder(service, conv)
             .with_websocket(port)
             .with_session_validator(gate)
             .anonymous_view()

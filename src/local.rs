@@ -1,7 +1,7 @@
 //! DIST-3: menger as a library call — the whole server, started from code.
 //!
 //! [`LocalServer::start`]: the store opened (its directory made if
-//! missing), every activation on the `menger` hub, the Plexus WebSocket and
+//! missing), every activation on the `menger` service, the Plexus WebSocket and
 //! the web shell (the app, `/vanilla`) on loopback — and nothing else: no
 //! login page, no REST bridge, no registry announcement. A host (DIST-1's
 //! desktop app) runs menger without copying `main.rs`.
@@ -17,8 +17,8 @@
 //! provider's credential, since nothing here is a provider.
 //!
 //! SCAFFOLD-5: the serving is `plexus-webapp`'s [`plexus_webapp::LocalServer`]
-//! — any hub, any app — and this module is menger's part of it: the store
-//! and the hub, and menger's shell ([`crate::shell::app_shell`], the
+//! — any service, any app — and this module is menger's part of it: the store
+//! and the service, and menger's shell ([`crate::shell::app_shell`], the
 //! favicon). Its API is DIST-3's, unchanged.
 //!
 //! A port of 0 is a free one: the shell's listener and the WebSocket's are
@@ -34,7 +34,7 @@
 //! — a Tauri webview's are [`TAURI_ORIGINS`]. A caller with no `Origin`
 //! (synapse, a native client) is admitted as always.
 //!
-//! The wiring the binary shares with this module is here too: the hub's RPC
+//! The wiring the binary shares with this module is here too: the service's RPC
 //! module ([`rpc_module`]), the shell's origins ([`shell_origins`]) and the
 //! startup log of the activations ([`log_activations`]).
 
@@ -55,7 +55,7 @@ fn hex(bytes: &[u8]) -> String {
 
 /// The origins a Tauri 2 webview loads its page from — plexus-webapp's.
 pub use plexus_webapp::TAURI_ORIGINS;
-/// The hub as the WebSocket (and stdio) transport serves it, and the
+/// The service as the WebSocket (and stdio) transport serves it, and the
 /// startup log of its activations — plexus-webapp's.
 pub use plexus_webapp::{log_activations, rpc_module};
 
@@ -127,7 +127,7 @@ impl LocalServer {
         let sessions = Arc::new(crate::sessions::Sessions::open(crate::sessions_file(&cfg.db_path), SESSION_SECS, &crate::login_names())?);
         let table = crate::session_table(&sessions);
         let access = Access::with_login(table.clone(), vec![owner.clone()]).minting(table);
-        let hub = crate::build_rpc(&cfg.db_path, access.clone()).await?;
+        let service = crate::build_rpc(&cfg.db_path, access.clone()).await?;
         let app = shell::app_shell(cfg.env.as_deref(), cfg.app);
         let local = plexus_webapp::LocalConfig {
             ws_port: cfg.ws_port,
@@ -136,10 +136,10 @@ impl LocalServer {
             shell: app,
         };
         // ACCESS-13: menger's own module — its calls' limits.
-        let module = crate::calls::rpc_module(hub.clone(), crate::calls::CallLimits::default())?;
+        let module = crate::calls::rpc_module(service.clone(), crate::calls::CallLimits::default())?;
         let gate: Arc<dyn plexus_core::plexus::SessionValidator> = Arc::new(crate::sessions::Gate::new(sessions, None).noticing(crate::MengerAccess(access.clone())));
         let options = UpgradeOptions { anonymous_view: true, credential_cookies: vec!["access_token".into()], ..UpgradeOptions::default() };
-        let server = plexus_webapp::LocalServer::start_guarded(hub, module, local, Some(gate), options).await?;
+        let server = plexus_webapp::LocalServer::start_guarded(service, module, local, Some(gate), options).await?;
         Ok(LocalServer { server, access, owner })
     }
 

@@ -6,7 +6,7 @@
 //! the calls open on a connection are its subscriptions. [`rpc_module`] is
 //! the service's own module ([`plexus_webapp::rpc_module`]) with `menger.call`
 //! registered again over the same dispatch — the params read, the caller's
-//! identity from the upgrade, `hub.route`, each item piped out by
+//! identity from the upgrade, `service.route`, each item piped out by
 //! plexus-core's own pipe (PERF-7: encoded once into its frame) — and two
 //! things added, per connection (the transport's
 //! [`plexus_transport::websocket::Connection`], AUTH-11):
@@ -98,8 +98,8 @@ pub const TOO_MANY_WRITES: &str = "too_many_writes";
 
 /// V2-31: the methods that write — an editor's and not a viewer's, as the
 /// activations declare their roles (children under their whole path).
-fn writes_of(hub: &DynamicHub) -> HashSet<String> {
-    let roles = hub.declared_roles();
+fn writes_of(service: &DynamicHub) -> HashSet<String> {
+    let roles = service.declared_roles();
     let viewer: HashSet<&String> = roles.get("viewer").map(|v| v.iter().collect()).unwrap_or_default();
     roles.get("editor").map(|e| e.iter().filter(|g| !viewer.contains(g)).cloned().collect()).unwrap_or_default()
 }
@@ -107,18 +107,18 @@ fn writes_of(hub: &DynamicHub) -> HashSet<String> {
 /// The error item a call past the limit gets (the module docs).
 pub const TOO_MANY_CALLS: &str = "too_many_calls";
 
-/// The hub's RPC module, `menger.call` held to `limits` (the module docs).
+/// The service's RPC module, `menger.call` held to `limits` (the module docs).
 /// Needs a Tokio runtime when `limits.idle` is set: the idle sweep runs on it.
-pub fn rpc_module(hub: Arc<DynamicHub>, limits: CallLimits) -> anyhow::Result<RpcModule<()>> {
-    let mut module = plexus_webapp::rpc_module(hub.clone())?;
-    let ns: &'static str = Box::leak(hub.runtime_namespace().to_string().into_boxed_str());
+pub fn rpc_module(service: Arc<DynamicHub>, limits: CallLimits) -> anyhow::Result<RpcModule<()>> {
+    let mut module = plexus_webapp::rpc_module(service.clone())?;
+    let ns: &'static str = Box::leak(service.runtime_namespace().to_string().into_boxed_str());
     let call: &'static str = Box::leak(format!("{ns}.call").into_boxed_str());
     let unsub: &'static str = Box::leak(format!("{ns}.call_unsub").into_boxed_str());
     module.remove_method(call);
     module.remove_method(unsub);
     let open = Open::new(limits);
     // V2-31: each principal's write bucket, and which methods write (read
-    // from the roles at the first call: the hub is whole by then).
+    // from the roles at the first call: the service is whole by then).
     let rate = f64::from(limits.writes_per_second);
     let buckets = Arc::new(menger_quota::Buckets::new(rate, rate * 2.0));
     let writes: Arc<OnceLock<HashSet<String>>> = Arc::new(OnceLock::new());
@@ -127,7 +127,7 @@ pub fn rpc_module(hub: Arc<DynamicHub>, limits: CallLimits) -> anyhow::Result<Rp
     }
     module
         .register_subscription(call, call, unsub, move |params, pending, _ctx, ext| {
-            let (hub, open, buckets, writes) = (hub.clone(), open.clone(), buckets.clone(), writes.clone());
+            let (service, open, buckets, writes) = (service.clone(), open.clone(), buckets.clone(), writes.clone());
             async move {
                 let place = match ext.get::<Arc<Connection>>() {
                     Some(conn) => match open.admit(conn) {
@@ -145,7 +145,7 @@ pub fn rpc_module(hub: Arc<DynamicHub>, limits: CallLimits) -> anyhow::Result<Rp
                 let p: CallParams = params.parse()?;
                 // ACCESS-13: with login off, the anonymous caller.
                 let anonymous = AuthContext::anonymous();
-                let auth = caller(&hub, ext.get::<Arc<AuthContext>>().map(|a| a.as_ref()), &anonymous);
+                let auth = caller(&service, ext.get::<Arc<AuthContext>>().map(|a| a.as_ref()), &anonymous);
                 // V2-31: a connection past its principal's limit is answered
                 // and closed — a person's 4, an agent key's 64, an admin of
                 // `*` none (the transport's own per-principal quota is one
@@ -154,7 +154,7 @@ pub fn rpc_module(hub: Arc<DynamicHub>, limits: CallLimits) -> anyhow::Result<Rp
                 if let (Some(conn), Some(a)) = (ext.get::<Arc<Connection>>(), auth) {
                     if let Some(principal) = a.principal().map(|p| p.to_string()) {
                         let limit = limit_for(&principal, &open.limits);
-                        if let Err(max) = open.seat(&principal, conn, limit, || admin_everywhere(&hub, a)) {
+                        if let Err(max) = open.seat(&principal, conn, limit, || admin_everywhere(&service, a)) {
                             let sink = pending.accept().await?;
                             sink.send(serde_json::value::to_raw_value(&crowded(ns, max, &principal))?).await?;
                             drop(place);
@@ -170,8 +170,8 @@ pub fn rpc_module(hub: Arc<DynamicHub>, limits: CallLimits) -> anyhow::Result<Rp
                 }
                 // V2-31: a write past the principal's rate is answered, not run.
                 if let Some(principal) = auth.and_then(|a| a.principal()).map(|p| p.to_string()) {
-                    if writes.get_or_init(|| writes_of(&hub)).contains(&p.method) {
-                        let exempt = || auth.is_some_and(|a| admin_everywhere(&hub, a));
+                    if writes.get_or_init(|| writes_of(&service)).contains(&p.method) {
+                        let exempt = || auth.is_some_and(|a| admin_everywhere(&service, a));
                         if let Err(wait) = buckets.take(&principal, Instant::now()).or_else(|w| if exempt() { Ok(()) } else { Err(w) }) {
                             let sink = pending.accept().await?;
                             sink.send(serde_json::value::to_raw_value(&too_fast(ns, wait, buckets.rate()))?).await?;
@@ -180,7 +180,7 @@ pub fn rpc_module(hub: Arc<DynamicHub>, limits: CallLimits) -> anyhow::Result<Rp
                         }
                     }
                 }
-                let result = hub.route(&p.method, p.params.unwrap_or_default(), auth).await;
+                let result = service.route(&p.method, p.params.unwrap_or_default(), auth).await;
                 let sink = pending.accept().await?;
                 let piped = match result {
                     // PERF-7: plexus-core's pipe, as its own `{ns}.call`
@@ -202,8 +202,8 @@ pub fn rpc_module(hub: Arc<DynamicHub>, limits: CallLimits) -> anyhow::Result<Rp
     Ok(module)
 }
 
-/// ACCESS-13: the identity a call carries into `hub` — the one the upgrade
-/// proved, else, on a hub with no gate (login off), `anonymous`. Every
+/// ACCESS-13: the identity a call carries into `service` — the one the upgrade
+/// proved, else, on a service with no gate (login off), `anonymous`. Every
 /// method on the frame resolves its caller from an identity
 /// (`#[from_auth(self.access.verify)]`), which the dispatch refuses to run
 /// without one; with login off the resolver admits anyone, so the
@@ -211,8 +211,8 @@ pub fn rpc_module(hub: Arc<DynamicHub>, limits: CallLimits) -> anyhow::Result<Rp
 /// identity" always meant there. With login on (a gate) nothing is added:
 /// no identity is the anonymous view, which the gate decides. ACCESS-24
 /// removes open mode, and this with it.
-pub fn caller<'a>(hub: &DynamicHub, proved: Option<&'a AuthContext>, anonymous: &'a AuthContext) -> Option<&'a AuthContext> {
-    proved.or_else(|| hub.gate().is_none().then_some(anonymous))
+pub fn caller<'a>(service: &DynamicHub, proved: Option<&'a AuthContext>, anonymous: &'a AuthContext) -> Option<&'a AuthContext> {
+    proved.or_else(|| service.gate().is_none().then_some(anonymous))
 }
 
 /// `{ns}.call`'s params, as plexus-core reads them.
@@ -243,8 +243,8 @@ fn too_many(ns: &str, max: usize) -> Value {
 
 /// V2-31: an admin of `*` (the operator among them) writes at any rate, as
 /// it stores past any cap — asked of the gate only once its bucket is empty.
-fn admin_everywhere(hub: &DynamicHub, caller: &AuthContext) -> bool {
-    hub.gate().is_none_or(|g| g.held_on(caller, &plexus_auth_core::grants::Grant::new(menger_quota::seam::ADMIN_GRANT)).iter().any(|s| s.is_everywhere()))
+fn admin_everywhere(service: &DynamicHub, caller: &AuthContext) -> bool {
+    service.gate().is_none_or(|g| g.held_on(caller, &plexus_auth_core::grants::Grant::new(menger_quota::seam::ADMIN_GRANT)).iter().any(|s| s.is_everywhere()))
 }
 
 /// V2-31: the connections `principal` may hold: an agent's key (a `key:`

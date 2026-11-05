@@ -862,23 +862,23 @@ async fn completing_a_ticket_that_blocks_many_moves_each_of_them_once() {
     let path = dir.path().join("fan.db");
     let store = Store::open(&path).unwrap();
     store.create(SYS, new_ticket("FAN", Kind::Scope, None, vec![])).await.unwrap();
-    let hub = store.create(SYS, new_ticket("FAN", Kind::Build, None, vec![])).await.unwrap().id;
+    let blocker = store.create(SYS, new_ticket("FAN", Kind::Build, None, vec![])).await.unwrap().id;
     let other = store.create(SYS, new_ticket("FAN", Kind::Build, None, vec![])).await.unwrap().id;
     let k: usize = 120;
     for i in 0..k {
         // A third also wait on another ticket; every one is Ready.
-        let blocked_by = if i % 3 == 0 { vec![hub.clone(), other.clone()] } else { vec![hub.clone()] };
+        let blocked_by = if i % 3 == 0 { vec![blocker.clone(), other.clone()] } else { vec![blocker.clone()] };
         let id = store.create(SYS, new_ticket("FAN", Kind::Build, None, blocked_by.into_iter().map(String::from).collect::<Vec<String>>())).await.unwrap().id;
         store.set_status(SYS.permit(&id), Status::Ready).await.unwrap();
     }
     let ready = |store: &Store| store.ready_page(SYS, Some("fan"), None, Some(0)).unwrap().remaining;
     assert_eq!(ready(&store), 0);
-    store.set_status(SYS.permit(&hub), Status::Complete).await.unwrap();
+    store.set_status(SYS.permit(&blocker), Status::Complete).await.unwrap();
     assert_eq!(ready(&store), (k - k.div_ceil(3)) as u64, "every one blocked by nothing else joins");
     assert_kept_is_a_scan(&store, Some(&path), "the fan-out");
     store.set_status(SYS.permit(&other), Status::Superseded).await.unwrap();
     assert_eq!(ready(&store), k as u64);
-    store.set_status(SYS.permit(&hub), Status::Coding).await.unwrap();
+    store.set_status(SYS.permit(&blocker), Status::Coding).await.unwrap();
     assert_eq!(ready(&store), 0, "and back: every one leaves");
     assert_kept_is_a_scan(&store, Some(&path), "the fan-out, back");
 }

@@ -12,7 +12,7 @@
 //! asked directly, or through a saved filter kept from v1.
 //!
 //! Signed in as the fixture operator (`--admin`, admin on `*`), so the
-//! view is the whole hub; its own throwaway database and a free port.
+//! view is the whole service; its own throwaway database and a free port.
 
 mod support;
 use jsonrpsee::core::client::{Subscription, SubscriptionClientT};
@@ -30,7 +30,7 @@ async fn free_port() -> u16 {
     listener.local_addr().unwrap().port()
 }
 
-/// A server as the wire reference starts one: the hub as `main` builds it,
+/// A server as the wire reference starts one: the service as `main` builds it,
 /// behind the gate, on a throwaway database.
 async fn start_server() -> u16 {
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("tempdir");
@@ -133,16 +133,16 @@ async fn the_service_registers_tickets_members_orgs_session_and_nothing_else() {
     let port = start_server().await;
     let c = support::connect(port).await;
 
-    let hub = children(&one(&c, "menger.schema", json!({})).await);
+    let service = children(&one(&c, "menger.schema", json!({})).await);
     let tickets_schema = one(&c, "tickets.schema", json!({})).await;
     let tickets = children(&tickets_schema);
     assert_eq!(
-        (hub, tickets),
+        (service, tickets),
         (
             set(&["auth", "tickets", "members", "orgs", "session", "ui", "media", "docs", "quota"]),
             set(&["commits", "inputs", "nav", "work", "filters", "subtasks", "revisions"])
         ),
-        "(the hub's activations, tickets' children)"
+        "(the service's activations, tickets' children)"
     );
     // `members` comes back with `teams`, and without `profiles` (the
     // profiles service's).

@@ -14,7 +14,7 @@
 //! `auth.login {session}`, `auth.logout`, `auth.providers` — over the same
 //! session table; this one stays, unchanged on the wire, for the browser app
 //! and IDENTITY-42's agents. Under login every method here is one any
-//! signed-in caller reaches (the hub's signed-in grants), whatever it holds.
+//! signed-in caller reaches (the service's signed-in grants), whatever it holds.
 //!
 //! ACCESS-19: **on the frame** (README "The frame", ACCESS-13) —
 //! `auth = "required"`, `request = MengerRequest`; `whoami`, `login` and

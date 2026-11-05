@@ -107,7 +107,7 @@ pub use plexus_ui_service::frame::{FRAME_CSP, FRAME_ROUTE};
 #[derive(Clone)]
 pub struct Studio {
     /// Whether a session's identity may open it (menger: the framework's
-    /// `routes::may_author` over the hub's gate — `ui.author` held on `*`).
+    /// `routes::may_author` over the service's gate — `ui.author` held on `*`).
     pub may: Arc<dyn Fn(&plexus_core::plexus::AuthContext) -> bool + Send + Sync>,
     /// `--ui-compiler`'s bytes, served at `/studio/ui-compiler.wasm`.
     pub compiler: Option<Vec<u8>>,

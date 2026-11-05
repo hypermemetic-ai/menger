@@ -96,13 +96,13 @@ async fn start() -> World {
     // MACRO-20: minting, so a member can take a ceilinged session (auth.login).
     let access = Access::with_login(menger::session_table(&sessions), vec![format!("idp:{ADA}")]).minting(menger::session_table(&sessions));
     let offers = providers.iter().map(menger::offer).collect();
-    let hub = build_rpc_offering(&dir.path().join("t.db"), None, Default::default(), offers, access.clone()).await.unwrap();
+    let service = build_rpc_offering(&dir.path().join("t.db"), None, Default::default(), offers, access.clone()).await.unwrap();
     // AUTH-7: as main wires it, the upgrade notices who signs in holding nothing.
     let gate = Arc::new(Gate::new(sessions, login::boundary(&providers).unwrap()).noticing(menger::MengerAccess(access)));
     let conv = |arc: Arc<DynamicHub>| DynamicHub::arc_into_rpc_module(arc).map_err(|e| anyhow::anyhow!("{e}"));
     tokio::spawn(async move {
         let _keep = dir;
-        TransportServer::builder(hub, conv)
+        TransportServer::builder(service, conv)
             .with_websocket(port)
             .with_session_validator(gate)
             .reject_upgrade_on_auth_failure()

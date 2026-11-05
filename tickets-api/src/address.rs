@@ -870,8 +870,8 @@ mod tests {
         assert_eq!((a.code.as_str(), &a.at), ("SYNAPSE-CC", &At::Shortcode));
         let a = Address::parse("hypermemetic:PLEXUS/SYNAPSE/SYNAPSE-CC-12").unwrap();
         assert_eq!((a.hosts.len(), a.code.as_str(), &a.at), (2, "SYNAPSE-CC", &At::Seq(12)));
-        let a = Address::parse("SYNAPSE-CC/HUB-GEN-3").unwrap();
-        assert_eq!((a.hosts, a.code.as_str(), a.at), (vec![code("SYNAPSE-CC")], "HUB-GEN", At::Seq(3)));
+        let a = Address::parse("SYNAPSE-CC/SERVICE-GEN-3").unwrap();
+        assert_eq!((a.hosts, a.code.as_str(), a.at), (vec![code("SYNAPSE-CC")], "SERVICE-GEN", At::Seq(3)));
         let a = Address::parse("SYNAPSE-CC/_MENGER/board").unwrap();
         assert_eq!(a.code.as_str(), "SYNAPSE-CC");
         // `A-1` is ticket 1 of A, never a shortcode; `A-1-2` is no address.

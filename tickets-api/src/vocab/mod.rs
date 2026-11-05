@@ -18,7 +18,7 @@
 //!   dispatch, before the method runs, and a value inside the method is
 //!   proof that it passed;
 //! - `$defs/<Name> { type: string }` behind a `$ref` in the schema, its
-//!   `///` the description — synapse shows `--id <string>`, hub-codegen
+//!   `///` the description — synapse shows `--id <string>`, service-codegen
 //!   emits `type TicketRef = string`;
 //! - `Display`, `as_str()`, no public field, and **one rule**: the
 //!   function its `TryFrom` calls, which answers the canonical text or why
@@ -232,7 +232,7 @@ macro_rules! as_text {
 /// The schema an enum a method takes is given (ACCESS-6's
 /// `lenient-enum-schema`, its recommended answer): the closed `enum` of
 /// its canonical spellings — `$defs/<Name> { type: string, enum: [...] }`,
-/// which synapse lists as the flag's values and hub-codegen emits as a
+/// which synapse lists as the flag's values and service-codegen emits as a
 /// union. Written by hand, not derived: a derived schema of an enum whose
 /// variants carry docs is a `oneOf` of `const`s, which synapse reads as a
 /// tagged union (`need --status.type`).

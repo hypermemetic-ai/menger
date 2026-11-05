@@ -202,13 +202,13 @@ pub async fn signed_in(seed: &[u8; 32], port: u16) -> WsClient {
     WsClientBuilder::default().set_headers(h).build(url).await.expect("a key proof is let in")
 }
 
-/// `<hub>.call`: its data items, or the error it was refused with.
-pub async fn call(c: &WsClient, hub: &str, method: &str, params: Value) -> Result<Vec<Value>, String> {
+/// `<service>.call`: its data items, or the error it was refused with.
+pub async fn call(c: &WsClient, service: &str, method: &str, params: Value) -> Result<Vec<Value>, String> {
     let mut p = ObjectParams::new();
     p.insert("method", method).unwrap();
     p.insert("params", params).unwrap();
     let mut sub: Subscription<Value> =
-        c.subscribe(&format!("{hub}.call"), p, &format!("{hub}.call_unsub")).await.map_err(|e| e.to_string())?;
+        c.subscribe(&format!("{service}.call"), p, &format!("{service}.call_unsub")).await.map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     while let Some(item) = tokio::time::timeout(Duration::from_secs(60), sub.next()).await.expect("an item in time") {
         let item = item.map_err(|e| e.to_string())?;
@@ -223,8 +223,8 @@ pub async fn call(c: &WsClient, hub: &str, method: &str, params: Value) -> Resul
 }
 
 /// The one answer of a call that must succeed, not an in-band error.
-pub async fn one(c: &WsClient, hub: &str, method: &str, params: Value) -> Value {
-    let items = call(c, hub, method, params.clone()).await.unwrap_or_else(|e| panic!("{method} {params}: {e}"));
+pub async fn one(c: &WsClient, service: &str, method: &str, params: Value) -> Value {
+    let items = call(c, service, method, params.clone()).await.unwrap_or_else(|e| panic!("{method} {params}: {e}"));
     let first = items.first().cloned().unwrap_or_else(|| panic!("{method}: nothing answered"));
     assert_ne!(first["type"], "error", "{method} {params}: {first}");
     first

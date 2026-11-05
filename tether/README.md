@@ -2,7 +2,7 @@
 
 The local side of menger (TETHER-1) as a Plexus RPC tool of its own:
 `synapse tether …`. substrate is a library inside it — the
-`plexus-substrate` crate, its hub built in this process
+`plexus-substrate` crate, its service built in this process
 (`build_plexus_rpc_with`) and called with substrate's own
 `ClaudeCodeClient` over plexus-core's in-memory `HubTransport` (LOCAL-6).
 No substrate process, no port between them.

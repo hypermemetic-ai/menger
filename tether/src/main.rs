@@ -203,10 +203,10 @@ async fn main() -> anyhow::Result<()> {
         archetypes: args.archetypes,
         permission_mode: args.permission_mode,
     };
-    let (hub, login) = tether::build(opts).await?;
+    let (service, login) = tether::build(opts).await?;
     let names: Vec<&str> = args.auth_provider.iter().map(Provider::name).collect();
     tracing::info!("tether on ws://127.0.0.1:{} — login: {}; data: {}", args.port, names.join(", "), data.display());
-    let builder = TransportServer::builder(hub, |h| {
+    let builder = TransportServer::builder(service, |h| {
         DynamicHub::arc_into_rpc_module(h).map_err(|e| anyhow::anyhow!("Failed to create RPC module: {e}"))
     })
     .with_websocket(args.port);

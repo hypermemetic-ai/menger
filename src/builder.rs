@@ -312,7 +312,7 @@ fn purge_daily(store: Arc<Store>, system: Arc<System>) {
     });
 }
 
-/// Builds the `menger` hub with every activation registered — `tickets` and
+/// Builds the `menger` service with every activation registered — `tickets` and
 /// (COMMENT-2) `comments`, over one store, and (IDENTITY-14) `session` —
 /// behind `access` (ACCESS-24: always the gate; there is no open mode).
 ///
@@ -355,7 +355,7 @@ pub async fn build_rpc_seeded(
 /// these providers (main's `--auth-provider`s). IDENTITY-19: and every
 /// `tickets` and `comments` method behind `access`.
 ///
-/// AUTH-7: the hub carries the protocol's gate and `auth` activation
+/// AUTH-7: the service carries the protocol's gate and `auth` activation
 /// ([`build_rpc_login`]) over a backend that mints sessions on a signed-in
 /// connection but has no login page to send a person to (`auth.login
 /// {browser}` is refused) — what the tests that wire their own transport
@@ -373,12 +373,12 @@ pub async fn build_rpc_offering(
     build_rpc_login(db_path, seed, shape, offers, access, backend, None, menger_tickets_api::store::BODY_MAX_DEFAULT).await
 }
 
-/// AUTH-7: the hub, the protocol's gate in front of every call and its
+/// AUTH-7: the service, the protocol's gate in front of every call and its
 /// `auth` activation, over `backend` and the store's roles, members and
 /// scopes ([`Access::book`]): `with_auth`, the declared roles seeded,
 /// menger's own signed-in methods ([`SIGNED_IN_GRANTS`]), and
 /// `resource_metadata` (RFC 9728's URL) named to an anonymous `_info`.
-/// ACCESS-24: always — there is no hub without the gate — and before it is
+/// ACCESS-24: always — there is no service without the gate — and before it is
 /// built, what open mode planted is purged ([`purge_planted`]).
 #[allow(clippy::too_many_arguments)]
 pub async fn build_rpc_login(
@@ -419,7 +419,7 @@ pub async fn build_rpc_ui(
 /// by `tickets` over the store and the rule — main's is
 /// [`TicketsActivation`]; a test's may be a reduced service, to show the
 /// ui service reads the running one through the seam, never a copy. The
-/// ui activation's seam is attached to the hub built here. V2-24: the
+/// ui activation's seam is attached to the service built here. V2-24: the
 /// media service on its file beside the tickets file
 /// ([`MediaSetup::beside`]); main names it ([`build_rpc_services`]).
 #[allow(clippy::too_many_arguments)]
@@ -449,7 +449,7 @@ where
 /// `--media-db-path`) — V2-31: and the quota service over `quota` (main's
 /// `--quota-db-path`, `--quota-plan`) — registered beside `tickets` and `ui` — every service
 /// of v2's, in one process (V2-1): the media service's seam is attached to
-/// the hub built here, so a put asks `tickets.may` through it as the caller.
+/// the service built here, so a put asks `tickets.may` through it as the caller.
 /// V2-29: and the docs service over `docs` (`--docs-db-path`), its seam
 /// attached the same way (the gate on a document's organization,
 /// `orgs.list` as the caller). POLYGLOT-5 (V2-44): each of `children` — a
@@ -574,7 +574,7 @@ where
     let quota = QuotaActivation::new(quota.ledger, quota.disk);
     let (quota_seam, meter) = (quota.seam().clone(), QuotaSeam::default());
     menger_quota::upkeep(quota.clone());
-    let mut hub = DynamicHub::new("menger")
+    let mut service = DynamicHub::new("menger")
         .register(tickets)
         .register(ui)
         .register(media)
@@ -589,40 +589,40 @@ where
     // gate, so its roles are in `declared_roles` and the book seeds them.
     for child in children {
         let name = child.name().to_string();
-        if hub.list_activations_info().iter().any(|a| a.namespace == name) {
+        if service.list_activations_info().iter().any(|a| a.namespace == name) {
             anyhow::bail!("--child {name}: `{name}` is one of menger's own activations; mount the child under another name");
         }
-        hub = hub.register(child);
+        service = service.register(child);
     }
     // AUTH-7: the gate reads the same book the methods ask; the roles the
     // activations declare are what a role holds until an admin edits it.
     let book = access.book();
-    hub = hub
+    service = service
         .with_auth(AuthSetup::new(backend, book.clone(), book.clone(), book.clone()).with_generation(generation))
         .with_signed_in_grants(SIGNED_IN_GRANTS);
     if let Some(url) = resource_metadata {
-        hub = hub.with_resource_metadata(url);
+        service = service.with_resource_metadata(url);
     }
     // MACRO-20: `declared_roles` holds the children's too, each grant
     // under its path (`tickets.commits.link`).
-    book.seed(hub.declared_roles());
-    let hub = Arc::new(hub);
+    book.seed(service.declared_roles());
+    let service = Arc::new(service);
     // UI-7, FRAME-5: the ui service asks the services a manifest names
     // (`tickets`) through this service, as the server's own caller (its full
     // view, whoever pushes).
-    seam.attach(&hub, access.system_caller());
+    seam.attach(&service, access.system_caller());
     // V2-24: the media service asks `tickets.may` through this service, as
     // the caller it serves (its permit is the tickets service's word).
-    media_seam.attach(&hub);
+    media_seam.attach(&service);
     // V2-29: the docs service asks the gate and `orgs.list` through it.
-    docs_seam.attach(&hub);
+    docs_seam.attach(&service);
     // V2-31: the quota service asks `members` and the stores through this
     // service as the server's own caller; the tickets service's writes
     // reserve through the meter, asking `quota.*` the same way.
-    quota_seam.attach(&hub, access.system_caller());
-    meter.attach(&hub, access.system_caller());
+    quota_seam.attach(&service, access.system_caller());
+    meter.attach(&service, access.system_caller());
     access.meter().attach(Arc::new(meter));
-    Ok(hub)
+    Ok(service)
 }
 
 /// FRAME-5: menger's grants count handed to the gate — a

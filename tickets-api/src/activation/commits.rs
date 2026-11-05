@@ -11,7 +11,7 @@
 //! permit and the store's answer, through the helpers beside
 //! `activation/mod.rs` (`answered!`, `cells_stream`).
 //!
-//! Its grants: the child's own `roles(...)` say `commits.<method>`; the hub
+//! Its grants: the child's own `roles(...)` say `commits.<method>`; the service
 //! gates a child's call by its whole path (`tickets.commits.<method>`, with
 //! the method's own `target`) and seeds its roles qualified the same way
 //! (MACRO-20: plexus-core's `DynamicHub` indexes a static child; the call

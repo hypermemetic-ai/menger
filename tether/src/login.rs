@@ -83,7 +83,7 @@ impl Login {
         Ok(Self { wired, access })
     }
 
-    /// What tether's hub's `auth` activation and gate are built from.
+    /// What tether's service's `auth` activation and gate are built from.
     pub fn auth_setup(&self) -> AuthSetup {
         self.access.auth_setup(self.wired.backend.clone())
     }
@@ -93,8 +93,8 @@ impl Login {
         self.wired.apply(builder)
     }
 
-    /// Seed the roles `hub`'s activations declare.
-    pub fn seed(&self, hub: &DynamicHub) {
-        self.access.seed_roles(hub);
+    /// Seed the roles `service`'s activations declare.
+    pub fn seed(&self, service: &DynamicHub) {
+        self.access.seed_roles(service);
     }
 }

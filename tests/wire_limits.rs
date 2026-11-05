@@ -29,7 +29,7 @@ async fn start(limits: CallLimits, quotas: ConnectionQuotas) -> u16 {
     let gate = login.gate(port);
     tokio::spawn(async move {
         let _keep = dir;
-        TransportServer::builder(service, move |hub| menger::calls::rpc_module(hub, limits))
+        TransportServer::builder(service, move |service| menger::calls::rpc_module(service, limits))
             .with_websocket(port)
             .with_session_validator(gate)
             .anonymous_view()
@@ -84,7 +84,7 @@ async fn a_call_past_the_connection_s_limit_is_refused_typed_and_a_closed_watch_
     // Another connection has its own.
     let other = connect(port).await.unwrap();
     let mut health = call(&other, "tickets.health", json!({})).await;
-    assert_eq!(first(&mut health).await["type"], "data", "the dispatch is the hub's");
+    assert_eq!(first(&mut health).await["type"], "data", "the dispatch is the service's");
     // Let one watch go: its place comes back at once, not at its next event.
     watches.pop().unwrap().unsubscribe().await.unwrap();
     let mut again = None;

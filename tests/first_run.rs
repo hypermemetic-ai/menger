@@ -1,6 +1,6 @@
 //! DIST-14: `menger` with no flags just works — on a fresh HOME and free
 //! ports it prints a one-time link, the link signs a browser in once (as
-//! the local admin, who reaches the hub), a second use is refused, and
+//! the local admin, who reaches the service), a second use is refused, and
 //! `menger login` prints a fresh one. Never open mode: a server with a
 //! provider serves no `once` link, and beyond loopback with none it refuses
 //! to start, naming the flag. And prod is untouched: deploy/ names its
@@ -158,8 +158,8 @@ async fn a_first_run_prints_a_link_that_signs_in_once_and_menger_login_prints_an
     let cookie = session_cookie(&first).expect("a session cookie");
     let me = get(shell, "/login/me", Some(&cookie)).await;
     assert!(status(&me) == 200 && me.contains("\"principal\":\"key:"), "{me}");
-    // As the local admin, who reaches the hub.
-    let h = health(ws, &cookie).await.expect("the session reaches the hub");
+    // As the local admin, who reaches the service.
+    let h = health(ws, &cookie).await.expect("the session reaches the service");
     assert_eq!(h["type"], "health", "{h}");
     // A second use is refused, and says how to get another.
     let again = get(shell, path_of(&link), None).await;

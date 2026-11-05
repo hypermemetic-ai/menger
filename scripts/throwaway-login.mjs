@@ -50,7 +50,7 @@ export function principalOf(file) {
   return `key:${publicHex(seedOf(fs.readFileSync(file, "utf8")))}`;
 }
 
-/** A session on the hub at `url` for the key in `keyFile`, as `agent`:
+/** A session on the service at `url` for the key in `keyFile`, as `agent`:
  *  `{ token, principal, name, agent, expires_at }`. */
 export async function mintSession(url, keyFile, agent = "owner", ttlSecs) {
   const aud = url.replace(/\/+$/, "");
