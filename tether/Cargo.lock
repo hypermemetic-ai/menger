@@ -2196,10 +2196,10 @@ dependencies = [
  "jsonrpsee",
  "menger-tickets-api",
  "plexus-auth-core",
- "plexus-client",
+ "plexus-client 0.7.0",
  "plexus-core",
  "plexus-login",
- "plexus-macros",
+ "plexus-macros 0.7.0",
  "plexus-substrate",
  "plexus-transport",
  "qrcode",
@@ -2220,8 +2220,8 @@ name = "menger-tickets-api"
 version = "0.6.2"
 dependencies = [
  "futures",
- "plexus-client",
- "plexus-macros",
+ "plexus-client 0.8.0",
+ "plexus-macros 0.8.0",
  "pulldown-cmark",
  "schemars",
  "serde",
@@ -2674,6 +2674,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "plexus-client"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "48817df33842f1ffb248275b2b05cb9aab52bd4d013501bdcf103f5c24304d63"
+dependencies = [
+ "futures-core",
+ "futures-util",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "plexus-core"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2694,8 +2706,8 @@ dependencies = [
  "jsonrpsee",
  "pin-project-lite",
  "plexus-auth-core",
- "plexus-client",
- "plexus-macros",
+ "plexus-client 0.7.0",
+ "plexus-macros 0.7.0",
  "rmcp 0.12.0",
  "schemars",
  "serde",
@@ -2750,6 +2762,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "plexus-macros"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a9298423ad52ca15b4782057c08b1a6f37a06300b5a3d86d5bb50b9a58dbb16"
+dependencies = [
+ "proc-macro-crate 3.5.0",
+ "proc-macro2",
+ "quote",
+ "serde_json",
+ "syn 2.0.119",
+ "uuid",
+]
+
+[[package]]
 name = "plexus-substrate"
 version = "0.6.3"
 source = "git+https://github.com/hypermemetic-ai/plexus-substrate?rev=7b6c9afe07f1be71c9a8e76941ceb999dad8826f#7b6c9afe07f1be71c9a8e76941ceb999dad8826f"
@@ -2772,10 +2798,10 @@ dependencies = [
  "jsonrpsee",
  "mustache",
  "plexus-auth-core",
- "plexus-client",
+ "plexus-client 0.7.0",
  "plexus-core",
  "plexus-login",
- "plexus-macros",
+ "plexus-macros 0.7.0",
  "plexus-transport",
  "rand 0.8.8",
  "regex",
@@ -2834,7 +2860,7 @@ dependencies = [
  "axum",
  "futures",
  "http",
- "plexus-client",
+ "plexus-client 0.7.0",
  "rmcp 3.8.0",
  "serde",
  "serde_json",

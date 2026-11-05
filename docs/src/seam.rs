@@ -14,6 +14,7 @@
 //! `docs.may` as the caller before it keeps an image for a document.
 
 use crate::{DocsClient, DocsEvent};
+use futures::TryStreamExt;
 use menger_tickets_api::members::Role;
 use menger_tickets_api::{OrgsClient, OrgsEvent};
 use plexus_auth_core::grants::Grant;
@@ -79,7 +80,7 @@ impl Seam {
     pub async fn orgs(&self, caller: &AuthContext) -> Result<Vec<String>, String> {
         let service = self.service().ok_or("the docs service is not attached to a running service")?;
         let orgs = OrgsClient::new(HubTransport::as_(service, caller.clone()));
-        match orgs.list_all().await {
+        match orgs.list().try_collect::<Vec<_>>().await {
             Ok(events) => {
                 let mut out = Vec::new();
                 for e in events {
@@ -113,7 +114,7 @@ pub enum Answer {
 pub async fn may(service: Arc<DynamicHub>, caller: AuthContext, id: &str, role: Role) -> Result<Answer, String> {
     let doc: crate::DocId = id.parse()?;
     let docs = DocsClient::new(HubTransport::as_(service, caller));
-    match docs.may_all(doc, role).await {
+    match docs.may(doc, role).try_collect::<Vec<_>>().await {
         Ok(events) => match events.as_slice() {
             [DocsEvent::May { id, held: true, .. }] => Ok(Answer::Held(id.clone())),
             [DocsEvent::May { held: false, .. }] => Ok(Answer::NotHeld),

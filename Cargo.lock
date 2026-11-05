@@ -456,6 +456,9 @@ name = "bytes"
 version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "castaway"
@@ -937,40 +940,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f46882e17999c6cc590af592290432be3bce0428cb0d5f8b6715e4dc7b383eb3"
 dependencies = [
  "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "darling"
-version = "0.23.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25ae13da2f202d56bd7f91c25fba009e7717a1e4a1cc98a76d844b65ae912e9d"
-dependencies = [
- "darling_core",
- "darling_macro",
-]
-
-[[package]]
-name = "darling_core"
-version = "0.23.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9865a50f7c335f53564bb694ef660825eb8610e0a53d3e11bf1b0d3df31e03b0"
-dependencies = [
- "ident_case",
- "proc-macro2",
- "quote",
- "strsim",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "darling_macro"
-version = "0.23.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac3984ec7bd6cfa798e62b4a642426a5be0e68f9401cfc2a01e3fa9ea2fcdb8d"
-dependencies = [
- "darling_core",
  "quote",
  "syn 2.0.119",
 ]
@@ -1763,12 +1732,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ident_case"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
-
-[[package]]
 name = "idna"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1989,9 +1952,9 @@ dependencies = [
 
 [[package]]
 name = "jsonrpsee"
-version = "0.26.0"
+version = "0.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f3f48dc3e6b8bd21e15436c1ddd0bc22a6a54e8ec46fedd6adf3425f396ec6a"
+checksum = "4826d5921c90b936eae1b0c09fef26697c4d7269ba5d6bb976f762a870a5ed82"
 dependencies = [
  "jsonrpsee-core",
  "jsonrpsee-proc-macros",
@@ -2004,9 +1967,9 @@ dependencies = [
 
 [[package]]
 name = "jsonrpsee-client-transport"
-version = "0.26.0"
+version = "0.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf36eb27f8e13fa93dcb50ccb44c417e25b818cfa1a481b5470cd07b19c60b98"
+checksum = "844daecf918f7dfb45ae84aa4ac1f07b514e9369bdfe0352d5369809e2c0827a"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
@@ -2027,9 +1990,9 @@ dependencies = [
 
 [[package]]
 name = "jsonrpsee-core"
-version = "0.26.0"
+version = "0.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "316c96719901f05d1137f19ba598b5fe9c9bc39f4335f67f6be8613921946480"
+checksum = "ba6e425d1828eb60a9e054f77b60e375fbf46aabff72c46b5ea24406566f7e91"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2054,9 +2017,9 @@ dependencies = [
 
 [[package]]
 name = "jsonrpsee-proc-macros"
-version = "0.26.0"
+version = "0.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2da3f8ab5ce1bb124b6d082e62dffe997578ceaf0aeb9f3174a214589dc00f07"
+checksum = "9cc1f1d4a2ed7619d08e9e86fa1759b16da756c5d8b02d62e98664417f3ac25d"
 dependencies = [
  "heck",
  "proc-macro-crate",
@@ -2067,9 +2030,9 @@ dependencies = [
 
 [[package]]
 name = "jsonrpsee-server"
-version = "0.26.0"
+version = "0.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c51b7c290bb68ce3af2d029648148403863b982f138484a73f02a9dd52dbd7f"
+checksum = "c01a2a627365144221ad5883ce2ea3953e152e29d102f2eeca8cbfc1be4bb286"
 dependencies = [
  "futures-util",
  "http",
@@ -2094,9 +2057,9 @@ dependencies = [
 
 [[package]]
 name = "jsonrpsee-types"
-version = "0.26.0"
+version = "0.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc88ff4688e43cc3fa9883a8a95c6fa27aa2e76c96e610b737b6554d650d7fd5"
+checksum = "e6e6de48c2fb8ba2773f4429c28349576f98d73a3b1d647d963f96df53210312"
 dependencies = [
  "http",
  "serde",
@@ -2106,9 +2069,9 @@ dependencies = [
 
 [[package]]
 name = "jsonrpsee-ws-client"
-version = "0.26.0"
+version = "0.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b6fceceeb05301cc4c065ab3bd2fa990d41ff4eb44e4ca1b30fa99c057c3e79"
+checksum = "06cd5b8daf2d7c0730731a97f96c0d1d0dd38def07001ff80df1cf6063442235"
 dependencies = [
  "http",
  "jsonrpsee-client-transport",
@@ -2281,7 +2244,7 @@ dependencies = [
  "rand 0.8.8",
  "reqwest 0.12.28",
  "reqwest 0.13.5",
- "rmcp 3.8.0",
+ "rmcp",
  "rusqlite",
  "schemars",
  "serde",
@@ -2641,9 +2604,9 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "plexus-auth-core"
-version = "0.2.2"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22d645424a9cf6d4ab52e939058b0f40a8702fa96731c23ac125722b778e34c6"
+checksum = "e2854a2c11b721324f96905753550f0a25cfd786de8b4488daef685b539771ed"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2664,13 +2627,15 @@ dependencies = [
 
 [[package]]
 name = "plexus-client"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e18fe28fc8fa4658e2bd684f657dcef146ffeab5a0531e35b628b3872ab0c49e"
+checksum = "48817df33842f1ffb248275b2b05cb9aab52bd4d013501bdcf103f5c24304d63"
 dependencies = [
+ "bytes",
  "futures-channel",
  "futures-core",
  "futures-util",
+ "schemars",
  "serde",
  "serde_json",
  "tokio",
@@ -2679,9 +2644,9 @@ dependencies = [
 
 [[package]]
 name = "plexus-core"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d8178ff7e263769b067869f4da1a6bfca60c54b95e8197ed48d87f2df637f82"
+checksum = "bc00a703fefe0cbc13f50ac7700898d7113784ac8eb53cf2d1537d3d4b511603"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2701,10 +2666,10 @@ dependencies = [
  "plexus-auth-core",
  "plexus-client",
  "plexus-macros",
- "rmcp 0.12.0",
  "schemars",
  "serde",
  "serde_json",
+ "sha2",
  "shell-words",
  "thiserror 1.0.69",
  "tokio",
@@ -2716,9 +2681,9 @@ dependencies = [
 
 [[package]]
 name = "plexus-login"
-version = "0.2.3"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2368649f31960f190462cc0bb6d8ec3af91ffd64d0a7d6359573217ebcd5c70b"
+checksum = "9dd1d061d55df24005d5aa7dcf6df5d859000807b4fdfa56f436429d4406838f"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2743,9 +2708,9 @@ dependencies = [
 
 [[package]]
 name = "plexus-macros"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7302046ee12bf12baacfce7d560baeb229bd05b342757b1794359f3f6bb6cab5"
+checksum = "0a9298423ad52ca15b4782057c08b1a6f37a06300b5a3d86d5bb50b9a58dbb16"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -2757,9 +2722,9 @@ dependencies = [
 
 [[package]]
 name = "plexus-transport"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9955033575580772c0770f14aa70f8db2584f62b8190a559b14275edebad1fc"
+checksum = "e464c468b8b8bd1d294cc261578cdfae5861d878e3c57a6f0c475042d044f15b"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2777,7 +2742,7 @@ dependencies = [
  "log",
  "plexus-core",
  "plexus-transport-mcp",
- "rmcp 0.12.0",
+ "rmcp",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -2789,15 +2754,15 @@ dependencies = [
 
 [[package]]
 name = "plexus-transport-mcp"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25485551e7bfd6106aba89eb6d05aa896987e1a5e0f117d7363ee00c69d40c00"
+checksum = "698f3b7c051c7c95b4028a0ae00fa70e2ed41a0826de5902dda36d60206b251d"
 dependencies = [
  "axum",
  "futures",
  "http",
  "plexus-client",
- "rmcp 3.8.0",
+ "rmcp",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -2808,9 +2773,9 @@ dependencies = [
 
 [[package]]
 name = "plexus-ui-compiler"
-version = "0.1.3"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "643dc91da5154cc2290e569fe6531103b0acdb573432a285f0022b851948f0a8"
+checksum = "51c1c97574b69ef723ce8a030af5ca895f2e9d129af16c066a22c84831509a9c"
 dependencies = [
  "rhai",
  "serde",
@@ -2820,9 +2785,9 @@ dependencies = [
 
 [[package]]
 name = "plexus-ui-service"
-version = "0.1.3"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9b2b42432cc08a21ff0524ab0041ec8221c4d67c17e407b73d693a71d79349a"
+checksum = "8a986c554b016449b809a7e77e8b794940291a9d0012fd5313e9dfe6300e4c25"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -2851,9 +2816,9 @@ dependencies = [
 
 [[package]]
 name = "plexus-webapp"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c086ab38d50f3ae13b37687349117a5e0eb719d2f4a6ff5dd18ab5adae49da0"
+checksum = "158b3ddb83902b080687e8c39dfc8fedaa7abdb238864c5fb085e893aa2e29f1"
 dependencies = [
  "anyhow",
  "axum",
@@ -3338,37 +3303,6 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "528d42f8176e6e5e71ea69182b17d1d0a19a6b3b894b564678b74cd7cab13cfa"
-dependencies = [
- "async-trait",
- "base64 0.22.1",
- "bytes",
- "chrono",
- "futures",
- "http",
- "http-body",
- "http-body-util",
- "pastey",
- "pin-project-lite",
- "rand 0.9.5",
- "rmcp-macros",
- "schemars",
- "serde",
- "serde_json",
- "sse-stream",
- "thiserror 2.0.20",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "tower-service",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "rmcp"
 version = "3.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8be15815186873ea063bf005011d16c356804973489e40c39116ae3a2878d1f"
@@ -3398,19 +3332,6 @@ dependencies = [
  "tower-service",
  "tracing",
  "uuid",
-]
-
-[[package]]
-name = "rmcp-macros"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3f81daaa494eb8e985c9462f7d6ce1ab05e5299f48aafd76cdd3d8b060e6f59"
-dependencies = [
- "darling",
- "proc-macro2",
- "quote",
- "serde_json",
- "syn 2.0.119",
 ]
 
 [[package]]
@@ -3617,6 +3538,7 @@ version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "687274d293b6cdc6e73e0fee520bf2049650090d7164f87672d212a3c530cf4a"
 dependencies = [
+ "bytes",
  "chrono",
  "dyn-clone",
  "ref-cast",

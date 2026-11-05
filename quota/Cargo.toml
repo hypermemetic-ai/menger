@@ -15,10 +15,10 @@ repository = "https://github.com/hypermemetic-ai/menger"
 
 [dependencies]
 # The 0.7 line, by published version (PLEXUS-16), as the server takes it.
-plexus-core = "0.7.0"
-plexus-macros = "0.7.0"
-plexus-client = { version = "0.7.0", default-features = false }
-plexus-auth-core = "0.2.2"
+plexus-core = "0.8.0"
+plexus-macros = "0.8.0"
+plexus-client = { version = "0.8.0", default-features = false }
+plexus-auth-core = "0.3.0"
 async-trait = "0.1"
 async-stream = "0.3"
 futures = "0.3"

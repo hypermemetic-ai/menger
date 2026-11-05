@@ -634,8 +634,8 @@ question.
 
 ## Conventions
 
-- Plexus crates come from the **0.7 line by published version**
-  (PLEXUS-16): `plexus-core`, `plexus-macros`, `plexus-client`,
+- Plexus crates come from the **0.8 line by published version**
+  (PLEXUS-16; V2-58 moved v2 from 0.7): `plexus-core`, `plexus-macros`, `plexus-client`,
   `plexus-transport`, `plexus-auth-core`, `plexus-webapp`, and since V2-47
   `plexus-login` and plexus-ui's `plexus-ui-service` and `plexus-ui-compiler`
   (at one version; FRAME-1's rule, `tests/apart.rs`), so a clone of menger
@@ -643,7 +643,8 @@ question.
   for the tool and an uncommitted `[patch.crates-io]` for the crates, never a
   committed path. tether takes plexus-substrate and plexus-login
   from their public repositories, each at a revision (PLEXUS-13, V2-44), the
-  plexus-login being the one substrate names. Every activation is `impl FooActivation` (MACRO-13,
+  plexus-login being the one substrate names — still the 0.7 line, since
+  plexus-substrate has no 0.8 revision yet (V2-58). Every activation is `impl FooActivation` (MACRO-13,
   MACRO-21): the stem names the namespace, the trait and the client.
 - **Workspace members** (`Cargo.toml`): `.`, `tickets-api`, `media`, `quota`;
   `tether/` is its own workspace. Three repositories

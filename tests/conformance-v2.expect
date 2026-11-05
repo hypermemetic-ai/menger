@@ -5,12 +5,12 @@
 # --max-connections-per-agent 8: the kit's key is a `key:` principal, an agent since V2-31).
 # plexus-wire's conformance/expect/menger.txt is main's; this is v2's — main's lines but schema.child_via_call
 # (v2 has no chats, so it passes), and paging.walk (PERF-15's rows pages) and limits.quota (V2-31's split), v2's own.
+# V2-58: on plexus 0.8 (BIDIR-6 published) input.not_this_call passes, and its line went.
 # One line per test: <test id>  <gap ticket>  <why>. A line whose test passes fails the run as "fixed — remove the entry".
 call.malformed            POLYGLOT-11  a {ns}.call with unreadable params answers -32603 Internal error; the spec says -32602
 schema.unknown_method     POLYGLOT-11  {ns}.schema {method} naming no method answers -32603; the spec says -32602
 paging.walk               V2-46        the kit reads a summary item per row; v2's tickets.list answers rows { items } pages (PERF-15)
 limits.quota              V2-48        V2-31 counts a principal's connections at its first call (in band), not at the upgrade (429)
-input.not_this_call       BIDIR-6      runs plexus 0.7 from crates.io, and the input half is not published (BIDIR-6)
 input.credit_first        BIDIR-6      no method of this service declares `input`
 input.in_order            BIDIR-6      no method of this service declares `input`
 input.end_with_seq        BIDIR-6      no method of this service declares `input`

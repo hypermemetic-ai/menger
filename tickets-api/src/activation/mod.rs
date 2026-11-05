@@ -1194,7 +1194,7 @@ impl TicketsActivation {
     /// Wait for the owner's response on a ticket: waiting { ticket, queued } at once, then one replied { ticket, reply } — an input answered, changes requested, an unqueue by another, the ticket canceled, archived or deleted — and the end; timed_out after timeout_minutes.
     ///
     /// APP-24: after queueing, an agent waits here — `waiting`, then one `replied` (or `timed_out`), then the end.
-    #[plexus_macros::method(group = "read", streaming)]
+    #[plexus_macros::method(group = "read")]
     pub async fn await_reply(
         &self,
         #[from_auth(self.access.verify)] user: VerifiedUser,
@@ -1299,7 +1299,6 @@ impl TicketsActivation {
     /// expired, held nowhere — it ends with `watch_closed { reason, message }`.
     #[plexus_macros::method(
         group = "read",
-        streaming,
         example(note = "follow active and in-review work", params = r#"{"filter": "category in (active, review)"}"#),
         example(note = "what entered Coding in the last hour — and what ages out of it", params = r#"{"filter": "entered Coding within 1h", "membership": true}"#)
     )]

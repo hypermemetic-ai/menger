@@ -13,6 +13,7 @@
 //! session's identity, for `GET /media/<hash>`.
 
 use crate::{MediaClient, MediaEvent, MediaHash};
+use futures::TryStreamExt;
 use menger_tickets_api::members::Role;
 use menger_tickets_api::vocab::TicketRef;
 use menger_tickets_api::{TicketsClient, TicketsEvent};
@@ -64,7 +65,7 @@ impl Seam {
         let service = self.service().ok_or("the media service is not attached to a running service")?;
         let id: TicketRef = ticket.parse().map_err(|e: String| format!("{ticket}: {e}"))?;
         let tickets = TicketsClient::new(HubTransport::as_(service, caller.clone()));
-        match tickets.may_all(id, role).await {
+        match tickets.may(id, role).try_collect::<Vec<_>>().await {
             Ok(events) => match events.as_slice() {
                 [TicketsEvent::May { id, held: true, .. }] => Ok(Answer::Held(id.to_string())),
                 [TicketsEvent::May { held: false, .. }] => Ok(Answer::NotHeld),
@@ -118,7 +119,7 @@ pub async fn fetch(service: Arc<DynamicHub>, caller: AuthContext, hash: &str) ->
         Err(_) => return Fetched::NotFound,
     };
     let media = MediaClient::new(HubTransport::as_(service, caller));
-    match media.info_all(hash).await {
+    match media.info(hash).try_collect::<Vec<_>>().await {
         Ok(events) => match events.as_slice() {
             [MediaEvent::Info { hash, mime, bytes, width, height, kind, name }] => {
                 Fetched::Found(crate::MediaInfo { hash: hash.clone(), mime: mime.clone(), bytes: *bytes, width: *width, height: *height, kind: kind.clone(), name: name.clone() })
