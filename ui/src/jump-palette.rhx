@@ -7,8 +7,8 @@
   // `find` (`held`, asked only then), no search below.
   prop("sheet");
   state(#{ open: false, q: "" });
-  let found = live(#{ snapshot: "tickets.find", params: #{ query: state.q, limit: 12, fields: ["id", "title", "kind", "status"] }, key: "id", debounce_ms: 80, when: state.q });
-  let held = live(#{ snapshot: "tickets.find", params: #{ query: sheet, limit: 12, fields: ["id", "title", "kind", "status"] }, key: "id", when: sheet });
+  let found = live(#{ snapshot: "tickets.find", params: #{ query: state.q, limit: 12, fields: ["id", "uid", "title", "kind", "status"] }, key: "id", debounce_ms: 80, when: state.q });
+  let held = live(#{ snapshot: "tickets.find", params: #{ query: sheet, limit: 12, fields: ["id", "uid", "title", "kind", "status"] }, key: "id", when: sheet });
   let searched = live(#{ snapshot: "tickets.search", params: #{ query: state.q, limit: 8 }, key: "id", debounce_ms: 80, when: state.q });
   fn keyed(state, ev) {
     if ev.key == "/" && !state.open && ev.target.tag != "input" && ev.target.tag != "textarea" && ev.target.tag != "select" { state.open = true; }
@@ -19,7 +19,12 @@
   fn entered(state, ev) {
     if ev.key == "Enter" {
       let f = ev.live.found;
-      if f.len() > 0 { navigate("#/ticket/" + f[0].id); state.open = false; state.q = ""; }
+      if f.len() > 0 {
+        let x = f[0];
+        let to = "#/ticket/" + x.id;
+        if x.uid != () { to = "#/t/" + x.uid + "/" + x.id; }
+        navigate(to); state.open = false; state.q = "";
+      }
     }
     state
   }
@@ -34,16 +39,16 @@
       {#if state.q != "" || type_of(sheet) == "string"}
         <ul class="palette-hits" data-palette-hits>
           {#each found as f (f.id)}
-            <li><a class="palette-hit" data-palette-hit={f.id} href={"#/ticket/" + f.id} on:click={picked}><span class="row-id">{f.id}</span> <span class="row-title">{f.title}</span></a></li>
+            <li><a class="palette-hit" data-palette-hit={f.id} href={if f.uid == () { "#/ticket/" + f.id } else { "#/t/" + f.uid + "/" + f.id }} on:click={picked}><span class="row-id">{f.id}</span> <span class="row-title">{f.title}</span></a></li>
           {/each}
           {#each held as f (f.id)}
-            <li><a class="palette-hit" data-palette-hit={f.id} href={"#/ticket/" + f.id} on:click={picked}><span class="row-id">{f.id}</span> <span class="row-title">{f.title}</span></a></li>
+            <li><a class="palette-hit" data-palette-hit={f.id} href={if f.uid == () { "#/ticket/" + f.id } else { "#/t/" + f.uid + "/" + f.id }} on:click={picked}><span class="row-id">{f.id}</span> <span class="row-title">{f.title}</span></a></li>
           {/each}
         </ul>
         <p class="palette-label">in titles and bodies</p>
         <ul class="palette-hits search" data-search-hits>
           {#each searched as h (h.id)}
-            <li><a class="palette-hit" data-search-hit={h.id} href={"#/ticket/" + h.id} on:click={picked}><span class="row-id">{h.id}</span> <span class="row-title">{h.title}</span></a></li>
+            <li><a class="palette-hit" data-search-hit={h.id} href={if h.uid == () { "#/ticket/" + h.id } else { "#/t/" + h.uid + "/" + h.id }} on:click={picked}><span class="row-id">{h.id}</span> <span class="row-title">{h.title}</span></a></li>
           {/each}
         </ul>
       {/if}

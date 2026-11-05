@@ -5,10 +5,12 @@
 //   - in a svelte/1 component (and anything but the helper): `"#/ticket/"`,
 //     `"#/t/"`, `"#/edit/"` or `"ticket/"` as code — a string the component
 //     builds a route from — outside a comment;
-//   - in an rhx/1 component: any of them but the name form, `"#/ticket/" +`
-//     — rhx/1 imports no code, so an rhx twin links by name, the form the
-//     helper itself gives a row without a uid, and the page it opens puts the
-//     uid form in the address bar.
+//   - in an rhx/1 component: any of them but two forms. rhx/1 imports no
+//     code, so an rhx twin spells its link inline: by uid, `"#/t/" + r.uid +
+//     "/" + r.id` (V2-50: the tail without its slug, which the page puts
+//     right in the address bar), or by name, `"#/ticket/" +`, the form the
+//     helper itself gives a row without a uid (ticket-chip, which holds an
+//     id alone; the nav's shortcode root, whose group carries no uid).
 //
 // And the helper itself, by its module script: the slug, the tail, the uid
 // link, the name link for a row without one, what a route names, and the
@@ -20,6 +22,7 @@ import path from "node:path";
 const HELPER = "ticket-links.svelte";
 const ROUTE = /["'`](?:#\/ticket\/|#\/t\/|#\/edit\/|ticket\/)/g;
 const NAME_FORM = /"#\/ticket\/"\s*\+/;
+const UID_FORM = /"#\/t\/"\s*\+\s*([\w.]+)\.uid\s*\+\s*"\/"\s*\+\s*\1\.id\b/;
 
 /** A file's lines that are code: no `//` comment line, nothing inside an HTML comment or a JS block comment. */
 function codeLines(text) {
@@ -49,7 +52,7 @@ export function checkDir(dir) {
     for (const [n, code] of codeLines(fs.readFileSync(path.join(dir, f), "utf8"))) {
       const hits = [...code.matchAll(ROUTE)];
       if (!hits.length) continue;
-      if (f.endsWith(".rhx") && hits.every((h) => NAME_FORM.test(code.slice(h.index)))) continue;
+      if (f.endsWith(".rhx") && hits.every((h) => NAME_FORM.test(code.slice(h.index)) || UID_FORM.test(code.slice(h.index)))) continue;
       refused.push(`ui/src/${f}:${n}: ${code.trim().slice(0, 160)} — make it with ticket-links.svelte (ticketHref, editHref)`);
     }
   }
@@ -113,6 +116,10 @@ export async function helperCases(dir) {
   eq(h.settled("#/t/7k3mq2xa/PERF-19-compression", t), null, "the address it has");
   eq(h.settled("#/t/q2r9wd4c/PERF-19", t), null, "another uid's page is left alone");
   eq(h.settled("#/ticket/PERF-19", { id: "PERF-19" }), null, "no uid: nothing to settle on");
+  // V2-50: the link to share, and a ticket without a uid has none.
+  eq(h.permalink(t, "https://app.menger.sh"), "https://app.menger.sh/t/7k3mq2xa/PERF-19-compression", "the permalink");
+  eq(h.permalink({ uid: "Q2R9WD4C", id: "PERF.115-2", title: "the schema answers 3.24 MB" }, ""), "/t/q2r9wd4c/PERF-2-the-schema-answers-3-24-mb", "its path, a namesake shown as its id");
+  eq(h.permalink({ id: "PERF-19" }, "https://x"), null, "no uid: no permalink");
   return bad;
 }
 

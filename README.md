@@ -1406,8 +1406,30 @@ bookmarks; once the page has the ticket, the address bar is put in the uid
 form in place (`history.replaceState`: no history entry, no route change),
 and a stale tail is put right the same way. `tests/links_check.mjs` refuses
 a ticket's route spelled anywhere else in `ui/src`; rhx/1 imports no code,
-so the rhx twins (`#/rhx/…`) link by name, the form the helper gives a row
-without a uid. `tests/pages/links.mjs` is the page group.
+so the rhx twins (`#/rhx/…`) spell it inline, by uid (`"#/t/" + r.uid + "/"
++ r.id`, V2-50: no slug, which the page puts right) or by name for a row
+with no uid (ticket-chip holds an id alone; the nav's shortcode root comes in
+a group, which carries no uid). `tests/pages/links.mjs` is the page group.
+
+**V2-50 (the rest of main's TICKETS-36):**
+
+| form | what it is |
+| -- | -- |
+| `#/ticket/<name>` | any name `get` takes. One ticket: its page, the address put in the uid form. Several: the **collision page** (`ticket-collision`, in page-ticket's place). None: "No ticket". A deleted one: its tombstone, as before. A name of two to four segments (`#/ticket/CLA/CLB/CLX-2`, a full address) is `page-named` (a route's `:name` is one segment), which resolves it the same way and replaces the address with the uid route in place. |
+| `#/t/<uid>/…` | a segment that is no uid (8 of Crockford's base32) is not found, never read as a name. The original of two namesakes is keyed by a name that fits both (`CLX-2`), so `page-t-key` draws its page by its full address. |
+| `<origin>/t/<uid>/<ID>-<slug>` | the link to share: **Copy link**, in the page's head and in its actions (`permalink` in the helper). The shell answers it `302` to `/app/#/t/<uid>/…`. |
+| `<origin>/<name>` | a ticket's name at the root (`/PERF-19`, `/PLEXUS/PERF-19`, `/hypermemetic:PLEXUS/PERF-19`): `302` to `/app/#/ticket/<name>`. Both redirects are behind the sign-in as `/app/` is (signed out: `/login?next=…`); GET and HEAD only; every other path is `404` as before (`src/shell.rs` `ticket_redirect`; `tests/ui_serve.rs`). |
+
+**The collision page**: the name, *names two tickets*, why (the shortcodes
+that share its letters), then one row per `choices` entry in the store's
+order — its address (the hosts muted, its id in the accent), kind, status,
+title, its parent (id and title, a link by its uid), where it lives (its
+epic; its organization too when the choices span several), its link by uid
+and *copy link*. A row opens its ticket at its own `#/t/…`; one out of the
+reader's reach is its address alone and no link. ↓ ↑ (j k) choose, ⏎ opens,
+`c` copies the chosen link, Esc is the page's (the board).
+`tests/pages/collision.mjs` holds main's `scripts/collision-check.sh` checks
+on two shortcodes named CLX.
 
 ### The bundle in the repository
 

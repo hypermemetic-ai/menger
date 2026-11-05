@@ -427,3 +427,44 @@ async fn two_mengers_on_one_ui_db_serve_their_own_channels() {
     let refused = call(&deployer, "ui.push", other).await;
     assert_eq!((refused[0]["type"].as_str(), refused[0]["reason"].as_str()), (Some("refused"), Some("forbidden")), "a deployer on prod pushes into test's channel: {refused:?}");
 }
+
+/// V2-50 (main's TICKETS-36): the shell answers a link by uid,
+/// `/t/<uid>[/…]`, and a path that names a ticket at the root — `/PERF-2`,
+/// `/PLEXUS/PERF-2`, its full address — with `302` into the app's route for
+/// it (`/app/#/t/<uid>/…`, `/app/#/ticket/<name>`), behind the login as
+/// `/app/` is: signed out, the sign-in page first, the path kept as `next`.
+/// Every other path answers as before — `/app/`, `/login`, `/ws`, a root
+/// file, an unknown path.
+#[tokio::test]
+async fn a_path_that_names_a_ticket_redirects_into_the_app_behind_the_login() {
+    let m = start().await;
+    let token = support::mint_session(m.ws).await;
+    let at = |r: &reqwest::Response| (r.status().as_u16(), r.headers().get("location").and_then(|v| v.to_str().ok()).unwrap_or_default().to_string());
+    let found = |to: &str| (302, to.to_string());
+    let login = |next: &str| (303, format!("/login?next={next}"));
+
+    // Signed in: into the app.
+    for (path, to) in [
+        ("/PERF-2", "/app/#/ticket/PERF-2"),
+        ("/PLEXUS/PERF-2", "/app/#/ticket/PLEXUS/PERF-2"),
+        ("/hypermemetic:PLEXUS/PERF-2", "/app/#/ticket/hypermemetic:PLEXUS/PERF-2"),
+        ("/t/7k3mq2xa/x", "/app/#/t/7k3mq2xa/x"),
+        ("/t/7k3mq2xa", "/app/#/t/7k3mq2xa"),
+    ] {
+        assert_eq!(at(&m.get(path, Some(&token)).await), found(to), "{path}, signed in");
+    }
+    // Signed out: the sign-in page first, as for /app/.
+    assert_eq!(at(&m.get("/PERF-2", None).await), login("%2FPERF-2"));
+    assert_eq!(at(&m.get("/t/7k3mq2xa/x", None).await), login("%2Ft%2F7k3mq2xa%2Fx"));
+    assert_eq!(at(&m.get("/app/", None).await), login("%2Fapp%2F"));
+    // Unchanged: the app, a path that names no ticket.
+    assert_eq!(m.get("/app/", Some(&token)).await.status(), 200);
+    for token in [Some(token.as_str()), None] {
+        for path in ["/PERF", "/robots.txt", "/t/not-a-uid", "/7k3mq2xa", "/ws"] {
+            assert_eq!(at(&m.get(path, token).await), (404, String::new()), "{path}, signed in: {}", token.is_some());
+        }
+    }
+    // A write to a ticket's path is no redirect.
+    let posted = m.http.post(m.url("/PERF-2")).header("cookie", m.jar(&token)).send().await.unwrap();
+    assert_ne!(posted.status().as_u16(), 302, "only GET and HEAD are sent on");
+}

@@ -6,7 +6,7 @@
   prop("id");
   let ticket = live(#{ snapshot: "tickets.get", params: #{ id: id }, changes: "tickets.watch", key: "id",
                        on: #{ amended: "upsert:ticket", status_changed: "upsert:ticket", kind_changed: "upsert:ticket" } });
-  let children = live(#{ snapshot: "tickets.list", params: #{ parent: id, summary: true, limit: 200, fields: ["id", "title", "kind", "status"] }, changes: "tickets.watch", key: "id",
+  let children = live(#{ snapshot: "tickets.list", params: #{ parent: id, summary: true, limit: 200, fields: ["id", "uid", "title", "kind", "status"] }, changes: "tickets.watch", key: "id",
                          on: #{ created: "upsert:ticket", amended: "upsert:ticket", status_changed: "upsert:ticket", deleted: "remove:ids" } });
   fn set_status(state, ev) {
     if ev.value != "" { call("tickets.set_status", #{ id: ev.props.id, status: ev.value }); }
@@ -51,7 +51,7 @@
     <h2>Children</h2>
     <ul>
       {#each children as c (c.id)}
-        <li><a data-ticket-child={c.id} data-status={c.status} href={"#/ticket/" + c.id}><span class="row-id">{c.id}</span> <span class="row-title">{c.title}</span> <span class="tag">{c.status}</span></a></li>
+        <li><a data-ticket-child={c.id} data-status={c.status} href={if c.uid == () { "#/ticket/" + c.id } else { "#/t/" + c.uid + "/" + c.id }}><span class="row-id">{c.id}</span> <span class="row-title">{c.title}</span> <span class="tag">{c.status}</span></a></li>
       {/each}
     </ul>
     {#if children.status == "live" && children.rows.len() == 0}<p class="empty">none</p>{/if}

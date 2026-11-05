@@ -12,7 +12,8 @@
      store's words ([data-refused]); nothing is asked twice while a write is
      pending. An action the caller's roles on this ticket do not hold — the
      grants of members.mine that cover it — is drawn disabled, naming the
-     roles `auth requires` says it needs. -->
+     roles `auth requires` says it needs. V2-50: and its link — Copy link,
+     the permalink by uid ([data-group=link], [data-action=copy-link]). -->
 <script module>
   export const uses = ["tickets.get", "tickets.watch", "members.mine", "auth.requires",
     "tickets.set_status", "tickets.label", "tickets.archive", "tickets.restore", "tickets.rename", "tickets.revisions.restore",
@@ -37,7 +38,7 @@
 
 <script>
   import { bus, live } from "plexus-ui/host";
-  import { ticketHref } from "./ticket-links.svelte";
+  import { ticketHref, permalink, copyText } from "./ticket-links.svelte";
 
   let { id, sheet = null } = $props();
   const b = bus();
@@ -53,6 +54,12 @@
   const tombed = $derived(ticket.rows.some((r) => Array.isArray(r.tombstones) && r.tombstones.some((x) => x.id === id)));
   // A delete asked here is known at its answer (the page itself draws a delete from elsewhere, and mounts
   // this component in its place, whose `get` answers `deleted`).
+  // V2-50 (main's TICKETS-36): Copy link — the permalink by uid, as the page's head has it.
+  let linkSaid = $state("");
+  async function copyLink() {
+    const link = permalink(t);
+    if (link) linkSaid = (await copyText(link)) ? `copied ${link}` : `The clipboard is not available — the link: ${link}`;
+  }
   let deletedHere = $state(false);
   let undone = $state(false); // undeleted here since
   const gone = $derived((tombed || deletedHere) && !undone);
@@ -329,6 +336,16 @@
       {@render answer("tickets.set_status")}
     </div>
 
+    {#if permalink(t)}
+      <div data-group="link">
+        <h2 class="sec">Link</h2>
+        <div class="ta-row">
+          <button type="button" class="btn" data-action="copy-link" onclick={copyLink}>copy link</button>
+          <span class="hint link" data-field="link">{linkSaid || permalink(t)}</span>
+        </div>
+      </div>
+    {/if}
+
     <div data-group="labels">
       <h2 class="sec">Labels</h2>
       <div class="ta-row" data-field="labels">
@@ -544,6 +561,7 @@
   .landed { margin: 5px 0 0; font-size: 11px; color: var(--live); }
   .landed::before { content: "\2713  "; }
   .hint { font-size: 11px; color: var(--muted); }
+  .hint.link { min-width: 0; overflow-wrap: anywhere; }
   .hint.warn { color: var(--warn); }
   .empty { padding: 8px 6px; font-size: 12px; color: var(--muted); }
   .skel { display: flex; flex-direction: column; gap: 8px; }

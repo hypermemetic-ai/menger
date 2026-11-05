@@ -1,0 +1,21 @@
+<script>
+  // V2-50 (main's TICKETS-36): the page for a ticket named by an address of
+  // several segments (`#/ticket/CLA/CLB/CLX-2`,
+  // `#/ticket/hypermemetic:PLEXUS/PERF-19`) — a route's `:name` is one
+  // segment, so these routes come here. ticket-by-name reads the name whole
+  // from the address bar and resolves it: the uid route, the collision page
+  // or not found.
+  prop("id");
+</script>
+
+<section class="page page-named">
+  <slot name="top" here="ticket"/>
+  <ticket-by-name id={id}/>
+  <slot name="palette"/>
+</section>
+
+<style>
+  :scope { display: block; }
+  .page-named { min-height: 100vh; min-height: 100dvh; background: var(--bg); }
+  .page-named > [data-slot=top] { position: sticky; top: 0; z-index: 4; }
+</style>

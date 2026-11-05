@@ -11,9 +11,13 @@
        import { ticketHref } from "./ticket-links.svelte";
 
      Nothing else in ui/src spells a ticket's route: tests/links_check.mjs
-     refuses one (rhx/1 imports no code, so the rhx twins link by name, the
-     form this helper gives a row without a uid). As a component it is a
-     plain link to the ticket. -->
+     refuses one. rhx/1 imports no code, so the rhx twins spell two forms
+     inline, which the check allows: by uid, `"#/t/" + r.uid + "/" + r.id`
+     (V2-50: no slug, which the page puts right in place), and by name for a
+     row with no uid (ticket-chip holds an id alone; the nav's shortcode root
+     comes in a group, which carries no uid). V2-50 adds the link to share,
+     `permalink` (`<origin>/t/<uid>/…`, which the shell answers `302` into the
+     app), and `copyText`. As a component it is a plain link to the ticket. -->
 <script module>
   export const uses = [];
 
@@ -97,6 +101,24 @@
   export function editHref(t) {
     const uid = uidOf(t?.uid);
     return uid ? `#/t/${uid}/${tail(t.id, t.title)}/edit` : `#/edit/${t.id}`;
+  }
+
+  /** V2-50 (main's TICKETS-36): the link to share — `<origin>/t/<uid>/<ID>-<slug>`, which the shell
+   *  answers `302` into the app's route by uid (`origin` "" gives the path alone); null for a ticket
+   *  with no uid. What Copy link copies, on the page, in its actions and on the collision page. */
+  export function permalink(t, origin = typeof location === "undefined" ? "" : location.origin) {
+    const uid = uidOf(t?.uid);
+    return uid ? `${origin}/t/${uid}/${tail(t.id, t.title)}` : null;
+  }
+
+  /** `text` on the clipboard: true when it went, false when the clipboard is not the page's. */
+  export async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** What a route names a ticket by: `{ uid }` for `#/t/<uid>[/…]`, `{ name }` for

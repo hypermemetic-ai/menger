@@ -14,7 +14,7 @@
 
 <script>
   import { bus, live } from "plexus-ui/host";
-  import { ticketHref, settle } from "./ticket-links.svelte";
+  import { ticketHref, settle, permalink, copyText } from "./ticket-links.svelte";
   import Chip from "./ticket-chip-sv.svelte";
 
   let { id } = $props();
@@ -51,6 +51,16 @@
     "]": { to: () => next && b.navigate(ticketHref(sib(next), base)), label: "next sibling" },
   });
 
+  // V2-50 (main's TICKETS-36): Copy link — the permalink by uid, `<origin>/t/<uid>/<ID>-<slug>`,
+  // which the shell answers into the app; the button says "Copied" (or the link, without a clipboard)
+  // until the page is left.
+  let copied = $state("");
+  async function copyLink() {
+    const link = permalink(t);
+    if (!link) return;
+    copied = (await copyText(link)) ? "Copied" : link;
+  }
+
   function setStatus(ev) {
     const status = ev.currentTarget.value;
     // FRAME-37: the answer's `ok` (undefined before it lands); the chip moves on the watch.
@@ -68,6 +78,7 @@
         <span class="bars" aria-hidden="true"><i></i><i></i><i></i></span>{t.severity ? t.severity.toLowerCase() : "no severity"}
       </span>
       <span class="address" data-field="address" title="organization : epic : shortcode">{t.address}</span>
+      {#if t.uid}<button type="button" class="copylink" data-action="copy-link" title={permalink(t)} onclick={copyLink}>{copied || "Copy link"}</button>{/if}
       {#if t.frozen}<span class="badge" data-badge="frozen">frozen</span>{/if}
       {#if archived}<span class="badge" data-badge="archived">archived</span>{/if}
       {#if t.hidden}<span class="badge" data-badge="hidden">hidden</span>{/if}
@@ -138,6 +149,9 @@
   .ticket-head .sib a { color: var(--muted); text-decoration: none; border-radius: var(--radius-sm); transition: color var(--motion-fast) var(--ease); }
   .ticket-head .sib a:hover, .ticket-head .sib a:global([data-sheet~=hover]) { color: var(--accent); }
   .ticket-head .sib a:focus-visible, .ticket-head .sib a:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .ticket-head .copylink { padding: 0 7px; color: var(--muted); font: inherit; font-size: 11px; line-height: 16px; background: none; border: var(--border) solid var(--line); border-radius: var(--radius-sm); cursor: pointer; overflow-wrap: anywhere; transition: color var(--motion-fast) var(--ease), border-color var(--motion-fast) var(--ease); }
+  .ticket-head .copylink:hover, .ticket-head .copylink:global([data-sheet~=hover]) { color: var(--accent); border-color: var(--muted); }
+  .ticket-head .copylink:focus-visible, .ticket-head .copylink:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
   .ticket-head .labels { display: inline-flex; flex-wrap: wrap; gap: 5px; }
   .ticket-head .label { display: inline-flex; align-items: center; padding: 0 8px; font-size: 11px; line-height: 18px; color: var(--chip-fg); background: var(--chip-bg); border: var(--border) solid var(--chip-line); border-radius: var(--radius-pill); }
   .ticket-head .none { font-size: 11px; color: var(--disabled); }
@@ -146,6 +160,6 @@
   .ticket-head .status-menu select:hover, .ticket-head .status-menu select:global([data-sheet~=hover]) { border-color: var(--muted); }
   .ticket-head .status-menu select:focus-visible, .ticket-head .status-menu select:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
   @media (prefers-reduced-motion: reduce) {
-    .ticket-head .sib a, .ticket-head .status-menu select { transition: none; }
+    .ticket-head .sib a, .ticket-head .status-menu select, .ticket-head .copylink { transition: none; }
   }
 </style>
