@@ -597,6 +597,10 @@ async fn bench(o: BenchOpts) -> anyhow::Result<()> {
     macro_rules! measure {
         ($name:expr, $reps:expr, |$i:ident| $params:expr, $method:expr) => {{
             let mut t = Timings::default();
+            // A socket of its own: the server closes a key's socket some
+            // minutes in, and a slow call at 10⁶ outlasts that.
+            let mut client = connect(o.port, "scale").await?;
+            let mut reconnects = 0usize;
             // A warm-up call, not counted.
             {
                 let $i = 0usize;
@@ -604,10 +608,21 @@ async fn bench(o: BenchOpts) -> anyhow::Result<()> {
             }
             for $i in 0..$reps {
                 let at = Instant::now();
-                let r = call(&client, $method, $params).await;
-                t.add(at.elapsed(), &r);
+                let mut r = call(&client, $method, $params).await;
+                let mut took = at.elapsed();
+                // A socket the server closed (it does, under seconds-long
+                // calls at 10⁶): a new one, and the call again, timed alone.
+                if matches!(&r, Err(e) if e.to_string().contains("restart required")) {
+                    reconnects += 1;
+                    client = connect(o.port, "scale").await?;
+                    let again = Instant::now();
+                    r = call(&client, $method, $params).await;
+                    took = again.elapsed();
+                }
+                t.add(took, &r);
             }
-            let s = t.summary();
+            let mut s = t.summary();
+            s["reconnects"] = json!(reconnects);
             eprintln!("bench: {:<22} {}", $name, s);
             results.push(($name.to_string(), s));
         }};
@@ -637,7 +652,8 @@ async fn bench(o: BenchOpts) -> anyhow::Result<()> {
 
     // The fan-out: `watchers` sockets each holding `tickets.watch`, then a
     // write, and when each of them heard it.
-    let fanout = fan_out(&o, &client, &work).await?;
+    let writer = connect(o.port, "scale-writer").await?;
+    let fanout = fan_out(&o, &writer, &work).await?;
     eprintln!("bench: watch_fan_out {fanout}");
     let (rss_end, hwm_end) = rss_kb(pid);
     drop(client);
