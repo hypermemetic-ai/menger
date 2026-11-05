@@ -539,6 +539,9 @@ where
     // ACCESS-24: grants planted while open, gone before anything is served.
     purge_planted(&store, &system, &access.admins()).await?;
     personal_orgs(&store, &system, &access.admins()).await?;
+    // COMPS-5: every definition the bodies hold registered in plexus-ui before anything is served —
+    // idempotent, so only the first start of a release that carries it writes.
+    crate::backfill::backfill(&store, &system, &ui.store, ui.author.as_ref()).await?;
     // IDENTITY-21: the members that decide, from the same store.
     access.attach_with(Arc::clone(&store), system);
     // UI-7: the activation registered as `tickets` is the caller's to make

@@ -13,6 +13,9 @@
 
 mod builder;
 
+/// COMPS-5: every definition the store holds registered in plexus-ui as the server starts.
+pub mod backfill;
+
 /// SCAFFOLD-3: menger's side of plexus-login's seam — `MengerAccess`
 /// (the `LoginAccess` impl over `Access`), `SessionTable`, `offer`.
 pub mod login_access;
