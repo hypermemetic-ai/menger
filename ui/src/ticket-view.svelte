@@ -317,47 +317,40 @@ m-step::before{content:attr(date) " · " attr(status) " · " attr(by) "  ";font-
       + `<style>${RAW_SHEET}</style></head><body>\n${out.join("\n")}\n</body></html>`;
   }
   /** EDITOR-15, COMPS-2: a raw body's ```mermaid fences drawn before the frame is handed it — each by the diagram's
-   *  own component, off screen in this page, its SVG put in place of the fence — so a diagram draws inside the frame
-   *  as outside (the frame loads no module of the app's). A fence Pele refuses stays its source. `within`: the
-   *  element the diagrams are drawn in meanwhile (page-frame's stage). */
-  async function drawDiagrams(html, within) {
-    if (!html.includes("language-mermaid")) return html;
-    const doc = new DOMParser().parseFromString(html, "text/html");
-    const codes = [...doc.querySelectorAll("pre > code.language-mermaid")];
-    const hold = document.createElement("div");
-    hold.setAttribute("aria-hidden", "true");
-    // Inside the frame's own stage (the host fills a mark within the component's element), never seen.
-    hold.style.cssText = "position:absolute;left:0;top:0;width:100%;opacity:0;pointer-events:none;z-index:-1";
-    (within ?? document.body).appendChild(hold);
+   *  own component, in `within` (page-frame's stage, unseen), its SVG put in place of the fence's `<pre>` in the frame's
+   *  document — so a diagram draws inside the frame as outside (the frame loads no module of the app's). The SVG is
+   *  Pele's own drawing (it escapes the diagram's text, filters links and styles) and goes only into the sandboxed
+   *  frame, never into the page. A fence Pele refuses stays its source. */
+  const FENCE_HTML = /<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/g;
+  const unescaped = (t) => t.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
+  async function drawn1(source, within) {
+    const at = document.createElement("div");
+    at.setAttribute("aria-hidden", "true");
+    at.style.cssText = "position:absolute;left:0;top:0;width:100%;opacity:0;pointer-events:none;z-index:-1";
+    within.appendChild(at);
+    const app = mount(Diagram, { target: at, props: { source } });
     try {
-      await Promise.all(codes.map(async (code) => {
-        const at = document.createElement("div");
-        hold.appendChild(at);
-        const app = mount(Diagram, { target: at, props: { source: code.textContent } });
-        try {
-          const t0 = Date.now();
-          let svg = null;
-          while (Date.now() - t0 < 8000) {
-            const fig = at.querySelector("[data-surface=mermaid-diagram]");
-            if (fig?.dataset.state === "refused") break;
-            svg = fig?.dataset.state === "drawn" ? fig.querySelector("svg") : null;
-            if (svg) break;
-            await new Promise((r) => setTimeout(r, 50));
-          }
-          if (svg) {
-            const box = doc.createElement("div");
-            box.className = "m-diagram";
-            box.innerHTML = svg.outerHTML;
-            code.parentElement.replaceWith(box);
-          }
-        } finally {
-          unmount(app);
-        }
-      }));
+      for (const t0 = Date.now(); Date.now() - t0 < 8000; await new Promise((r) => setTimeout(r, 50))) {
+        const fig = at.querySelector("[data-surface=mermaid-diagram]");
+        if (fig?.dataset.state === "refused") return null;
+        const svg = fig?.dataset.state === "drawn" ? fig.querySelector("svg") : null;
+        if (svg) return new XMLSerializer().serializeToString(svg);
+      }
+      return null;
     } finally {
-      hold.remove();
+      unmount(app);
+      at.remove();
     }
-    return "<!doctype html>\n" + doc.documentElement.outerHTML;
+  }
+  async function drawDiagrams(html, within) {
+    const fences = [...html.matchAll(FENCE_HTML)];
+    if (!fences.length) return html;
+    const svgs = await Promise.all(fences.map((m) => drawn1(unescaped(m[1]), within ?? document.body)));
+    let k = 0;
+    return html.replace(FENCE_HTML, (whole) => {
+      const svg = svgs[k++];
+      return svg ? `<div class="m-diagram">${svg}</div>` : whole;
+    });
   }
   const parts = $derived(edit || block ? [] : blocks(body));
   const defs = $derived(block ? given ?? "" : edit ? "" : refDefs(body));
