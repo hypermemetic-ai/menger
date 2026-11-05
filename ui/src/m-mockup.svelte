@@ -1,29 +1,29 @@
-<!-- EDITOR-14: a full page in a body, drawn as itself — interactive, in a
-     sandboxed frame at its own height. The owner, 2026-11-05: "we currently
+<!-- COMPS-3: `<m-mockup>` — a full page in a body, drawn as itself,
+     interactive, in a sandboxed frame at its own height: an ordinary
+     svelte/1 component on plexus-ui's frame API (`bus.frame`), mounted where
+     the body has the tag. The owner, 2026-11-05: "adding m-mockups actual
+     implementation should be a plexus-ui svelte component". ticket-view keeps
+     no frame code: it draws a page piece by its tag's component (its `TAGS`
+     table) — this one, `m-live` (the test app) or `m-page` (a body of raw
+     HTML, framed whole through this one). EDITOR-14 (the owner: "we currently
      don't support the same level of tickets rendering full iframes. full
      pages inside. we need to support that", and "also you know that v1 could
-     just host raw html inside a frame right?". v1 drew these (tag v0.0.1,
-     frontend/src/md.rs `is_framed`, mockup.rs, frame.rs); v2 had cut them.
-     ticket-view draws a piece through this component when it is a page:
-
+     just host raw html inside a frame right?"); v1 drew these (tag v0.0.1,
+     frontend/src/md.rs `is_framed`, mockup.rs, frame.rs).
+     What it draws (`source`, the piece's markdown):
      - `<m-mockup label|title|description|width|height|widths>…a page…</m-mockup>`
        (v1's form, as stored), and the fences ```mockup / ```page, or ```html
        with a page's attributes (`label`, `title`, `width`, `height`,
        `widths="390,1440"`, or the bare word `page`) — the page in a frame;
      - a body that is a whole page (`<!doctype html>` …) — one frame, its
        widths from `<meta name="menger-widths">`, its label its `<title>`;
-     - a body holding raw HTML the page cannot draw (`holdsRaw` below: an HTML
-       element outside the sanitizer's allow-list, or an allowed one with an
-       attribute it drops) — the whole body as one frame (`doc`, built by
-       ticket-view: the markdown around the raw HTML, a page block inside it a
-       nested frame), the app's tokens in its head and sent again when the
-       theme flips, `<base target="_blank">` and popups that escape the
-       sandbox, so a link opens a tab;
-     - `<m-live route widths>` and ```live (APP-110) — the test app at that
-       route, from the origin the shell stamps (`--live-origin`,
-       `<meta name="menger-live-origin">`); none configured, or `env=` naming
-       another, says so in words;
-     - `<m-mockup ref="X">` — a link to X, whose body is the page.
+     - `<m-mockup ref="X">` — a link to X, whose body is the page;
+     - `doc` (m-page's): a body holding raw HTML the page cannot draw
+       (`holdsRaw` below), its frame document built by m-page, drawn whole
+       (`data-kind=body`): the app's tokens in its head and sent again when
+       the theme flips, popups that escape the sandbox, so a link opens a tab.
+     The parsing below (`pageSpec`, `holdsRaw`, …) is ticket-view's and
+     m-live's too. Every framed page carries `data-surface=page-frame`.
 
      COMPS-2: the frame is plexus-ui's — the engine's `bus.frame` (its
      CONTRACT.md "Frames"), on the service's `/frame`. `<iframe
@@ -44,7 +44,7 @@
      reader — `READS` below, kept only where the component drawing the
      ticket holds it too (EDITOR-15, v1's `menger.call`); anything else is
      refused in words. A body's ```mermaid fences are drawn before it is
-     handed over (`prepare`, ticket-view), so a diagram draws inside the
+     handed over (`prepare`, m-page's), so a diagram draws inside the
      frame as outside. Here: which pages are frames, a width the page names
      drawn at that width and scaled down to the column (EDITOR-12: nothing
      wider than the column on a phone), with a switch when it names
@@ -171,9 +171,6 @@
 
   /** The height a frame starts at, before its page says its own: a device's screen at a named width. */
   export const startHeight = (w, named) => (!named ? 320 : w <= 480 ? 844 : w <= 1024 ? 1024 : 900);
-
-  /** The live origin this server's bodies may frame (APP-110), stamped by the shell; "" when none. */
-  const liveOrigin = () => (typeof document === "object" && document.querySelector('meta[name="menger-live-origin"]')?.content?.trim()) || "";
 </script>
 
 <script>
@@ -183,8 +180,8 @@
 
   const bus = member();
 
-  /** `source`: the piece's markdown. `doc`: a body framed whole (ticket-view built it), its kind `body`;
-   *  `prepare(html, within)` → a promise of the html to hand over (ticket-view draws its diagrams, in `within`). */
+  /** `source`: the piece's markdown. `doc`: a body framed whole (m-page built it), its kind `body`;
+   *  `prepare(html, within)` → a promise of the html to hand over (m-page draws its diagrams, in `within`). */
   let { source = "", doc = null, prepare = null } = $props();
   const spec = $derived(doc != null ? { kind: "body", attrs: {}, html: doc } : pageSpec(source));
   const sizes = $derived(widthsOf(spec?.attrs ?? {}));
@@ -223,22 +220,10 @@
     });
   });
   $effect(() => () => { f?.destroy(); f = null; });
-
-  // The live view: test's app at the route, or why not.
-  const live = $derived.by(() => {
-    if (spec?.kind !== "live") return null;
-    const env = (spec.attrs.env || "test").toLowerCase();
-    if (env !== "test") return { refused: `A live view draws the test app only; env=${env} is refused.` };
-    const origin = liveOrigin();
-    if (!origin) return { refused: "No live origin is configured on this server (--live-origin), so the test app is not drawn here." };
-    if (typeof location === "object" && origin === location.origin) return { refused: "The live origin is this app's own, which is never framed with its scripts." };
-    const route = spec.attrs.route || "#/";
-    return { src: `${origin}/${route.replace(/^\//, "")}` };
-  });
 </script>
 
-{#if spec}
-<figure class="pf" data-surface="page-frame" data-kind={spec.kind} data-state={framed ? phase : live?.src ? "drawn" : "note"} data-width={size?.w ?? undefined}>
+{#if spec && spec.kind !== "live"}
+<figure class="pf" data-surface="page-frame" data-kind={spec.kind} data-state={framed ? phase : "note"} data-width={size?.w ?? undefined}>
   {#if label || about || sizes.length > 1}
     <figcaption class="pf-head">
       {#if label}<span class="pf-label" data-field="label">{label}</span>{/if}
@@ -252,20 +237,13 @@
   {/if}
   {#if spec.kind === "ref"}
     <p class="pf-note" data-field="note">The page is <a href={ticketHref({ id: encodeURIComponent(spec.attrs.ref) })}>{spec.attrs.ref}</a>'s body; open it there.</p>
-  {:else if spec.kind === "live" && live?.refused}
-    <p class="pf-note" data-field="note">{live.refused} <code>{spec.attrs.route || "#/"}</code></p>
   {:else}
     <div class="pf-stage" bind:clientWidth={col}>
       <div class="pf-box" class:bare={spec.kind === "body"} style:width={size ? `${Math.round(W * scale)}px` : "100%"} style:height={`${Math.round(H * scale)}px`}>
-        {#if spec.kind === "live"}
-          <iframe src={live.src} title={label || "the test app"} loading="lazy" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" referrerpolicy="no-referrer"
-                  style:width={size ? `${W}px` : "100%"} style:height={`${H}px`} style:transform={scale < 1 ? `scale(${scale})` : null}></iframe>
-        {:else}
-          <div class="pf-frames" bind:this={stage} style:width={size ? `${W}px` : "100%"} style:height={`${H}px`} style:transform={scale < 1 ? `scale(${scale})` : null}></div>
-        {/if}
+        <div class="pf-frames" bind:this={stage} style:width={size ? `${W}px` : "100%"} style:height={`${H}px`} style:transform={scale < 1 ? `scale(${scale})` : null}></div>
       </div>
     </div>
-    {#if framed && phase === "failed"}
+    {#if phase === "failed"}
       <p class="pf-note" data-field="note">This page could not be drawn here; its source is below.</p>
       <details class="pf-src"><summary>the page's source</summary><pre>{spec.kind === "body" ? source : spec.html}</pre></details>
     {/if}
@@ -284,7 +262,6 @@
   .pf-stage { width: 100%; min-width: 0; }
   .pf-box { position: relative; max-width: 100%; overflow: hidden; border: var(--border) solid var(--line); border-radius: var(--radius); background: var(--panel); }
   .pf-box.bare { border: 0; border-radius: 0; background: none; }
-  .pf-box iframe { display: block; max-width: none !important; border: 0; transform-origin: 0 0; }
   .pf-frames { position: relative; transform-origin: 0 0; }
   .pf-note { margin: 0; font-family: var(--font-text); font-size: 12px; color: var(--muted); }
   .pf-src summary { cursor: pointer; font-family: var(--font-text); font-size: 12px; color: var(--muted); }

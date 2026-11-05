@@ -92,7 +92,7 @@ pub const MEDIA_ROUTE: &str = "/media/{hash}";
 /// ```` ```mockup ```` fence, an html page) is drawn in a frame — the
 /// framework's (`plexus_ui_service::frame`): the ui routes serve its
 /// document at [`FRAME_ROUTE`] under its own policy, and the engine's
-/// `bus.frame` draws it (ui/src/page-frame.svelte). Public: the same bytes
+/// `bus.frame` draws it (COMPS-3: ui/src/m-mockup.svelte, m-live, m-page). Public: the same bytes
 /// for everyone, no data in them — [`is_public_asset`] lets it through.
 pub use plexus_ui_service::frame::{FRAME_CSP, FRAME_ROUTE};
 
