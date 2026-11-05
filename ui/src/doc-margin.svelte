@@ -126,6 +126,9 @@
     const name = (file.name || "image").replace(/\.[a-z0-9]+$/i, "").replace(/[[\]\n]/g, " ");
     drafts[t.thread] = `${drafts[t.thread] ?? ""}${file.type.startsWith("image/") ? "!" : ""}[${name}](media:${stored.hash})`;
   }
+  // EDITOR-13: ctrl/⌘+enter in an answer sends it — the engine's chord, heard in the reply box it was pressed in.
+  const replyKey = (ev) => { const t = shown.find((x) => String(x.thread) === ev?.target?.data?.["reply-to"]); if (t) reply(t); };
+  b.keys({ "ctrl+enter": { to: replyKey, label: "send the answer" }, "meta+enter": { to: replyKey, label: "send the answer" } });
   const when = (ms) => new Date(ms).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 </script>
 
@@ -141,7 +144,7 @@
         <p class="muted done">resolved by {t.resolved.by} · <button type="button" class="link" data-action="reopen" onclick={() => resolve(t, true)}>open again</button></p>
       {:else}
         <textarea class="say" data-field="reply" rows="2" placeholder="answer… (an image pastes)" aria-label="an answer" bind:value={drafts[t.thread]}
-                  onkeydown={(ev) => { if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); reply(t); } }} onpaste={(ev) => pasted(ev, t)}></textarea>
+                  data-reply-to={t.thread} onpaste={(ev) => pasted(ev, t)}></textarea>
         <p class="acts">
           <button type="button" class="pick" data-action="reply" disabled={!(drafts[t.thread] ?? "").trim()} onclick={() => reply(t)}>answer</button>
           <button type="button" class="pick" data-action="resolve" onclick={() => resolve(t, false)}>resolve</button>

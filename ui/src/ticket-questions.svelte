@@ -71,7 +71,8 @@
   };
   const ticked = (i, value) => (ticks[i.id] ?? i.answer?.value?.options ?? []).includes(value);
   const reply = (i) => answer(i, { type: "text", text: texts[i.id] ?? "" }).then((a) => a.ok && (texts[i.id] = ""));
-  const textKey = (ev, i) => ev.key === "Enter" && ev.ctrlKey && (ev.preventDefault(), reply(i));
+  // EDITOR-13: ctrl+enter in a reply sends it — the engine's chord, heard in the reply box it was pressed in.
+  const replyKey = (ev) => { const i = list.find((x) => x.id === ev?.target?.data?.["reply-to"]); if (i) reply(i); };
   const clear = (i) => b.call("tickets.inputs.clear", { ticket: id, input: i.id }).then((a) => heard(a));
   const close = (i) => b.call("tickets.inputs.close", { ticket: id, input: i.id }).then((a) => heard(a));
   const reopen = (i) => b.call("tickets.inputs.reopen", { ticket: id, input: i.id }).then((a) => heard(a));
@@ -96,6 +97,7 @@
   b.keys({
     a: { to: () => focus(".tq-item[data-state=open] button, .tq-item[data-state=open] input, .tq-item[data-state=open] textarea"), label: "the first open question" },
     q: { to: () => focus("[data-form='tickets.queue'] input[name=reason]"), label: "queue this ticket" },
+    "ctrl+enter": { to: replyKey, label: "send the reply" },
   });
 </script>
 
@@ -122,7 +124,7 @@
           </div>
         {:else}
           <div class="tq-reply">
-            <textarea class="in" name="reply" rows="2" spellcheck="false" placeholder="your reply" bind:value={texts[i.id]} onkeydown={(ev) => textKey(ev, i)}></textarea>
+            <textarea class="in" name="reply" rows="2" spellcheck="false" placeholder="your reply" bind:value={texts[i.id]} data-reply-to={i.id}></textarea>
             <button class="btn" data-action="tickets.inputs.answer" onclick={() => reply(i)}>save</button>
           </div>
         {/if}
