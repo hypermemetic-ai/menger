@@ -348,8 +348,8 @@ scripts. **The frames are plexus-ui's** (COMPS-2; `../plexus-ui/CONTRACT.md`
 "Frames"): the ui routes serve the public **`GET /frame`** (`FRAME_CSP`:
 `connect-src 'none'; form-action 'none'; frame-ancestors 'self'; sandbox …`),
 which says `plexus:boot` on its channel and is handed the page by
-`postMessage`, from its own parent only, and `ui/src/page-frame.svelte` draws
-each through the engine's `bus.frame` — the handshake, its height, the theme,
+`postMessage`, from its own parent only, and `ui/src/page-frame.svelte` (real Svelte:
+`svelte/1`) draws each through the engine's `bus.frame` — the handshake, its height, the theme,
 the double buffer. A framed page reads the tracker through the bridge
 (EDITOR-15): `plexus.call("tickets.get", { id })` is answered as the reader,
 held to `tickets.get`, `tickets.list` and `tickets.search` and to what the
