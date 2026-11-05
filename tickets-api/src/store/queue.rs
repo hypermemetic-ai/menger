@@ -614,15 +614,6 @@ fn ask_blocking(urgency: Urgency, asked: &[String]) -> bool {
 }
 
 impl Store {
-    /// A permit's key, or any address of a ticket, as the store keeps it.
-    pub(crate) fn keyed(&self, id: &str) -> Result<String, StoreError> {
-        let cache = self.tickets.read().expect("store lock poisoned");
-        match cache.at.contains_key(id) {
-            true => Ok(id.to_string()),
-            false => cache.resolve(id),
-        }
-    }
-
     /// MENGER-39: puts `id` in front of the owner — at `urgency`, for
     /// `reason`, answered by `input` (required at `blocking`). The one-input
     /// spelling of [`Store::queue_with`].
@@ -641,7 +632,7 @@ impl Store {
     /// answers the entry with its row and what the write was.
     pub async fn queue_with(&self, on: Permit<Editor>, ask: QueueAsk, act: Act) -> Result<QueueChange, StoreError> {
         // ORG-3: the ticket by any short form of its address.
-        let id = self.resolve(on.id())?;
+        let id = self.keyed(on.id())?;
         let QueueAsk { urgency, reason, inputs, blocking } = ask;
         let reason = reason.trim().to_string();
         if reason.is_empty() {
@@ -748,7 +739,7 @@ impl Store {
     /// written.
     pub async fn unqueue_by(&self, on: Permit<Editor>, act: Act) -> Result<Option<QueueChange>, StoreError> {
         // ORG-3: the ticket by any short form of its address.
-        let id = self.resolve(on.id())?;
+        let id = self.keyed(on.id())?;
         let serial = self.serial().await;
         let now = chrono::Utc::now().timestamp();
         let (row, entry, record, under) = {
@@ -767,7 +758,7 @@ impl Store {
     /// week); still queued. Refused when it is not queued.
     pub async fn snooze_by(&self, on: Permit<Editor>, minutes: u32, act: Act) -> Result<QueueChange, StoreError> {
         // ORG-3: the ticket by any short form of its address.
-        let id = self.resolve(on.id())?;
+        let id = self.keyed(on.id())?;
         if minutes == 0 || minutes > SNOOZE_MAX_MINUTES {
             return Err(StoreError::Invalid(format!("`minutes` is 1 to {SNOOZE_MAX_MINUTES} (a week) — not {minutes}")));
         }

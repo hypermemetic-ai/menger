@@ -334,7 +334,7 @@ impl TicketsActivation {
         /// Ticket id, e.g. MNG-2 — or a path address, e.g. PLEXUS/_MENGER/board.
         id: TicketRef,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        crate::store::reading_as(user.principal_text(), get_stream(self.store.clone(), user, id.into_string()))
+        dressing(self.store.clone(), crate::store::reading_as(user.principal_text(), get_stream(self.store.clone(), user, id.into_string())))
     }
 
     /// Whether you hold a role on one ticket — viewer | editor | admin — as the gate and the kept tree say now; yields may { id, role, held }, or not_found for a ticket you cannot see.
@@ -433,7 +433,7 @@ impl TicketsActivation {
         /// Only these summary-row fields, e.g. id,title,kind,status — each row then carries them and its id (optional; implies summary).
         fields: Option<Vec<SummaryField>>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        crate::store::reading_as(user.principal_text(), list_stream(self.store.clone(), user, ListAsk { epic, status, parent, after, limit, summary, filter, at, keep, tz, fields }))
+        dressing(self.store.clone(), crate::store::reading_as(user.principal_text(), list_stream(self.store.clone(), user, ListAsk { epic, status, parent, after, limit, summary, filter, at, keep, tz, fields })))
     }
 
     /// Set a ticket's status (not a doc's: a doc has no lifecycle); Canceled cancels its open descendants in the same write, and leaving Canceled may restore them (restore_children).
@@ -649,7 +649,7 @@ impl TicketsActivation {
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         // AUTH-7: the gate held the grant on `id`; `ids` are asked there.
         let write = CellWrite::Labels(add.unwrap_or_default(), remove.unwrap_or_default());
-        cells_stream(self.store.clone(), user, id, ids, write)
+        dressing(self.store.clone(), cells_stream(self.store.clone(), user, id, ids, write))
     }
 
     /// Freeze a scope (admin): no new children of it, no new numbers in the shortcode it roots, until it is unfrozen; yields frozen_changed { ticket }.
@@ -796,7 +796,7 @@ impl TicketsActivation {
         // tickets, and a parent or blocker beyond them, are asked there.
         let mut ask = update_of(None, None, kind, status, parent, severity, block, unblock);
         (ask.label, ask.unlabel) = (label.unwrap_or_default(), unlabel.unwrap_or_default());
-        update_many_stream(self.store.clone(), user, ids, filter, max, tz, ask, source, message)
+        dressing(self.store.clone(), update_many_stream(self.store.clone(), user, ids, filter, max, tz, ask, source, message))
     }
 
     /// Delete tickets for good (admin): refused while one has children, is among another's blockers, or roots a shortcode that holds others, unless children reparent|delete and unblock say what moves; a tombstone kept (get answers deleted), the body 30 days for undelete; yields deleted { ids, tombstones }.
@@ -851,7 +851,7 @@ impl TicketsActivation {
         /// Deleted ticket ids, e.g. ["MENGER-40"].
         ids: Vec<TicketRef>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        undelete_stream(self.store.clone(), user, texts(ids))
+        dressing(self.store.clone(), undelete_stream(self.store.clone(), user, texts(ids)))
     }
 
     /// Archive tickets — each named (or a filter's) with its whole subtree, live work included and named (live); out of every view unless a filter says archived; status unchanged; yields archived { ids, live, mark, dry_run }.
@@ -944,7 +944,7 @@ impl TicketsActivation {
         let (ids, to, new_scope, parent) = (texts(ids), to.into_string(), new_scope.map(String::from), parent.map(String::from));
         let (with_children, dry_run) = (with_children.unwrap_or(false), dry_run.unwrap_or(false));
         let ask = crate::store::Reshortcode { ids, to, new_scope, parent, with_children, orgs: None, dry_run };
-        reshortcode_stream(self.store.clone(), user, ask, message)
+        dressing(self.store.clone(), reshortcode_stream(self.store.clone(), user, ask, message))
     }
 
     /// Rename a ticket into a subtask id, `<parent>.N` (TICKETS-10.1), only under its own parent; its old id keeps resolving (get says moved_from); refused in band, naming the rule, anywhere else; yields reshortcoded { moves, tickets }.
@@ -969,7 +969,7 @@ impl TicketsActivation {
         dry_run: Option<bool>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let ask = crate::store::Rename { id: id.into(), to: to.into(), orgs: None, dry_run: dry_run.unwrap_or(false) };
-        rename_stream(self.store.clone(), user, ask, message)
+        dressing(self.store.clone(), rename_stream(self.store.clone(), user, ask, message))
     }
 
     /// Find tickets whose id or title contains the query (case-insensitive), optionally under a filter; summary rows, paged with after + limit.
@@ -1013,7 +1013,7 @@ impl TicketsActivation {
         /// Only these summary-row fields, e.g. id,title,kind,status — each row then carries them and its id (optional).
         fields: Option<Vec<SummaryField>>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        find_stream(self.store.clone(), user, query, after, limit, filter, tz, fields)
+        dressing(self.store.clone(), find_stream(self.store.clone(), user, query, after, limit, filter, tz, fields))
     }
 
     /// Search inside tickets: the tickets whose title or body holds every word of the query (prefixes and typos too), best first, each with the passage that matched; optionally under a filter, paged with offset + limit.
@@ -1052,7 +1052,7 @@ impl TicketsActivation {
         /// The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC).
         tz: Option<Zone>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        search_stream(self.store.clone(), user, query, filter, limit, offset, tz)
+        dressing(self.store.clone(), search_stream(self.store.clone(), user, query, filter, limit, offset, tz))
     }
 
     /// What the nav and the menus ask — `tickets.nav.<method>`: groups, extents, tree, counts, facets, member (ACCESS-16).
@@ -1137,7 +1137,7 @@ impl TicketsActivation {
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let (inputs, blocking) = (input.map(InputIds::into_strings).unwrap_or_default(), blocking.map(InputId::into_string));
         let ask = Ask::Queue { urgency, reason, inputs, blocking };
-        queue_stream(self.store.clone(), user, id.into_string(), ask, source)
+        dressing(self.store.clone(), queue_stream(self.store.clone(), user, id.into_string(), ask, source))
     }
 
     /// Take a ticket out of the owner's queue (done with it, or withdrawn); yields unqueued { id, entry, action, by, at_unix }, or not_queued.
@@ -1153,7 +1153,7 @@ impl TicketsActivation {
         /// app | api | pipeline (optional, default api).
         source: Option<CallerSource>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        queue_stream(self.store.clone(), user, id.into_string(), Ask::Unqueue, source)
+        dressing(self.store.clone(), queue_stream(self.store.clone(), user, id.into_string(), Ask::Unqueue, source))
     }
 
     /// Snooze a queued ticket for some minutes (1 to a week): off the alerting surfaces, still queued; yields snoozed { entry, ticket }.
@@ -1171,7 +1171,7 @@ impl TicketsActivation {
         /// app | api | pipeline (optional, default api).
         source: Option<CallerSource>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        queue_stream(self.store.clone(), user, id.into_string(), Ask::Snooze { minutes }, source)
+        dressing(self.store.clone(), queue_stream(self.store.clone(), user, id.into_string(), Ask::Snooze { minutes }, source))
     }
 
     /// Request changes on a queued ticket: the body kept on the queue's log and the ticket unqueued (action changes_requested), in one write; its input stays open; yields changes_requested { id, body, entry, by, at_unix }.
@@ -1188,7 +1188,7 @@ impl TicketsActivation {
         /// app | api | pipeline (optional, default api).
         source: Option<CallerSource>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        request_changes_stream(self.store.clone(), user, id.into_string(), body.into_string(), source)
+        dressing(self.store.clone(), request_changes_stream(self.store.clone(), user, id.into_string(), body.into_string(), source))
     }
 
     /// Wait for the owner's response on a ticket: waiting { ticket, queued } at once, then one replied { ticket, reply } — an input answered, changes requested, an unqueue by another, the ticket canceled, archived or deleted — and the end; timed_out after timeout_minutes.
@@ -1230,7 +1230,7 @@ impl TicketsActivation {
         after: Option<Cursor>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let ask = crate::store::QueuedAsk { id: id.map(TicketRef::into_string), snoozed: snoozed.unwrap_or(true), limit: limit.map(|n| n as usize), after: after.map(String::from) };
-        crate::store::reading_as(user.principal_text(), queued_stream(self.store.clone(), user, ask))
+        dressing(self.store.clone(), crate::store::reading_as(user.principal_text(), queued_stream(self.store.clone(), user, ask)))
     }
 
     /// Subscribe to ticket changes (Created / StatusChanged / KindChanged / Amended / CommitsLinked / CommitsUnlinked / LabelsChanged / FrozenChanged / HiddenChanged / UnlocksChanged / UnlocksRemoved / BlockersChanged / SeverityChanged / ChildrenChanged / ParentChanged / ChildRemoved / GroupChanged / PlacementsChanged / UpdatedMany / Deleted / Undeleted / Archived / Restored / Reshortcoded), until disconnect; Lagged { missed } where a slow subscriber lost changes; with a filter, Entered / Left / Recount as each write's last events; Entered / Left / Recount when the caller's grants move what it sees; WatchClosed { reason } when they end it.
@@ -1320,7 +1320,7 @@ impl TicketsActivation {
         // ACCESS-12: the caller followed as the grants move, every change
         // cut to its reach (activation/watch.rs).
         let ask = WatchAsk { epic, filter, membership: membership.unwrap_or(false), tz, revisions: revisions.unwrap_or(false) };
-        watch_stream(Arc::clone(&self.store), self.access.clone(), user, ask)
+        dressing(self.store.clone(), watch_stream(Arc::clone(&self.store), self.access.clone(), user, ask))
     }
 
     /// The order of work — `tickets work ready | waves | waves_under | waves_to | blockers` (ACCESS-17, activation/work.rs).

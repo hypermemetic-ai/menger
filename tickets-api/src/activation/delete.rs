@@ -73,7 +73,7 @@ pub(super) fn undelete_stream(store: Arc<Store>, caller: VerifiedUser, ids: Vec<
         let may = move |ids: &[String]| undeleting(&at, &gate, ids);
         match store.undelete_by(&ids, act, may).await {
             Ok(Undeleted { ids, tickets }) => yield TicketsEvent::Undeleted { ids, tickets },
-            Err(e) => yield veiled(&caller, e),
+            Err(e) => yield veiled(&store, &caller, e),
         }
     }
 }

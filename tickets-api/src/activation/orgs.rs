@@ -7,15 +7,22 @@ use super::*;
 /// ORG-4: an `ambiguous` answer as `caller` may hear it — only the
 /// candidates in the organizations it holds a role in (every one for `*`);
 /// none left, `not_found`: another organization's
-/// tickets and shortcodes are not a stranger's to learn. Every other
-/// refusal as [`refusal`] says it.
-pub(super) fn veiled(caller: &VerifiedUser, e: StoreError) -> TicketsEvent {
-    let (StoreError::Ambiguous { text, candidates }, Some(held)) = (&e, caller.orgs()) else { return refusal(e) };
-    let ours = |c: &String| c.split_once(':').is_some_and(|(o, _)| held.iter().any(|h| h.as_str() == o));
-    let kept: Vec<String> = candidates.iter().filter(|c| ours(c)).cloned().collect();
+/// tickets and shortcodes are not a stranger's to learn. TICKETS-35: and a
+/// choice for each ([`Store::choices`]) — whole where `caller` reads the
+/// ticket, its address alone where it may not. Every other refusal as
+/// [`refusal`] says it.
+pub(super) fn veiled(store: &Store, caller: &VerifiedUser, e: StoreError) -> TicketsEvent {
+    let StoreError::Ambiguous { text, candidates } = e else { return refusal(e) };
+    let kept: Vec<String> = match caller.orgs() {
+        Some(held) => {
+            let ours = |c: &String| c.split_once(':').is_some_and(|(o, _)| held.iter().any(|h| h.as_str() == o));
+            candidates.into_iter().filter(|c| ours(c)).collect()
+        }
+        None => candidates,
+    };
     match kept.is_empty() {
         true => TicketsEvent::NotFound { id: crate::vocab::Asked::stored(text.as_str()) },
-        false => TicketsEvent::Ambiguous { id: crate::vocab::Asked::stored(text.as_str()), candidates: kept },
+        false => TicketsEvent::Ambiguous { id: crate::vocab::Asked::stored(text.as_str()), choices: store.choices(caller, &kept), candidates: kept },
     }
 }
 

@@ -8,6 +8,7 @@
 
 <script>
   import { live } from "plexus-ui/host";
+  import { ticketHref } from "./ticket-links.svelte";
 
   let { id, kind } = $props();
   const base = location.hash.startsWith("#/sv/") ? "#/sv/" : "#/";
@@ -15,7 +16,7 @@
   const title = $derived($t.rows[0]?.title ?? "");
 </script>
 
-<a class="chip" data-chip={kind} data-chip-id={id} href={base + "ticket/" + id}>
+<a class="chip" data-chip={kind} data-chip-id={id} href={ticketHref({ id, uid: $t.rows[0]?.uid, title }, base)}>
   <span class="chip-kind">{kind}</span>
   <span class="chip-code">{id}</span>
   <span class="chip-title" data-chip-title>{title}</span>

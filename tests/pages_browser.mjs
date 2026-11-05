@@ -70,6 +70,14 @@ const ONLY = opt("--only", null)?.split(",");
 // `--group NAME` runs that file's cases alone (the board's own are skipped), `--group all` the board's and every file.
 const GROUP = opt("--group", null);
 let inGroup = false;
+// V2-42: whether `hash` is the page of the ticket `id` — its uid form,
+// `#/t/<uid>/<id>-<slug>` (what the UI links and what the page settles on),
+// or its name form `#/ticket/<id>` an rhx twin links by (put in the uid form
+// once the page has the ticket); under `#/sv/` either. Groups get it as `ticketAt`.
+const ticketAt = (hash, id) => {
+  const esc = String(id).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^#/(?:sv/)?(?:t/[0-9a-z]{8}/${esc}(?:-[a-z0-9-]*)?|ticket/${esc})$`).test(String(hash).split("?")[0]);
+};
 const PAGE = 200; // the board's page
 const HELD_MAX = 2_500; // rows held after a scroll
 const CREATE_MS = 100; // a created ticket's frame → its row and count
@@ -714,8 +722,10 @@ async function main() {
         for (const [chip, other] of [["parent", parent], ["blocker", blocker]]) {
           const c = tp.locator(`[data-chip=${chip}][data-chip-id="${other.id}"]`);
           assert((await c.count()) === 1, `a ${chip} chip for ${other.id}`);
-          const L = { ...B, ...B.lands };
-          assert((await c.getAttribute("href")) === `${L.ticketRoute}${other.id}`, `the ${chip} chip goes to ${L.ticketRoute} (${await c.getAttribute("href")})`);
+          // V2-42: the Svelte page's chip by its uid once its `get` answered (`#/t/<uid>/<ID>-<slug>`);
+          // the rhx twin's by name (rhx/1 imports no code), which the page it opens rewrites.
+          const byUid = B.name === "sv";
+          await eventually(`the ${chip} chip goes to ${other.id}${byUid ? " by its uid" : ""}`, async () => (!byUid || /^#\/(?:sv\/)?t\/[0-9a-z]{8}\//.test((await c.getAttribute("href")) ?? "")) && ticketAt(await c.getAttribute("href"), other.id), 3_000);
           await eventually(`the ${chip} chip resolves to "${other.title}"`, async () => trimmed(await c.locator("[data-chip-title]").textContent({ timeout: 1000 })) === other.title.trim(), 3_000);
         }
 
@@ -818,7 +828,7 @@ async function main() {
         // Enter jumps to the first hit, on this board.
         await page.keyboard.press("Enter");
         const L = { ...B, ...B.lands };
-        await eventually(`Enter goes to ${L.ticketRoute}${zap34[0]}`, async () => (await page.evaluate(() => location.hash)) === `${L.ticketRoute}${zap34[0]}`, 2_000);
+        await eventually(`Enter goes to ${zap34[0]}`, async () => ticketAt(await page.evaluate(() => location.hash), zap34[0]), 2_000);
       });
 
       await onBoard(B, "the_filter_line_filters_the_board_and_the_nav", async () => {
@@ -954,7 +964,7 @@ async function main() {
     if (GROUP && GROUP !== "all" && !wanted.length) throw new Error(`--group ${GROUP}: no tests/pages/${GROUP}.mjs (have: ${groupFiles.join(", ") || "none"})`);
     inGroup = true;
     const ctx = { fake, test, assert, eventually, sleep, typeBursts, openPage, marked, sameDocument, sy, summaries, extentsNow, groupsNow,
-      section, main, nav, palette, rowIds, attrs, boardUp, BOARDS, server, token, session, v1, v2, pages, fs, path };
+      section, main, nav, palette, rowIds, attrs, boardUp, BOARDS, server, token, session, v1, v2, pages, fs, path, ticketAt };
     for (const f of wanted) {
       console.log(`group ${f.replace(/\.mjs$/, "")}`);
       const m = await import(path.join(groupsDir, f));

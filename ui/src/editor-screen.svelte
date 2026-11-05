@@ -24,27 +24,35 @@
 
 <script>
   import { bus, live } from "plexus-ui/host";
+  import { ticketHref, editHref, settle } from "./ticket-links.svelte";
   import Editor from "plexus-ui:editor-body";
   import Questions from "plexus-ui:ticket-questions";
 
-  let { id = null, doc = null, sheet = null } = $props();
+  let { id = null, doc = null, uid = null, sheet = null } = $props();
   const b = bus();
+  // V2-42: `#/t/<uid>/<ID>-<slug>/edit` names the ticket by its uid — `get`
+  // takes it and answers the ticket whatever its id is now; the surface is
+  // then the ticket by the key it answered, as `#/edit/<id>` is.
+  const byUid = live({ snapshot: "tickets.get", params: () => ({ id: uid }), key: "id", when: () => uid != null && id == null && doc == null });
+  const resolved = $derived(uid != null && id == null && doc == null ? (byUid.rows.find((r) => r.id && r.title != null)?.id ?? null) : null);
   const remembered = () => { try { return localStorage.getItem(LAST) || null; } catch { return null; } };
   const remember = (v) => { try { localStorage.setItem(LAST, v); } catch { /* a private window */ } };
   const readRecent = () => { try { const r = JSON.parse(localStorage.getItem(RECENT) || "[]"); return Array.isArray(r) ? r.filter((x) => x && typeof x.id === "string") : []; } catch { return []; } };
   // The document on screen: the route's (a doc, or a ticket), else the last opened here.
   let last = $state(remembered());
-  const route = $derived(doc ? { kind: "doc", id: doc } : id ? { kind: "ticket", id } : null);
-  const cur = $derived(route ?? lastOf(last));
+  const route = $derived(doc ? { kind: "doc", id: doc } : id ? { kind: "ticket", id } : resolved ? { kind: "ticket", id: resolved } : null);
+  const cur = $derived(route ?? (uid != null && id == null && doc == null ? null : lastOf(last)));
   const current = $derived(cur?.id ?? null);
   const isDoc = $derived(cur?.kind === "doc");
-  const href = (r) => (r.kind === "doc" ? "#/doc/" : "#/edit/") + r.id;
+  const href = (r) => (r.kind === "doc" ? "#/doc/" + r.id : editHref(r));
   $effect(() => { if (route) { const v = route.kind === "doc" ? "doc:" + route.id : route.id; remember(v); last = v; } });
 
   // A ticket on the surface: its kind for the bar (the editor holds the same get and watch).
   const ticket = live({ snapshot: "tickets.get", params: () => ({ id: current }), changes: "tickets.watch", key: "id", when: () => current != null && !isDoc,
                         on: { amended: "upsert:ticket", kind_changed: "upsert:ticket", updated: "upsert:ticket", deleted: "upsert:." } });
   const t = $derived(isDoc ? null : ticket.rows.find((r) => r.id === current && r.title != null));
+  // V2-42: `#/edit/<id>` becomes `#/t/<uid>/<ID>-<slug>/edit` in place (`#/` stays `#/`).
+  $effect(() => { if (route && t?.uid) settle(t); });
 
   // ── the documents ────────────────────────────────────────────────────────
   const docs = live({ snapshot: "docs.list", params: { limit: 200 }, changes: "docs.watch", changes_params: {}, key: "id",
@@ -56,7 +64,7 @@
   $effect(() => {
     const title = isDoc ? titled.get(current) : t?.title;
     if (!cur || title == null) return;
-    const row = { id: cur.id, title, kind: cur.kind };
+    const row = { id: cur.id, title, kind: cur.kind, ...(isDoc || !t?.uid ? {} : { uid: t.uid }) };
     const next = [row, ...recent.filter((r) => r.id !== row.id)].slice(0, 12);
     if (JSON.stringify(next) === JSON.stringify(recent)) return;
     recent = next;
@@ -95,7 +103,7 @@
       <span class="kind" data-field="kind"><i class="kmark" data-kind="doc" aria-hidden="true"></i>doc</span>
       <span class="id" data-field="current">{current}</span>
     {:else if current}
-      <a class="id" href={"#/ticket/" + current} data-field="current">{current}</a>
+      <a class="id" href={ticketHref(t ?? { id: current })} data-field="current">{current}</a>
       {#if t}<span class="kind" data-field="kind"><i class="kmark" data-kind={t.kind} aria-hidden="true"></i>{t.kind}</span>{/if}
     {:else}
       <span class="none" data-empty>no document open yet</span>

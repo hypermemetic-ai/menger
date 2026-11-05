@@ -4,12 +4,13 @@
      imports it; it is a component in its own right too. -->
 <script module>
   // PERF-15: a row is the four fields drawn, not the whole summary row.
-  const FIELDS = ["id", "title", "kind", "status"];
+  const FIELDS = ["id", "uid", "title", "kind", "status"];
   export const uses = ["tickets.list"];
 </script>
 
 <script>
   import { live } from "plexus-ui/host";
+  import { ticketHref } from "./ticket-links.svelte";
 
   let { parent } = $props();
   const base = location.hash.startsWith("#/sv/") ? "#/sv/" : "#/";
@@ -19,7 +20,7 @@
 
 <ul class="nav-children" data-nav-children={parent}>
   {#each list as c (c.id)}
-    <li><a class="nav-row" data-nav-row={c.id} data-status={c.status} href={base + "ticket/" + c.id}><span class="row-id">{c.id}</span> <span class="row-title">{c.title}</span></a></li>
+    <li><a class="nav-row" data-nav-row={c.id} data-status={c.status} href={ticketHref(c, base)}><span class="row-id">{c.id}</span> <span class="row-title">{c.title}</span></a></li>
   {/each}
   {#if $kids.status === "live" && list.length === 0}<li class="empty">nothing under it</li>{/if}
 </ul>

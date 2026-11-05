@@ -35,10 +35,10 @@ pub(super) fn counts_stream(store: Arc<Store>, caller: VerifiedUser, filter: Opt
                             yield ev;
                         }
                     }
-                    Err(e) => yield veiled(&caller, e),
+                    Err(e) => yield veiled(&store, &caller, e),
                 }
             }
-            Err(e) => yield veiled(&caller, e),
+            Err(e) => yield veiled(&store, &caller, e),
         }
     }
 }

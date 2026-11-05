@@ -12,6 +12,7 @@
 
 <script>
   import { live } from "plexus-ui/host";
+  import { ticketHref } from "./ticket-links.svelte";
   import NavFlat from "./nav-flat-sv.svelte";
   import NavChildren from "./nav-children-sv.svelte";
 
@@ -42,7 +43,7 @@
         <li class="nav-group" data-nav-group={g.shortcode}>
           <div class="nav-group-row">
             <button class="nav-toggle" data-nav-toggle={g.shortcode} aria-expanded={open.includes(g.shortcode) ? "true" : "false"} onclick={() => toggle(g.shortcode)}>{open.includes(g.shortcode) ? "▾" : "▸"}</button>
-            <a class="nav-code" href={g.root == null ? board : base + "ticket/" + g.root} title={g.root_row == null ? g.shortcode : g.root_row.title}>{g.shortcode}</a>
+            <a class="nav-code" href={g.root == null ? board : ticketHref(g.root_row ?? { id: g.root }, base)} title={g.root_row == null ? g.shortcode : g.root_row.title}>{g.shortcode}</a>
             {#if filter != null}
               <span class="nav-held" data-nav-held>{heldIn(g.shortcode)}</span>
             {/if}

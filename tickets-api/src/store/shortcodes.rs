@@ -495,12 +495,28 @@ impl Registry {
                 (true, None) => {}
             }
         }
+        // TICKETS-35: a full address is its own shortcode's (a root's is
+        // also a short form of a namesake's hosted below it).
+        if ids.len() > 1 && a.org.is_some() {
+            let full = a.to_string();
+            let exact: Vec<&ShortcodeId> = ids.iter().filter(|id| self.address(id) == full).collect();
+            if let [one] = exact.as_slice() {
+                return Found::One((*one).clone());
+            }
+        }
         self.found(ids)
     }
 
     /// Every shortcode's id.
     pub(super) fn ids(&self) -> impl Iterator<Item = &ShortcodeId> {
         self.entries.keys()
+    }
+
+    /// TICKETS-35: whether `text` is some shortcode's code (or id), any case
+    /// — what no uid is minted as.
+    pub(super) fn holds_letters(&self, text: &str) -> bool {
+        let up = text.to_ascii_uppercase();
+        self.by_letters.contains_key(&up) || self.entries.contains_key(&ShortcodeId::new(&up)) || self.entries.contains_key(&ShortcodeId::new(text))
     }
 
     fn found(&self, ids: Vec<ShortcodeId>) -> Found<ShortcodeId> {
@@ -861,6 +877,10 @@ impl Cache {
         match self.find_ticket(text, reach) {
             Found::One(key) => Ok(key),
             Found::Many(candidates) => Err(StoreError::Ambiguous { text: text.trim().to_string(), candidates }),
+            // TICKETS-35: a uid as the store spells it (lower case).
+            Found::None if crate::vocab::uid_named(text).is_some() => {
+                Err(StoreError::NotFound(crate::vocab::uid_named(text).map(String::from).unwrap_or_default()))
+            }
             // An id as the store spells it (`theme-3` → THEME-3); an address
             // as given.
             Found::None if text.contains('/') || text.contains(':') => Err(StoreError::NotFound(text.trim().to_string())),
@@ -878,6 +898,19 @@ impl Cache {
             OrgReach::All => true,
             OrgReach::Only(_) => self.get(key).and_then(|r| self.shortcodes.org(&r.shortcode)).is_some_and(|o| reach.holds(o)),
         };
+        // TICKETS-35: a uid — bare, or in the app's link — names its ticket,
+        // live or deleted, in any organization the reader reaches; one no
+        // ticket has names none (a bare word names no other ticket).
+        if let Some(uid) = crate::vocab::uid_named(t) {
+            let org = |key: &str| {
+                let sc = self.get(key).map(|r| &r.shortcode).or_else(|| self.tombstones.shortcode_of(key));
+                sc.and_then(|sc| self.shortcodes.org(sc)).is_some_and(|o| reach.holds(o))
+            };
+            return match self.uids.key(&uid) {
+                Some(key) if matches!(reach, OrgReach::All) || org(key) => Found::One(key.to_string()),
+                _ => Found::None,
+            };
+        }
         // ORG-13: the caller's current epic first — a pin there, then a
         // match there — then the pin, then every match.
         let pref = self.shortcodes.preferred_now();
@@ -936,6 +969,16 @@ impl Cache {
         if keys.is_empty() && a.is_bare() && self.at.contains_key(&a.to_string()) {
             return Found::One(a.to_string());
         }
+        // TICKETS-35: a full address is its own ticket's, never refused as
+        // ambiguous — a root's (`acme:PERF-2`) is also a short form of a
+        // namesake's hosted below it in the same organization.
+        if keys.len() > 1 && a.org.is_some() {
+            let full = a.to_string();
+            let exact: Vec<&String> = keys.iter().filter(|k| self.get(k).is_some_and(|r| r.address == full)).collect();
+            if let [one] = exact.as_slice() {
+                return Found::One((*one).clone());
+            }
+        }
         match keys.len() {
             0 => Found::None,
             1 => Found::One(keys.pop().expect("one")),
@@ -955,6 +998,11 @@ impl Cache {
             Found::One(key) => return Ok(TicketName::new(key)),
             Found::Many(candidates) => return Err(StoreError::Ambiguous { text: t.to_string(), candidates }),
             Found::None => {}
+        }
+        // TICKETS-35: a uid is never a ticket not born yet — one no ticket
+        // has names none.
+        if let Some(uid) = crate::vocab::uid_named(t) {
+            return Err(StoreError::NotFound(uid.into_string()));
         }
         let Ok(a) = Address::parse(t) else { return Ok(TicketName::new(t)) };
         let At::Seq(n) = a.at else { return Ok(TicketName::new(t)) };

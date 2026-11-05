@@ -39,7 +39,7 @@ pub(super) fn rows_events(items: Vec<Row>) -> Vec<TicketsEvent> {
 /// instead, with no page event: nothing was walked, so there is nowhere to
 /// resume from. SCALE-14: the `summary` shape — a page of the cache's rows,
 /// as they are; whole tickets come from [`walk_events`].
-pub(super) fn page_events(page: Result<Page, StoreError>, fields: Option<&[SummaryField]>) -> Box<dyn Iterator<Item = TicketsEvent> + Send> {
+pub(super) fn page_events(store: &Store, page: Result<Page, StoreError>, fields: Option<&[SummaryField]>) -> Box<dyn Iterator<Item = TicketsEvent> + Send> {
     let page = match page {
         Ok(page) => page,
         Err(e) => {
@@ -48,7 +48,8 @@ pub(super) fn page_events(page: Result<Page, StoreError>, fields: Option<&[Summa
             }))
         }
     };
-    let items = page.tickets.into_iter().map(|row| Row::Summary { summary: SummaryRow::of(row, fields) }).collect();
+    // TICKETS-35 (V2-42): each row its `uid_of` before `fields` thins it.
+    let items = page.tickets.into_iter().map(|row| Row::Summary { summary: SummaryRow::of(store.dressed_summary(row), fields) }).collect();
     let mut events = rows_events(items);
     events.push(TicketsEvent::Page { next: page.next, remaining: page.remaining, first: page.first });
     Box::new(events.into_iter())
@@ -228,13 +229,27 @@ pub(super) fn membership_event(store: &Store, m: Membership) -> TicketsEvent {
 
 /// ORG-3: a refusal as its one event — `ambiguous { id, candidates }` for a
 /// name that names more than one in reach (each by its full address), the
-/// in-band `error` for every other.
+/// in-band `error` for every other. TICKETS-35: said with no caller in
+/// hand, each choice is its candidate's address alone ([`veiled`] says
+/// more, to a caller).
 pub(super) fn refusal(e: StoreError) -> TicketsEvent {
     match e {
-        StoreError::Ambiguous { text, candidates } => TicketsEvent::Ambiguous { id: crate::vocab::Asked::stored(text), candidates },
+        StoreError::Ambiguous { text, candidates } => {
+            let choices = candidates.iter().map(|c| crate::types::Choice { address: c.clone(), ..Default::default() }).collect();
+            TicketsEvent::Ambiguous { id: crate::vocab::Asked::stored(text), candidates, choices }
+        }
         StoreError::Frozen { scope, numbers } => frozen(scope, numbers),
         e => TicketsEvent::Error { message: e.to_string() },
     }
+}
+
+/// TICKETS-35: a stream's events as they go out — each ticket and summary
+/// given its `uid_of`, the uids of the tickets it names ([`Store::dressed`]).
+pub(super) fn dressing<S>(store: Arc<Store>, s: S) -> impl Stream<Item = TicketsEvent> + Send + 'static
+where
+    S: Stream<Item = TicketsEvent> + Send + 'static,
+{
+    s.map(move |ev| store.dressed(ev))
 }
 
 /// TICKETS-6: a refusal by a frozen scope, as its typed event.
@@ -306,11 +321,12 @@ impl From<crate::access::Refusal> for Failed {
 /// it names out of the caller's reach said as such ([`said`]).
 pub(super) fn answer(store: &Store, caller: &VerifiedUser, asked: Option<&str>, r: Result<TicketsEvent, Failed>) -> TicketsEvent {
     match r {
-        Ok(ev) | Err(Failed::Said(ev)) => ev,
+        // TICKETS-35: each ticket it carries names the uids of the tickets it names.
+        Ok(ev) | Err(Failed::Said(ev)) => store.dressed(ev),
         Err(Failed::Refused(message)) => TicketsEvent::Error { message },
         Err(Failed::Store(StoreError::NotFound(_))) if asked.is_some() => TicketsEvent::NotFound { id: Asked::stored(asked.unwrap_or_default()) },
         Err(Failed::Store(e @ StoreError::BodyTooLarge { .. })) => too_large(e),
-        Err(Failed::Store(e @ StoreError::Ambiguous { .. })) => veiled(caller, e),
+        Err(Failed::Store(e @ StoreError::Ambiguous { .. })) => veiled(store, caller, e),
         // TICKETS-6: typed, naming the scope — to a caller who sees it.
         Err(Failed::Store(StoreError::Frozen { scope, numbers })) if sees_id(store, &caller.sight(), &scope) => frozen(scope, numbers),
         Err(Failed::Store(e)) => said(store, caller, e),

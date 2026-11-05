@@ -14,7 +14,7 @@
      (`data-state="stale"`) until it is read again.
      STUDIO-12: the page's title is page-ready's (rhx). -->
 <script module>
-  const FIELDS = ["id", "title", "kind", "status", "severity", "parent"];
+  const FIELDS = ["id", "uid", "title", "kind", "status", "severity", "parent"];
   const RANK = { Critical: 0, High: 1, Medium: 2, Low: 3 };
   const LIMIT = 200, LIVE = 24;
   export const uses = ["tickets.work.ready", "tickets.watch"];

@@ -766,6 +766,9 @@ impl Store {
         let mut born_ticket = None;
         if let (Some((key, title, parent)), Some(sc)) = (&p.born, &p.minted) {
             let t = Ticket {
+                // TICKETS-35: a scope born here takes a uid of its own.
+                uid: cache.mint_uid(&[]),
+                uid_of: Default::default(),
                 id: crate::address::TicketId::new(key.clone()),
                 epic: sc.code.clone(),
                 shortcode: sc.id.clone(),

@@ -55,7 +55,22 @@ impl Store {
             (next_seq, cache.len())
         };
 
-        let generated = synthetic::generate(spec, &next_seq, shape);
+        let seed_value = spec.seed;
+        let mut generated = synthetic::generate(spec, &next_seq, shape);
+        // TICKETS-35: each its uid — no other's, no code (the seed's own
+        // included) — drawn from the seed value here, so the generator stays
+        // a function of it and the seed's uids are one too.
+        {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            let codes: HashSet<String> = generated.iter().map(|t| t.epic.as_str().to_ascii_lowercase()).collect();
+            let mut minted: HashSet<crate::vocab::Uid> = HashSet::with_capacity(generated.len());
+            let mut draw = uids::seeded(seed_value);
+            for t in generated.iter_mut() {
+                let taken = |u: &crate::vocab::Uid| minted.contains(u) || cache.uids.holds(u) || codes.contains(u.as_str()) || cache.shortcodes.holds_letters(u);
+                t.uid = uids::mint(taken, &mut draw);
+                minted.insert(t.uid);
+            }
+        }
         let generate = started.elapsed();
         let epics = {
             let mut seen: HashSet<&str> = HashSet::new();

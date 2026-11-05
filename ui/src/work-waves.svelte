@@ -21,6 +21,7 @@
 
 <script>
   import { live } from "plexus-ui/host";
+  import { ticketHref } from "./ticket-links.svelte";
 
   let { epics = null, id = null, to = null, sheet = null } = $props();
   let kinds = $state(["build", "gap", "spike"]);
@@ -140,7 +141,7 @@
               {#each G.by.get(k) as r (r.id)}
                 <a class="chip" data-id={r.summary.id} data-status={r.summary.status} data-kind={r.summary.kind}
                    data-on={hot === r.summary.id ? "1" : "0"} data-rel={touches(r) ? "1" : "0"}
-                   href={"#/ticket/" + r.summary.id} title={`${r.summary.id} ${r.summary.title} · ${r.summary.status}`}
+                   href={ticketHref(r.summary)} title={`${r.summary.id} ${r.summary.title} · ${r.summary.status}`}
                    onmouseenter={() => (hot = r.summary.id)} onfocus={() => (hot = r.summary.id)} onblur={() => { if (hot === r.summary.id) hot = ""; }}>
                   <i class="kmark" data-kind={r.summary.kind} aria-hidden="true"></i>
                   <span class="chip-code">{r.summary.id}</span>
