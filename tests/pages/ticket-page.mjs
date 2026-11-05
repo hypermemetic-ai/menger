@@ -223,11 +223,19 @@ export default async (ctx) => {
       await eventually("picked", async () => (await r.locator("[data-pick]").getAttribute("aria-pressed")) === "true");
       await r.locator("[data-close]").click({ timeout: 2000 });
       await eventually("closed, back in its column", async () => (await r.getAttribute("data-open")) === "false");
-      // Two revisions made while the page is open: both listed, the count the service's.
-      sy("tickets", "update", "--id", t.id, "--severity", "Low");
+      // Two revisions made while the page is open: both listed, the count the service's. V2-37
+      // coalesces the same actor's writes within 120 s into its latest revision unless one says
+      // why, so the first says why (it is kept apart from the amend's rev) and the second, after
+      // a revision with a message, is kept as its own.
+      sy("tickets", "update", "--id", t.id, "--severity", "Low", "--message", "the case's first");
       sy("tickets", "update", "--id", t.id, "--severity", "High");
       await eventually("both new revisions appear live", async () => (await r.locator(`li[data-id="${top + 1}"]`).count()) === 1 && (await r.locator(`li[data-id="${top + 2}"]`).count()) === 1, 5_000);
+      // EDITOR-16: a third, soon and saying nothing, is coalesced into top+2 (`revised` says
+      // top+2 again): no row is added, and top+2's row shows the fields of both live.
+      sy("tickets", "update", "--id", t.id, "--title", `${t.title}, renamed`);
+      await eventually("the coalesced write shows in top+2's row", async () => { const f = await text(r.locator(`li[data-id="${top + 2}"] [data-field=fields]`)); return f.includes("severity") && f.includes("title"); }, 5_000);
       const held = sy("tickets", "revisions", "list", "--id", t.id).filter((e) => e.type === "revision").map((e) => e.revision.rev);
+      assert(Math.max(...held) === top + 2, `the third write was coalesced (${held})`);
       await eventually(`the list is the service's (${held})`, async () => JSON.stringify(await r.locator("li[data-id]").evaluateAll((els) => els.map((e) => Number(e.dataset.id)))) === JSON.stringify(held), 5_000);
       // Opened, the newest is compared with the one before it, which is listed.
       await r.locator(`li[data-id="${top + 2}"]`).click({ timeout: 2000 });
