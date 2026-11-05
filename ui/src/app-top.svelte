@@ -50,6 +50,19 @@
     if (!editor || !onApp) return;
     return b.keys({ "ctrl+e": { to: () => location.assign("/studio/#/page/" + encodeURIComponent(location.hash || "#/")), label: "edit this page" } });
   });
+  // EDITOR-13: the app's page-wide chords are the engine's on every route, so the browser never acts
+  // on them: ctrl/⌘+s is `page.save` (the editor's own binding saves on its page and runs alone), and
+  // for a viewer ctrl+e is held too — it does nothing, where the browser would take it to its search.
+  if (onApp) {
+    b.keys({
+      "ctrl+s": { to: () => b.emit("page.save", {}), label: "save" },
+      "meta+s": { to: () => b.emit("page.save", {}), label: "save" },
+    });
+  }
+  $effect(() => {
+    if (editor || !onApp) return;
+    return b.keys({ "ctrl+e": { to: () => {}, label: "edit this page (an editor's)" } });
+  });
 
   const enc = (t) => t.trim().replaceAll("%", "%25").replaceAll("/", "%2F").replaceAll("#", "%23");
   function searched(ev) {
