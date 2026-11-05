@@ -22,6 +22,10 @@
     "top": "app-top",
     "palette": "jump-palette-sv"
   },
+  "page-named": {
+    "top": "app-top",
+    "palette": "jump-palette-sv"
+  },
   "page-new": {
     "top": "app-top",
     "palette": "jump-palette-sv"
