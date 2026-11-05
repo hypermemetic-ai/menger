@@ -276,15 +276,19 @@ deploy/pipeline image R                       # RUN-10: the release as an image 
 deploy/pipeline remote test --image ghcr.io/hypermemetic-ai/menger:R
                                               # app-test.menger.sh through infra, the bundle pushed through
                                               # ui.push as the pipeline key, then the smoke
-deploy/pipeline suite R                       # the full suite at R's commit, on this machine; marks R passed / failed
+deploy/pipeline suite R                       # the full suite at R's commit, on this machine, then plexus-bench's
+                                              # counts and bench (PERF-6, PERF.115-29: ../plexus-bench, every
+                                              # scenario against its golden); marks R passed / failed
 deploy/pipeline remote prod                   # what test runs → app.menger.sh, only once its suite passed; the owner's
 deploy/pipeline local --image menger:R        # RUN-25: the image on 127.0.0.1:4470/4471, a CI throwaway
 deploy/pipeline status                        # what test and prod run, their suites, the runner and its branch
 deploy/pipeline releases                      # every release: its suite, tested?, where it runs
 ```
 
-- **The release names its branch** (`build --branch B`: B's tip). A tree
-  with no `frontend/` builds `cargo build --release -p menger`, the
+- **The release names its branch** (`build --branch B`: B's tip), and is
+  **the perf build** (RUN-39: `[profile.perf]`, the one build perf runs and
+  releases use; `RELEASE` says `profile: perf`). A tree
+  with no `frontend/` builds `cargo build --profile perf -p menger`, the
   `plexus-ui` tool from `../plexus-ui` (FRAME-8; the release carries it as
   `bin/plexus-ui`), the engine (`plexus-ui build --prebuild`), the bundle
   (`plexus-ui build --contract HASH` → `dist/ui.tar`) and
@@ -623,9 +627,11 @@ question.
 - Plexus crates come from the **0.7 line by published version**
   (PLEXUS-16): `plexus-core`, `plexus-macros`, `plexus-client`,
   `plexus-transport`, `plexus-auth-core`, `plexus-webapp`. What is
-  unpublished stays by sibling path: `../plexus-login`, `../plexus-ui` and
-  tether's `../plexus-substrate`; a clone of menger alone does not build
-  until those are decided. Every activation is `impl FooActivation` (MACRO-13,
+  unpublished stays by sibling path: `../plexus-login` and `../plexus-ui`
+  (FRAME-1's rule, `tests/apart.rs`); a clone of menger alone does not build
+  until those are decided. tether takes plexus-substrate and plexus-login
+  from their public repositories, each at a revision (PLEXUS-13, V2-44), the
+  plexus-login being the one substrate names. Every activation is `impl FooActivation` (MACRO-13,
   MACRO-21): the stem names the namespace, the trait and the client.
 - **Workspace members** (`Cargo.toml`): `.`, `tickets-api`, `media`, `quota`;
   `tether/` is its own workspace. Three repositories

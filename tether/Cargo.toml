@@ -23,9 +23,9 @@ path = "src/main.rs"
 
 [dependencies]
 # substrate, imported: its service is built inside tether and called over the
-# in-memory service transport. By sibling path while substrate is unpublished
-# (PLEXUS-16); the plexus 0.7 line below by version, one of each in the graph.
-plexus-substrate = { path = "../../plexus-substrate", default-features = false }
+# in-memory service transport. PLEXUS-13 (V2-44): from its public repository,
+# at a revision on the plexus 0.7 line; the rest of the line from crates.io.
+plexus-substrate = { git = "https://github.com/hypermemetic-ai/plexus-substrate", rev = "7b6c9afe07f1be71c9a8e76941ceb999dad8826f", default-features = false }
 plexus-core = "0.7.0"
 plexus-macros = "0.7.0"
 # TETHER-9: the remote menger is reached as a client — WsTransport over a

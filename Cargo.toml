@@ -90,7 +90,9 @@ plexus-webapp = "0.2.0"
 # never by path outside this repository, so the graph resolves exactly one
 # of each; only what is unpublished (plexus-login, plexus-ui's crates) stays
 # by sibling path, and those take the same published versions.
-plexus-core = "0.7.0"
+# POLYGLOT-5 (V2-44): `clap` — plexus-core's ChildArgs, `--child` and its
+# flags spelled as every service spells them.
+plexus-core = { version = "0.7.0", features = ["clap"] }
 # Slim: default features off; http-gateway enables the REST + SSE bridge
 # (MNG-8). TRANSPORT-15 (V2-43): `mcp` mounts the MCP bridge
 # (plexus-transport-mcp) behind the login — menger's /mcp.
@@ -228,3 +230,14 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.wasmtime-internal-core]
 opt-level = 3
+
+# PERF-6 (PLEXUS/PERF-6): the one build perf runs and releases use, PERF-1's
+# `profiles` fork built to its recommendation. Release, with LTO across every
+# crate and one codegen unit, and line tables kept for flamegraphs; `panic` is
+# release's (menger's tests rely on unwinding). Dev, test and release are
+# unchanged. `cargo build --profile perf`; plexus-bench measures with it.
+[profile.perf]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+debug = "line-tables-only"
