@@ -10,9 +10,23 @@ use crate::types::InputValue;
 use std::time::{Duration, Instant};
 
 const CAP: usize = 8 * 1024 * 1024;
-/// A debug build, on a loaded machine: the bound is that it ends, not a
-/// budget (perf/ringer.mjs has those).
-const AT_MOST: Duration = Duration::from_secs(20);
+/// V2-35: a shape may cost at most this many plain reads of a body as large.
+/// The reader's allowance (marks.rs's WORK_MAX) is about twelve parses of an
+/// 8 MiB body, so a shape that ends at the allowance costs about that; a
+/// walk the allowance does not count, quadratic in 8 MiB, costs thousands.
+/// Both sides are this thread's CPU time in the same build, so neither the
+/// builds running beside the suite nor a debug build moves the verdict.
+const READS_AT_MOST: u32 = 40;
+
+/// V2-35: the CPU time this thread has spent — what the read costs, whatever
+/// else the machine is doing (wall time grew to ~20 s at load 15).
+fn thread_cpu() -> Duration {
+    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    // SAFETY: a valid, writable timespec and a clock every Linux and macOS has.
+    let rc = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) };
+    assert_eq!(rc, 0, "clock_gettime(CLOCK_THREAD_CPUTIME_ID)");
+    Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
+}
 
 fn new(kind: Kind, body: &str) -> NewTicket {
     NewTicket { epic: "V".into(), title: "a ticket".into(), kind, severity: None, blocked_by: Vec::new(), parent: None, path: None, body: body.into() }
@@ -132,14 +146,25 @@ fn heavy() -> Vec<(&'static str, String)> {
 
 #[test]
 fn every_shape_at_the_cap_ends() {
+    // What one plain read of a body at the cap costs here, now: an input, then prose.
+    let mut plain = String::from("<m-input id=\"x\" kind=\"text\"></m-input>\n\n");
+    while plain.len() + 40 <= CAP {
+        plain.push_str("a plain line of prose, read once.\n\n");
+    }
+    let t = thread_cpu();
+    let (found, _) = read(&plain);
+    let once = thread_cpu() - t;
+    assert_eq!(found.len(), 1, "the plain body's one input");
+    let at_most = once * READS_AT_MOST;
+    eprintln!("one plain read: {once:?}; a shape may take {at_most:?}");
     let mut worst = Duration::ZERO;
     for (what, body) in heavy() {
         assert!(body.len() <= CAP + 8192, "{what}: {}", body.len());
-        let t = Instant::now();
+        let t = thread_cpu();
         let (found, problems) = read(&body);
-        let took = t.elapsed();
+        let took = thread_cpu() - t;
         eprintln!("{what}: {took:?}, {} found, {:?}", found.len(), problems.first());
-        assert!(took < AT_MOST, "{what}: {took:?}");
+        assert!(took < at_most, "{what}: {took:?}, past {READS_AT_MOST} plain reads ({at_most:?})");
         worst = worst.max(took);
     }
     eprintln!("the worst shape: {worst:?}");

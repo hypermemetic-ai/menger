@@ -121,4 +121,6 @@ menger-tickets-api = { path = ".", features = ["test-support"] }
 # throwaway database files.
 serde_json = "1"
 tempfile = "3"
+# V2-35: tests_reading bounds a read by its thread's CPU time (clock_gettime).
+libc = "0.2"
 tokio = { version = "1", features = ["full"] }
