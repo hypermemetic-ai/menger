@@ -25,36 +25,40 @@
        another, says so in words;
      - `<m-mockup ref="X">` — a link to X, whose body is the page.
 
-     The frame: `<iframe sandbox="allow-scripts allow-forms">`, never
-     `allow-same-origin` — an opaque origin, so the page's scripts run but read
-     no cookie or storage of the app, reach no socket and cannot touch
-     `parent` or `top`. `allow-forms` because Chrome fires no `submit` in a
-     sandbox without it, so a form a script handles would be dead; a real
-     submission is still refused, by the frame's `form-action 'none'`.
-     Not a `srcdoc`, which would inherit the app's policy and refuse the
-     page's inline scripts: the frame loads the shell's `/frame` (served
-     under its own policy — no connection, no form, `sandbox allow-scripts`
-     even opened alone; src/shell.rs FRAME_CSP), which says `menger:boot` on
-     its channel and is answered `menger:doc { html }` — the page, with a
-     few lines after it that post its height (`menger:size`) and take the
-     theme (`menger:theme`). A message is taken only from that frame's own
-     `contentWindow` carrying its channel. The height follows the content's,
-     at most MAX px (then the frame scrolls inside); a page that grows with
-     its frame (`100vh` and a margin) is held after a few steps. A width the
-     page names is drawn at that width and scaled down to the column
-     (EDITOR-12: nothing wider than the column on a phone), with a switch
-     when it names several. A changed page (an amend, an edit, a width
-     switched) loads in a second, hidden frame that replaces the first once
-     it says its height, so nothing flashes. The label and the description
-     sit above the frame, never inside it. A frame that never says it is up
-     (an older server) draws a note and the source. -->
+     COMPS-2: the frame is plexus-ui's — the engine's `bus.frame` (its
+     CONTRACT.md "Frames"), on the service's `/frame`. `<iframe
+     sandbox="allow-scripts allow-forms">`, never `allow-same-origin` — an
+     opaque origin, so the page's scripts run but read no cookie or storage
+     of the app, reach no socket and cannot touch `parent` or `top`.
+     `allow-forms` because Chrome fires no `submit` in a sandbox without it,
+     so a form a script handles would be dead; a real submission is still
+     refused, by the frame's `form-action 'none'`. The engine does the
+     handshake (a message taken only from that frame's own `contentWindow`
+     carrying its channel), the height (the content's, at most MAX px, then
+     the frame scrolls inside; a page that grows with its frame is held
+     after a few steps), the theme (a body's: the app's tokens, again on a
+     flip) and the double buffer (a changed page — an amend, an edit, a
+     width switched — loads in a second, hidden frame that replaces the
+     first once it says its height, so nothing flashes). And the bridge: a
+     framed page's `plexus.call(method, params)` reads the tracker as the
+     reader — `READS` below, kept only where the component drawing the
+     ticket holds it too (EDITOR-15, v1's `menger.call`); anything else is
+     refused in words. A body's ```mermaid fences are drawn before it is
+     handed over (`prepare`, ticket-view), so a diagram draws inside the
+     frame as outside. Here: which pages are frames, a width the page names
+     drawn at that width and scaled down to the column (EDITOR-12: nothing
+     wider than the column on a phone), with a switch when it names
+     several; the label and the description above the frame, never inside
+     it; a frame that never says it is up (an older server) a note and the
+     source. -->
 <script module>
   export const uses = [];
 
   /** The frame's height at most, in the page's own pixels. */
   export const MAX = 2000;
-  /** How many times in a row a frame may grow before it is held where it is. */
-  const GROWS = 8;
+  /** COMPS-2: what a framed page may read through the bridge (`plexus.call`) — held, by the engine, to what the
+   *  component drawing the ticket holds too, and to the reader's grants by the service. */
+  export const READS = ["tickets.get", "tickets.list", "tickets.search"];
 
   const ATTR = /([a-zA-Z][\w:-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g;
   /** `key=value`, `key="a value"`, `key='…'` and bare words, as an object (keys lower-cased). */
@@ -168,36 +172,19 @@
   /** The height a frame starts at, before its page says its own: a device's screen at a named width. */
   export const startHeight = (w, named) => (!named ? 320 : w <= 480 ? 844 : w <= 1024 ? 1024 : 900);
 
-  /** The lines after the page that post its height on its channel — the content's height (the document's
-   *  scroll height when it overflows, else its box's) whenever it changes — and take the theme's tokens. */
-  const reporter = (channel) => "<scr" + `ipt>(function(){var c=${JSON.stringify(channel)},last=-1;function s(){var de=document.documentElement,b=document.body,`
-    + `h=de.scrollHeight>de.clientHeight+1?de.scrollHeight:Math.ceil(Math.max(de.getBoundingClientRect().height,b?b.getBoundingClientRect().height:0));`
-    + `if(h!==last){last=h;parent.postMessage({type:"menger:size",channel:c,height:h},"*");}}`
-    + `addEventListener("message",function(e){var d=e.data;if(e.source!==parent||!d||d.type!=="menger:theme"||d.channel!==c)return;var t=document.getElementById("menger-theme");if(t)t.textContent=d.css;});`
-    + `if(window.ResizeObserver){var r=new ResizeObserver(s);r.observe(document.documentElement);if(document.body)r.observe(document.body);}`
-    + `addEventListener("load",s);setTimeout(s,0);setInterval(s,1000);})();</scr` + "ipt>";
-
-  /** The document a frame is handed: the page, then its reporter. */
-  export const docOf = (html, channel) => `${html}\n${reporter(channel)}`;
-
-  /** The app's theme as the frame's `:root`: every token the page's root holds, and its colour scheme. */
-  export function themeCss() {
-    if (typeof document !== "object") return "";
-    const cs = getComputedStyle(document.documentElement);
-    const out = [];
-    for (let i = 0; i < cs.length; i++) if (cs[i].startsWith("--")) out.push(`${cs[i]}:${cs.getPropertyValue(cs[i]).trim()}`);
-    return `:root{color-scheme:${cs.colorScheme || "normal"};${out.join(";")}}`;
-  }
-
   /** The live origin this server's bodies may frame (APP-110), stamped by the shell; "" when none. */
   const liveOrigin = () => (typeof document === "object" && document.querySelector('meta[name="menger-live-origin"]')?.content?.trim()) || "";
 </script>
 
 <script>
-  import { onMount, untrack } from "svelte";
+  import { untrack } from "svelte";
+  import { bus as member } from "plexus-ui/host";
 
-  /** `source`: the piece's markdown. `doc`: a body framed whole (ticket-view built it), its kind `body`. */
-  let { source = "", doc = null } = $props();
+  const bus = member();
+
+  /** `source`: the piece's markdown. `doc`: a body framed whole (ticket-view built it), its kind `body`;
+   *  `prepare(html, within)` → a promise of the html to hand over (ticket-view draws its diagrams, in `within`). */
+  let { source = "", doc = null, prepare = null } = $props();
   const spec = $derived(doc != null ? { kind: "body", attrs: {}, html: doc } : pageSpec(source));
   const sizes = $derived(widthsOf(spec?.attrs ?? {}));
   let pick = $state(0);
@@ -206,79 +193,35 @@
   const about = $derived(spec?.attrs?.description || "");
   let col = $state(0);
   let phase = $state("loading"); // loading · drawn · failed
+  let said = $state(null); // the content's height, as the frame said it
 
   const W = $derived(size ? size.w : Math.max(1, col));
   const scale = $derived(size && col > 0 ? Math.min(1, col / size.w) : 1);
   const framed = $derived(spec?.kind === "page" || spec?.kind === "body");
-  // A body's links open a tab (its `<base target="_blank">`); a mockup's stay in it.
-  const SANDBOX = $derived(spec?.kind === "body" ? "allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox" : "allow-scripts allow-forms");
-
-  // The frames: the one on screen, and a newer one loading behind it until it says its height.
-  let bufs = $state([]);
-  let shown = $state(0);
-  let seq = 0;
-  $effect(() => {
-    if (!framed) return;
-    const html = spec.html, w = size?.w ?? 0;
-    untrack(() => {
-      const id = ++seq;
-      bufs = [...bufs.filter((b) => b.id === shown), { id, html, w, h: null, grows: 0 }];
-      if (!bufs.some((b) => b.id === shown)) shown = id;
-    });
-  });
-  const cur = $derived(bufs.find((b) => b.id === shown) ?? bufs[0] ?? null);
   // A height the page names (`WxH`, or `height=`) is kept; else the content's.
   const fixed = $derived(size?.h ?? (Number(spec?.attrs?.height) > 0 ? Math.round(Number(spec.attrs.height)) : null));
-  const H = $derived(Math.max(40, Math.min(MAX, fixed ?? cur?.h ?? startHeight(W, !!size))));
-  const hOf = (b) => Math.max(40, Math.min(MAX, fixed ?? b.h ?? startHeight(W, !!size)));
+  const H = $derived(Math.max(40, Math.min(MAX, fixed ?? said ?? startHeight(W, !!size))));
 
-  /** A buffer's frame: `/frame#<channel>` says it is up, is handed the page once, then says its height. */
-  function frame(node, buf) {
-    const channel = "f" + Array.from(crypto.getRandomValues(new Uint32Array(3)), (x) => x.toString(36)).join("");
-    let sent = false, wait = null;
-    node.dataset.channel = channel;
-    const on = (e) => {
-      if (e.source !== node.contentWindow) return;
-      const d = e.data;
-      if (!d || typeof d !== "object" || d.channel !== channel) return;
-      if (d.type === "menger:boot" && !sent) {
-        sent = true;
-        // Handed over once the frame has a width (a page reads its viewport as it runs; a section still hidden has none).
-        const give = () => {
-          const html = spec.kind === "body" ? buf.html.replace("/*menger-theme*/", themeCss()) : buf.html;
-          node.contentWindow?.postMessage({ type: "menger:doc", channel, html: docOf(html, channel) }, "*");
-        };
-        if (node.offsetWidth > 0) give();
-        else { wait = new ResizeObserver(() => { if (node.offsetWidth > 0) { wait.disconnect(); wait = null; give(); } }); wait.observe(node); }
-      } else if (d.type === "menger:size" && sent && Number.isFinite(d.height)) {
-        const h = Math.round(d.height);
-        const b = bufs.find((x) => x.id === buf.id);
-        if (!b) return;
-        if (b.h != null && h > b.h) { if (++b.grows > GROWS) return; } else b.grows = 0;
-        b.h = h;
-        if (shown !== buf.id && buf.id === bufs[bufs.length - 1]?.id) { shown = buf.id; bufs = bufs.filter((x) => x.id >= buf.id); }
-        if (shown === buf.id) phase = "drawn";
-      }
-    };
-    addEventListener("message", on);
-    const late = setTimeout(() => { if (!sent && shown === buf.id) phase = "failed"; }, 8000);
-    node.src = `/frame#${channel}`;
-    return { destroy() { removeEventListener("message", on); clearTimeout(late); wait?.disconnect(); } };
-  }
-
-  // A body takes the app's theme again when it flips (an attribute on the root, or the system's scheme).
-  onMount(() => {
-    if (spec?.kind !== "body") return;
-    const send = () => {
-      const css = themeCss();
-      for (const f of document.querySelectorAll("[data-surface=page-frame][data-kind=body] iframe[data-channel]")) f.contentWindow?.postMessage({ type: "menger:theme", channel: f.dataset.channel, css }, "*");
-    };
-    const mo = new MutationObserver(send);
-    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "class", "style"] });
-    const mq = matchMedia("(prefers-color-scheme: dark)");
-    mq.addEventListener("change", send);
-    return () => { mo.disconnect(); mq.removeEventListener("change", send); };
+  // COMPS-2: the frame, the engine's — made once its stage is drawn, handed every new page after.
+  let stage = $state(null);
+  let f = null, asked = 0;
+  $effect(() => {
+    if (!framed || !stage) return;
+    const html = spec.html, body = spec.kind === "body", width = size?.w, height = fixed ?? undefined, start = startHeight(W, !!size), title = label || (body ? "the body" : "a page");
+    untrack(() => {
+      const n = ++asked;
+      const hand = (page) => {
+        if (n !== asked) return;
+        if (!f) {
+          f = bus.frame(stage, { html: page, width, height, max: MAX, start, title, popups: body, theme: body, uses: READS,
+            onsize: (h) => (said = h), onstate: (s) => { if (s !== "loading") phase = s; } });
+        } else f.update({ html: page, width, height });
+      };
+      if (body && prepare) Promise.resolve(prepare(html, stage)).then(hand, () => hand(html));
+      else hand(html);
+    });
   });
+  $effect(() => () => { f?.destroy(); f = null; });
 
   // The live view: test's app at the route, or why not.
   const live = $derived.by(() => {
@@ -317,11 +260,7 @@
           <iframe src={live.src} title={label || "the test app"} loading="lazy" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" referrerpolicy="no-referrer"
                   style:width={size ? `${W}px` : "100%"} style:height={`${H}px`} style:transform={scale < 1 ? `scale(${scale})` : null}></iframe>
         {:else}
-          {#each bufs as b (b.id)}
-            <iframe use:frame={b} title={label || (spec.kind === "body" ? "the body" : "a page")} sandbox={SANDBOX} referrerpolicy="no-referrer" class:behind={b.id !== shown}
-                    data-buffer={b.id === shown ? "shown" : "loading"}
-                    style:width={size ? `${W}px` : "100%"} style:height={`${hOf(b)}px`} style:transform={scale < 1 ? `scale(${scale})` : null}></iframe>
-          {/each}
+          <div class="pf-frames" bind:this={stage} style:width={size ? `${W}px` : "100%"} style:height={`${H}px`} style:transform={scale < 1 ? `scale(${scale})` : null}></div>
         {/if}
       </div>
     </div>
@@ -345,7 +284,7 @@
   .pf-box { position: relative; max-width: 100%; overflow: hidden; border: var(--border) solid var(--line); border-radius: var(--radius); background: var(--panel); }
   .pf-box.bare { border: 0; border-radius: 0; background: none; }
   .pf-box iframe { display: block; max-width: none !important; border: 0; transform-origin: 0 0; }
-  .pf-box iframe.behind { position: absolute; top: 0; left: 0; visibility: hidden; pointer-events: none; }
+  .pf-frames { position: relative; transform-origin: 0 0; }
   .pf-note { margin: 0; font-family: var(--font-text); font-size: 12px; color: var(--muted); }
   .pf-src summary { cursor: pointer; font-family: var(--font-text); font-size: 12px; color: var(--muted); }
   .pf-src pre { max-height: 320px; overflow: auto; margin: 4px 0 0; padding: 8px 10px; font-family: var(--font-text); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--panel); border-radius: var(--radius); }

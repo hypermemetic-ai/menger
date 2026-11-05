@@ -16,6 +16,11 @@
 // no horizontal scroll and a 1440 page is scaled into the column.
 // `FRAMES_REAL=DIR`: each `*.md` there (real bodies, kept outside the
 // repository) is filed and must draw a frame per page, at 390 without scroll.
+// COMPS-2: the frames are plexus-ui's (the engine's `bus.frame`, the service's
+// `/frame`); EDITOR-15: a raw body's script reads the tracker through the
+// bridge (`plexus.call("tickets.get")`, as the reader) and a write through it
+// is refused naming `uses`, and a ```mermaid fence in it draws an svg inside
+// the frame.
 // Run alone by `node tests/pages_browser.mjs --group frames`.
 //
 // Marks: `[data-surface=page-frame]` (`data-kind=page|live|ref`,
@@ -130,6 +135,18 @@ const RAW = `A body with raw HTML in it.
 
 <script>document.getElementById("n").dataset.ran = "yes";</script>
 
+<p id="got">…</p><p id="wrote">…</p>
+
+<script>
+plexus.call("tickets.get", { id: "@ROOT@" }).then(function (ev) { var t = ev.find(function (e) { return e.ticket; }); document.getElementById("got").textContent = ev.ok && t ? "read " + t.ticket.title : "unread: " + ev.message; });
+plexus.call("tickets.amend", { id: "@ROOT@", body: "overwritten" }).then(function (ev) { document.getElementById("wrote").textContent = (ev.ok ? "written" : "refused: ") + ev.message; });
+</script>
+
+\`\`\`mermaid
+graph TD
+  A[kiln] --> B[cone 6]
+\`\`\`
+
 <m-status data-field="status">
 
 <m-step date="2026-11-05T06:00Z" status="Coding" by="builder">a step</m-step>
@@ -157,7 +174,8 @@ export default async (ctx) => {
   const root = made("the kiln's frames");
   const tid = made("every form of a page", BODY, root);
   const wid = made("a whole page", WHOLE, root);
-  const rid = made("raw html", RAW, root);
+  const rawBody = RAW.replaceAll("@ROOT@", root);
+  const rid = made("raw html", rawBody, root);
 
   const PF = "[data-surface=page-frame]";
   /** The page frames under `scope`, each drawn (its page said its height), `count` of them. */
@@ -253,7 +271,8 @@ export default async (ctx) => {
         const f = document.querySelector("[data-surface=page-frame][data-kind=page] iframe");
         const channel = f.getAttribute("src").split("#")[1];
         const before = f.getBoundingClientRect().height;
-        window.postMessage({ type: "menger:size", channel, height: 1999 }, "*");
+        window.postMessage({ type: "plexus:size", channel, height: 1999 }, "*");
+        window.postMessage({ type: "plexus:call", channel, id: "p99", method: "tickets.get", params: { id: "X-1" } }, "*");
         return new Promise((r) => setTimeout(() => r({ before, after: f.getBoundingClientRect().height }), 400));
       });
       assert(forged.after === forged.before, `a forged height is ignored: ${JSON.stringify(forged)}`);
@@ -381,6 +400,14 @@ export default async (ctx) => {
         const fr = await el.contentFrame();
         await eventually("its script ran", async () => (await fr.locator("#n").getAttribute("data-ran")) === "yes", 5_000);
         await fr.locator("#b").click();
+        // EDITOR-15, COMPS-2: the bridge reads as the reader; a write through it is refused, named; a diagram drawn inside.
+        await eventually("the bridge answered", async () => (await fr.locator("#got").textContent()) !== "…" && (await fr.locator("#wrote").textContent()) !== "…", 8_000);
+        const got = await fr.locator("#got").textContent(), wrote = await fr.locator("#wrote").textContent();
+        assert(got === "read the kiln's frames", `${route}: plexus.call("tickets.get") read the root: ${got}`);
+        assert(wrote.startsWith("refused: ") && wrote.includes("tickets.amend") && wrote.includes("uses"), `${route}: a write through the bridge is refused, named: ${wrote}`);
+        assert((await sy("tickets", "get", "--id", root))[0]?.ticket?.body !== "overwritten", `${route}: nothing was written`);
+        await eventually("the diagram drawn in the frame", async () => (await fr.locator(".m-diagram svg").count()) === 1, 10_000);
+        assert((await fr.locator("code.language-mermaid").count()) === 0, `${route}: the fence is the diagram, not its source`);
         assert((await fr.locator("#n").textContent()) === "1", `${route}: an inline handler works`);
         const look = await fr.evaluate(() => ({
           strong: document.querySelector("strong")?.textContent, link: document.querySelector("a[href='https://example.com/away']")?.textContent,
@@ -415,7 +442,7 @@ export default async (ctx) => {
           assert(page.url().includes(`#/ticket/${rid}`), `the app was not moved: ${page.url()}`);
           await tab.close();
           // An amend reloads it behind the one on screen: never no frame.
-          sy("tickets", "amend", "--id", rid, "--body", file(RAW.replace("The end.", "The end, amended.")));
+          sy("tickets", "amend", "--id", rid, "--body", file(rawBody.replace("The end.", "The end, amended.")));
           const seenShown = [];
           for (let k = 0; k < 30; k++) { seenShown.push(await page.locator(`${S} ${PF} iframe[data-buffer=shown]`).count()); await sleep(50); }
           assert(seenShown.every((c) => c === 1), `a frame on screen through the amend: ${seenShown}`);
@@ -423,7 +450,7 @@ export default async (ctx) => {
             const f = await (await page.locator(`${S} ${PF} iframe[data-buffer=shown]`).elementHandle()).contentFrame();
             return (await f.locator("body").textContent()).includes("The end, amended.");
           }, 8_000);
-          sy("tickets", "amend", "--id", rid, "--body", file(RAW));
+          sy("tickets", "amend", "--id", rid, "--body", file(rawBody));
         }
       } finally {
         await context.close();
