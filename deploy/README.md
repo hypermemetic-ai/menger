@@ -78,7 +78,8 @@ deploy/pipeline build [REV] [--branch B] [--no-gate]   # a commit → a release 
                                                        # named in the release; --no-gate: the suite comes after
 deploy/pipeline image [RELEASE]                        # RUN-10: the release as an image (IMAGE_STORE=ghcr pushes it to GHCR)
 deploy/pipeline remote test --image IMG                # app-test.menger.sh through infra, the bundle pushed, then the smoke
-deploy/pipeline suite RELEASE                          # DEPLOY-52: the full suite at the release's commit; marks the release
+deploy/pipeline suite RELEASE                          # DEPLOY-52: the full suite at the release's commit, plexus-bench's counts
+                                                       # and bench beside it (PERF-6, PERF.115-29); marks the release
 deploy/pipeline suite --status RELEASE                 # suite: passed | failed | running | none
 deploy/pipeline remote prod                            # what test runs → app.menger.sh, only once its suite passed
 deploy/pipeline smoke test|prod                        # the smoke against app-test / app.menger.sh, on its own
@@ -111,8 +112,13 @@ the owner's.
 3. **Release.** A tree with no `frontend/` (v2) has no browser toolchain on
    this machine, and needs none — every step runs here, none in a container
    (FRAME-8):
-   - `cargo build --release -p menger` (the workspace's `menger`, read from
-     `cargo metadata`); a tree with no `ui/src` is refused;
+   - `cargo build --profile perf -p menger` (the workspace's `menger`, read from
+     `cargo metadata`) — a release is the perf build (RUN-39: `[profile.perf]`,
+     PERF-6's "the one build that perf runs and releases use", so the binary
+     test and prod run is the one the suite's bench holds to its goldens);
+     `RELEASE` says `profile: perf`. A tree older than PERF-6 defines no perf
+     profile and builds the release profile, said `profile: release`. A tree
+     with no `ui/src` is refused;
    - `plexus-ui` — the framework's tool, `cargo build --release
      --manifest-path ../plexus-ui/Cargo.toml -p plexus-ui-cli` from the
      framework's checkout beside the build checkout (`MENGER_PLEXUS_UI`
@@ -166,7 +172,7 @@ the owner's.
    dist/ui.tar                 the UI's bundle, pushed after the deploy
    dist/studio.tar             the framework's studio, pushed --no-live after it
    dist/ui-compiler.wasm       the compiler module, --ui-compiler
-   RELEASE                     release, commit, branch, subject, built, rustc, steps, gate
+   RELEASE                     release, commit, branch, subject, built, rustc, profile, steps, gate
    SUITE, TESTED               marks, once its suite ran and once test passed it
    ```
 
@@ -194,7 +200,25 @@ the owner's.
    workspace reads — an example's `path`, another member's manifest; the
    suite does: `20261029T173657Z-454cd56`'s went red before a test ran on an
    example path V2-9 had removed (V2-12; `tickets-api/tests/leftovers.rs`
-   now holds every manifest `path` to a file in the tree).
+   now holds every manifest `path` to a file in the tree). **Beside it,
+   plexus-bench** (PERF-6, PERF.115-29; V2-44 brought both to v2). First its
+   `scripts/ci-check.sh`: every scenario's instructions and allocations
+   against `goldens/ci`, under callgrind in the `plexus-bench-ci` image. They
+   read no clock, so a count past its line is not noise, and it marks the
+   release `failed … — counts red; log …` and logs `suite test <release>
+   failed counts`. A check that could not run is red too: a release passes on
+   a count read. Then its `scripts/gate.sh` runs every PERF scenario under
+   the perf profile and `plexus-bench check` against the goldens (a red on a
+   quiet first pass runs again, three times at most, until a quiet read
+   answers it; a red taken on a busy machine is said, not failed), with
+   `schema.*` measuring the release's own `bin/menger` — the perf build, as
+   the goldens were taken from it (RUN-39). A red bench marks the release
+   `failed … — bench red; log …` and logs `suite test <release> failed
+   bench`, as a red test does; green, the `SUITE` line ends `; bench
+   <check's verdict>; counts <check --ci's verdict>`. `MENGER_BENCH_DIR`
+   names the checkout (default `../plexus-bench`; `none` skips both and the
+   line says `bench not run`), `MENGER_BENCH_TARGET` their cargo target
+   (`~/.cache/cargo-target/plexus-bench`).
 6. **Promote** (`remote prod`). infra's `promote.yml` ships the image test
    runs — the release `deployments.log` last shows test running `ok` — and
    only when that release's suite `passed`: `failed`, `running` or no result

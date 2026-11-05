@@ -372,7 +372,7 @@ run_gate() {
 # build_legacy / build_v2 — the release's bytes from $BUILD into $stage (id and stage set by
 # them: id=<UTC>-<short>, stage=$RELEASES/$id.tmp); the caller writes RELEASE.
 build_legacy() {
-  step "release build"
+  step "release build (the perf profile, RUN-39)"
   lr=$(log_path build-release); say "log: $lr"
   cargo_release "$lr"
   lr=$(log_path build-trunk); say "log: $lr"
@@ -387,7 +387,7 @@ build_legacy() {
   id=$(date -u +%Y%m%dT%H%M%SZ)-$short
   stage=$RELEASES/$id.tmp
   mkdir -p "$stage/bin"
-  for f in $WS_PKGS; do cp "$CARGO_TARGET_DIR/release/$f" "$stage/bin/"; done
+  for f in $WS_PKGS; do cp "$REL_OUT/$f" "$stage/bin/"; done
   cp "$REPO/deploy/launch/run-menger" "$stage/bin/"
   chmod 0755 "$stage/bin/"*
   cp -r "$BUILD/frontend/dist" "$stage/app"
@@ -402,12 +402,20 @@ release_packages() {
   grep -qx menger <<<"$names" && WS_PKGS="menger"
   [[ -n $WS_PKGS ]]
 }
-cargo_release() { # LOG — cargo build --release of WS_PKGS; dies red, naming the log
+# RUN-39 (PERF-6; PERF-1's `profiles`): a release is the perf build — `[profile.perf]`, "the one
+# build that perf runs and releases use" — so the binary test and prod run is the one the suite's
+# bench holds to its goldens, which were taken from that build. A tree older than PERF-6 defines
+# no perf profile, and builds --release as it did; RELEASE's `profile:` says which.
+REL_PROFILE="" REL_OUT=""
+cargo_release() { # LOG — cargo build --profile perf (or --release) of WS_PKGS → REL_OUT; dies red, naming the log
   local lr=$1 p args=()
   release_packages "$lr" || { red_run; die "release build failed — $lr (cargo metadata names no menger among the workspace's packages)"; }
   for p in $WS_PKGS; do args+=(-p "$p"); done
-  (cd "$BUILD" && cargo build --release "${args[@]}" >> "$lr" 2>&1) || { red_run; die "release build failed — $lr"; }
-  for p in $WS_PKGS; do [[ -s $CARGO_TARGET_DIR/release/$p ]] || die "release build: $CARGO_TARGET_DIR/release/$p is missing or empty"; done
+  if grep -qx '\[profile\.perf\]' "$BUILD/Cargo.toml" 2>/dev/null; then REL_PROFILE=perf; else REL_PROFILE=release; fi
+  REL_OUT=$CARGO_TARGET_DIR/$REL_PROFILE
+  say "release build: the $REL_PROFILE profile"
+  (cd "$BUILD" && cargo build --profile "$REL_PROFILE" "${args[@]}" >> "$lr" 2>&1) || { red_run; die "release build failed — $lr"; }
+  for p in $WS_PKGS; do [[ -s $REL_OUT/$p ]] || die "release build: $REL_OUT/$p is missing or empty"; done
 }
 # ── UI-12: the contract a release's bundle is built against ──────────────────
 # The bundle names the services it was built against (manifest.contract), and ui.push answers
@@ -529,7 +537,7 @@ V2_STEPS=""
 build_v2() { # V2-7, FRAME-8: every step on this machine — the release, the tool, the engine, the contract, the bundle, the compiler module
   local lr f
   V2_STEPS="cargo build"
-  step "release build"
+  step "release build (the perf profile, RUN-39)"
   lr=$(log_path build-release); say "log: $lr"
   cargo_release "$lr"
   [[ -d $BUILD/ui/src ]] || die "ui-build: no ui/src at $short — a v2 tree's UI is its components' sources"
@@ -564,7 +572,7 @@ build_v2() { # V2-7, FRAME-8: every step on this machine — the release, the to
   lr=$(log_path build-contract); say "log: $lr"
   local asks=(contract "$app_uses")
   [[ -n $studio_uses ]] && asks+=("studio contract" "$studio_uses")
-  contract_read "$lr" "$CARGO_TARGET_DIR/release/menger" "${asks[@]}"
+  contract_read "$lr" "$REL_OUT/menger" "${asks[@]}"
   local studio_contract=${CONTRACTS[1]:-}
   say "contract: $CONTRACT over $(uses_services "$app_uses") (ui.contract for the bundle's uses: $app_uses)"
   if [[ $studio == 1 && -n $studio_contract ]]; then say "studio contract: $studio_contract over $(uses_services "$studio_uses") (ui.contract for the studio's uses: $studio_uses)"
@@ -596,7 +604,7 @@ build_v2() { # V2-7, FRAME-8: every step on this machine — the release, the to
   id=$(date -u +%Y%m%dT%H%M%SZ)-$short
   stage=$RELEASES/$id.tmp
   mkdir -p "$stage/bin" "$stage/dist"
-  for f in $WS_PKGS; do cp "$CARGO_TARGET_DIR/release/$f" "$stage/bin/"; done
+  for f in $WS_PKGS; do cp "$REL_OUT/$f" "$stage/bin/"; done
   cp "$UI_TOOL" "$stage/bin/plexus-ui"
   cp "$REPO/deploy/launch/run-menger" "$stage/bin/"
   chmod 0755 "$stage/bin/"*
@@ -666,6 +674,7 @@ cmd_build() {
     echo "subject:   $(git -C "$REPO" log -1 --format=%s "$sha")"
     echo "built:     $(date -u +%FT%TZ)"
     echo "rustc:     $(rustc --version)"
+    if [[ $REL_PROFILE == perf ]]; then echo "profile:   perf (RUN-39: the build the bench measures)"; else echo "profile:   $REL_PROFILE"; fi
     echo "steps:     $steps"
     echo "gate:      $gate"
   } > "$stage/RELEASE"
@@ -1237,7 +1246,7 @@ cmd_smoke() {
 
 # ── the suite, after the deploy (DEPLOY-52) ─────────────────────────────────
 # `suite RELEASE`: cargo test --workspace and the frontend's tests at the
-# release's commit — its own tree, in ../menger-suite (MENGER_SUITE_CHECKOUT),
+# release's commit, then plexus-bench's two checks (PERF-6, PERF.115-29, run_bench) — its own tree, in ../menger-suite (MENGER_SUITE_CHECKOUT),
 # never against a deployment — one suite at a time (a lock). The release's
 # SUITE says `running`, then `passed` or `failed` with the counts and the log;
 # a line in deployments.log (`suite test RELEASE passed|failed`, no deployment).
@@ -1259,6 +1268,45 @@ suite_of() { # REL → passed | failed | running | none
 suite_line() { # REL → what its SUITE says, one line
   local r=$RELEASES/$1
   if [[ -f $r/SUITE ]]; then head -n 1 "$r/SUITE"; else sed -n 's/^gate: */gate at build: /p' "$r/RELEASE" 2>/dev/null | head -n 1; fi
+}
+# PERF.115-29: plexus-bench's counts beside the suite — every scenario's
+# instructions and allocations held to goldens/ci (scripts/ci-check.sh, callgrind
+# in the plexus-bench-ci image). They read no clock, so they run first: a count
+# past its line is not noise, and no wall-clock red can stand in front of it. A
+# check that could not run reads no count, and is red: a release passes on a count read.
+# PERF-6: then every PERF scenario under the perf profile, held to its golden
+# (plexus-bench's scripts/gate.sh: the scenarios, `plexus-bench check`, a red on a
+# quiet first pass run again, three times at most, until a quiet read answers it:
+# PLEXUS-38). A red of either
+# marks the release `suite failed` as a red test does (DEPLOY-52). schema.*
+# measure the release's own bin/menger (RUN-39: the perf build, as its goldens were taken). MENGER_BENCH_DIR names the
+# plexus-bench checkout (default: beside the repository; `none` skips it, and
+# the SUITE line says so); MENGER_BENCH_TARGET its cargo target.
+BENCH_DIR=${MENGER_BENCH_DIR:-$(dirname "$REPO")/plexus-bench}
+GATE_BENCH=""
+run_bench() { # REL SHORT
+  local rel=$1 short=$2 lb lc counts target=${MENGER_BENCH_TARGET:-$HOME/.cache/cargo-target/plexus-bench}
+  if [[ $BENCH_DIR == none ]]; then GATE_BENCH="not run (MENGER_BENCH_DIR=none)"; say "bench: $GATE_BENCH"; return 0; fi
+  if [[ ! -x $BENCH_DIR/scripts/gate.sh ]]; then GATE_BENCH="not run (no plexus-bench at $BENCH_DIR)"; say "bench: $GATE_BENCH"; return 0; fi
+  step "counts: plexus-bench — every scenario's instructions and allocations against goldens/ci"
+  lc=$(log_path counts); say "log: $lc"
+  if (cd "$BENCH_DIR" && CARGO_TARGET_DIR=$target scripts/ci-check.sh "${lc%.log}" >"$lc" 2>&1) &&
+    counts=$(sed -n 's/^check --ci: //p' "$lc" | tail -n 1) && [[ -n $counts ]]; then
+    say "counts: $counts"
+  else
+    grep -E '^RED ' "$lc" >&2 || true
+    gate_red counts "$lc" "$short"
+  fi
+  step "bench: plexus-bench — every PERF scenario, perf profile, against its golden"
+  lb=$(log_path bench); say "log: $lb"
+  if (cd "$BENCH_DIR" && PLEXUS_BENCH_MENGER=$RELEASES/$rel/bin/menger CARGO_TARGET_DIR=$target \
+      scripts/gate.sh "${lb%.log}" >"$lb" 2>&1); then
+    GATE_BENCH="$(sed -n 's/^check: //p' "$lb" | tail -n 1); counts $counts"
+    say "bench: $GATE_BENCH"
+  else
+    grep -E '^(RED|MISS) ' "$lb" >&2 || true
+    gate_red bench "$lb" "$short"
+  fi
 }
 SUITE_REL=""
 suite_red() { # LABEL LOGFILE — gate_red's hook: the release marked failed, the log line written
@@ -1293,9 +1341,10 @@ cmd_suite() {
   git -C "$REPO" cat-file -e "$sha^{commit}" 2>/dev/null || die "$rel's commit $short is not in $REPO"
   checkout "$SUITE_CHECKOUT" "$sha"
   run_gate "$SUITE_CHECKOUT" "$short"
-  mark_release "$rel" SUITE "passed $(date -u +%FT%TZ) — workspace $GATE_WS${GATE_FE:+; frontend $GATE_FE}"
+  run_bench "$rel" "$short"
+  mark_release "$rel" SUITE "passed $(date -u +%FT%TZ) — workspace $GATE_WS${GATE_FE:+; frontend $GATE_FE}; bench $GATE_BENCH"
   record suite test "$rel" "passed"
-  say "suite $rel: passed — workspace $GATE_WS${GATE_FE:+; frontend $GATE_FE}"
+  say "suite $rel: passed — workspace $GATE_WS${GATE_FE:+; frontend $GATE_FE}; bench $GATE_BENCH"
 }
 
 # `remote-secret test|prod` (IDENTITY-45) — the WorkOS environment's API key
