@@ -5103,6 +5103,9 @@ mod tests_uid;
 mod stored;
 // COMPS-5: every ```component definition the store holds, for the backfill into plexus-ui.
 pub mod carried;
+// PERF-24: bulk writes for the scale harness — measurement only.
+#[cfg(feature = "scale")]
+pub mod scale;
 
 pub use stored::{Verdict, FORM};
 

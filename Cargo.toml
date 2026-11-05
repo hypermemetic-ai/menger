@@ -58,6 +58,17 @@ path = "src/lib.rs"
 name = "menger"
 path = "src/main.rs"
 
+# PERF-24: the scale harness — a dataset of 10³ … 10⁹ tickets written into a
+# store file, then the server started on it and measured over the wire.
+# Measurement only: `cargo build --release --features scale --bin menger-scale`.
+[[bin]]
+name = "menger-scale"
+path = "scripts/scale/menger-scale.rs"
+required-features = ["scale"]
+
+[features]
+scale = ["menger-tickets-api/scale"]
+
 [dependencies]
 # MFE-9/MFE-11: the tickets activation — vocabulary, store, the activation
 # and its generated client, from one declaration — shared with the browser
