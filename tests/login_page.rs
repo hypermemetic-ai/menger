@@ -765,7 +765,7 @@ async fn a_seeded_user_signs_in_with_its_roles() {
     let mine = call(&ws, "members.mine").await;
     let grants: Vec<(String, String, String)> = mine
         .iter()
-        .filter(|e| e["type"] == "grant")
+        .filter(|e| e["type"] == "grant" && e["grant"]["granted_by"] != "personal-org")
         .map(|e| (e["grant"]["scope"].as_str().unwrap().into(), e["grant"]["role"].as_str().unwrap().into(), e["grant"]["granted_by"].as_str().unwrap().into()))
         .collect();
     assert_eq!(
@@ -773,6 +773,12 @@ async fn a_seeded_user_signs_in_with_its_roles() {
         vec![("hypermemetic:OUGHT".into(), "editor".into(), "dev-login".into()), ("hypermemetic:PLEXUS".into(), "viewer".into(), "dev-login".into())],
         "the roster's roles, not the form's"
     );
+    // V2-41: and their own organization, made as they were accepted — kept
+    // when they sign in again (the roster's grants are reset, not it).
+    let own: Vec<_> = mine.iter().filter(|e| e["grant"]["granted_by"] == "personal-org").collect();
+    assert_eq!((own.len(), own[0]["grant"]["role"].as_str()), (1, Some("editor")), "{mine:?}");
+    let again = dev_post(&m, &[("user", "mixed"), ("next", "/app/")]).await;
+    assert_eq!(again.status(), 303, "signed in again: {}", again.text().await.unwrap());
 }
 
 #[tokio::test]

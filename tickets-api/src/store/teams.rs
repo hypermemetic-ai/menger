@@ -225,17 +225,30 @@ impl Store {
                 return Ok(m);
             }
         }
+        // V2-41: into a team that holds a grant is accepted — a person's own
+        // organization is made beside it.
+        let making = {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            let holds = !cache.members.of(&Grantee::Team(team.clone()).to_string()).is_empty();
+            let who = holds.then(|| principal.as_str().to_string());
+            personal::plan(&cache, who, personal::next_row(&cache), &[])
+        };
+        let mine = making.clone();
         let at = chrono::Utc::now().timestamp();
         let (t, p, by) = (team.clone(), principal.clone(), added_by.to_string());
         let member = TeamMember { team: team.clone(), principal: principal.clone(), added_by: added_by.clone(), at };
         self.write(
             serial,
-            move |tx| Ok(tx.execute("INSERT INTO team_members (team, principal, added_by, at) VALUES (?1, ?2, ?3, ?4)", params![t.as_str(), p.as_str(), by, at])?),
-            move |cache, _| {
+            move |tx| {
+                tx.execute("INSERT INTO team_members (team, principal, added_by, at) VALUES (?1, ?2, ?3, ?4)", params![t.as_str(), p.as_str(), by, at])?;
+                Ok(personal::keep(tx, &mine)?)
+            },
+            move |cache, made| {
                 if let Some(r) = cache.members.records.get_mut(&member.team) {
                     r.members.insert(member.principal.as_str().to_string(), (added_by, at));
                 }
                 cache.members.set_team(member.principal.as_str(), member.team.clone(), true);
+                personal::put(cache, making, made);
                 member
             },
             move |_, member, _| member,

@@ -13,8 +13,11 @@ use std::path::Path;
 const OPERATOR_KEY: &str = "key:ba720a3d0cfbbf974cf6d57fe57832ad2c2c6198375691be98e28afbe3974b8e";
 /// An agent the operator granted under login.
 const BUILDER: &str = "key:54a9677a62e4289ee5a2d0a4751a6f188abafd8b1f2b2d4019ec0768eb3b0d28";
-/// A stranger who granted themselves admin while open (ACCESS-4 C2).
-const STRANGER: &str = "nostr:0000000000000000000000000000000000000000000000000000000000000001";
+/// A stranger who granted themselves admin while open (ACCESS-4 C2). A key:
+/// this build would accept a person the test plants for (V2-41, their own
+/// organization), which a file from open mode never held — the start purges
+/// before it backfills.
+const STRANGER: &str = "key:0000000000000000000000000000000000000000000000000000000000000001";
 const ADA: &str = "key:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 fn hyper() -> OrgId {
