@@ -526,7 +526,7 @@ fits two is refused in band, naming each candidate. **Every ticket has a
 uid** (TICKETS-35, on v2 V2-42: 8 characters of Crockford's base32,
 `7k3mq2xa`, kept through every move): each of those takes it too, bare or in
 the UI's link, `#/t/<uid>/<ID>-<slug>` — which the UI makes from one helper,
-`ui/src/ticket-links.svelte` (README "A ticket's uid", "A ticket's link"). A scope roots its own
+`ui/src/ticket-links.svelte`, real Svelte (svelte/1) (README "A ticket's uid", "A ticket's link"). A scope roots its own
 shortcode (ORG-5). Every ticket is in one organization (ORG-4) and one epic
 (ORG-13; V2-25: the `epics` methods went — a read is the organization's
 whole set, and an epic is named only in an address). A grant's scope is `*`, `org:`, a shortcode, a ticket

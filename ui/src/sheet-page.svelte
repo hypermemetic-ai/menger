@@ -87,6 +87,8 @@
   import CodeLegacy from "plexus-ui:code-legacy";
   import TicketChip from "plexus-ui:ticket-chip";
   import TicketChipSv from "plexus-ui:ticket-chip-sv";
+  import TicketLinks from "plexus-ui:ticket-links";
+  import PageT from "plexus-ui:page-t";
   import TicketCommits from "plexus-ui:ticket-commits";
   import TicketCreate from "plexus-ui:ticket-create";
   import TicketEdit from "plexus-ui:ticket-edit";
@@ -181,6 +183,8 @@
       ["keys-help", KeysHelp, F, [], {}],
       ["ticket-chip-sv", TicketChipSv, ID, ["hover", "focus"], gone],
       ["ticket-chip", TicketChip, ID, ["hover", "focus"], gone],
+      // V2-42: a ticket's link, from the one helper (by name here: the sheet's id has no uid in hand).
+      ["ticket-links", TicketLinks, ID, [], {}],
     ]],
     ["the nav", [
       ["nav-tree-sv", NavTreeSv, F, ["hover", "focus", "checked"], fil, false, { checked: ["[data-nav-mode=flat]"] }],
@@ -261,6 +265,8 @@
     // STUDIO-12: the pages — each route's rhx page, placing its components by their marks (#/sheet's own, page-sheet, aside: it places this).
     ["the pages", [
       ["page-ticket", PageTicket, ID, [], { loading: { sheet: "loading" }, ...gone }, true],
+      // V2-42: a ticket by its uid (get takes the id too, so the sheet's id draws it).
+      ["page-t", PageT, (t) => ({ uid: t }), [], {}, true],
       ["page-queue", PageQueue, F, [], {}, true],
       ["page-new", PageNew, (t) => ({ parent: t }), [], {}, true],
       ["page-search", PageSearch, (t) => ({ q: t }), [], { empty: { q: "zzqqxxjj" } }, true],
