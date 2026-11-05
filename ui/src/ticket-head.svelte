@@ -14,6 +14,7 @@
 
 <script>
   import { bus, live } from "plexus-ui/host";
+  import { ticketHref, settle } from "./ticket-links.svelte";
   import Chip from "./ticket-chip-sv.svelte";
 
   let { id } = $props();
@@ -30,18 +31,24 @@
   const history = live({ snapshot: "tickets.history", params: () => ({ id }), changes: "tickets.watch", key: "transition", on: { transition: "upsert:." } });
   const t = $derived(ticket.rows.find((r) => r.title != null));
   const parent = $derived(t?.parent ?? null);
-  const siblings = live({ snapshot: "tickets.list", params: () => ({ parent, summary: true, limit: 1000, fields: ["id"] }), key: "id", when: () => parent != null });
+  const siblings = live({ snapshot: "tickets.list", params: () => ({ parent, summary: true, limit: 1000, fields: ["id", "uid", "title"] }), key: "id", when: () => parent != null });
   const sibs = $derived(parent == null ? [] : siblings.rows.map((r) => r.id).filter((x) => !x.includes(".")));
   const at = $derived(sibs.indexOf(id));
   const prev = $derived(at > 0 ? sibs[at - 1] : null);
   const next = $derived(at >= 0 && at + 1 < sibs.length ? sibs[at + 1] : null);
+  /** A sibling's row, for its link by uid (its id alone until the list has it). */
+  const sib = (x) => siblings.rows.find((r) => r.id === x) ?? { id: x };
+  // V2-42: the address bar names the ticket by its uid — an old `#/ticket/<id>`
+  // becomes `#/t/<uid>/<ID>-<slug>`, a stale tail the ticket's now — in
+  // place, no history entry and no route change.
+  $effect(() => { if (t?.uid) settle(t); });
   // The last archive transition of this ticket, else get's mark.
   const moves = $derived(history.rows.map((r) => r.transition).filter((x) => x && x.ticket === id && x.field === "archive").sort((a, z) => a.id - z.id));
   const archived = $derived(moves.length ? moves.at(-1).to === "archived" : t?.archived != null);
 
   b.keys({
-    "[": { to: () => prev && b.navigate(base + "ticket/" + prev), label: "previous sibling" },
-    "]": { to: () => next && b.navigate(base + "ticket/" + next), label: "next sibling" },
+    "[": { to: () => prev && b.navigate(ticketHref(sib(prev), base)), label: "previous sibling" },
+    "]": { to: () => next && b.navigate(ticketHref(sib(next), base)), label: "next sibling" },
   });
 
   function setStatus(ev) {
@@ -66,8 +73,8 @@
       {#if t.hidden}<span class="badge" data-badge="hidden">hidden</span>{/if}
       {#if prev || next}
         <span class="sib">
-          {#if prev}<a href={base + "ticket/" + prev} data-sib="prev">‹ {prev}</a>{/if}
-          {#if next}<a href={base + "ticket/" + next} data-sib="next">{next} ›</a>{/if}
+          {#if prev}<a href={ticketHref(sib(prev), base)} data-sib="prev">‹ {prev}</a>{/if}
+          {#if next}<a href={ticketHref(sib(next), base)} data-sib="next">{next} ›</a>{/if}
         </span>
       {/if}
     </div>

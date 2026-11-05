@@ -2842,10 +2842,11 @@ fn one_rows_frame(what: &str, frames: &[Value], trailing: Option<&str>) -> Vec<V
 }
 
 /// The keys of a build's summary row (a doc has no `placement`; the flags
-/// and hidden counts are omitted when unset).
-const SUMMARY_KEYS: [&str; 18] = [
+/// and hidden counts are omitted when unset). TICKETS-35 (V2-42): its
+/// `uid`, and `uid_of` for the parent it names.
+const SUMMARY_KEYS: [&str; 20] = [
     "address", "blocked_by", "child_count", "commits", "created_unix", "epic", "id", "kind", "labels", "parent", "placement", "seq", "severity",
-    "shortcode", "status", "title", "unlocks", "updated_unix",
+    "shortcode", "status", "title", "uid", "uid_of", "unlocks", "updated_unix",
 ];
 
 /// `n` tickets in `epic`: its scope root, then `n - 1` builds under it,
@@ -3164,4 +3165,235 @@ async fn a_second_call_on_one_socket_overlaps_the_first_s_stream() {
         .collect();
     assert_eq!(seqs.len(), 1001, "every row");
     assert!(seqs.windows(2).all(|w| w[0] < w[1]), "the rows in the order they were sent");
+}
+
+/// TICKETS-35: a client signed in as the key `seed` (not the operator) on
+/// `port` — a principal with no grant until one is given.
+async fn connect_as(port: u16, seed: &[u8; 32]) -> WsClient {
+    let url = format!("ws://127.0.0.1:{port}");
+    let mut h = jsonrpsee::ws_client::HeaderMap::new();
+    h.insert("authorization", jsonrpsee::ws_client::HeaderValue::from_str(&format!("Bearer {}", support::proof_of(seed, port))).unwrap());
+    WsClientBuilder::default().set_headers(h).build(&url).await.unwrap_or_else(|e| panic!("{url}: {e}"))
+}
+
+/// TICKETS-35: the one event a finite call answers.
+async fn one(client: &WsClient, method: &str, params: Value) -> Value {
+    let evs = collect(call(client, method, params.clone()).await).await;
+    assert_eq!(evs.len(), 1, "{method} {params}: {evs:?}");
+    evs.into_iter().next().unwrap()
+}
+
+/// TICKETS-35: a uid as the store mints one — 8 characters of Crockford's
+/// base32, lower case.
+fn is_uid(v: &Value) -> bool {
+    v.as_str().is_some_and(|u| u.len() == 8 && u.bytes().all(|b| b"0123456789abcdefghjkmnpqrstvwxyz".contains(&b)))
+}
+
+/// TICKETS-35 (TICKETS-32's case): two shortcodes named PERF in two
+/// namespaces, the original's ticket keyed `PERF-2` beside a namesake's
+/// `PERF.N-2`. A write by either's full address lands on its own (TICKETS-32:
+/// the original's was refused as ambiguous, its key read again as a name);
+/// every ticket carries a uid, and `get`, `amend` and `update` take it; the
+/// bare id answers `candidates` and `choices`, each choice with its parent;
+/// a reader of one organization sees its own choices alone, and a choice
+/// its caller may not read carries its address alone.
+#[tokio::test]
+async fn a_ticket_is_read_and_written_by_its_address_or_its_uid_in_both_namespaces_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    let made = |evs: Vec<Value>| -> Value {
+        assert_eq!(evs[0]["type"], "created", "{evs:?}");
+        evs[0]["ticket"].clone()
+    };
+    let create = |p: Value| {
+        let client = &client;
+        async move { made(collect(call(client, "tickets.create", p).await).await) }
+    };
+    create(json!({"epic": "MENGER", "title": "menger", "kind": "scope"})).await;
+    create(json!({"epic": "STORE", "title": "the store and the server", "kind": "scope", "parent": "MENGER-1"})).await;
+    let perf1 = create(json!({"epic": "PERF", "title": "Magnitude", "kind": "scope", "parent": "STORE-1"})).await;
+    let original = create(json!({"epic": "PERF", "title": "Compression on the WebSocket", "parent": "PERF-1"})).await;
+    create(json!({"epic": "PLEXUS", "title": "the platform", "kind": "scope"})).await;
+    let theirs1 = create(json!({"epic": "PERF", "title": "Self-description cached", "kind": "scope", "parent": "PLEXUS-1"})).await;
+    let namesake = create(json!({"epic": "PLEXUS/PERF", "title": "the schema answers 3.24 MB", "kind": "gap", "parent": theirs1["id"]})).await;
+    assert_eq!((original["id"].as_str(), original["address"].as_str()), (Some("PERF-2"), Some("hypermemetic:MENGER/STORE/PERF-2")));
+    assert_eq!(namesake["address"], "hypermemetic:PLEXUS/PERF-2");
+    let nid = namesake["id"].as_str().unwrap().to_string();
+    assert!(nid.starts_with("PERF.") && nid.ends_with("-2"), "the namesake's key: {nid}");
+
+    // TICKETS-32: a write by the full address lands on its own ticket — in
+    // both namespaces, and by a short form that fits one.
+    let amended = one(&client, "tickets.amend", json!({"id": "hypermemetic:MENGER/STORE/PERF-2", "body": "by its address"})).await;
+    assert_eq!((amended["type"].as_str(), amended["ticket"]["id"].as_str()), (Some("amended"), Some("PERF-2")), "{amended}");
+    let amended = one(&client, "tickets.amend", json!({"id": "hypermemetic:PLEXUS/PERF-2", "body": "by its address"})).await;
+    assert_eq!((amended["type"].as_str(), amended["ticket"]["id"].as_str()), (Some("amended"), Some(nid.as_str())), "{amended}");
+    let updated = one(&client, "tickets.update", json!({"id": "STORE/PERF-2", "severity": "High"})).await;
+    assert_eq!((updated["type"].as_str(), updated["ticket"]["severity"].as_str()), (Some("updated"), Some("High")), "{updated}");
+    let moved = one(&client, "tickets.set_status", json!({"id": "hypermemetic:MENGER/STORE/PERF-2", "status": "Ready"})).await;
+    assert_eq!((moved["type"].as_str(), moved["ticket"]["id"].as_str()), (Some("status_changed"), Some("PERF-2")), "{moved}");
+    let linked = one(&client, "tickets.commits.link", json!({"id": "hypermemetic:MENGER/STORE/PERF-2", "commits": ["77df9a0"]})).await;
+    assert_eq!(linked["type"], "commits_linked", "{linked}");
+    let labelled = one(&client, "tickets.label", json!({"id": "hypermemetic:MENGER/STORE/PERF-2", "add": ["needs-you"]})).await;
+    assert_eq!(labelled["type"], "labels_changed", "{labelled}");
+
+    // Every ticket carries a uid, minted at create; no two alike.
+    let all = rows(call(&client, "tickets.list", json!({"summary": true})).await).await;
+    let uids: std::collections::BTreeSet<String> = all.iter().map(|r| r["summary"]["uid"].as_str().unwrap_or_default().to_string()).collect();
+    assert_eq!(uids.len(), 7, "seven tickets, seven uids: {all:?}");
+    for t in [&perf1, &original, &theirs1, &namesake] {
+        assert!(is_uid(&t["uid"]), "created answers a uid: {t}");
+        assert!(uids.contains(t["uid"].as_str().unwrap()), "the uid it was born with: {t}");
+    }
+    let (ouid, nuid) = (original["uid"].as_str().unwrap(), namesake["uid"].as_str().unwrap());
+
+    // `get`, `amend` and `update` by the uid, in both namespaces.
+    for (uid, id) in [(ouid, "PERF-2"), (nuid, nid.as_str())] {
+        let got = one(&client, "tickets.get", json!({"id": uid})).await;
+        assert_eq!((got["type"].as_str(), got["ticket"]["id"].as_str(), got["ticket"]["uid"].as_str()), (Some("ticket"), Some(id), Some(uid)), "{got}");
+        let upper = one(&client, "tickets.get", json!({"id": uid.to_ascii_uppercase()})).await;
+        assert_eq!(upper["ticket"]["id"].as_str(), Some(id), "a uid reads case-blind: {upper}");
+        let amended = one(&client, "tickets.amend", json!({"id": uid, "title": format!("{id}, by its uid")})).await;
+        assert_eq!((amended["type"].as_str(), amended["ticket"]["id"].as_str()), (Some("amended"), Some(id)), "{amended}");
+        let updated = one(&client, "tickets.update", json!({"id": uid, "severity": "Low"})).await;
+        assert_eq!((updated["type"].as_str(), updated["ticket"]["id"].as_str(), updated["ticket"]["uid"].as_str()), (Some("updated"), Some(id), Some(uid)), "{updated}");
+    }
+    for (address, id) in [("hypermemetic:MENGER/STORE/PERF-2", "PERF-2"), ("hypermemetic:PLEXUS/PERF-2", nid.as_str())] {
+        let got = one(&client, "tickets.get", json!({"id": address})).await;
+        assert_eq!(got["ticket"]["id"].as_str(), Some(id), "{got}");
+    }
+
+    // The bare id fits both: `candidates` as before, and a choice each —
+    // uid, id, address, org, epic, kind, status, title and its parent.
+    let both = one(&client, "tickets.get", json!({"id": "PERF-2"})).await;
+    assert_eq!(both["type"], "ambiguous", "{both}");
+    assert_eq!(both["candidates"], json!(["hypermemetic:MENGER/STORE/PERF-2", "hypermemetic:PLEXUS/PERF-2"]), "{both}");
+    let choices = both["choices"].as_array().unwrap_or_else(|| panic!("choices: {both}"));
+    assert_eq!(choices.len(), 2, "{both}");
+    let (a, b) = (&choices[0], &choices[1]);
+    assert_eq!(
+        (a["uid"].as_str(), a["id"].as_str(), a["address"].as_str(), a["org"].as_str(), a["epic"].as_str(), a["kind"].as_str(), a["status"].as_str(), a["title"].as_str()),
+        (Some(ouid), Some("PERF-2"), Some("hypermemetic:MENGER/STORE/PERF-2"), Some("hypermemetic"), Some("genesis"), Some("build"), Some("Ready"), Some("PERF-2, by its uid")),
+        "{a}"
+    );
+    assert_eq!(
+        (a["parent"]["uid"].as_str(), a["parent"]["id"].as_str(), a["parent"]["address"].as_str(), a["parent"]["title"].as_str()),
+        (perf1["uid"].as_str(), Some("PERF-1"), Some("hypermemetic:MENGER/STORE/PERF-1"), Some("Magnitude")),
+        "{a}"
+    );
+    assert_eq!((b["uid"].as_str(), b["id"].as_str(), b["kind"].as_str()), (Some(nuid), Some(nid.as_str()), Some("gap")), "{b}");
+    assert_eq!((b["parent"]["uid"].as_str(), b["parent"]["address"].as_str()), (theirs1["uid"].as_str(), Some("hypermemetic:PLEXUS/PERF-1")), "{b}");
+    // A write by the bare id stays ambiguous, with the same choices.
+    let refused = one(&client, "tickets.amend", json!({"id": "PERF-2", "body": "which one?"})).await;
+    assert_eq!((refused["type"].as_str(), refused["choices"].as_array().map(Vec::len)), (Some("ambiguous"), Some(2)), "{refused}");
+
+    // A reader of one organization: acme holds two PERFs of its own. Its
+    // choices are acme's alone; another organization's uid is not found.
+    const CAROL: [u8; 32] = [0xc4; 32];
+    let carol_key = support::principal_of(&CAROL);
+    let acme = one(&client, "orgs.create", json!({"name": "acme", "admin": carol_key})).await;
+    assert_eq!(acme["type"], "created", "{acme}");
+    let carol = connect_as(port, &CAROL).await;
+    let made_by_carol = |evs: Vec<Value>| -> Value {
+        assert_eq!(evs[0]["type"], "created", "{evs:?}");
+        evs[0]["ticket"].clone()
+    };
+    made_by_carol(collect(call(&carol, "tickets.create", json!({"epic": "PERF", "title": "acme's perf", "kind": "scope"})).await).await);
+    made_by_carol(collect(call(&carol, "tickets.create", json!({"epic": "acme:PERF", "title": "acme's PERF-2"})).await).await);
+    let ops = made_by_carol(collect(call(&carol, "tickets.create", json!({"epic": "OPS", "title": "acme's ops", "kind": "scope"})).await).await);
+    let ops_perf = made_by_carol(collect(call(&carol, "tickets.create", json!({"epic": "PERF", "title": "ops perf", "kind": "scope", "parent": ops["id"]})).await).await);
+    made_by_carol(collect(call(&carol, "tickets.create", json!({"epic": "acme:OPS/PERF", "title": "ops PERF-2", "parent": ops_perf["id"]})).await).await);
+    let hers = one(&carol, "tickets.get", json!({"id": "PERF-2"})).await;
+    assert_eq!(hers["type"], "ambiguous", "{hers}");
+    assert_eq!(hers["candidates"], json!(["acme:PERF-2", "acme:OPS/PERF-2"]), "acme's alone: {hers}");
+    let titles: Vec<&str> = hers["choices"].as_array().unwrap().iter().map(|c| c["title"].as_str().unwrap_or_default()).collect();
+    assert_eq!(titles, ["acme's PERF-2", "ops PERF-2"], "{hers}");
+    assert!(hers["choices"].as_array().unwrap().iter().all(|c| c["org"] == "acme" && is_uid(&c["uid"]) && c["parent"]["address"].as_str().is_some_and(|p| p.starts_with("acme:"))), "{hers}");
+    assert_eq!(one(&carol, "tickets.get", json!({"id": ouid})).await["type"], "not_found", "another organization's uid");
+    // The operator, of `*`, is told all four.
+    let four = one(&client, "tickets.get", json!({"id": "PERF-2"})).await;
+    assert_eq!(four["choices"].as_array().map(Vec::len), Some(4), "{four}");
+
+    // A choice the caller may not read carries its address alone: Bob edits
+    // MENGER's tree; the bare id is the original's key, so the gate admits
+    // his write, and the store says which two it could be.
+    const BOB: [u8; 32] = [0xb0; 32];
+    let granted = one(&client, "members.grant", json!({"principal": support::principal_of(&BOB), "scope": "hypermemetic:MENGER", "role": "editor"})).await;
+    assert_eq!(granted["type"], "grant", "{granted}");
+    let bob = connect_as(port, &BOB).await;
+    let his = one(&bob, "tickets.amend", json!({"id": "PERF-2", "body": "which one?"})).await;
+    assert_eq!(his["type"], "ambiguous", "{his}");
+    assert_eq!(his["candidates"], json!(["hypermemetic:MENGER/STORE/PERF-2", "hypermemetic:PLEXUS/PERF-2"]), "{his}");
+    let seen = &his["choices"][0];
+    assert_eq!((seen["uid"].as_str(), seen["title"].as_str()), (Some(ouid), Some("PERF-2, by its uid")), "the one he reads: {his}");
+    assert_eq!(his["choices"][1], json!({"address": "hypermemetic:PLEXUS/PERF-2"}), "the one he may not read: its address alone");
+    let landed = one(&bob, "tickets.amend", json!({"id": ouid, "body": "Bob, by its uid"})).await;
+    assert_eq!(landed["type"], "amended", "{landed}");
+}
+
+/// TICKETS-35 (rows 4 and 9): a uid names its ticket wherever a ticket is
+/// named — `get` by the bare uid, by `/t/<uid>/…` and by the whole link; the
+/// filter words `under` and `ticket`; a deleted ticket's uid answers its
+/// tombstone — and a row names the uids of the tickets it names (`uid_of`).
+#[tokio::test]
+async fn a_uid_names_its_ticket_in_get_and_in_the_filters_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    let mut made = Vec::new();
+    for p in [
+        json!({"epic": "KILN", "title": "the kiln", "kind": "scope"}),
+        json!({"epic": "KILN", "title": "a firing log", "parent": "KILN-1"}),
+        json!({"epic": "KILN", "title": "the glaze", "parent": "KILN-2", "blocked_by": ["KILN-2"]}),
+        json!({"epic": "KILN", "title": "a shelf", "parent": "KILN-1", "blocked_by": ["KILN-5"]}),
+    ] {
+        let evs = collect(call(&client, "tickets.create", p).await).await;
+        assert_eq!(evs[0]["type"], "created", "{evs:?}");
+        made.push(evs[0]["ticket"].clone());
+    }
+    let uid = |i: usize| made[i]["uid"].as_str().unwrap_or_else(|| panic!("a uid: {}", made[i])).to_string();
+    let (k2, k3) = (uid(1), uid(2));
+
+    // `get` by the bare uid, by `/t/<uid>/<anything>`, by the whole link.
+    for name in [k2.clone(), format!("/t/{k2}/KILN-2-a-firing-log"), format!("https://app.menger.sh/t/{k2}/KILN-2-a-firing-log"), format!("/t/{k2}")] {
+        let got = one(&client, "tickets.get", json!({"id": name})).await;
+        assert_eq!((got["type"].as_str(), got["ticket"]["id"].as_str()), (Some("ticket"), Some("KILN-2")), "{name}: {got}");
+    }
+    assert_eq!(one(&client, "tickets.get", json!({"id": "zzzzzzzz"})).await["type"], "not_found", "a uid no ticket has");
+
+    // `uid_of`: the parent's, a blocker's, an unlock's — keyed as the row
+    // writes them; a forward reference has none.
+    let k3got = one(&client, "tickets.get", json!({"id": k3})).await["ticket"].clone();
+    assert_eq!(k3got["uid_of"], json!({"KILN-2": k2}), "parent and blocker are one: {k3got}");
+    let k2got = one(&client, "tickets.get", json!({"id": "KILN-2"})).await["ticket"].clone();
+    assert_eq!(k2got["uid_of"], json!({"KILN-1": uid(0), "KILN-3": k3}), "its parent and what it unlocks: {k2got}");
+    let k4 = one(&client, "tickets.get", json!({"id": "KILN-4"})).await["ticket"].clone();
+    assert_eq!(k4["blocked_by"], json!(["KILN-5"]), "{k4}");
+    assert_eq!(k4["uid_of"], json!({"KILN-1": uid(0)}), "a forward reference has none: {k4}");
+    let summaries = rows(call(&client, "tickets.list", json!({"summary": true, "parent": k2})).await).await;
+    assert_eq!(summaries[0]["summary"]["uid_of"], json!({"KILN-2": k2}), "a summary names them too: {summaries:?}");
+    let k1 = one(&client, "tickets.get", json!({"id": "KILN-1"})).await["ticket"].clone();
+    assert!(k1.get("uid_of").is_none(), "omitted when empty: {k1}");
+
+    // The filter words take a uid: `under` the ticket and its descendants,
+    // `ticket` the one.
+    let ids = |evs: Vec<Value>| -> Vec<String> { evs.iter().filter_map(|e| e["summary"]["id"].as_str().map(str::to_string)).collect() };
+    let under = ids(rows(call(&client, "tickets.list", json!({"summary": true, "filter": format!("under {k2}")})).await).await);
+    assert_eq!(under, ["KILN-2", "KILN-3"]);
+    let upper = ids(rows(call(&client, "tickets.list", json!({"summary": true, "filter": format!("under {}", k2.to_ascii_uppercase())})).await).await);
+    assert_eq!(upper, ["KILN-2", "KILN-3"], "case-blind");
+    let alone = ids(rows(call(&client, "tickets.list", json!({"summary": true, "filter": format!("ticket {k3}")})).await).await);
+    assert_eq!(alone, ["KILN-3"]);
+
+    // Every parameter that names a ticket takes it: a parent, a blocker.
+    let child = one(&client, "tickets.create", json!({"epic": "KILN", "title": "by uid", "parent": k2, "blocked_by": [k3]})).await;
+    assert_eq!((child["ticket"]["parent"].as_str(), child["ticket"]["blocked_by"].clone()), (Some("KILN-2"), json!(["KILN-3"])), "{child}");
+    let moved = one(&client, "tickets.set_parent", json!({"id": child["ticket"]["uid"], "parent": made[0]["uid"]})).await;
+    assert_eq!((moved["type"].as_str(), moved["ticket"]["parent"].as_str()), (Some("parent_changed"), Some("KILN-1")), "{moved}");
+
+    // A deleted ticket's uid answers its tombstone; undeleted, the same uid.
+    let gone = one(&client, "tickets.delete", json!({"ids": [child["ticket"]["uid"]], "unblock": true})).await;
+    assert_eq!(gone["type"], "deleted", "{gone}");
+    let tomb = one(&client, "tickets.get", json!({"id": child["ticket"]["uid"]})).await;
+    assert_eq!((tomb["type"].as_str(), tomb["tombstones"][0]["uid"].clone()), (Some("deleted"), child["ticket"]["uid"].clone()), "{tomb}");
+    let back = one(&client, "tickets.undelete", json!({"ids": [child["ticket"]["id"]]})).await;
+    assert_eq!(back["tickets"][0]["uid"], child["ticket"]["uid"], "{back}");
 }

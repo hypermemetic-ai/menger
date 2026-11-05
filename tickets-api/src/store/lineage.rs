@@ -203,6 +203,26 @@ impl Bound {
                 }
                 continue;
             }
+            // TICKETS-35: a uid (any case) names its ticket — and when a
+            // shortcode has those letters too, the name fits both: refused by
+            // a read, naming both; nowhere for a watch already open.
+            if let Some(key) = cache.uid_key(u).filter(|k| cache.at.contains_key(*k)) {
+                let letters = cache.shortcodes.find_shortcode(u.trim(), shortcodes::OrgReach::All);
+                match letters {
+                    shortcodes::Found::None => names.push((key.to_string(), u.clone())),
+                    _ if strict => {
+                        let mut both = vec![cache.get(key).map_or_else(|| key.to_string(), |r| r.address.clone())];
+                        match letters {
+                            shortcodes::Found::One(sc) => both.push(cache.shortcodes.address(&sc)),
+                            shortcodes::Found::Many(c) => both.extend(c),
+                            shortcodes::Found::None => {}
+                        }
+                        return Err(StoreError::Filter(format!("`under {u}` names more than one: {} — name one in full", both.join(", "))));
+                    }
+                    _ => {}
+                }
+                continue;
+            }
             let exact = u.trim().to_ascii_uppercase();
             if cache.at.contains_key(&exact) || cache.shortcodes.get(&ShortcodeId::new(&exact)).is_some() {
                 names.push((exact, u.clone()));

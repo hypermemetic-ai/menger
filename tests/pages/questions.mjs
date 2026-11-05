@@ -18,7 +18,7 @@ const BODY = `<m-decision id="cone"><m-question>Which cone?</m-question><m-optio
 `;
 
 export default async (ctx) => {
-  const { test, assert, eventually, openPage, sy, fs, path, session } = ctx;
+  const { test, assert, eventually, openPage, sy, fs, path, session, ticketAt } = ctx;
   const body = path.join(path.dirname(session), "questions-body.md");
   fs.writeFileSync(body, BODY);
   const created = (out, what) => {
@@ -153,7 +153,7 @@ export default async (ctx) => {
       await page.keyboard.press("k");
       await eventually("on the snoozed row", async () => (await selected()) === a);
       await page.keyboard.press("Enter");
-      await eventually("enter: its page", () => page.evaluate((id) => location.hash === `#/ticket/${id}`, a));
+      await eventually("enter: its page", async () => ticketAt(await page.evaluate(() => location.hash), a));
     } finally {
       await context.close();
     }

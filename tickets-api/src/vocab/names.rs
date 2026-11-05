@@ -40,7 +40,12 @@ fn bounded<'a>(text: &'a str, what: &str) -> Result<&'a str, String> {
 
 fn ticket_ref(text: &str) -> Result<String, String> {
     let t = bounded(text, "a ticket's name")?;
-    let shape = "SC-N, ROOT/SC-N or org:ROOT/…/SC-N — or a path address, SHORTCODE/_MENGER/…";
+    let shape = "SC-N, ROOT/SC-N or org:ROOT/…/SC-N — or a path address, SHORTCODE/_MENGER/… — or a uid, 7k3mq2xa, bare or in a link";
+    // TICKETS-35: a uid — bare, or the app's path or link to it — names its
+    // ticket; kept as the uid alone.
+    if let Some(uid) = super::uid_named(t) {
+        return Ok(uid.into_string());
+    }
     match Address::parse(t) {
         Ok(a) if a.names_ticket() => Ok(a.to_string()),
         Ok(_) => Err(not_a(t, "a ticket (it names a shortcode)", shape)),
@@ -52,17 +57,28 @@ text_type!(
     /// A ticket as a call names it (ORG-3): its key (`MNG-1`, a namesake's
     /// `THEME.62-3`), any short form of its address (`MENGER/THEME-3`,
     /// `hypermemetic:THEME-3`) or a path address (`PLEXUS/_MENGER/board`),
-    /// its codes folded to upper case — `mng-1` is `MNG-1`. The store
-    /// resolves it to the one ticket it names in the caller's reach.
+    /// its codes folded to upper case — `mng-1` is `MNG-1`. TICKETS-35: or
+    /// its uid (`7k3mq2xa`, any case), bare or in the app's link to it
+    /// (`/t/7k3mq2xa/…`, `https://app.menger.sh/t/7k3mq2xa/…`), kept as the
+    /// uid alone. The store resolves it to the one ticket it names in the
+    /// caller's reach.
     TicketRef,
     ticket_ref
 );
 
 impl TicketRef {
+    /// TICKETS-35: the uid it names its ticket by, when it is one.
+    pub fn uid(&self) -> Option<super::Uid> {
+        self.0.parse().ok()
+    }
+
     /// The address it is written as — `None` for a namesake's minted key,
-    /// which is no address but a key.
+    /// which is no address but a key, and (TICKETS-35) for a uid.
     pub fn address(&self) -> Option<Address> {
-        Address::parse(&self.0).ok()
+        match self.uid() {
+            Some(_) => None,
+            None => Address::parse(&self.0).ok(),
+        }
     }
 
     /// Whether it names a ticket by its path (`SHORTCODE/_MENGER/…`).

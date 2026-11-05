@@ -97,7 +97,7 @@ impl SubtasksActivation {
         let limit = Some(crate::limits::page(limit, crate::limits::LIST_PAGE_DEFAULT, crate::limits::LIST_PAGE_MAX));
         let events: Vec<TicketsEvent> = match user.read_filter() {
             Err(message) => vec![TicketsEvent::Error { message }],
-            Ok(_) => page_events(self.store.page(&user, PageQuery { epic: None, status: None, parent: Some(parent.as_str()), after: after.as_deref(), limit }), None).collect(),
+            Ok(_) => page_events(&self.store, self.store.page(&user, PageQuery { epic: None, status: None, parent: Some(parent.as_str()), after: after.as_deref(), limit }), None).collect(),
         };
         futures::stream::iter(events)
     }

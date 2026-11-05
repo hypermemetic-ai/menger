@@ -122,7 +122,7 @@ pub(super) fn cells_stream(
         match written {
             Ok(change) => yield change_event(change),
             Err(StoreError::NotFound(_)) => yield TicketsEvent::NotFound { id: Asked::stored(id.as_str()) },
-            Err(e) => yield veiled(&caller, e),
+            Err(e) => yield veiled(&store, &caller, e),
         }
     }
 }

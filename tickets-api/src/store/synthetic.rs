@@ -342,6 +342,10 @@ pub(super) fn generate(spec: SeedSpec, existing_max: &HashMap<String, u32>, shap
         members[e].push(i);
         index.insert(id.clone(), i);
         out.push(Ticket {
+            // TICKETS-35: given its uid as the seed lands ([`super::seed`]),
+            // so the generator stays a function of its seed value.
+            uid: Default::default(),
+            uid_of: Default::default(),
             labels: Vec::new(),
             id: crate::address::TicketId::new(id),
             // ORG-3: a seed's codes are shortcodes of their own, each its

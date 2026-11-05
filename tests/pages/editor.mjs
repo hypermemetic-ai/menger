@@ -402,7 +402,8 @@ graph TD
       await caretAt(page, "a new page".length);
       await page.keyboard.type(" more");
       await screen.locator(`[data-field=documents] [data-doc=${first}]`).first().click();
-      await eventually("the ticket again, at #/edit", async () => (await hash(page)) === `#/edit/${first}`, 5_000);
+      // V2-42: by its uid, `#/t/<uid>/<ID>-<slug>/edit` (the recent row carries the uid), else by its id.
+      await eventually("the ticket again, in the editor", async () => { const h = await hash(page); return h === `#/edit/${first}` || new RegExp(`^#/t/[0-9a-z]{8}/${first}(-[a-z0-9-]*)?/edit$`).test(h); }, 5_000);
       await eventually("the doc kept what was typed", async () => docOf(made).body === "a new page more", 5_000);
       assert(get(first).body === "start\n", "and the ticket is untouched");
       // The search finds docs by title.

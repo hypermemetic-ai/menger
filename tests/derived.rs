@@ -754,3 +754,124 @@ async fn the_derived_state_is_rebuilt_in_the_new_form_once() {
     s.kill9();
     assert_eq!(tables(&db), kept);
 }
+
+/// TICKETS-35, acceptance 3, through the binary: `tests/fixtures/pre-uid.db`
+/// was written by main's binary at e9ab8c6 through its own API — stored form
+/// 15, no uid column: two shortcodes named PERF in two namespaces (MENGER's
+/// STORE's and PLEXUS's, the original's ticket keyed `PERF-2` beside the
+/// namesake's), a blocker between two, and a deleted ticket (a tombstone).
+/// Before any open it verifies, with no uids yet; the first open mints one
+/// for each of its 9 tickets and its tombstone and says how many; the file
+/// then verifies with every uid; the second open mints none; and a uid
+/// blanked by hand, then one doubled, is each a difference (exit 1).
+#[tokio::test]
+async fn a_file_from_before_uids_gains_one_for_every_ticket_and_tombstone_once() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let db = dir.path().join("pre-uid.db");
+    std::fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pre-uid.db"), &db).unwrap();
+    {
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let cols: Vec<String> = conn.prepare("PRAGMA table_info(tickets)").unwrap().query_map([], |r| r.get(1)).unwrap().collect::<Result<_, _>>().unwrap();
+        assert!(!cols.contains(&"uid".to_string()), "the fixture predates TICKETS-35");
+        let form: i64 = conn.query_row("SELECT form FROM derived_state", [], |r| r.get(0)).unwrap();
+        assert_eq!(form, 15, "and is in form 15");
+    }
+    // V2-42: v2 reads form 17, so before its first open the file is a form
+    // behind — said, not a uid difference; the open builds it again.
+    let (code, out, err) = verify(&db);
+    assert_eq!(code, Some(1), "{out}\n{err}");
+    assert!(format!("{out}{err}").contains("stored in form 15"), "{out}\n{err}");
+
+    let s = spawn_server(&db, dir.path(), "uid-first").await;
+    let c = connect(s.port).await;
+    let original = one(&c, "tickets.get", json!({"id": "hypermemetic:MENGER/STORE/PERF-2"})).await.unwrap();
+    let uid = original["ticket"]["uid"].as_str().unwrap_or_else(|| panic!("a uid: {original}")).to_string();
+    assert_eq!(one(&c, "tickets.get", json!({"id": uid})).await.unwrap()["ticket"]["id"], "PERF-2");
+    let ambiguous = one(&c, "tickets.get", json!({"id": "PERF-2"})).await.unwrap();
+    assert_eq!(ambiguous["choices"].as_array().map(Vec::len), Some(2), "{ambiguous}");
+    let amended = one(&c, "tickets.amend", json!({"id": "hypermemetic:MENGER/STORE/PERF-2", "body": "landed"})).await.unwrap();
+    assert_eq!(amended["type"], "amended", "TICKETS-32's write, on the old file: {amended}");
+    let log = s.log();
+    assert!(log.contains("TICKETS-35: minted 10 uid(s) — 9 ticket(s) and 1 tombstone(s), the file's first"), "{log}");
+    drop(c);
+    s.kill9();
+    let (code, out, err) = verify(&db);
+    assert_eq!(code, Some(0), "{out}\n{err}");
+    assert!(out.contains("10 uid(s), one for every ticket and every tombstone"), "{out}");
+
+    let s = spawn_server(&db, dir.path(), "uid-second").await;
+    let c = connect(s.port).await;
+    let again = one(&c, "tickets.get", json!({"id": "hypermemetic:MENGER/STORE/PERF-2"})).await.unwrap();
+    assert_eq!(again["ticket"]["uid"].as_str(), Some(uid.as_str()), "the uid it was given, kept");
+    assert!(!s.log().contains("TICKETS-35: minted"), "the second open mints none:\n{}", s.log());
+    drop(c);
+    s.kill9();
+
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    conn.execute("UPDATE tickets SET uid = NULL WHERE id = 'PERF-3'", []).unwrap();
+    let (code, out, _) = verify(&db);
+    assert_eq!(code, Some(1), "{out}");
+    assert!(out.contains("uid of ticket PERF-3: none (the next open mints one)"), "{out}");
+    conn.execute_batch(
+        "DROP INDEX tickets_uid;
+         UPDATE tickets SET uid = (SELECT uid FROM tickets WHERE id = 'PERF-2') WHERE id = 'PERF-3';",
+    )
+    .unwrap();
+    let (code, out, _) = verify(&db);
+    assert_eq!(code, Some(1), "{out}");
+    assert!(out.contains(&format!("uid {uid}: held by ticket PERF-2 and ticket PERF-3")), "{out}");
+}
+
+/// TICKETS-35: the open's minting is one transaction — a SIGKILL while it
+/// runs leaves the file as it was (no uid column, none minted) or, past its
+/// commit, every row with one: never some. A 40,000-ticket file seeded by
+/// this binary, its uids taken away by hand as a file from before them, is
+/// killed as soon as the open says it is minting; whatever the kill caught,
+/// the next open leaves every ticket its own uid and the file verifies.
+#[tokio::test]
+async fn a_sigkill_while_the_open_mints_leaves_none_or_all() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let db = dir.path().join("big.db");
+    let s = spawn_with(&db, dir.path(), "seed", &["--seed-synthetic", "40000", "--seed-value", "35"]).await;
+    let c = connect(s.port).await;
+    assert_eq!(one(&c, "tickets.health", json!({})).await.unwrap()["ticket_count"], 40_000);
+    drop(c);
+    s.kill9();
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute_batch(
+            "DROP INDEX tickets_uid; DROP INDEX tombstones_uid;
+             ALTER TABLE tickets DROP COLUMN uid; ALTER TABLE tombstones DROP COLUMN uid;",
+        )
+        .unwrap();
+
+    let s = spawn_server(&db, dir.path(), "minting").await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while !s.log().contains("TICKETS-35: minting") {
+        assert!(std::time::Instant::now() < deadline, "the open never said it was minting:\n{}", s.log());
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    s.kill9();
+    let (has, without) = {
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        let cols: Vec<String> = conn.prepare("PRAGMA table_info(tickets)").unwrap().query_map([], |r| r.get(1)).unwrap().collect::<Result<_, _>>().unwrap();
+        match cols.contains(&"uid".to_string()) {
+            false => (false, 40_000),
+            true => (true, conn.query_row("SELECT count(*) FROM tickets WHERE uid IS NULL", [], |r| r.get::<_, i64>(0)).unwrap()),
+        }
+    };
+    assert!(!has || without == 0, "a kill mid-mint left {without} ticket(s) without a uid beside the others");
+    eprintln!("TICKETS-35: the kill caught the minting {}", if has { "after its commit" } else { "before its commit: nothing kept" });
+
+    let s = spawn_server(&db, dir.path(), "after").await;
+    let c = connect(s.port).await;
+    one(&c, "tickets.health", json!({})).await.unwrap();
+    drop(c);
+    s.kill9();
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let (n, distinct): (i64, i64) = conn.query_row("SELECT count(uid), count(DISTINCT uid) FROM tickets", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    assert_eq!((n, distinct), (40_000, 40_000), "every ticket its own uid");
+    drop(conn);
+    let (code, out, err) = verify(&db);
+    assert_eq!(code, Some(0), "{out}\n{err}");
+}

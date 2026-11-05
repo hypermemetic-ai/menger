@@ -11,6 +11,7 @@
 
 <script>
   import { live } from "plexus-ui/host";
+  import { ticketHref } from "./ticket-links.svelte";
 
   let { id, side = "blocker", live: watching = true, sheet = null } = $props();
   const held = live({ snapshot: "tickets.get", params: () => ({ id }), changes: "tickets.watch", key: "id", when: () => watching,
@@ -24,7 +25,7 @@
 
 <span class="wb-one" data-surface="work-blocker">
   {#each open as r (r.id)}
-    <a class="chip" data-id={r.id} data-side={side} data-live={watching ? "1" : "0"} data-status={r.status} href={"#/ticket/" + r.id} title={`${r.id} ${r.title} · ${r.status}`}>
+    <a class="chip" data-id={r.id} data-side={side} data-live={watching ? "1" : "0"} data-status={r.status} href={ticketHref(r)} title={`${r.id} ${r.title} · ${r.status}`}>
       <i class="kmark" data-kind={r.kind} aria-hidden="true"></i>
       <span class="chip-code">{r.id}</span>
       <span class="chip-title" data-field="title">{r.title}</span>
