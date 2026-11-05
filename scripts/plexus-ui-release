@@ -150,7 +150,12 @@ s, n = re.subn(r'^(plexus-ui-(?:service|compiler)\s*=\s*)"[^"]*"', rf'\g<1>"{v}"
 if n != 2: sys.exit(f"{p}: {n} line(s) take plexus-ui-service / plexus-ui-compiler by version, not 2")
 open(p, 'w').write(s)
 PY
-(cd "$menger" && cargo update --quiet -p plexus-ui-service -p plexus-ui-compiler) || die "cargo update in $menger failed"
+# the lock re-resolved for the new requirement (`cargo update -p` cannot name a package the lock
+# held by path), then held to it: both at VERSION, from crates.io
+(cd "$menger" && cargo fetch --quiet) || die "cargo fetch in $menger failed — the bump is left uncommitted there"
+for c in plexus-ui-service plexus-ui-compiler; do
+  grep -A2 -x "name = \"$c\"" "$menger/Cargo.lock" | grep -qx "version = \"$ver\"" || die "$menger/Cargo.lock does not take $c $ver"
+done
 if [[ $check == 1 ]]; then
   say "cargo check --workspace --all-targets in $menger"
   (cd "$menger" && cargo check --quiet --workspace --all-targets >&2) || die "menger does not build on plexus-ui $ver — the bump is left uncommitted in $menger"
