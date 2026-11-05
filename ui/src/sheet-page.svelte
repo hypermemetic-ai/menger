@@ -74,7 +74,9 @@
   import TicketView from "plexus-ui:ticket-view";
   import MermaidDiagram from "plexus-ui:mermaid-diagram";
   import CodeCard from "plexus-ui:code-card";
-  import PageFrame from "plexus-ui:page-frame";
+  import MMockup from "plexus-ui:m-mockup";
+  import MLive from "plexus-ui:m-live";
+  import MPage from "plexus-ui:m-page";
   import TagComponents from "plexus-ui:tag-components";
   import ComponentDef from "plexus-ui:component-def";
   import CodePaint from "plexus-ui:code-paint";
@@ -214,8 +216,12 @@
       ["mermaid-diagram", MermaidDiagram, (t) => ({ source: "flowchart LR\n  A[a click] --> B[the caret]" }), [], { refused: { source: "flowchart TD\n  A[open --> \n" } }],
       // EDITOR-9: code — the card every fence draws as, its painter, and a painter per language.
       ["code-card", CodeCard, (t) => ({ code: "fn main() {\n    println!(\"{}\", 42);\n}", info: "rust", path: "src/main.rs", why: "the entry" }), ["hover", "focus"], {}],
-      // EDITOR-14: a page in a body, framed — two widths, so the width switch shows.
-      ["page-frame", PageFrame, (t) => ({ source: "<m-mockup label=\"a page\" widths=\"390,1440\"><!doctype html><title>a page</title><p>a page in a frame</p></m-mockup>" }), [], {}],
+      // EDITOR-14, COMPS-3: a page in a body, framed — two widths, so the width switch shows.
+      ["m-mockup", MMockup, (t) => ({ source: "<m-mockup label=\"a page\" widths=\"390,1440\"><!doctype html><title>a page</title><p>a page in a frame</p></m-mockup>" }), [], {}],
+      // APP-110, COMPS-3: the test app at a route — here with no --live-origin, so it says so.
+      ["m-live", MLive, (t) => ({ source: "<m-live route=\"#/\" label=\"the board on test\"></m-live>" }), [], {}],
+      // EDITOR-14, COMPS-3: a body of raw HTML, framed whole — its markdown and its HTML in one frame.
+      ["m-page", MPage, (t) => ({ source: "## A raw body\n\n<div class=\"note\" style=\"padding:8px;border:1px solid\">raw HTML, framed</div>\n\nAnd **markdown** around it." }), [], {}],
       // COMPS-4: a tag's table (no markup of its own), and a ```component definition's line under its block.
       ["tag-components", TagComponents, (t) => ({}), [], {}],
       ["component-def", ComponentDef, (t) => ({ name: "x-hello", source: "<p class=\"x-hello\">hello</p>\n" }), [], { html: { name: "x-card", source: "<div>a card</div>\n", html: true } }],
