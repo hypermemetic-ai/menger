@@ -2,7 +2,8 @@
      (saving · saved, where: the live bundle, or the saver's own namespace, and the version · not saved,
      the refusal and its line), else what the store holds for its name (tag-components' table). Mounted
      by ticket-view under each ```component fence's code card, so the editor says it too.
-     Marks: `[data-surface=component-def]` (`data-name`, `data-state=saving|authored|refused|unsaved|unknown`),
+     COMPS-5: v1's custom element (`v1`, plexus-ui's element/1) is said as such.
+     Marks: `[data-surface=component-def]` (`data-name`, `data-v1`, `data-state=saving|authored|refused|unsaved|unknown`),
      `[data-field=line]`, `[data-refused]`. -->
 <script module>
   export const uses = [];
@@ -11,7 +12,7 @@
 <script>
   import { onDestroy } from "svelte";
   import { listen, registry, want } from "./tag-components.svelte";
-  let { name, source, html = false } = $props();
+  let { name, source, html = false, v1 = false } = $props();
 
   let tick = $state(0);
   onDestroy(listen(() => tick++));
@@ -34,8 +35,8 @@
   });
 </script>
 
-<div class="def" data-surface="component-def" data-name={name} data-state={said.state} data-html={html ? "" : undefined}>
-  <span class="tag">&lt;{name}&gt;{html ? " · html, framed" : ""}</span>
+<div class="def" data-surface="component-def" data-name={name} data-state={said.state} data-html={html ? "" : undefined} data-v1={v1 ? "" : undefined}>
+  <span class="tag">&lt;{name}&gt;{v1 ? " · v1's element, framed" : html ? " · html, framed" : ""}</span>
   {#if said.text}<span class="line" data-field="line" data-refused={said.state === "refused" ? "" : undefined}>{said.text}</span>{/if}
 </div>
 

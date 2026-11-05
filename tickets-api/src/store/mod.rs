@@ -5101,6 +5101,8 @@ mod tests_uid;
 /// reads from them, a first open builds into them, and `--verify-derived`
 /// compares with a scan.
 mod stored;
+// COMPS-5: every ```component definition the store holds, for the backfill into plexus-ui.
+pub mod carried;
 
 pub use stored::{Verdict, FORM};
 

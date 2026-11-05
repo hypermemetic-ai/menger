@@ -297,7 +297,7 @@
         placed.push({ at, app: mount(CodeCard, { target: at, props }) });
       }
       // COMPS-4: each ```component fence's save, said under its card; each tag drawn by its component.
-      placed.push(...defLines(node, text, (at, d) => mount(DefLine, { target: at, props: { name: d.name, source: d.source, html: d.html } })));
+      placed.push(...defLines(node, text, (at, d) => mount(DefLine, { target: at, props: { name: d.name, source: d.source, html: d.html, v1: d.v1 } })));
       tags = drawTags(node);
     };
     place(src);

@@ -18,21 +18,36 @@
        from its kept version, an html one as a page. Its attributes are its props (`data-prop-*`, the
        sanitizer's), its children its `body`. A name nothing holds keeps its words and says "no component
        named x" on hover. The table follows `ui.watch`: a namespace's write (`component`) and the bundle's
-       move (resolved again), so every ticket using a definition redraws with its new version. -->
+       move (resolved again), so every ticket using a definition redraws with its new version.
+     - **v1's definitions** (COMPS-5): a fence with no `html` is read by its content — a `<template>`, or a
+       script reading `this.root`, `this.menger` or `this.attr`, is v1's custom element (`isV1`), never rhx
+       (rhx drops `<template>`; its own `<script>` and `<style>` say nothing either way). v1's words after
+       the name (its preview attributes) are kept as a definition's head. It is saved as plexus-ui's
+       `element/1` and drawn by plexus-ui (`bus.frame(…, { element })`: an open shadow root, the script with
+       `this.root` and `this.menger`, the theme, the cleanup — CONTRACT.md "An element component"). The ones
+       v1's bodies held were registered by the server at start (`src/v1_components.rs`). -->
 <script module>
   export const uses = ["ui.components", "ui.watch", "ui.history", "ui.author"];
 
   // ── definitions ────────────────────────────────────────────────────────
   const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
-  const DEF = /^\s*component\s+([a-z][a-z0-9]*(?:-[a-z0-9]+)+)(?:\s+(html))?\s*$/;
+  // COMPS-5: v1 wrote words after the name (its preview attributes, `component x-a data-field=b`).
+  const DEF = /^\s*component\s+([a-z][a-z0-9]*(?:-[a-z0-9]+)+)(?:\s+(\S.*?))?\s*$/;
+  /** v1's custom element (COMPS-5): a `<template>` (rhx drops one), or a script reading v1's element. */
+  const V1 = /<template[\s>]|\bthis\.(?:root|menger|attr)\b/;
 
-  /** A fence's info string as a definition's head: `{ name, html }`, or null. */
+  /** A fence's info string as a definition's head: `{ name, html }` (`html`: the word after the name is
+   *  `html`), or null. */
   export function defHead(info) {
     const m = DEF.exec(String(info ?? ""));
-    return m ? { name: m[1], html: m[2] === "html" } : null;
+    return m ? { name: m[1], html: (m[2] ?? "").split(/\s+/)[0] === "html" } : null;
   }
 
-  /** The definitions in `body`, in order: `{ name, html, source }` (the fence's lines, a newline after). */
+  /** Whether `source` is v1's custom element (COMPS-5): plexus-ui's `element/1`. */
+  export const isV1 = (source) => V1.test(String(source ?? ""));
+
+  /** The definitions in `body`, in order: `{ name, html, v1, source }` (the fence's lines, a newline after);
+   *  `v1` a fence with no `html` holding v1's custom element (`isV1`), framed as html is. */
   export function definitions(body) {
     const lines = String(body ?? "").split("\n");
     const out = [];
@@ -46,7 +61,11 @@
         if (c && c[1][0] === ch && c[1].length >= len) break;
       }
       const head = defHead(open[2]);
-      if (head) out.push({ ...head, source: lines.slice(i + 1, k).join("\n") + "\n" });
+      if (head) {
+        const source = lines.slice(i + 1, k).join("\n") + "\n";
+        const v1 = !head.html && isV1(source);
+        out.push({ name: head.name, html: head.html || v1, v1, source });
+      }
       i = k;
     }
     return out;
@@ -55,7 +74,7 @@
   /** The definitions of `after` that `before` does not hold as they are (new, or their text changed). */
   export function changed(before, after) {
     const was = new Map(definitions(before).map((d) => [d.name, d]));
-    return definitions(after).filter((d) => was.get(d.name)?.source !== d.source || was.get(d.name)?.html !== d.html);
+    return definitions(after).filter((d) => was.get(d.name)?.source !== d.source || was.get(d.name)?.html !== d.html || was.get(d.name)?.v1 !== d.v1);
   }
 
   // ── the table: what a name resolves to, and what each save answered ─────
@@ -101,7 +120,7 @@
     say();
     const out = [];
     for (const d of defs) {
-      const src = { name: d.name, source: d.source, ...(d.html ? { profile: "html/1" } : {}) };
+      const src = { name: d.name, source: d.source, ...(d.v1 ? { profile: "element/1" } : d.html ? { profile: "html/1" } : {}) };
       let e = null;
       try {
         if (!d.html) e = first(await b.call("ui.author", { sources: [src] }));
@@ -204,7 +223,10 @@
           // Someone else's: framed — never in the page — its calls the viewer's, held to its uses.
           host.style.position = "relative";
           host.setAttribute("data-author", row.by ?? row.author ?? "");
-          const opts = row.profile === "html/1"
+          // COMPS-5: v1's custom element is plexus-ui's to draw (element/1).
+          const opts = row.profile === "element/1"
+            ? { element: { name: f.tag, source: row.source ?? "" }, props, theme: true, title: f.tag }
+            : row.profile === "html/1"
             ? { html: htmlDoc(f.tag, row.source ?? "", props), theme: true, title: f.tag }
             : { component: { version: row.version, name: f.tag }, props, theme: true, title: f.tag };
           try {

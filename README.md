@@ -255,6 +255,27 @@ its props, its children its `body`, and the table follows `ui.watch`, so a
 definition edited redraws every ticket using it. A tag nothing names keeps
 its words, "no component named x" on hover. `tests/pages/components.mjs`.
 
+**v1's definitions** (COMPS-5). A fence with no `html` holding v1's custom
+element — a `<template>`, or a script reading `this.root`, `this.menger` or
+`this.attr` (rhx drops `<template>`; its own `<script>` and `<style>` say
+nothing either way) — is saved as plexus-ui's `element/1` and drawn by
+plexus-ui in a frame: an open shadow root holding its styles and template,
+its script run with the element as `this` (`this.root`, `this.attr(name)`,
+`this.menger.on('theme' | 'change')`), its attributes its props, the cleanup
+it returns run when it leaves (plexus-ui's CONTRACT.md "An element
+component"). v1's words after the name (`component x-a data-field=b`) are
+kept as its head. **The backfill** (`src/backfill.rs`): every start, before
+anything is served, registers each definition the store holds — every body
+(archived ones too), each deleted ticket's body its tombstone keeps, then
+v1's own registry left in the file (`components`, orphans too), a name at its
+first — that plexus-ui does not resolve, in the namespace `menger:v1`,
+written by its ticket, signed by `--ui-author-key`; it leaves the live
+bundle's names and anything authored on v2, refuses rhx (compiled by its
+ticket's save), keeps again one whose body moved, and logs `backfill: N
+registered, M kept again, K unchanged, R refused`. A second start changes
+nothing. `tests/backfill.rs`. The theme carries v1's `--text-scale`,
+`--mono` and `--err-fg`, which v1's components paint with.
+
 `menger login [--agent]` prints a one-time link (or the agent's `_login`
 line) for the server running on `--data-dir`.
 

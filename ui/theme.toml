@@ -36,6 +36,7 @@
 [colour.signal]
 "--warn" = ['#b3261e', '#ff8a80', 'offline, a refusal, a filter that matches nothing, an unknown word']
 "--live" = ['#2f7a2a', '#6cc66a', 'done in a roll-up, a write that landed']
+"--err-fg" = ['#b3261e', '#ff8a80', "COMPS-5: v1's name for --warn, which v1's components (element/1) paint errors with"]
 
 [colour.chip]
 "--chip-bg"    = ['#eef0f4', '#23252b', 'a ticket chip, a count']
@@ -105,6 +106,8 @@
 "--weight-medium" = ['500', '500', 'a code, a head']
 "--weight-strong" = ['600', '600', 'a title']
 "--weight-bold"   = ['700', '700', 'a count']
+"--mono"          = ['"Geist Mono", ui-monospace, monospace', '"Geist Mono", ui-monospace, monospace', "COMPS-5: v1's name for --font-text, which v1's components (element/1) set code in"]
+"--text-scale"    = ['1', '1', "COMPS-5: v1's text scale, which v1's components (element/1) size their type by (calc(13px * var(--text-scale)))"]
 
 [space]
 "--pitch"  = ['28px', '28px', 'a row']

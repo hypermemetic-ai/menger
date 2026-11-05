@@ -154,6 +154,66 @@ export default async (ctx) => {
     await ed.context.close();
   });
 
+  // COMPS-5: v1's format — a fence with no `html` whose source is v1's custom element (a <template>, its
+  // <style>, a <script> run with the element as `this`), words after the name (v1's preview attributes) — in
+  // a body written straight to the store, as v1's were, and registered as the server's backfill does (one
+  // `ui.author` of plexus-ui's element/1, own: true). Its ticket and another using its tag draw it in
+  // plexus-ui's frame: an open shadow root, its attribute a prop, the page's theme through
+  // `this.menger.on('theme')`, and its cleanup run before it draws again.
+  const FILM = "<template>\n<div class=\"box\" part=\"box\"><b class=\"tok\">-</b> <i class=\"who\">-</i></div>\n</template>\n"
+    + "<style>:host{display:block}.box{background:var(--panel);color:var(--ink);padding:8px;border:1px solid var(--line);font:13px var(--font-text)}</style>\n"
+    + "<docs><summary>a v1 component, for COMPS-5</summary></docs>\n<script>\n"
+    + "const tok = this.root.querySelector('.tok'), who = this.root.querySelector('.who');\n"
+    + "const paint = () => { tok.textContent = getComputedStyle(this).getPropertyValue('--bg').trim() + '|' + this.menger.theme.scheme; };\n"
+    + "who.textContent = 'label=' + this.attr('label');\n"
+    + "this.menger.on('theme', paint);\npaint();\nwindow.__drawn = (window.__drawn || 0) + 1;\n"
+    + "return () => { window.__cleaned = (window.__cleaned || 0) + 1; };\n</script>\n";
+
+  await test("a_v1_definition_draws_in_plexus_uis_frame_and_follows_the_theme", async () => {
+    const a = make("defines x-film in v1's format", "The film, defined the v1 way.\n\n```component x-film data-field=film\n" + FILM + "```\n\nAnd used:\n\n<x-film label=\"Kiln\"></x-film>\n");
+    const b = make("uses x-film", "Elsewhere:\n\n<x-film label=\"Glaze\"></x-film>\n");
+    const params = path.join(path.dirname(session), "comp-film-author.json");
+    fs.writeFileSync(params, JSON.stringify({ sources: [{ name: "x-film", source: FILM, profile: "element/1" }], own: true }));
+    // `-p` is synapse's global option, before the service's name: the call `sy` makes, with it there.
+    const { spawnSync } = await import("node:child_process");
+    const r = spawnSync("synapse", ["--no-hold", "--token-file", session, "-j", "-p", `@${params}`, "-P", String(server.ws), "menger", "ui", "author"],
+      { env: { ...process.env, XDG_CACHE_HOME: path.join(server.work, "cache") }, encoding: "utf8" });
+    assert(/"type":\s*"authored"/.test(r.stdout ?? ""), `registered as element/1: ${r.stdout} ${r.stderr}`);
+    const view = await ticketPage(a);
+    const said = await defSays(view.page, "x-film", "authored");
+    assert(/drawn framed/.test(said), `its block says it is saved, framed: ${said}`);
+    assert((await view.page.locator("[data-surface=component-def][data-name=x-film]").getAttribute("data-v1")) != null, "read as v1's element");
+    const host = view.page.locator("[data-surface=tag-component][data-name=x-film]");
+    await eventually("x-film is framed", async () => (await host.getAttribute("data-mode")) === "framed" && (await host.locator("iframe").count()) >= 1, 20_000);
+    const film = async (page) => {
+      for (const f of page.frames()) if (await f.locator("x-film").count().catch(() => 0)) return f;
+      return null;
+    };
+    const text = async (page, sel) => (await (await film(page))?.locator(sel).textContent({ timeout: 300 }).catch(() => null)) ?? null;
+    await eventually("its template drew in its shadow root, its attribute given", async () => (await text(view.page, ".who")) === "label=Kiln", 15_000);
+    const f = await film(view.page);
+    assert(await f.evaluate(() => document.querySelector("x-film").shadowRoot?.mode === "open"), "an open shadow root");
+    assert(await f.evaluate(() => !document.querySelector("docs") && !document.querySelector("x-film").shadowRoot.querySelector("docs")), "its <docs> drawn nowhere");
+    const lightBg = await view.page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--bg").trim());
+    await eventually("it painted with the page's light tokens", async () => (await text(view.page, ".tok")) === `${lightBg}|light`, 10_000);
+    await view.page.evaluate(() => (document.documentElement.dataset.theme = "dark"));
+    const darkBg = await view.page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--bg").trim());
+    assert(darkBg !== lightBg, `the page's --bg moved: ${lightBg} → ${darkBg}`);
+    await eventually("on('theme') heard the flip and it repainted", async () => (await text(view.page, ".tok")) === `${darkBg}|dark`, 10_000);
+    await view.page.evaluate(() => (document.documentElement.dataset.theme = "light"));
+    await eventually("and back", async () => (await text(view.page, ".tok")) === `${lightBg}|light`, 10_000);
+    await f.evaluate(() => document.querySelector("x-film").setAttribute("label", "Clay"));
+    await eventually("it drew again with the new attribute", async () => (await text(view.page, ".who")) === "label=Clay", 5_000);
+    const runs = await f.evaluate(() => ({ drawn: window.__drawn, cleaned: window.__cleaned }));
+    assert(runs.drawn === 2 && runs.cleaned === 1, `the cleanup ran before the second draw: ${JSON.stringify(runs)}`);
+    assert(await view.page.evaluate(() => !document.querySelector(".tok")), "nothing of it is in the page");
+    await shoot(view.page, "comps5-v1");
+    await view.context.close();
+    const other = await ticketPage(b);
+    await eventually("another ticket's tag draws it too", async () => (await text(other.page, ".who")) === "label=Glaze", 20_000);
+    await other.context.close();
+  });
+
   await test("a_tag_nothing_names_keeps_its_words", async () => {
     const a = make("an unknown tag", "<x-nobody-here>the words stay</x-nobody-here>\n");
     const view = await ticketPage(a);
