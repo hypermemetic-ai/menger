@@ -1092,6 +1092,7 @@ async fn shell_serves_the_page() {
             framing: Default::default(),
             ui: None,
             studio: None, media: None,
+            mcp: None,
         })
         .await;
     });
