@@ -14,7 +14,7 @@
 // The data is synthetic, made here in shortcodes of the cases' own. STUDIO-12:
 // the scrollers `.wr-scroll` and `.ww-scroll` bounded by the window.
 export default async (ctx) => {
-  const { test, assert, eventually, openPage, sy } = ctx;
+  const { test, assert, eventually, openPage, sy, ticketAt } = ctx;
 
   const made = (ev) => {
     const t = ev.find((e) => e.type === "created")?.ticket;
@@ -138,7 +138,7 @@ export default async (ctx) => {
       await eventually("the hovered chip's lines light", async () => (await W.locator('.edge[data-on="1"]').count()) === 2, 3_000);
       // A click opens the ticket.
       await W.locator(`.chip[data-id="${C}"]`).click();
-      await eventually("a chip opens its ticket", async () => (await page.evaluate(() => location.hash)) === `#/ticket/${C}`, 5_000);
+      await eventually("a chip opens its ticket", async () => ticketAt(await page.evaluate(() => location.hash), C), 5_000);
       // No shortcode named: the epic's shortcodes to choose from.
       await page.evaluate(() => (location.hash = "#/waves"));
       await eventually("#/waves offers the shortcodes", async () => (await W.locator('[data-param=epics] a[data-epic="WRKB"]').count()) === 1, 10_000);

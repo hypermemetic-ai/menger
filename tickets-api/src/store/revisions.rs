@@ -1029,6 +1029,9 @@ fn as_it_was(cache: &Cache, key: &str, kept: &Kept_, body: String) -> Ticket {
         None => {
             let (sc, seq) = cache.tombstones.place_of(key).map(|(s, n)| (s.clone(), n)).unwrap_or_else(|| (ShortcodeId::new(""), 0));
             Ticket {
+                // TICKETS-35: its tombstone's uid.
+                uid: cache.tombstones.get(key).map(|t| t.uid).unwrap_or_default(),
+                uid_of: Default::default(),
                 id: TicketId::new(key.to_string()),
                 epic: crate::address::Code::stored(sc.as_str()),
                 shortcode: sc,

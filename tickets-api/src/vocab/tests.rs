@@ -57,6 +57,26 @@ fn a_ticket_ref_takes_every_short_form_and_nothing_else() {
     assert!(e.contains("names a shortcode"), "{e}");
 }
 
+/// TICKETS-35: a ticket's name takes its uid — bare, any case, in the app's
+/// path or the whole link — kept as the uid alone; a bare word that is no
+/// uid still names a shortcode, refused.
+#[test]
+fn a_ticket_ref_takes_a_uid_bare_or_in_a_link_kept_as_the_uid() {
+    for named in ["7k3mq2xa", "7K3MQ2XA", "/t/7k3mq2xa/PERF-19-compression", "#/t/7k3mq2xa", "https://app.menger.sh/t/7k3mq2xa/x", "https://app.menger.sh/app/#/t/7k3mq2xa/x"] {
+        let r: TicketRef = named.parse().unwrap_or_else(|e| panic!("{named:?}: {e}"));
+        assert_eq!((r.as_str(), r.uid().map(|u| u.into_string())), ("7k3mq2xa", Some("7k3mq2xa".to_string())), "{named:?}");
+        assert!(r.address().is_none() && !r.is_path(), "a uid is no address: {named:?}");
+        assert_eq!(de::<TicketRef>(named).unwrap(), r, "{named:?} through serde");
+    }
+    holds::<TicketRef>(&["7k3mq2xa"], &["7k3mq2xi", "7k3mq2x", "/t/7k3mq2x/x", "t/7k3mq2xa"]);
+    assert!("MENGER".parse::<TicketRef>().unwrap_err().contains("names a shortcode"), "a word that is no uid");
+    assert_eq!("MNG-1".parse::<TicketRef>().unwrap().uid(), None);
+    // `under` (comments.list's) and `Asked` read it too.
+    assert_eq!("/t/7k3mq2xa/x".parse::<Under>().unwrap().as_str(), "7k3mq2xa");
+    assert_eq!("MENGER".parse::<Under>().unwrap().as_str(), "MENGER");
+    assert_eq!(de::<Asked>("7k3mq2xa").unwrap().as_str(), "7k3mq2xa");
+}
+
 #[test]
 fn a_shortcode_ref_is_a_code_or_an_address_of_one() {
     holds::<ShortcodeRef>(

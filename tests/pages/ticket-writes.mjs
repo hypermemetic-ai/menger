@@ -15,7 +15,7 @@ import { makeKey, readToken, sessionCookies, writeSession } from "../../scripts/
 import { sentCalls } from "../../scripts/ui-throwaway.mjs";
 
 export default async (ctx) => {
-  const { test, assert, eventually, sleep, openPage, sy, server, path } = ctx;
+  const { test, assert, eventually, sleep, openPage, sy, server, path, ticketAt } = ctx;
   const EPIC = "WRIT";
   const get = (id) => sy("tickets", "get", "--id", id).find((e) => e.type === "ticket")?.ticket;
   const created = (out, what) => {
@@ -356,7 +356,7 @@ export default async (ctx) => {
       await eventually("the dry run says the move", async () => (await text(group.locator("[data-dry-answer]"))) === `would move ${id} → ${parent}.1`);
       assert(get(id).id === id, "a dry run writes nothing");
       await group.locator("[data-action='tickets.rename']:not([data-dry])").click();
-      await eventually("moved, and the page follows it", async () => page.evaluate(() => location.hash).then((h) => h === `#/ticket/${parent}.1`));
+      await eventually("moved, and the page follows it", async () => page.evaluate(() => location.hash).then((h) => ticketAt(h, `${parent}.1`)));
       assert(get(`${parent}.1`)?.title === "to become a subtask", "the store has it under its new id");
     } finally {
       await context.close();
@@ -376,7 +376,7 @@ export default async (ctx) => {
       await eventually("the dry run names the new id", async () => /^would move .* → WRITX-\d+$/.test(await text(admin.locator("[data-dry-answer]"))));
       const to = (await text(admin.locator("[data-dry-answer]"))).split(" → ")[1];
       await admin.locator("[data-action='tickets.reshortcode']:not([data-dry]):not([data-open])").click();
-      await eventually("moved, the page follows it", async () => page.evaluate(() => location.hash).then((h) => h === `#/ticket/${to}`));
+      await eventually("moved, the page follows it", async () => page.evaluate(() => location.hash).then((h) => ticketAt(h, to)));
       assert(get(to)?.title === "to move shortcodes" && get(to).parent === target, `the store: ${JSON.stringify(get(to)?.parent)}`);
     } finally {
       await context.close();

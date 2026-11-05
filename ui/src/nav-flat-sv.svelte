@@ -6,12 +6,13 @@
      ([data-refused]). -->
 <script module>
   // PERF-15: a row is the four fields drawn, not the whole summary row.
-  const FIELDS = ["id", "title", "kind", "status"];
+  const FIELDS = ["id", "uid", "title", "kind", "status"];
   export const uses = ["tickets.list"];
 </script>
 
 <script>
   import { live } from "plexus-ui/host";
+  import { ticketHref } from "./ticket-links.svelte";
 
   let { filter = null } = $props();
   const base = location.hash.startsWith("#/sv/") ? "#/sv/" : "#/";
@@ -21,7 +22,7 @@
 
 <ul class="nav-flat" data-nav-flat>
   {#each list as t (t.id)}
-    <li><a class="nav-row" data-nav-flat-row={t.id} data-status={t.status} href={base + "ticket/" + t.id}><span class="row-id">{t.id}</span> <span class="row-title">{t.title}</span></a></li>
+    <li><a class="nav-row" data-nav-flat-row={t.id} data-status={t.status} href={ticketHref(t, base)}><span class="row-id">{t.id}</span> <span class="row-title">{t.title}</span></a></li>
   {/each}
 </ul>
 {#if $flat.status === "live" && list.length === 0}<p class="empty" data-empty>No ticket matches this filter.</p>{/if}

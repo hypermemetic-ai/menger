@@ -27,7 +27,7 @@ const KEYS_PROBE = `(() => {
   window.addEventListener("keydown", (e) => window.__reached.push(e.key));
 })();`;
 
-export default async ({ test, assert, eventually, sleep, openPage, sy, groupsNow, attrs, BOARDS }) => {
+export default async ({ test, assert, eventually, sleep, openPage, sy, groupsNow, attrs, BOARDS, ticketAt }) => {
   // The palette is the Svelte board's (jump-palette-sv), the default board.
   const SV = BOARDS.sv;
   const trimmed = (t) => String(t ?? "").trim();
@@ -88,7 +88,7 @@ export default async ({ test, assert, eventually, sleep, openPage, sy, groupsNow
     assert(snippet.includes("qorvex wash"), `the passage is drawn: ${snippet}`);
     // A row opens its ticket.
     await sp(page).locator(`[data-result=find][data-id="${titled}"]`).click();
-    await eventually(`#/ticket/${titled}`, async () => (await hash(page)) === `#/ticket/${titled}`, 3_000);
+    await eventually(`${titled}'s page`, async () => ticketAt(await hash(page), titled), 3_000);
   });
 
   await test("search_pages_through_results", async () => {
@@ -170,7 +170,7 @@ export default async ({ test, assert, eventually, sleep, openPage, sy, groupsNow
     taken(await pressed(page, "ArrowUp"), "arrowup");
     await eventually("arrowup moves it back", async () => (await selected()) === order[1], 2_000);
     taken(await pressed(page, "Enter"), "enter");
-    await eventually(`enter opens ${order[1]}`, async () => (await hash(page)) === `${SV.ticketRoute}${order[1]}`, 3_000);
+    await eventually(`enter opens ${order[1]}`, async () => ticketAt(await hash(page), order[1]), 3_000);
 
     // Escape closes; the bus's palette.open opens (the page's top's jump button emits it; STUDIO-12: app-top's, the one on the page).
     await page.evaluate(() => (location.hash = "#/search/qorvex"));

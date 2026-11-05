@@ -1,0 +1,34 @@
+<script>
+  // V2-42 (TICKETS-36 on v2): a ticket by its uid — `#/t/<uid>/<ID>-<slug>`,
+  // the link every part of the UI makes (ui/src/ticket-links.svelte). Only
+  // the uid is read: `get` takes it and answers the ticket whatever its id
+  // is now, so a moved ticket's old link still lands; `<ID>-<slug>` is the
+  // reader's, never trusted (ticket-head puts a stale one right in the
+  // address bar). The page drawn is the ticket's own, page-ticket, by the key
+  // `get` answered (`/edit` after the tail is page-editor's route, which
+  // resolves the uid itself). A deleted ticket's uid answers its tombstone:
+  // page-ticket draws it as deleted. A uid naming nothing says so.
+  prop("uid");
+  prop("tail");
+  let t = live(#{ snapshot: "tickets.get", params: #{ id: uid }, key: "id" });
+</script>
+
+<section class="page-t" data-surface="ticket-by-uid" data-uid={uid}>
+  {#if t.rows.filter(|r| r.title != () || type_of(r.ids) == "array").len() == 0}
+    {#if t.status == "pending" || t.status == "resyncing"}
+      <div class="wait" data-loading aria-busy="true"></div>
+    {:else}
+      <p class="empty" data-empty data-not-found>{"No ticket " + uid + " here" + (if t.message == () { "" } else { " — " + t.message }) + "."}</p>
+    {/if}
+  {:else}
+    {#each t.rows.filter(|r| r.title != () || type_of(r.ids) == "array").map(|r| if type_of(r.ids) == "array" { r.ids[0] } else { r.id }) as key (key)}
+      <page-ticket id={key}/>
+    {/each}
+  {/if}
+</section>
+
+<style>
+  :scope { display: block; }
+  .wait { min-height: 100vh; min-height: 100dvh; background: var(--bg); }
+  .empty { margin: 0; padding: 28px; min-height: 100vh; color: var(--muted); background: var(--bg); font-family: var(--font-text); font-size: var(--text-size); }
+</style>

@@ -287,7 +287,8 @@ async fn the_summary_row_is_its_fields() {
     let defs = &list["returns"]["$defs"];
     let row: BTreeSet<String> = defs["TicketSummary"]["properties"].as_object().unwrap_or_else(|| panic!("TicketSummary in {}", list["returns"])).keys().cloned().collect();
     let written = set(&[
-        "id", "epic", "shortcode", "address", "seq", "title", "status", "kind", "severity", "parent", "parent_hidden", "child_count", "blocked_by", "unlocks",
+        // TICKETS-35 (V2-42): `uid`, and `uid_of` — the uids of what it names.
+        "uid", "uid_of", "id", "epic", "shortcode", "address", "seq", "title", "status", "kind", "severity", "parent", "parent_hidden", "child_count", "blocked_by", "unlocks",
         "hidden_blocked_by", "hidden_unlocks", "commits", "path", "placement", "labels", "archived", "frozen", "hidden", "created_unix", "updated_unix",
     ]);
     assert_eq!(row, written, "the summary row's fields");

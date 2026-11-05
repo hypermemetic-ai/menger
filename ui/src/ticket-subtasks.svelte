@@ -10,6 +10,7 @@
 
 <script>
   import { bus, live } from "plexus-ui/host";
+  import { ticketHref } from "./ticket-links.svelte";
 
   let { id, sheet = null } = $props();
   const b = bus();
@@ -53,7 +54,7 @@
   <div class="rows" data-field="subtasks">
     {#if sheet === "loading" || subtasks.status === "pending"}<div data-loading aria-busy="true"><i class="bone"></i></div>{/if}
     {#each subs as s (s.id)}
-      <a class="row" data-id={s.id} data-status={s.status} href={base + "ticket/" + s.id}>
+      <a class="row" data-id={s.id} data-status={s.status} href={ticketHref(s, base)}>
         <i class="kmark" data-kind={s.kind} aria-hidden="true"></i>
         <span class="row-id">{s.id}</span>
         <span class="row-title" data-field="title">{s.title}</span>

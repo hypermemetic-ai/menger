@@ -11,12 +11,13 @@
 
 <script>
   import { live } from "plexus-ui/host";
+  import { ticketHref } from "./ticket-links.svelte";
   import Chip from "./ticket-chip-sv.svelte";
   import Subtasks from "plexus-ui:ticket-subtasks";
 
   let { id, sheet = null } = $props();
   const base = location.hash.startsWith("#/sv/") ? "#/sv/" : "#/";
-  const FIELDS = ["id", "title", "kind", "status"];
+  const FIELDS = ["id", "uid", "title", "kind", "status"];
   const ticket = live({ snapshot: "tickets.get", params: () => ({ id }), changes: "tickets.watch", key: "id",
                         on: { amended: "upsert:ticket", status_changed: "upsert:ticket", kind_changed: "upsert:ticket", updated: "upsert:ticket",
                               labels_changed: "upsert:ticket", severity_changed: "upsert:ticket", frozen_changed: "upsert:ticket", hidden_changed: "upsert:ticket",
@@ -35,7 +36,7 @@
   <div class="rows" data-field="children">
     {#if sheet === "loading" || children.status === "pending"}<div data-loading aria-busy="true"><i class="bone"></i><i class="bone"></i></div>{/if}
     {#each kids as c (c.id)}
-      <a class="row" data-id={c.id} data-ticket-child={c.id} data-status={c.status} href={base + "ticket/" + c.id}>
+      <a class="row" data-id={c.id} data-ticket-child={c.id} data-status={c.status} href={ticketHref(c, base)}>
         <i class="kmark" data-kind={c.kind} aria-hidden="true"></i>
         <span class="row-id" data-field="id">{c.id}</span>
         <span class="row-title" data-field="title">{c.title}</span>

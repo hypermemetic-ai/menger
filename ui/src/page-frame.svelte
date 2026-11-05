@@ -179,6 +179,7 @@
 <script>
   import { untrack } from "svelte";
   import { bus as member } from "plexus-ui/host";
+  import { ticketHref } from "./ticket-links.svelte";
 
   const bus = member();
 
@@ -250,7 +251,7 @@
     </figcaption>
   {/if}
   {#if spec.kind === "ref"}
-    <p class="pf-note" data-field="note">The page is <a href={"#/ticket/" + encodeURIComponent(spec.attrs.ref)}>{spec.attrs.ref}</a>'s body; open it there.</p>
+    <p class="pf-note" data-field="note">The page is <a href={ticketHref({ id: encodeURIComponent(spec.attrs.ref) })}>{spec.attrs.ref}</a>'s body; open it there.</p>
   {:else if spec.kind === "live" && live?.refused}
     <p class="pf-note" data-field="note">{live.refused} <code>{spec.attrs.route || "#/"}</code></p>
   {:else}

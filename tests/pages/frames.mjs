@@ -161,7 +161,7 @@ The end.
 `;
 
 export default async (ctx) => {
-  const { test, assert, eventually, sleep, openPage, sy, fs, path, session } = ctx;
+  const { test, assert, eventually, sleep, openPage, sy, fs, path, session, ticketAt } = ctx;
   const scratch = path.dirname(session);
   let n = 0;
   const file = (text) => { const f = path.join(scratch, `frames-${++n}.md`); fs.writeFileSync(f, text); return `@${f}`; };
@@ -264,7 +264,7 @@ export default async (ctx) => {
       });
       assert(probe.origin === "null", `an opaque origin: ${probe.origin}`);
       for (const k of ["cookie", "storage", "parentDoc", "parentLocation", "top", "fetch", "socket"]) assert(probe[k].startsWith("refused"), `${k} is refused in the frame: ${JSON.stringify(probe)}`);
-      assert(page.url().includes(`#/ticket/${tid}`), `the app was not moved: ${page.url()}`);
+      assert(ticketAt(new URL(page.url()).hash, tid), `the app was not moved: ${page.url()}`);
 
       // A height said from anywhere but the frame's own window is ignored, its channel or not.
       const forged = await page.evaluate(() => {
@@ -285,7 +285,7 @@ export default async (ctx) => {
       const where = (await inner(page, S, 0)).url();
       console.log(`    after a real submit the frame is at ${where}`);
       assert(sent.length === 0 && !where.startsWith("https://example.com"), `a real submission went nowhere: ${JSON.stringify({ sent, where })}`);
-      assert(page.url().includes(`#/ticket/${tid}`), `the app was not moved: ${page.url()}`);
+      assert(ticketAt(new URL(page.url()).hash, tid), `the app was not moved: ${page.url()}`);
 
       // The width switch: 1440, scaled into the column, its script now at 1440.
       const elPf = page.locator(`${S} ${PF}`).first();
@@ -439,7 +439,7 @@ export default async (ctx) => {
           const [tab] = await Promise.all([context.waitForEvent("page", { timeout: 5000 }), fr.locator("a[href='https://example.com/away']").click()]);
           await tab.waitForLoadState().catch(() => {});
           assert(tab.url().startsWith("https://example.com/away"), `the link opened a tab: ${tab.url()}`);
-          assert(page.url().includes(`#/ticket/${rid}`), `the app was not moved: ${page.url()}`);
+          assert(new RegExp(`^#/(?:ticket/|edit/|t/[0-9a-z]{8}/)${rid}(?:-[a-z0-9-]*)?(?:/edit)?$`).test(new URL(page.url()).hash), `the app was not moved: ${page.url()}`);
           await tab.close();
           // An amend reloads it behind the one on screen: never no frame.
           sy("tickets", "amend", "--id", rid, "--body", file(rawBody.replace("The end.", "The end, amended.")));

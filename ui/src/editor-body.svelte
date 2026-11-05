@@ -135,6 +135,7 @@
 <script>
   import { getAllContexts, mount, tick, unmount, untrack } from "svelte";
   import { bus, live } from "plexus-ui/host";
+  import { ticketHref } from "./ticket-links.svelte";
   import TicketView, { blocks, pieceClass, refDefs } from "./ticket-view.svelte";
   import Margin, { threadMarks } from "./doc-margin.svelte";
   import { ingest } from "./media-ingest.svelte";
@@ -989,7 +990,7 @@
       <button type="button" class="pick image" data-action="image" onmousedown={(ev) => ev.preventDefault()} onclick={() => picker?.click()}>image</button>
       <input class="file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple aria-label="an image" bind:this={picker} onchange={picked}/>
       {#if isDoc}<button type="button" class="pick" data-action="history" aria-pressed={!!replaying} onmousedown={(ev) => ev.preventDefault()} onclick={openHistory}>history</button>
-      {:else}<a class="revs" href={"#/ticket/" + doc_id} data-action="revisions">revisions</a>{/if}
+      {:else}<a class="revs" href={ticketHref({ id: doc_id })} data-action="revisions">revisions</a>{/if}
     </p>
   {/if}
 </section>

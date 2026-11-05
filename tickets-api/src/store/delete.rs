@@ -90,7 +90,8 @@ const TABLE: &str = "
             reparented  TEXT NOT NULL DEFAULT '[]',
             unblocked   TEXT NOT NULL DEFAULT '[]',
             ticket      TEXT,
-            purged_unix INTEGER
+            purged_unix INTEGER,
+            uid         TEXT
         );
     ";
 
@@ -120,15 +121,21 @@ pub(super) fn load(conn: &Connection) -> rusqlite::Result<Tombstones> {
     if !has_table(conn)? {
         return Ok(out);
     }
-    let mut stmt = conn.prepare(
-        "SELECT id, epic, seq, title, actor, name, at_unix, message, parent, reparented, unblocked, ticket IS NOT NULL
-             FROM tombstones",
-    )?;
+    // TICKETS-35: and its uid — none in a file the open has not given one.
+    let uid = match super::db::has_column(conn, "tombstones", super::uids::COLUMN)? {
+        true => "uid",
+        false => "NULL",
+    };
+    let mut stmt = conn.prepare(&format!(
+        "SELECT id, epic, seq, title, actor, name, at_unix, message, parent, reparented, unblocked, ticket IS NOT NULL, {uid}
+             FROM tombstones"
+    ))?;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
         let at_unix: i64 = r.get(6)?;
         let kept: bool = r.get(11)?;
         let t = Tombstone {
+            uid: r.get(12)?,
             id: r.get(0)?,
             title: r.get(3)?,
             by: r.get(4)?,
@@ -828,6 +835,9 @@ impl Store {
         for t in &p.gone {
             let whole = db::ticket(&txn, &t.id)?.ok_or_else(|| missing(&t.id))?;
             let tomb = Tombstone {
+                // TICKETS-35: its uid stays with it — the tombstone's name, and
+                // the ticket's again at an undelete.
+                uid: t.uid,
                 id: t.id.clone(),
                 title: t.title.clone(),
                 by: act.actor.clone(),
@@ -840,8 +850,8 @@ impl Store {
                 unblocked: p.unblocks.iter().filter(|(_, from)| from.iter().any(|b| *b == t.id)).map(|(x, _)| x.clone()).collect(),
             };
             txn.prepare_cached(
-                "INSERT INTO tombstones (id, epic, seq, title, actor, name, at_unix, message, parent, reparented, unblocked, ticket)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                "INSERT INTO tombstones (id, epic, seq, title, actor, name, at_unix, message, parent, reparented, unblocked, ticket, uid)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             )?
             .execute(rusqlite::params![
                 tomb.id,
@@ -856,6 +866,7 @@ impl Store {
                 ids_json(&tomb.reparented),
                 ids_json(&tomb.unblocked),
                 serde_json::to_string(&whole).expect("serialize a ticket"),
+                tomb.uid,
             ])?;
             search::remove(&txn, &t.id)?;
             // TICKETS-7: its revisions stay with the tombstone, the last saying so.
@@ -948,7 +959,12 @@ impl Store {
         _act: Act,
         may: impl FnOnce(&[String]) -> Result<Vec<(String, AdminOf)>, String> + Send,
     ) -> Result<Undeleted, StoreError> {
-        let ids: Vec<String> = rules::distinct(&ids.iter().map(|i| i.trim().to_ascii_uppercase()).filter(|i| !i.is_empty()).collect::<Vec<_>>());
+        // TICKETS-35: a deleted ticket by its uid too — its tombstone's key.
+        let ids: Vec<String> = {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            let key = |i: &String| cache.uid_key(i).map_or_else(|| i.trim().to_ascii_uppercase(), str::to_string);
+            rules::distinct(&ids.iter().map(key).filter(|i| !i.is_empty()).collect::<Vec<_>>())
+        };
         if ids.is_empty() || ids.len() > UPDATE_MANY_CEILING {
             return Err(StoreError::Invalid(format!("name 1 to {UPDATE_MANY_CEILING} tickets")));
         }
@@ -1020,8 +1036,14 @@ impl Store {
                 }
             }
         }
-        for (ticket, _) in &back {
+        for (ticket, tomb) in &back {
             let mut t = ticket.clone();
+            // TICKETS-35: the uid it had — its tombstone's (a ticket deleted
+            // before uids, or by a server without them, has the one the open
+            // gave its tombstone).
+            if tomb.uid.is_some() {
+                t.uid = tomb.uid;
+            }
             // Its `unlocks`: who waits on it now — those that did, those
             // whose block came back and those coming back with it — each one
             // that still names it.

@@ -28,6 +28,7 @@
 
 <script>
   import { bus, live, markdown } from "plexus-ui/host";
+  import { ticketHref } from "./ticket-links.svelte";
   import Picker from "./ticket-picker.svelte";
   import Chip from "./ticket-chip-sv.svelte";
 
@@ -75,7 +76,7 @@
     const r = await answer(b.call("tickets.create", params));
     sending = false;
     const made = r.events.find((x) => x.type === "created")?.ticket;
-    if (r.ok && made) b.navigate("#/ticket/" + (made.address?.split(":").length > 2 ? made.address : made.id));
+    if (r.ok && made) b.navigate(made.uid ? ticketHref(made) : ticketHref({ id: made.address?.split(":").length > 2 ? made.address : made.id }));
     else refused = r.message ?? "the ticket was not created";
   }
 

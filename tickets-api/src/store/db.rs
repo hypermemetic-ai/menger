@@ -29,6 +29,7 @@ pub(super) const SCHEMA: &str = "
             assignees    TEXT NOT NULL DEFAULT '[]',
             frozen       INTEGER NOT NULL DEFAULT 0,
             hidden       INTEGER NOT NULL DEFAULT 0,
+            uid          TEXT,
             UNIQUE (epic, seq)
         );
     ";
@@ -587,8 +588,8 @@ pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
         "INSERT INTO tickets
                  (id, epic, seq, title, status, kind, severity,
                   blocked_by, unlocks, parent, body,
-                  created_unix, updated_unix, commits, child_count, path, labels, archived, assignees, frozen, hidden)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
+                  created_unix, updated_unix, commits, child_count, path, labels, archived, assignees, frozen, hidden, uid)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
              ON CONFLICT (id) DO UPDATE SET
                  epic = excluded.epic,
                  seq = excluded.seq,
@@ -608,7 +609,8 @@ pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
                  labels = excluded.labels,
                  archived = excluded.archived,
                  frozen = excluded.frozen,
-                 hidden = excluded.hidden",
+                 hidden = excluded.hidden,
+                 uid = coalesce(excluded.uid, tickets.uid)",
         params![
             t.id,
             // ORG-3: the column holds the shortcode's identity — the code
@@ -635,6 +637,9 @@ pub(super) fn upsert(conn: &Connection, t: &Ticket) -> rusqlite::Result<()> {
             "[]".to_string(),
             t.frozen,
             t.hidden,
+            // TICKETS-35: its uid — never taken away by a write that has
+            // none in hand (the `coalesce` above).
+            t.uid,
         ],
     )?;
     Ok(())
@@ -653,8 +658,8 @@ pub(super) fn insert_many(conn: &Connection, tickets: &[Ticket], open: &[u32]) -
         "INSERT INTO tickets
                  (id, epic, seq, title, status, kind, severity,
                   blocked_by, unlocks, parent, body,
-                  created_unix, updated_unix, commits, child_count, unsatisfied, path, labels, archived, assignees, frozen, hidden)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
+                  created_unix, updated_unix, commits, child_count, unsatisfied, path, labels, archived, assignees, frozen, hidden, uid)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
     )?;
     debug_assert_eq!(tickets.len(), open.len());
     for (t, open) in tickets.iter().zip(open) {
@@ -682,6 +687,7 @@ pub(super) fn insert_many(conn: &Connection, tickets: &[Ticket], open: &[u32]) -
             "[]".to_string(),
             t.frozen,
             t.hidden,
+            t.uid,
         ])?;
     }
     Ok(())
@@ -692,9 +698,13 @@ pub(super) fn insert_many(conn: &Connection, tickets: &[Ticket], open: &[u32]) -
 /// whole ticket is read back as. SDLC-9: `commits` at 12. SCALE-28:
 /// `child_count` at 13. WAVE-10: `path` at 14. MENGER-12: `labels` at 15.
 /// ARCHIVE-2: `archived` at 16. TICKETS-9: `assignees` at 17. TICKETS-6:
-/// `frozen` at 18. TICKETS-27: `hidden` last, at 19.
+/// `frozen` at 18. TICKETS-27: `hidden` at 19. TICKETS-35: `uid` last, at
+/// 20 — so what a read adds after them is at [`AFTER_ROW`].
 const ROW_COLUMNS: &str = "id, epic, seq, title, status, kind, severity,
-                    blocked_by, unlocks, created_unix, updated_unix, parent, commits, child_count, path, labels, archived, assignees, frozen, hidden";
+                    blocked_by, unlocks, created_unix, updated_unix, parent, commits, child_count, path, labels, archived, assignees, frozen, hidden, uid";
+
+/// The index of the first column a `SELECT` adds after [`ROW_COLUMNS`].
+const AFTER_ROW: usize = 21;
 
 /// [`ROW_COLUMNS`] for a file that may be from before WAVE-10 — what
 /// `--verify-derived` reads, which runs no migration: `NULL` stands in for
@@ -724,6 +734,10 @@ fn row_columns(conn: &Connection) -> rusqlite::Result<String> {
     if !has_column(conn, "tickets", HIDDEN_COLUMN)? {
         columns = columns.replace(", hidden", ", 0 AS hidden");
     }
+    // TICKETS-35: and none for a `uid` column it does not have yet.
+    if !has_column(conn, "tickets", super::uids::COLUMN)? {
+        columns = columns.replace(", uid", ", NULL AS uid");
+    }
     Ok(columns)
 }
 
@@ -736,6 +750,8 @@ fn row_columns(conn: &Connection) -> rusqlite::Result<String> {
 fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
     let shortcode: crate::address::ShortcodeId = row.get(1)?;
     Ok(Row {
+        // TICKETS-35: minted at birth, or by the open for a row without one.
+        uid: row.get(20)?,
         id: row.get(0)?,
         epic: crate::address::Code::stored(shortcode.as_str()),
         shortcode,
@@ -754,6 +770,8 @@ fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
         unlocks: parse_ids(8, &row.get::<_, String>(8)?)?.into_iter().map(TicketName::new).collect(),
         hidden_blocked_by: 0,
         hidden_unlocks: 0,
+        // TICKETS-35: never kept — filled as a ticket goes out.
+        uid_of: Default::default(),
         parent_hidden: false,
         // ARCHIVE-2: moved by `archive` and `restore` alone.
         archived: archived_of(16, row.get(16)?)?,
@@ -801,7 +819,7 @@ pub(super) fn load_rows_counted(
     conn: &Connection,
 ) -> anyhow::Result<(HashMap<String, Row>, HashMap<String, u32>)> {
     let mut stmt = conn.prepare(&format!("SELECT {ROW_COLUMNS}, unsatisfied FROM tickets"))?;
-    let rows = stmt.query_map([], |r| Ok((read_row(r)?, r.get::<_, u32>(20)?)))?;
+    let rows = stmt.query_map([], |r| Ok((read_row(r)?, r.get::<_, u32>(AFTER_ROW)?)))?;
     let (mut out, mut open) = (HashMap::new(), HashMap::new());
     for row in rows {
         let (row, n) = row?;
@@ -836,7 +854,7 @@ pub(super) fn row_unmigrated(conn: &Connection, id: &str) -> rusqlite::Result<Op
 /// statement, so from one snapshot (SCALE-28: its `child_count` too).
 pub(super) fn ticket(conn: &Connection, id: &str) -> rusqlite::Result<Option<Ticket>> {
     conn.prepare_cached(&format!("SELECT {ROW_COLUMNS}, body FROM tickets WHERE id = ?1"))?
-        .query_row([id], |row| Ok(super::whole(read_row(row)?, row.get(20)?)))
+        .query_row([id], |row| Ok(super::whole(read_row(row)?, row.get(AFTER_ROW)?)))
         .optional()
 }
 

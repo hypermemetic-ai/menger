@@ -11,6 +11,7 @@
 
 <script>
   import { live } from "plexus-ui/host";
+  import { ticketHref } from "./ticket-links.svelte";
   import TicketChip from "plexus-ui:ticket-chip";
 
   let { id, row = null, live: watching = true } = $props();
@@ -23,7 +24,7 @@
 </script>
 
 {#each shown as r (r.id)}
-  <a class="board-row" class:arrived={row == null} data-id={r.id} data-status={r.status} data-arrived={row == null ? (watching ? "live" : "once") : undefined} href={"#/ticket/" + r.id}>
+  <a class="board-row" class:arrived={row == null} data-id={r.id} data-status={r.status} data-arrived={row == null ? (watching ? "live" : "once") : undefined} href={ticketHref(r)}>
     <i class="kmark" data-kind={r.kind} aria-hidden="true"></i>
     <span class="row-id" data-field="id">{r.id}</span>
     <span class="row-title" data-field="title">{r.title}</span>

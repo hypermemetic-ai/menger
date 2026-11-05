@@ -8,11 +8,13 @@
   // V2-29: `#/doc/:doc` opens a document of the docs service on the same surface.
   prop("id");
   prop("doc");
+  // V2-42: `#/t/:uid/:tail/edit` — a ticket by its uid; editor-screen resolves it.
+  prop("uid");
 </script>
 
 <section class="page page-editor">
   <slot name="top" here="editor"/>
-  <editor-screen id={id} doc={doc}/>
+  <editor-screen id={id} doc={doc} uid={uid}/>
   <slot name="palette"/>
 </section>
 
