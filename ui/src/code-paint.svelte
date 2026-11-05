@@ -53,10 +53,14 @@
     const idle = globalThis.requestIdleCallback ? (f) => globalThis.requestIdleCallback(f, { timeout: 500 }) : (f) => setTimeout(() => f({ timeRemaining: () => 8 }), 1);
     const stop = (h) => (globalThis.cancelIdleCallback ? globalThis.cancelIdleCallback(h) : clearTimeout(h));
     const parse = grammar.startParse(text);
+    // EDITOR-19: a slice of at least SLICE ms per call. On a page that is never idle the callback comes
+    // only at its timeout, with no time remaining, and one advance per 500 ms left a block unpainted.
+    const SLICE = 8;
     const step = (deadline) => {
       handle = null;
       let tree = null;
-      while (!cancelled && !(tree = parse.advance())) if (deadline.timeRemaining() < 1) { handle = idle(step); return; }
+      const began = performance.now();
+      while (!cancelled && !(tree = parse.advance())) if (deadline.timeRemaining() < 1 && performance.now() - began > SLICE) { handle = idle(step); return; }
       if (cancelled || !tree) return;
       const out = [];
       let at = 0;
