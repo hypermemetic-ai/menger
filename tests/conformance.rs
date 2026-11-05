@@ -72,6 +72,8 @@ async fn kit_green_on_menger() {
             .arg("--ui-db-path")
             .arg(dir.path().join("conformance-ui.db"))
             .args(["--max-calls-per-connection", "8", "--idle-timeout-secs", "3", "--max-connections-per-principal", "8"])
+            // V2-54: the message limit small too, and the kit told it (errors.request_too_big sends one past it).
+            .args(["--max-message-bytes", "1048576"])
             // V2-31: the kit's key is a `key:` principal — an agent, held to its own quota.
             .args(["--max-connections-per-agent", "8"])
             .env("PLEXUS_NO_REGISTRY", "1")
@@ -111,6 +113,7 @@ async fn kit_green_on_menger() {
             .arg(wire().join("conformance/run.py"))
             .args(["run", "--role", "service", "--url", &format!("ws://127.0.0.1:{port}"), "--key", key.to_str().unwrap()])
             .args(["--max-calls", "8", "--idle-secs", "3", "--max-per-principal", "8", "--origin-allowed", &format!("http://127.0.0.1:{shell}")])
+            .args(["--max-message-bytes", "1048576"])
             // A debug build answers its self-description in seconds (07's schema walk): four times the kit's budgets.
             .args(["--expect-fail", expect.to_str().unwrap(), "--budget-scale", "4"])
             .output()
