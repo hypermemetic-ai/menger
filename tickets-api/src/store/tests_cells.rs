@@ -410,13 +410,13 @@ async fn a_crossing_past_the_threshold_carries_the_counts_it_leaves() {
     let store = Store::new();
     store.create(SYS, new_ticket("FAN", Kind::Scope, None, vec![])).await.unwrap();
     store.create(SYS, new_ticket("OTHER", Kind::Scope, None, vec![])).await.unwrap();
-    let hub = store.create(SYS, new_ticket("FAN", Kind::Build, None, vec![])).await.unwrap().id;
+    let blocker = store.create(SYS, new_ticket("FAN", Kind::Build, None, vec![])).await.unwrap().id;
     for i in 0..300 {
         let epic = if i % 3 == 0 { "OTHER" } else { "FAN" };
-        store.create(SYS, new_ticket(epic, Kind::Build, None, vec![hub.to_string()])).await.unwrap();
+        store.create(SYS, new_ticket(epic, Kind::Build, None, vec![blocker.to_string()])).await.unwrap();
     }
     let mut rx = store.subscribe_filtered();
-    store.set_status(SYS.permit(&hub), Status::Complete).await.unwrap();
+    store.set_status(SYS.permit(&blocker), Status::Complete).await.unwrap();
     let mut counts = None;
     while let Ok(change) = rx.try_recv() {
         if let Change::CellsMoved { moves } = change {
@@ -431,7 +431,7 @@ async fn a_crossing_past_the_threshold_carries_the_counts_it_leaves() {
         .map(|e| (ShortcodeId::from(e), kept.iter().filter(|((epic, _), _)| epic == e).map(|((_, c), n)| (*c, *n)).collect()))
         .collect();
     assert_eq!(counts, want, "every count of each shortcode moved, as the write left it");
-    store.set_status(SYS.permit(&hub), Status::Ready).await.unwrap();
+    store.set_status(SYS.permit(&blocker), Status::Ready).await.unwrap();
     store.set_status(SYS.permit("FAN-1"), Status::Ready).await.unwrap();
     let mut seen = 0;
     while let Ok(change) = rx.try_recv() {
@@ -688,10 +688,10 @@ async fn fan_out_phases() {
     let path = dir.path().join("fan.db");
     std::fs::copy(source, &path).unwrap();
     let store = Store::open(&path).unwrap();
-    let hub = "FAN-4".to_string();
+    let blocker = "FAN-4".to_string();
     for status in [Status::Complete, Status::Ready, Status::Complete, Status::Ready] {
         let cache = store.tickets.read().unwrap();
-        let mut row = cache.get(&hub).unwrap().clone();
+        let mut row = cache.get(&blocker).unwrap().clone();
         let previous = row.status;
         row.status = status;
         let rows = cache.rows().with(&row);
@@ -711,7 +711,7 @@ async fn fan_out_phases() {
         let t_take = t.elapsed();
         drop(cache);
         let t = std::time::Instant::now();
-        store.set_status(SYS.permit(&hub), status).await.unwrap();
+        store.set_status(SYS.permit(&blocker), status).await.unwrap();
         let t_write = t.elapsed();
         println!(
             "{previous} -> {status}: ready move {:.1} ms, cell move {:.1} ms, its rows {:.1} ms, cache take {:.1} ms; the whole write {:.1} ms",

@@ -51,9 +51,9 @@ pub fn identity(principal: &str) -> AuthContext {
     AuthContext::new(principal.to_string(), "quota".into(), vec![], json!({ "principal": principal }))
 }
 
-/// Every data item of `method` called on `hub` as `ctx`, or the error said.
-pub async fn call(hub: &DynamicHub, ctx: &AuthContext, method: &str, params: Value) -> Result<Vec<Value>, String> {
-    let mut stream = hub.route(method, params, Some(ctx)).await.map_err(|e| e.to_string())?;
+/// Every data item of `method` called on `service` as `ctx`, or the error said.
+pub async fn call(service: &DynamicHub, ctx: &AuthContext, method: &str, params: Value) -> Result<Vec<Value>, String> {
+    let mut stream = service.route(method, params, Some(ctx)).await.map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     while let Some(item) = stream.next().await {
         match item {
@@ -207,8 +207,8 @@ impl QuotaSeam {
 
     fn client(&self) -> Result<QuotaClient<HubTransport>, Refusal> {
         let (w, ctx) = self.at.get().ok_or_else(|| Refusal::Failed("not attached to a running service".into()))?;
-        let hub = w.upgrade().ok_or_else(|| Refusal::Failed("the service has stopped".into()))?;
-        Ok(QuotaClient::new(HubTransport::as_(hub, ctx.clone())))
+        let service = w.upgrade().ok_or_else(|| Refusal::Failed("the service has stopped".into()))?;
+        Ok(QuotaClient::new(HubTransport::as_(service, ctx.clone())))
     }
 
     fn principal(p: &str) -> Result<crate::vocab::PrincipalName, Refusal> {

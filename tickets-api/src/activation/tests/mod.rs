@@ -9,7 +9,7 @@ mod commits;
 mod nav;
 mod work;
 
-fn hub() -> TicketsActivation {
+fn service() -> TicketsActivation {
     TicketsActivation::new(Arc::new(Store::new()))
 }
 
@@ -54,8 +54,8 @@ fn a_refusal_names_only_the_tickets_the_caller_can_see() {
 
 #[tokio::test]
 async fn health_reports_count() {
-    let hub = hub();
-    match one(hub.health(operator()).await).await {
+    let service = service();
+    match one(service.health(operator()).await).await {
         TicketsEvent::Health { ticket_count, .. } => assert_eq!(ticket_count, 0),
         other => panic!("expected Health, got {other:?}"),
     }
@@ -63,8 +63,8 @@ async fn health_reports_count() {
 
 #[tokio::test]
 async fn create_allocates_sequential_ids() {
-    let hub = hub();
-    let ev = one(hub.create(operator(), "mng".into(), "first".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    let service = service();
+    let ev = one(service.create(operator(), "mng".into(), "first".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     match ev {
         TicketsEvent::Created { ticket } => {
             assert_eq!(ticket.id, "MNG-1");
@@ -72,7 +72,7 @@ async fn create_allocates_sequential_ids() {
         }
         other => panic!("expected Created, got {other:?}"),
     }
-    let ev = one(hub.create(operator(), "MNG".into(), "second".into(), None, None, None, None, None, None, None).await).await;
+    let ev = one(service.create(operator(), "MNG".into(), "second".into(), None, None, None, None, None, None, None).await).await;
     match ev {
         TicketsEvent::Created { ticket } => assert_eq!(ticket.id, "MNG-2"),
         other => panic!("expected Created, got {other:?}"),
@@ -84,15 +84,15 @@ async fn create_allocates_sequential_ids() {
 /// that names all five, and nothing is created.
 #[tokio::test]
 async fn create_defaults_kind_to_build_accepts_gap_and_rejects_unknown_naming_the_six() {
-    let hub = hub();
+    let service = service();
     // MNG-12: the prefix's scope root first; the default is measured
     // on the ticket after it.
-    one(hub.create(operator(), "MNG".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
-    match one(hub.create(operator(), "MNG".into(), "no kind".into(), None, None, None, None, None, None, None).await).await {
+    one(service.create(operator(), "MNG".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    match one(service.create(operator(), "MNG".into(), "no kind".into(), None, None, None, None, None, None, None).await).await {
         TicketsEvent::Created { ticket } => assert_eq!(ticket.kind, Kind::Build),
         other => panic!("expected Created, got {other:?}"),
     }
-    match one(hub.create(operator(), "MNG".into(), "a gap".into(), Some("gap".into()), None, None, None, None, None, None).await)
+    match one(service.create(operator(), "MNG".into(), "a gap".into(), Some("gap".into()), None, None, None, None, None, None).await)
         .await
     {
         TicketsEvent::Created { ticket } => assert_eq!(ticket.kind, Kind::Gap),
@@ -106,7 +106,7 @@ async fn create_defaults_kind_to_build_accepts_gap_and_rejects_unknown_naming_th
         assert!(message.contains(name), "names {name}: {message}");
     }
     assert!(matches!(
-        one(hub.get(operator(), "MNG-4".into()).await).await,
+        one(service.get(operator(), "MNG-4".into()).await).await,
         TicketsEvent::NotFound { .. }
     ));
 }
@@ -118,39 +118,39 @@ async fn create_defaults_kind_to_build_accepts_gap_and_rejects_unknown_naming_th
 /// `list { status: Doc }` finds the doc.
 #[tokio::test]
 async fn a_doc_over_the_activation_refuses_every_lifecycle_write_in_band() {
-    let hub = hub();
-    match one(hub.create(operator(), "DOCS".into(), "the manifest".into(), Some("doc".into()), None, None, None, None, None, None).await).await {
+    let service = service();
+    match one(service.create(operator(), "DOCS".into(), "the manifest".into(), Some("doc".into()), None, None, None, None, None, None).await).await {
         TicketsEvent::Created { ticket } => {
             assert_eq!((ticket.id.as_str(), ticket.kind, ticket.status), ("DOCS-1", Kind::Doc, Status::Doc));
         }
         other => panic!("expected Created, got {other:?}"),
     }
-    one(hub.create(operator(), "DOCS".into(), "work".into(), None, None, None, None, None, None, None).await).await; // DOCS-2
+    one(service.create(operator(), "DOCS".into(), "work".into(), None, None, None, None, None, None, None).await).await; // DOCS-2
     for status in ["Ready", "Complete", "Doc", "active"] {
-        match one(hub.set_status(operator(), "DOCS-1".into(), status.into(), None, None, None).await).await {
+        match one(service.set_status(operator(), "DOCS-1".into(), status.into(), None, None, None).await).await {
             TicketsEvent::Error { message } => assert!(message.contains("a doc has no lifecycle"), "{message}"),
             other => panic!("{status}: expected Error, got {other:?}"),
         }
     }
-    match one(hub.set_status(operator(), "DOCS-2".into(), "doc".into(), None, None, None).await).await {
+    match one(service.set_status(operator(), "DOCS-2".into(), "doc".into(), None, None, None).await).await {
         TicketsEvent::Error { message } => assert!(message.contains("Doc is a doc's own status"), "{message}"),
         other => panic!("expected Error, got {other:?}"),
     }
     let blocked = Some(vec!["DOCS-2".into()]);
-    match one(hub.create(operator(), "DOCS".into(), "x".into(), Some("doc".into()), None, blocked, None, None, None, None).await).await {
+    match one(service.create(operator(), "DOCS".into(), "x".into(), Some("doc".into()), None, blocked, None, None, None, None).await).await {
         TicketsEvent::Error { message } => assert!(message.contains("a doc is never blocked"), "{message}"),
         other => panic!("expected Error, got {other:?}"),
     }
     let on_doc = Some(vec!["DOCS-1".into()]);
-    match one(hub.create(operator(), "DOCS".into(), "x".into(), None, None, on_doc, None, None, None, None).await).await {
+    match one(service.create(operator(), "DOCS".into(), "x".into(), None, None, on_doc, None, None, None, None).await).await {
         TicketsEvent::Error { message } => assert!(message.contains("'DOCS-1' is a doc"), "{message}"),
         other => panic!("expected Error, got {other:?}"),
     }
-    match one(flat(hub.list(operator(), None, Some("Doc".into()), None, None, None, Some(true), None, None, None, None, None).await)).await {
+    match one(flat(service.list(operator(), None, Some("Doc".into()), None, None, None, Some(true), None, None, None, None, None).await)).await {
         TicketsEvent::Summary { summary } => assert_eq!((summary.id.as_str(), summary.status), ("DOCS-1", Status::Doc)),
         other => panic!("expected Summary, got {other:?}"),
     }
-    match one(hub.get(operator(), "DOCS-1".into()).await).await {
+    match one(service.get(operator(), "DOCS-1".into()).await).await {
         TicketsEvent::Ticket { ticket } => assert_eq!(ticket.status, Status::Doc, "nothing moved it"),
         other => panic!("expected Ticket, got {other:?}"),
     }
@@ -158,36 +158,36 @@ async fn a_doc_over_the_activation_refuses_every_lifecycle_write_in_band() {
 
 #[tokio::test]
 async fn get_distinguishes_found_from_missing() {
-    let hub = hub();
-    one(hub.create(operator(), "MNG".into(), "x".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    let service = service();
+    one(service.create(operator(), "MNG".into(), "x".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     assert!(matches!(
-        one(hub.get(operator(), "MNG-1".into()).await).await,
+        one(service.get(operator(), "MNG-1".into()).await).await,
         TicketsEvent::Ticket { .. }
     ));
     assert!(matches!(
-        one(hub.get(operator(), "MNG-99".into()).await).await,
+        one(service.get(operator(), "MNG-99".into()).await).await,
         TicketsEvent::NotFound { .. }
     ));
 }
 
 #[tokio::test]
 async fn list_filters_by_status() {
-    let hub = hub();
-    one(hub.create(operator(), "MNG".into(), "a".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
-    one(hub.create(operator(), "MNG".into(), "b".into(), None, None, None, None, None, None, None).await).await;
-    one(hub.set_status(operator(), "MNG-1".into(), "Ready".into(), None, None, None).await).await;
+    let service = service();
+    one(service.create(operator(), "MNG".into(), "a".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    one(service.create(operator(), "MNG".into(), "b".into(), None, None, None, None, None, None, None).await).await;
+    one(service.set_status(operator(), "MNG-1".into(), "Ready".into(), None, None, None).await).await;
 
     let (ids, page) =
-        ids_and_page(flat(hub.list(operator(), None, Some("Ready".into()), None, None, None, None, None, None, None, None, None).await)).await;
+        ids_and_page(flat(service.list(operator(), None, Some("Ready".into()), None, None, None, None, None, None, None, None, None).await)).await;
     assert_eq!(ids, vec!["MNG-1"]);
     assert_eq!(page, Some((None, 0)), "one match, nothing beyond it");
 }
 
 #[tokio::test]
 async fn set_status_reports_previous() {
-    let hub = hub();
-    one(hub.create(operator(), "MNG".into(), "a".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
-    match one(hub.set_status(operator(), "MNG-1".into(), "ready".into(), None, None, None).await).await {
+    let service = service();
+    one(service.create(operator(), "MNG".into(), "a".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    match one(service.set_status(operator(), "MNG-1".into(), "ready".into(), None, None, None).await).await {
         TicketsEvent::StatusChanged { ticket, previous } => {
             assert_eq!(ticket.status, Status::Ready);
             assert_eq!(previous, Status::Draft);
@@ -203,23 +203,23 @@ async fn set_status_reports_previous() {
 /// in-band `error` naming what it refuses.
 #[tokio::test]
 async fn set_kind_reports_previous_and_refuses_in_band() {
-    let hub = hub();
-    one(hub.create(operator(), "IDN".into(), "identity".into(), Some("doc".into()), None, None, None, None, None, None).await).await;
-    one(hub.create(operator(), "IDN".into(), "a".into(), None, None, None, None, None, None, None).await).await;
-    match one(hub.set_kind(operator(), "IDN-1".into(), "Scope".into(), None, None, None).await).await {
+    let service = service();
+    one(service.create(operator(), "IDN".into(), "identity".into(), Some("doc".into()), None, None, None, None, None, None).await).await;
+    one(service.create(operator(), "IDN".into(), "a".into(), None, None, None, None, None, None, None).await).await;
+    match one(service.set_kind(operator(), "IDN-1".into(), "Scope".into(), None, None, None).await).await {
         TicketsEvent::KindChanged { ticket, previous } => {
             assert_eq!((ticket.kind, ticket.status, previous), (Kind::Scope, Status::Epic, Kind::Doc));
         }
         other => panic!("expected KindChanged, got {other:?}"),
     }
-    match one(hub.set_kind(operator(), "IDN-2".into(), "gap".into(), Some("active".into()), None, None).await).await {
+    match one(service.set_kind(operator(), "IDN-2".into(), "gap".into(), Some("active".into()), None, None).await).await {
         TicketsEvent::KindChanged { ticket, previous } => {
             assert_eq!((ticket.kind, ticket.status, previous), (Kind::Gap, Status::Coding, Kind::Build));
         }
         other => panic!("expected KindChanged, got {other:?}"),
     }
     assert!(matches!(
-        one(hub.set_kind(operator(), "IDN-9".into(), "gap".into(), None, None, None).await).await,
+        one(service.set_kind(operator(), "IDN-9".into(), "gap".into(), None, None, None).await).await,
         TicketsEvent::NotFound { id } if id == "IDN-9"
     ));
     // ACCESS-8: an unknown kind or status is no Kind or Status — refused
@@ -231,7 +231,7 @@ async fn set_kind_reports_previous_and_refuses_in_band() {
         ("IDN-2", "doc", Some("Ready"), "a doc's status is Doc"),
         ("IDN-2", "spike", Some("Doc"), "Doc is a doc's own status"),
     ] {
-        match one(hub.set_kind(operator(), id.into(), kind.into(), status.map(Into::into), None, None).await).await {
+        match one(service.set_kind(operator(), id.into(), kind.into(), status.map(Into::into), None, None).await).await {
             TicketsEvent::Error { message } => assert!(message.contains(says), "{kind} {status:?}: {message}"),
             other => panic!("{kind} {status:?}: expected Error, got {other:?}"),
         }
@@ -244,29 +244,29 @@ async fn set_kind_reports_previous_and_refuses_in_band() {
 /// the wire, and `list { status }` filters on each.
 #[tokio::test]
 async fn set_status_takes_the_worker_states_and_list_filters_on_them() {
-    let hub = hub();
-    one(hub.create(operator(), "WK".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
-    one(hub.create(operator(), "WK".into(), "a".into(), None, None, None, None, None, None, None).await).await;
-    one(hub.create(operator(), "WK".into(), "b".into(), None, None, None, None, None, None, None).await).await;
+    let service = service();
+    one(service.create(operator(), "WK".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    one(service.create(operator(), "WK".into(), "a".into(), None, None, None, None, None, None, None).await).await;
+    one(service.create(operator(), "WK".into(), "b".into(), None, None, None, None, None, None, None).await).await;
 
     for (id, spelling, want, previous) in [
         ("WK-2", "Coding", Status::Coding, Status::Draft),
         ("WK-3", "active", Status::Coding, Status::Draft),
         ("WK-3", "In Review", Status::InReview, Status::Coding),
     ] {
-        match one(hub.set_status(operator(), id.into(), spelling.into(), None, None, None).await).await {
+        match one(service.set_status(operator(), id.into(), spelling.into(), None, None, None).await).await {
             TicketsEvent::StatusChanged { ticket, previous: was } => {
                 assert_eq!((ticket.id.as_str(), ticket.status, was), (id, want, previous), "{spelling}");
             }
             other => panic!("{spelling}: expected StatusChanged, got {other:?}"),
         }
     }
-    let wire = serde_json::to_value(one(hub.get(operator(), "WK-3".into()).await).await).unwrap();
+    let wire = serde_json::to_value(one(service.get(operator(), "WK-3".into()).await).await).unwrap();
     assert_eq!(wire["ticket"]["status"], "In Review");
 
-    let (ids, _) = ids_and_page(flat(hub.list(operator(), None, Some("coding".into()), None, None, None, None, None, None, None, None, None).await)).await;
+    let (ids, _) = ids_and_page(flat(service.list(operator(), None, Some("coding".into()), None, None, None, None, None, None, None, None, None).await)).await;
     assert_eq!(ids, ["WK-2"]);
-    let (ids, _) = ids_and_page(flat(hub.list(operator(), None, Some("In Review".into()), None, None, None, None, None, None, None, None, None).await)).await;
+    let (ids, _) = ids_and_page(flat(service.list(operator(), None, Some("In Review".into()), None, None, None, None, None, None, None, None, None).await)).await;
     assert_eq!(ids, ["WK-3"]);
 }
 
@@ -278,27 +278,27 @@ async fn set_status_takes_the_worker_states_and_list_filters_on_them() {
 /// real change.
 #[tokio::test]
 async fn a_body_past_the_cap_is_the_typed_body_too_large() {
-    let hub = TicketsActivation::new(Arc::new(Store::new().with_body_max(10)));
-    one(hub.create(operator(), "BIG".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
-    let ev = one(hub.create(operator(), "BIG".into(), "page".into(), Some("doc".into()), None, None, Some("x".repeat(11).as_str().into()), None, None, None).await).await;
+    let service = TicketsActivation::new(Arc::new(Store::new().with_body_max(10)));
+    one(service.create(operator(), "BIG".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    let ev = one(service.create(operator(), "BIG".into(), "page".into(), Some("doc".into()), None, None, Some("x".repeat(11).as_str().into()), None, None, None).await).await;
     let wire = serde_json::to_value(&ev).unwrap();
     assert_eq!((wire["type"].as_str(), wire["bytes"].as_u64(), wire["max"].as_u64()), (Some("body_too_large"), Some(11), Some(10)), "{wire}");
     assert!(wire["id"].is_null() && wire["message"].as_str().unwrap().contains("past the 10-byte cap"), "{wire}");
-    let ev = one(hub.amend(operator(), "BIG-1".into(), None, Some("y".repeat(12).as_str().into())).await).await;
+    let ev = one(service.amend(operator(), "BIG-1".into(), None, Some("y".repeat(12).as_str().into())).await).await;
     let wire = serde_json::to_value(&ev).unwrap();
     assert_eq!((wire["type"].as_str(), wire["id"].as_str(), wire["bytes"].as_u64()), (Some("body_too_large"), Some("BIG-1"), Some(12)), "{wire}");
     // At the cap, kept.
-    let ev = one(hub.amend(operator(), "BIG-1".into(), None, Some("z".repeat(10).as_str().into())).await).await;
+    let ev = one(service.amend(operator(), "BIG-1".into(), None, Some("z".repeat(10).as_str().into())).await).await;
     assert!(matches!(ev, TicketsEvent::Amended { .. }), "{ev:?}");
 }
 
 #[tokio::test]
 async fn amend_yields_amended_and_watch_carries_only_what_changed() {
-    let hub = hub();
-    one(hub.create(operator(), "AM".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
-    let mut watch = Box::pin(hub.watch(operator(), None, None, None, None, None).await);
+    let service = service();
+    one(service.create(operator(), "AM".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    let mut watch = Box::pin(service.watch(operator(), None, None, None, None, None).await);
 
-    let ev = one(hub.amend(operator(), "am-1".into(), None, Some("the body, now".into())).await).await;
+    let ev = one(service.amend(operator(), "am-1".into(), None, Some("the body, now".into())).await).await;
     let wire = serde_json::to_value(&ev).unwrap();
     assert_eq!(wire["type"], "amended");
     assert_eq!(wire["changed"], serde_json::json!(["body"]));
@@ -312,18 +312,18 @@ async fn amend_yields_amended_and_watch_carries_only_what_changed() {
         other => panic!("expected Amended, got {other:?}"),
     }
 
-    match one(hub.amend(operator(), "AM-1".into(), None, Some("the body, now".into())).await).await {
+    match one(service.amend(operator(), "AM-1".into(), None, Some("the body, now".into())).await).await {
         TicketsEvent::Amended { changed, .. } => assert!(changed.is_empty(), "{changed:?}"),
         other => panic!("expected Amended, got {other:?}"),
     }
     assert!(matches!(
-        one(hub.amend(operator(), "AM-7".into(), Some("t".into()), None).await).await,
+        one(service.amend(operator(), "AM-7".into(), Some("t".into()), None).await).await,
         TicketsEvent::NotFound { id } if id == "AM-7"
     ));
     // ACCESS-8: a blank title is no Title — refused at dispatch.
     assert!("  ".parse::<crate::vocab::Title>().unwrap_err().contains("not blank"));
 
-    one(hub.amend(operator(), "AM-1".into(), Some("a better title".into()), None).await).await;
+    one(service.amend(operator(), "AM-1".into(), Some("a better title".into()), None).await).await;
     match watch.next().await.expect("change") {
         TicketsEvent::Amended { ticket, changed } => {
             assert_eq!(ticket.title, "a better title");
@@ -335,10 +335,10 @@ async fn amend_yields_amended_and_watch_carries_only_what_changed() {
 
 #[tokio::test]
 async fn watch_sees_creations_and_status_changes() {
-    let hub = hub();
-    let mut watch = Box::pin(hub.watch(operator(), None, None, None, None, None).await);
+    let service = service();
+    let mut watch = Box::pin(service.watch(operator(), None, None, None, None, None).await);
 
-    one(hub.create(operator(), "MNG".into(), "a".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    one(service.create(operator(), "MNG".into(), "a".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     match watch.next().await.expect("change") {
         TicketsEvent::Created { ticket } => assert_eq!(ticket.id, "MNG-1"),
         other => panic!("expected Created, got {other:?}"),
@@ -357,7 +357,7 @@ async fn watch_sees_creations_and_status_changes() {
         other => panic!("expected GroupChanged, got {other:?}"),
     }
 
-    one(hub.set_status(operator(), "MNG-1".into(), "Ready".into(), None, None, None).await).await;
+    one(service.set_status(operator(), "MNG-1".into(), "Ready".into(), None, None, None).await).await;
     match watch.next().await.expect("change") {
         TicketsEvent::StatusChanged { previous, .. } => assert_eq!(previous, Status::Draft),
         other => panic!("expected StatusChanged, got {other:?}"),
@@ -401,11 +401,11 @@ async fn ids_and_page(
 
 #[tokio::test]
 async fn create_adds_new_id_to_blockers_unlocks_and_watch_carries_it() {
-    let hub = hub();
-    one(hub.create(operator(), "DAG".into(), "a".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
-    let mut watch = Box::pin(untransitioned(hub.watch(operator(), None, None, None, None, None).await));
+    let service = service();
+    one(service.create(operator(), "DAG".into(), "a".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    let mut watch = Box::pin(untransitioned(service.watch(operator(), None, None, None, None, None).await));
 
-    one(hub
+    one(service
         .create(operator(), "DAG".into(), "b".into(), None, None, Some(vec!["DAG-1".into()]), None, None, None, None)
         .await)
     .await;
@@ -436,7 +436,7 @@ async fn create_adds_new_id_to_blockers_unlocks_and_watch_carries_it() {
         other => panic!("expected UnlocksChanged, got {other:?}"),
     }
 
-    match one(hub.get(operator(), "DAG-1".into()).await).await {
+    match one(service.get(operator(), "DAG-1".into()).await).await {
         TicketsEvent::Ticket { ticket } => assert_eq!(ticket.unlocks, vec!["DAG-2"]),
         other => panic!("expected Ticket, got {other:?}"),
     }
@@ -448,12 +448,12 @@ async fn create_adds_new_id_to_blockers_unlocks_and_watch_carries_it() {
 /// update as `children_changed`: its id, the child and its new count.
 #[tokio::test]
 async fn create_with_parent_updates_children_and_watch_carries_the_parent() {
-    let hub = hub();
-    one(hub.create(operator(), "FAM".into(), "P".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
-    let mut watch = Box::pin(untransitioned(hub.watch(operator(), None, None, None, None, None).await));
+    let service = service();
+    one(service.create(operator(), "FAM".into(), "P".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    let mut watch = Box::pin(untransitioned(service.watch(operator(), None, None, None, None, None).await));
 
     match one(
-        hub.create(operator(), 
+        service.create(operator(), 
             "FAM".into(),
             "C".into(),
             Some("execution".into()),
@@ -498,7 +498,7 @@ async fn create_with_parent_updates_children_and_watch_carries_the_parent() {
         serde_json::json!({"type": "children_changed", "id": "FAM-1", "added": "FAM-2", "child_count": 1})
     );
 
-    match one(hub.get(operator(), "FAM-1".into()).await).await {
+    match one(service.get(operator(), "FAM-1".into()).await).await {
         TicketsEvent::Ticket { ticket } => {
             assert_eq!(ticket.child_count, 1);
             assert_eq!(ticket.parent, None);
@@ -506,10 +506,10 @@ async fn create_with_parent_updates_children_and_watch_carries_the_parent() {
         other => panic!("expected Ticket, got {other:?}"),
     }
     assert_eq!(
-        ticket_ids(flat(hub.list(operator(), None, None, Some("FAM-1".into()), None, None, None, None, None, None, None, None).await)).await,
+        ticket_ids(flat(service.list(operator(), None, None, Some("FAM-1".into()), None, None, None, None, None, None, None, None).await)).await,
         vec!["FAM-2"]
     );
-    match one(hub.get(operator(), "FAM-2".into()).await).await {
+    match one(service.get(operator(), "FAM-2".into()).await).await {
         TicketsEvent::Ticket { ticket } => assert_eq!(ticket.parent.as_deref(), Some("FAM-1")),
         other => panic!("expected Ticket, got {other:?}"),
     }
@@ -519,9 +519,9 @@ async fn create_with_parent_updates_children_and_watch_carries_the_parent() {
 /// error naming the reason, and nothing is created.
 #[tokio::test]
 async fn create_rejects_a_nonexistent_parent_in_band() {
-    let hub = hub();
+    let service = service();
     let ev = one(
-        hub.create(operator(), 
+        service.create(operator(), 
             "ORPH".into(),
             "no such parent".into(),
             Some("scope".into()),
@@ -542,7 +542,7 @@ async fn create_rejects_a_nonexistent_parent_in_band() {
         other => panic!("expected Error, got {other:?}"),
     }
     assert!(matches!(
-        one(hub.get(operator(), "ORPH-1".into()).await).await,
+        one(service.get(operator(), "ORPH-1".into()).await).await,
         TicketsEvent::NotFound { .. }
     ));
 }
@@ -551,12 +551,12 @@ async fn create_rejects_a_nonexistent_parent_in_band() {
 /// children, in (epic, seq) order.
 #[tokio::test]
 async fn list_filters_by_parent() {
-    let hub = hub();
-    one(hub.create(operator(), "LP".into(), "P".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
-    one(hub.create(operator(), "LP".into(), "unrelated".into(), None, None, None, None, None, None, None).await).await;
+    let service = service();
+    one(service.create(operator(), "LP".into(), "P".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    one(service.create(operator(), "LP".into(), "unrelated".into(), None, None, None, None, None, None, None).await).await;
     // ZZ's first ticket is its scope root (MNG-12), filed under LP-1.
     for (epic, title, kind) in [("LP", "child a", None), ("ZZ", "child b", Some("scope"))] {
-        one(hub
+        one(service
             .create(operator(), 
                 epic.into(),
                 title.into(),
@@ -573,14 +573,14 @@ async fn list_filters_by_parent() {
 
     // MNG-14: "unrelated" (LP-2) named no parent and hangs under the root.
     assert_eq!(
-        ticket_ids(flat(hub.list(operator(), None, None, Some("LP-1".into()), None, None, None, None, None, None, None, None).await)).await,
+        ticket_ids(flat(service.list(operator(), None, None, Some("LP-1".into()), None, None, None, None, None, None, None, None).await)).await,
         vec!["LP-2", "LP-3", "ZZ-1"]
     );
-    assert!(ticket_ids(flat(hub.list(operator(), None, None, Some("LP-2".into()), None, None, None, None, None, None, None, None).await))
+    assert!(ticket_ids(flat(service.list(operator(), None, None, Some("LP-2".into()), None, None, None, None, None, None, None, None).await))
         .await
         .is_empty());
     assert_eq!(
-        ticket_ids(flat(hub.list(operator(), None, None, None, None, None, None, None, None, None, None, None).await)).await.len(),
+        ticket_ids(flat(service.list(operator(), None, None, None, None, None, None, None, None, None, None, None).await)).await.len(),
         4,
         "unfiltered list is unchanged"
     );
@@ -591,8 +591,8 @@ async fn list_filters_by_parent() {
 /// key at all (what a board renders; the body arrives via `get`).
 #[tokio::test]
 async fn summary_rows_carry_every_field_but_the_body() {
-    let hub = hub();
-    one(hub
+    let service = service();
+    one(service
         .create(operator(), 
             "SUM".into(),
             "with a body".into(),
@@ -606,7 +606,7 @@ async fn summary_rows_carry_every_field_but_the_body() {
         .await)
     .await;
 
-    let evs: Vec<_> = Box::pin(flat(hub.list(operator(), None, None, None, None, None, Some(true), None, None, None, None, None).await))
+    let evs: Vec<_> = Box::pin(flat(service.list(operator(), None, None, None, None, None, Some(true), None, None, None, None, None).await))
         .collect()
         .await;
     assert_eq!(evs.len(), 2, "one row, one page: {evs:?}");
@@ -622,7 +622,7 @@ async fn summary_rows_carry_every_field_but_the_body() {
     assert!(summary.get("children").is_none(), "SCALE-4: no list of children: {summary}");
 
     // The full ticket still carries it, unchanged.
-    let evs: Vec<_> = Box::pin(flat(hub.list(operator(), None, None, None, None, None, None, None, None, None, None, None).await))
+    let evs: Vec<_> = Box::pin(flat(service.list(operator(), None, None, None, None, None, None, None, None, None, None, None).await))
         .collect()
         .await;
     let row = serde_json::to_value(&evs[0]).unwrap();
@@ -634,14 +634,14 @@ async fn summary_rows_carry_every_field_but_the_body() {
 /// and nothing else — no rows, no page (there is nowhere to resume).
 #[tokio::test]
 async fn an_after_that_names_no_ticket_is_one_in_band_error() {
-    let hub = hub();
-    one(hub.create(operator(), "CUR".into(), "a".into(), None, None, None, None, None, None, None).await).await;
+    let service = service();
+    one(service.create(operator(), "CUR".into(), "a".into(), None, None, None, None, None, None, None).await).await;
 
     for evs in [
-        Box::pin(flat(hub.list(operator(), None, None, None, Some("ZZZ-9".into()), None, None, None, None, None, None, None).await))
+        Box::pin(flat(service.list(operator(), None, None, None, Some("ZZZ-9".into()), None, None, None, None, None, None, None).await))
             .collect::<Vec<_>>()
             .await,
-        Box::pin(flat(hub.work().ready(operator(), None, Some("ZZZ-9".into()), None, None, None, None, None).await))
+        Box::pin(flat(service.work().ready(operator(), None, Some("ZZZ-9".into()), None, None, None, None, None).await))
             .collect::<Vec<_>>()
             .await,
     ] {
@@ -663,33 +663,33 @@ async fn an_after_that_names_no_ticket_is_one_in_band_error() {
 /// error.
 #[tokio::test]
 async fn find_yields_summary_rows_then_one_page_fifty_by_default() {
-    let hub = hub();
+    let service = service();
     for i in 1..=60 {
         let kind = (i == 1).then_some(crate::types::Kind::Scope); // MNG-12: the root first
-        one(hub.create(operator(), "FND".into(), format!("row {i}").as_str().into(), kind, None, None, Some("a body".into()), None, None, None).await).await;
+        one(service.create(operator(), "FND".into(), format!("row {i}").as_str().into(), kind, None, None, Some("a body".into()), None, None, None).await).await;
     }
-    one(hub.create(operator(), "OTH".into(), "The Ticket Page".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    one(service.create(operator(), "OTH".into(), "The Ticket Page".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
 
-    let evs: Vec<TicketsEvent> = Box::pin(flat(hub.find(operator(), "".into(), None, None, None, None, None).await)).collect().await;
+    let evs: Vec<TicketsEvent> = Box::pin(flat(service.find(operator(), "".into(), None, None, None, None, None).await)).collect().await;
     assert_eq!(evs.len(), 51, "50 rows and the page");
     let row = serde_json::to_value(&evs[0]).unwrap();
     assert_eq!((row["type"].as_str(), row["summary"]["id"].as_str()), (Some("summary"), Some("FND-1")));
     assert!(row["summary"].get("body").is_none(), "a summary carries no body: {row}");
-    let (ids, page) = ids_and_page(flat(hub.find(operator(), "".into(), None, None, None, None, None).await)).await;
+    let (ids, page) = ids_and_page(flat(service.find(operator(), "".into(), None, None, None, None, None).await)).await;
     assert_eq!(ids.len(), 50, "the palette's 50 when no limit is asked");
     assert_eq!(page, Some((Some("FND-50".into()), 11)));
 
-    let (ids, page) = ids_and_page(flat(hub.find(operator(), "  fnd-5 ".into(), None, None, None, None, None).await)).await;
+    let (ids, page) = ids_and_page(flat(service.find(operator(), "  fnd-5 ".into(), None, None, None, None, None).await)).await;
     let expected: Vec<String> =
         std::iter::once(5).chain(50..=59).map(|n| format!("FND-{n}")).collect();
     assert_eq!(ids, expected, "trimmed, case-folded, in (epic, seq) order");
     assert_eq!(page, Some((None, 0)));
 
     let (ids, page) =
-        ids_and_page(flat(hub.find(operator(), "ticket page".into(), Some("fnd-3".into()), Some(1), None, None, None).await)).await;
+        ids_and_page(flat(service.find(operator(), "ticket page".into(), Some("fnd-3".into()), Some(1), None, None, None).await)).await;
     assert_eq!((ids, page), (vec!["OTH-1".to_string()], Some((None, 0))));
 
-    let evs: Vec<TicketsEvent> = Box::pin(flat(hub.find(operator(), "row".into(), Some("ZZZ-9".into()), None, None, None, None).await))
+    let evs: Vec<TicketsEvent> = Box::pin(flat(service.find(operator(), "row".into(), Some("ZZZ-9".into()), None, None, None, None).await))
         .collect()
         .await;
     match evs.as_slice() {
@@ -700,20 +700,20 @@ async fn find_yields_summary_rows_then_one_page_fifty_by_default() {
 
 #[tokio::test]
 async fn dangling_forward_reference_resolves_at_birth() {
-    let hub = hub();
-    one(hub
+    let service = service();
+    one(service
         .create(operator(), "DAG".into(), "d1".into(), Some("scope".into()), None, Some(vec!["DAG-2".into()]), None, None, None, None)
         .await)
     .await;
     // The ticket that becomes DAG-2 has DAG-1 in unlocks from birth.
-    match one(hub.create(operator(), "DAG".into(), "d2".into(), None, None, None, None, None, None, None).await).await {
+    match one(service.create(operator(), "DAG".into(), "d2".into(), None, None, None, None, None, None, None).await).await {
         TicketsEvent::Created { ticket } => {
             assert_eq!(ticket.id, "DAG-2");
             assert_eq!(ticket.unlocks, vec!["DAG-1"]);
         }
         other => panic!("expected Created, got {other:?}"),
     }
-    match one(hub.get(operator(), "DAG-2".into()).await).await {
+    match one(service.get(operator(), "DAG-2".into()).await).await {
         TicketsEvent::Ticket { ticket } => assert_eq!(ticket.unlocks, vec!["DAG-1"]),
         other => panic!("expected Ticket, got {other:?}"),
     }
@@ -721,9 +721,9 @@ async fn dangling_forward_reference_resolves_at_birth() {
 
 #[tokio::test]
 async fn create_rejects_self_reference() {
-    let hub = hub();
+    let service = service();
     // First create in the epic allocates DAG-1; naming it is a self-cycle.
-    let ev = one(hub
+    let ev = one(service
         .create(operator(), "DAG".into(), "me".into(), Some("scope".into()), None, Some(vec!["DAG-1".into()]), None, None, None, None)
         .await)
     .await;
@@ -732,21 +732,21 @@ async fn create_rejects_self_reference() {
         other => panic!("expected Error, got {other:?}"),
     }
     assert!(matches!(
-        one(hub.get(operator(), "DAG-1".into()).await).await,
+        one(service.get(operator(), "DAG-1".into()).await).await,
         TicketsEvent::NotFound { .. }
     ));
 }
 
 #[tokio::test]
 async fn create_rejects_cycle_through_dangling_forward_reference() {
-    let hub = hub();
+    let service = service();
     // DAG-1 blocked_by the not-yet-existing DAG-2.
-    one(hub
+    one(service
         .create(operator(), "DAG".into(), "d1".into(), Some("scope".into()), None, Some(vec!["DAG-2".into()]), None, None, None, None)
         .await)
     .await;
     // The create that would become DAG-2, blocked_by DAG-1, closes the loop.
-    let ev = one(hub
+    let ev = one(service
         .create(operator(), "DAG".into(), "d2".into(), None, None, Some(vec!["DAG-1".into()]), None, None, None, None)
         .await)
     .await;
@@ -756,41 +756,41 @@ async fn create_rejects_cycle_through_dangling_forward_reference() {
     }
     // Nothing was stored.
     assert!(matches!(
-        one(hub.get(operator(), "DAG-2".into()).await).await,
+        one(service.get(operator(), "DAG-2".into()).await).await,
         TicketsEvent::NotFound { .. }
     ));
 }
 
 #[tokio::test]
 async fn create_rejects_longer_cycles() {
-    let hub = hub();
-    one(hub
+    let service = service();
+    one(service
         .create(operator(), "DAG".into(), "p1".into(), Some("scope".into()), None, Some(vec!["DAG-3".into()]), None, None, None, None)
         .await)
     .await;
-    one(hub
+    one(service
         .create(operator(), "DAG".into(), "p2".into(), None, None, Some(vec!["DAG-1".into()]), None, None, None, None)
         .await)
     .await;
     // Would become DAG-3: DAG-3 -> DAG-2 -> DAG-1 -> DAG-3.
-    let ev = one(hub
+    let ev = one(service
         .create(operator(), "DAG".into(), "p3".into(), None, None, Some(vec!["DAG-2".into()]), None, None, None, None)
         .await)
     .await;
     assert!(matches!(ev, TicketsEvent::Error { .. }), "got {ev:?}");
     assert!(matches!(
-        one(hub.get(operator(), "DAG-3".into()).await).await,
+        one(service.get(operator(), "DAG-3".into()).await).await,
         TicketsEvent::NotFound { .. }
     ));
 }
 
 #[tokio::test]
 async fn watch_epic_filter_drops_other_epics() {
-    let hub = hub();
-    let mut watch = Box::pin(hub.watch(operator(), Some("mng".into()), None, None, None, None).await);
+    let service = service();
+    let mut watch = Box::pin(service.watch(operator(), Some("mng".into()), None, None, None, None).await);
 
-    one(hub.create(operator(), "OTHER".into(), "x".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
-    one(hub.create(operator(), "MNG".into(), "y".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    one(service.create(operator(), "OTHER".into(), "x".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    one(service.create(operator(), "MNG".into(), "y".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
 
     match watch.next().await.expect("change") {
         TicketsEvent::Created { ticket } => assert_eq!(ticket.epic, "MNG"),
@@ -824,14 +824,14 @@ fn label(ev: &TicketsEvent) -> String {
 async fn a_watch_that_falls_behind_reads_one_lagged_then_the_newest_changes() {
     const CREATES: u64 = 200;
     const HELD: u64 = 256; // Store::with_connection's broadcast capacity
-    let hub = hub();
-    one(hub.create(operator(), "LAG".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
-    let mut watch = Box::pin(hub.watch(operator(), None, None, None, None, None).await);
-    let mut other = Box::pin(hub.watch(operator(), Some("other".into()), None, None, None, None).await);
+    let service = service();
+    one(service.create(operator(), "LAG".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    let mut watch = Box::pin(service.watch(operator(), None, None, None, None, None).await);
+    let mut other = Box::pin(service.watch(operator(), Some("other".into()), None, None, None, None).await);
 
     let mut broadcast: Vec<String> = Vec::new();
     for k in 2..=CREATES + 1 {
-        match one(hub.create(operator(), "LAG".into(), format!("t{k}").as_str().into(), None, None, None, None, None, None, None).await).await {
+        match one(service.create(operator(), "LAG".into(), format!("t{k}").as_str().into(), None, None, None, None, None, None, None).await).await {
             TicketsEvent::Created { ticket } => assert_eq!(ticket.id, format!("LAG-{k}")),
             ev => panic!("expected Created, got {ev:?}"),
         }
@@ -858,10 +858,10 @@ async fn a_watch_that_falls_behind_reads_one_lagged_then_the_newest_changes() {
     assert_eq!(read.iter().filter(|l| l.starts_with("lagged")).count(), 1);
     assert!(futures::FutureExt::now_or_never(watch.next()).is_none(), "and nothing more");
 
-    one(hub.create(operator(), "LAG".into(), "after".into(), None, None, None, None, None, None, None).await).await;
+    one(service.create(operator(), "LAG".into(), "after".into(), None, None, None, None, None, None, None).await).await;
     assert_eq!(label(&watch.next().await.expect("an event")), format!("created LAG-{}", CREATES + 2), "and on, as usual");
 
-    one(hub.create(operator(), "OTHER".into(), "its own".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    one(service.create(operator(), "OTHER".into(), "its own".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     assert_eq!(label(&other.next().await.expect("an event")), "created OTHER-1", "then only its own epic");
 
     let wire = serde_json::to_value(TicketsEvent::Lagged { missed: 3 }).unwrap();
@@ -873,14 +873,14 @@ async fn a_watch_that_falls_behind_reads_one_lagged_then_the_newest_changes() {
 /// carries both parents' sides.
 #[tokio::test]
 async fn set_parent_yields_parent_changed_and_maps_errors_in_band() {
-    let hub = hub();
-    one(hub.create(operator(), "SP".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
-    one(hub.create(operator(), "SP".into(), "a".into(), None, None, None, None, None, None, None).await).await; // SP-2 → SP-1
-    one(hub.create(operator(), "SP".into(), "b".into(), None, None, None, None, None, None, None).await).await; // SP-3 → SP-1
-    one(hub.create(operator(), "OT".into(), "other".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
-    let mut watch = Box::pin(hub.watch(operator(), None, None, None, None, None).await);
+    let service = service();
+    one(service.create(operator(), "SP".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    one(service.create(operator(), "SP".into(), "a".into(), None, None, None, None, None, None, None).await).await; // SP-2 → SP-1
+    one(service.create(operator(), "SP".into(), "b".into(), None, None, None, None, None, None, None).await).await; // SP-3 → SP-1
+    one(service.create(operator(), "OT".into(), "other".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    let mut watch = Box::pin(service.watch(operator(), None, None, None, None, None).await);
 
-    match one(hub.set_parent(operator(), "sp-3".into(), "sp-2".into()).await).await {
+    match one(service.set_parent(operator(), "sp-3".into(), "sp-2".into()).await).await {
         TicketsEvent::ParentChanged { ticket, previous } => {
             assert_eq!(ticket.id, "SP-3");
             assert_eq!(ticket.parent.as_deref(), Some("SP-2"));
@@ -907,27 +907,27 @@ async fn set_parent_yields_parent_changed_and_maps_errors_in_band() {
     }
 
     assert!(matches!(
-        one(hub.set_parent(operator(), "SP-9".into(), "SP-1".into()).await).await,
+        one(service.set_parent(operator(), "SP-9".into(), "SP-1".into()).await).await,
         TicketsEvent::NotFound { .. }
     ));
-    match one(hub.set_parent(operator(), "SP-2".into(), "SP-9".into()).await).await {
+    match one(service.set_parent(operator(), "SP-2".into(), "SP-9".into()).await).await {
         TicketsEvent::Error { message } => {
             assert!(message.contains("SP-9") && message.contains("must exist"), "{message}")
         }
         other => panic!("expected Error, got {other:?}"),
     }
-    match one(hub.set_parent(operator(), "SP-2".into(), "OT-1".into()).await).await {
+    match one(service.set_parent(operator(), "SP-2".into(), "OT-1".into()).await).await {
         TicketsEvent::Error { message } => {
             assert!(message.contains("OT-1") && message.contains("outside"), "{message}")
         }
         other => panic!("expected Error, got {other:?}"),
     }
-    match one(hub.set_parent(operator(), "SP-1".into(), "SP-3".into()).await).await {
+    match one(service.set_parent(operator(), "SP-1".into(), "SP-3".into()).await).await {
         TicketsEvent::Error { message } => assert!(message.contains("own ancestor"), "{message}"),
         other => panic!("expected Error, got {other:?}"),
     }
     // The root may be hosted by another shortcode.
-    match one(hub.set_parent(operator(), "SP-1".into(), "OT-1".into()).await).await {
+    match one(service.set_parent(operator(), "SP-1".into(), "OT-1".into()).await).await {
         TicketsEvent::ParentChanged { ticket, .. } => assert_eq!(ticket.parent.as_deref(), Some("OT-1")),
         other => panic!("expected ParentChanged, got {other:?}"),
     }
@@ -937,15 +937,15 @@ async fn set_parent_yields_parent_changed_and_maps_errors_in_band() {
 /// activation the refusal is the in-band error naming the rule.
 #[tokio::test]
 async fn first_ticket_of_a_prefix_must_be_a_scope_in_band() {
-    let hub = hub();
-    match one(hub.create(operator(), "FRESH".into(), "a build".into(), None, None, None, None, None, None, None).await).await {
+    let service = service();
+    match one(service.create(operator(), "FRESH".into(), "a build".into(), None, None, None, None, None, None, None).await).await {
         TicketsEvent::Error { message } => {
             assert!(message.contains("FRESH") && message.contains("scope"), "{message}");
         }
         other => panic!("expected Error, got {other:?}"),
     }
     assert!(matches!(
-        one(hub.get(operator(), "FRESH-1".into()).await).await,
+        one(service.get(operator(), "FRESH-1".into()).await).await,
         TicketsEvent::NotFound { .. }
     ));
 }
@@ -958,9 +958,9 @@ async fn list_pages_by_default_and_never_past_the_most() {
     use crate::limits::{LIST_PAGE_DEFAULT, LIST_PAGE_MAX};
     let store = Arc::new(Store::new());
     store.seed_synthetic(SYS, crate::store::SeedSpec { count: 1_200, seed: 7, into_existing: false }).unwrap();
-    let hub = TicketsActivation::new(store);
+    let service = TicketsActivation::new(store);
     let list = |after: Option<crate::vocab::Cursor>, limit: Option<u32>| {
-        hub.list(operator(), None, None, None, after, limit, Some(true), None, None, None, None, None)
+        service.list(operator(), None, None, None, after, limit, Some(true), None, None, None, None, None)
     };
     let (ids, page) = ids_and_page(list(None, None).await).await;
     assert_eq!(ids.len(), LIST_PAGE_DEFAULT as usize);
@@ -972,7 +972,7 @@ async fn list_pages_by_default_and_never_past_the_most() {
     assert_eq!(ids.len(), 1_200, "under the most, what is asked");
     assert!(LIST_PAGE_MAX >= 10_000);
     // Full rows page the same way.
-    let (ids, _) = ids_and_page(flat(hub.list(operator(), None, None, None, None, None, None, None, None, None, None, None).await)).await;
+    let (ids, _) = ids_and_page(flat(service.list(operator(), None, None, None, None, None, None, None, None, None, None, None).await)).await;
     assert_eq!(ids.len(), LIST_PAGE_DEFAULT as usize);
 }
 
@@ -982,13 +982,13 @@ async fn list_pages_by_default_and_never_past_the_most() {
 /// the cap is kept.
 #[tokio::test]
 async fn a_title_and_a_filter_are_held_to_their_sizes() {
-    let hub = hub();
-    one(hub.create(operator(), "SZ".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    let service = service();
+    one(service.create(operator(), "SZ".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     let long = "t".repeat(crate::limits::TITLE_MAX + 1);
     let refused = long.parse::<crate::vocab::Title>().unwrap_err();
     assert!(refused.contains("at most 1024 bytes"), "{refused}");
     let at = "t".repeat(crate::limits::TITLE_MAX);
-    assert!(matches!(one(hub.amend(operator(), "SZ-1".into(), Some(at.as_str().into()), None).await).await, TicketsEvent::Amended { .. }));
+    assert!(matches!(one(service.amend(operator(), "SZ-1".into(), Some(at.as_str().into()), None).await).await, TicketsEvent::Amended { .. }));
     let filter = format!("kind build and {}", "not kind doc and ".repeat(300));
     let refused = filter.parse::<crate::vocab::FilterText>().unwrap_err();
     assert!(refused.contains("a filter is at most 4096 bytes"), "{refused}");

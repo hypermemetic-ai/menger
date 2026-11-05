@@ -103,11 +103,11 @@ function info(ws) {
 
 /** AUTH-4: the activations a connection's view shows, each with its methods. */
 async function viewOf(ws) {
-  const hub = (await call(ws, 'menger.schema'))[0] || {};
-  // RUN-18: namespaces in name order — the hub's own order is not fixed
+  const service = (await call(ws, 'menger.schema'))[0] || {};
+  // RUN-18: namespaces in name order — the service's own order is not fixed
   // between processes, and the checks compare views as JSON
   const out = {};
-  for (const c of [...(hub.children || [])].sort((a, b) => a.namespace.localeCompare(b.namespace))) {
+  for (const c of [...(service.children || [])].sort((a, b) => a.namespace.localeCompare(b.namespace))) {
     const s = (await call(ws, `${c.namespace}.schema`))[0] || {};
     out[c.namespace] = (s.methods || []).map((m) => m.name).filter((n) => n !== 'schema').sort();
   }

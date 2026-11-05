@@ -856,10 +856,10 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
     let client = connect(port).await;
 
     for params in [
-        json!({"epic": "HUB", "title": "the host", "kind": "scope"}), // HUB-1
-        json!({"epic": "HUB", "title": "core"}),                      // HUB-2 → HUB-1
-        json!({"epic": "HUB", "title": "under core", "parent": "HUB-2"}), // HUB-3
-        json!({"epic": "SUB", "title": "hosted", "kind": "scope", "parent": "HUB-2"}), // SUB-1
+        json!({"epic": "HOST", "title": "the host", "kind": "scope"}), // HOST-1
+        json!({"epic": "HOST", "title": "core"}),                      // HOST-2 → HOST-1
+        json!({"epic": "HOST", "title": "under core", "parent": "HOST-2"}), // HOST-3
+        json!({"epic": "SUB", "title": "hosted", "kind": "scope", "parent": "HOST-2"}), // SUB-1
         json!({"epic": "SUB", "title": "a"}),                         // SUB-2 → SUB-1
         json!({"epic": "SUB", "title": "b"}),                      // SUB-3 → SUB-1 (TICKETS-30: SUB-2 stays a leaf, so it can complete)
         json!({"epic": "DEEP", "title": "deeper", "kind": "scope", "parent": "SUB-3"}), // DEEP-1
@@ -870,7 +870,7 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
         let evs = collect(call(&client, "tickets.create", params).await).await;
         assert_eq!(evs[0]["type"], "created", "{evs:?}");
     }
-    for id in ["HUB-3", "SUB-2", "DEEP-2"] {
+    for id in ["HOST-3", "SUB-2", "DEEP-2"] {
         collect(call(&client, "tickets.set_status", json!({"id": id, "status": "Complete"})).await).await;
     }
 
@@ -884,10 +884,10 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
     assert_eq!(
         groups,
         vec![
-            json!({"epic": "DEEP", "shortcode": "DEEP", "address": "hypermemetic:HUB/SUB/DEEP", "total": 2, "done": 1, "docs": 0, "root": "DEEP-1", "root_row": root_row("deeper"), "host": "SUB-3"}),
-            json!({"epic": "HUB", "shortcode": "HUB", "address": "hypermemetic:HUB", "total": 8, "done": 3, "docs": 0, "root": "HUB-1", "root_row": root_row("the host"), "host": null}),
+            json!({"epic": "DEEP", "shortcode": "DEEP", "address": "hypermemetic:HOST/SUB/DEEP", "total": 2, "done": 1, "docs": 0, "root": "DEEP-1", "root_row": root_row("deeper"), "host": "SUB-3"}),
+            json!({"epic": "HOST", "shortcode": "HOST", "address": "hypermemetic:HOST", "total": 8, "done": 3, "docs": 0, "root": "HOST-1", "root_row": root_row("the host"), "host": null}),
             json!({"epic": "LONE", "shortcode": "LONE", "address": "hypermemetic:LONE", "total": 2, "done": 0, "docs": 0, "root": "LONE-1", "root_row": root_row("alone"), "host": null}),
-            json!({"epic": "SUB", "shortcode": "SUB", "address": "hypermemetic:HUB/SUB", "total": 5, "done": 2, "docs": 0, "root": "SUB-1", "root_row": root_row("hosted"), "host": "HUB-2"}),
+            json!({"epic": "SUB", "shortcode": "SUB", "address": "hypermemetic:HOST/SUB", "total": 5, "done": 2, "docs": 0, "root": "SUB-1", "root_row": root_row("hosted"), "host": "HOST-2"}),
         ]
     );
 
@@ -937,7 +937,7 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
 
     // Acceptance 2: the status change, then exactly one group_changed.
     let mut watch = call(&client, "tickets.watch", json!({})).await;
-    let mut hub_only = call(&client, "tickets.watch", json!({"epic": "HUB"})).await;
+    let mut host_only = call(&client, "tickets.watch", json!({"epic": "HOST"})).await;
     collect(call(&client, "tickets.set_status", json!({"id": "LONE-2", "status": "Complete"})).await).await;
     let ev = content(watch.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "status_changed");
@@ -953,19 +953,19 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
     let ev = content(watch.next().await.unwrap().unwrap());
     assert_eq!(ev, json!({"type": "placements_changed", "changes": [{"id": "LONE-2", "placement": {"type": "done"}}]}));
     // Nothing else came of it: the next item is the next write's.
-    collect(call(&client, "tickets.set_status", json!({"id": "HUB-1", "status": "Ready"})).await).await;
+    collect(call(&client, "tickets.set_status", json!({"id": "HOST-1", "status": "Ready"})).await).await;
     let ev = content(watch.next().await.unwrap().unwrap());
-    assert_eq!((ev["type"].as_str(), ev["ticket"]["id"].as_str()), (Some("status_changed"), Some("HUB-1")));
+    assert_eq!((ev["type"].as_str(), ev["ticket"]["id"].as_str()), (Some("status_changed"), Some("HOST-1")));
     let ev = content(watch.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "transition", "MENGER-13: right after its status_changed");
-    // AGS-23: HUB-1 roots HUB, and its status is on HUB's row: no count
+    // AGS-23: HOST-1 roots HOST, and its status is on HOST's row: no count
     // moved, but the group did — once, its own.
     let ev = content(watch.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "group_changed");
-    assert_eq!((ev["group"]["epic"].as_str(), ev["group"]["done"].as_u64()), (Some("HUB"), Some(3)));
+    assert_eq!((ev["group"]["epic"].as_str(), ev["group"]["done"].as_u64()), (Some("HOST"), Some(3)));
     assert_eq!(ev["group"]["root_row"]["status"], "Ready");
 
-    // Three rows deep: DEEP, then SUB, then HUB.
+    // Three rows deep: DEEP, then SUB, then HOST.
     collect(call(&client, "tickets.set_status", json!({"id": "DEEP-1", "status": "Complete"})).await).await;
     let ev = content(watch.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "status_changed");
@@ -977,23 +977,23 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
         assert_eq!(ev["type"], "group_changed");
         moved.push((ev["group"]["epic"].clone(), ev["group"]["done"].clone()));
     }
-    assert_eq!(moved, [(json!("DEEP"), json!(2)), (json!("SUB"), json!(3)), (json!("HUB"), json!(4))]);
+    assert_eq!(moved, [(json!("DEEP"), json!(2)), (json!("SUB"), json!(3)), (json!("HOST"), json!(4))]);
 
-    // `watch { epic: HUB }`: neither LONE's group nor DEEP's ticket — the
-    // HUB-1 flip and (AGS-23) the root row it moved, then HUB's own row.
-    let ev = content(hub_only.next().await.unwrap().unwrap());
-    assert_eq!((ev["type"].as_str(), ev["ticket"]["id"].as_str()), (Some("status_changed"), Some("HUB-1")));
-    // MENGER-13: HUB-1's transition is HUB's; DEEP-1's is not.
-    let ev = content(hub_only.next().await.unwrap().unwrap());
-    assert_eq!((ev["type"].as_str(), ev["transition"]["ticket"].as_str()), (Some("transition"), Some("HUB-1")));
-    let ev = content(hub_only.next().await.unwrap().unwrap());
+    // `watch { epic: HOST }`: neither LONE's group nor DEEP's ticket — the
+    // HOST-1 flip and (AGS-23) the root row it moved, then HOST's own row.
+    let ev = content(host_only.next().await.unwrap().unwrap());
+    assert_eq!((ev["type"].as_str(), ev["ticket"]["id"].as_str()), (Some("status_changed"), Some("HOST-1")));
+    // MENGER-13: HOST-1's transition is HOST's; DEEP-1's is not.
+    let ev = content(host_only.next().await.unwrap().unwrap());
+    assert_eq!((ev["type"].as_str(), ev["transition"]["ticket"].as_str()), (Some("transition"), Some("HOST-1")));
+    let ev = content(host_only.next().await.unwrap().unwrap());
     assert_eq!((ev["type"].as_str(), ev["group"]["done"].as_u64()), (Some("group_changed"), Some(3)));
-    let ev = content(hub_only.next().await.unwrap().unwrap());
+    let ev = content(host_only.next().await.unwrap().unwrap());
     assert_eq!(ev["type"], "group_changed");
     assert_eq!(
         ev["group"],
         json!({
-            "epic": "HUB", "shortcode": "HUB", "address": "hypermemetic:HUB", "total": 8, "done": 4, "docs": 0, "root": "HUB-1",
+            "epic": "HOST", "shortcode": "HOST", "address": "hypermemetic:HOST", "total": 8, "done": 4, "docs": 0, "root": "HOST-1",
             "root_row": {"title": "the host", "status": "Ready", "kind": "scope"},
             "host": null
         })
@@ -1004,7 +1004,7 @@ async fn groups_are_the_navs_rollups_and_a_completion_pushes_one_group_changed()
 /// shortcode that holds a ticket — flat `{ epic, last_seq }` — in
 /// shortcode order, and then the stream's own `done`: no page, nothing
 /// else. The `last_seq`s add up to `health`'s count; a refused create
-/// moves nothing; and they are not the roll-ups — HUB's group counts the
+/// moves nothing; and they are not the roll-ups — HOST's group counts the
 /// sub-shortcode nested under it, its extent only its own tickets.
 /// Acceptance 2: for every shortcode E and row k, `list { epic: E, after:
 /// "E-k", limit: 1 }` yields `E-(k+1)` — a position becomes a cursor.
@@ -1014,12 +1014,12 @@ async fn extents_are_each_shortcodes_last_seq_and_a_row_is_a_cursor() {
     let client = connect(port).await;
 
     for params in [
-        json!({"epic": "HUB", "title": "the host", "kind": "scope"}),
-        json!({"epic": "HUB", "title": "a"}),
-        json!({"epic": "SUB", "title": "hosted", "kind": "scope", "parent": "HUB-2"}),
+        json!({"epic": "HOST", "title": "the host", "kind": "scope"}),
+        json!({"epic": "HOST", "title": "a"}),
+        json!({"epic": "SUB", "title": "hosted", "kind": "scope", "parent": "HOST-2"}),
         json!({"epic": "SUB", "title": "b"}),
         json!({"epic": "SUB", "title": "c"}),
-        json!({"epic": "HUB", "title": "d"}),
+        json!({"epic": "HOST", "title": "d"}),
         json!({"epic": "AAA", "title": "first by name", "kind": "scope"}),
     ] {
         let evs = collect(call(&client, "tickets.create", params).await).await;
@@ -1034,7 +1034,7 @@ async fn extents_are_each_shortcodes_last_seq_and_a_row_is_a_cursor() {
         items,
         vec![
             json!({"type": "extent", "epic": "AAA", "shortcode": "AAA", "last_seq": 1}),
-            json!({"type": "extent", "epic": "HUB", "shortcode": "HUB", "last_seq": 3}),
+            json!({"type": "extent", "epic": "HOST", "shortcode": "HOST", "last_seq": 3}),
             json!({"type": "extent", "epic": "SUB", "shortcode": "SUB", "last_seq": 3}),
         ],
         "one flat extent per shortcode, in order, and nothing after them"
@@ -1043,8 +1043,8 @@ async fn extents_are_each_shortcodes_last_seq_and_a_row_is_a_cursor() {
     let sum: u64 = items.iter().map(|ev| ev["last_seq"].as_u64().unwrap()).sum();
     assert_eq!(json!(sum), health[0]["ticket_count"]);
     let groups = collect(call(&client, "tickets.nav.groups", json!({})).await).await;
-    let hub = groups.iter().find(|ev| ev["group"]["epic"] == "HUB").unwrap();
-    assert_eq!(hub["group"]["total"], 6, "the roll-up nests SUB; the extent does not");
+    let host = groups.iter().find(|ev| ev["group"]["epic"] == "HOST").unwrap();
+    assert_eq!(host["group"]["total"], 6, "the roll-up nests SUB; the extent does not");
 
     for ev in &items {
         let (epic, last) = (ev["epic"].as_str().unwrap(), ev["last_seq"].as_u64().unwrap());
@@ -2157,7 +2157,7 @@ async fn a_crossing_that_unblocks_three_hundred_recounts() {
     let client = connect(port).await;
     answer(&client, "tickets.create", json!({"epic": "RA", "title": "root", "kind": "scope"})).await;
     answer(&client, "tickets.create", json!({"epic": "RB", "title": "root", "kind": "scope"})).await;
-    answer(&client, "tickets.create", json!({"epic": "RA", "title": "the hub"})).await;
+    answer(&client, "tickets.create", json!({"epic": "RA", "title": "the service"})).await;
     for i in 0..300 {
         let epic = if i % 3 == 0 { "RB" } else { "RA" };
         let ev = answer(&client, "tickets.create", json!({"epic": epic, "title": format!("w{i}"), "blocked_by": ["RA-2"]})).await;

@@ -1,8 +1,8 @@
-//! substrate under the hood (TETHER-7): its whole hub built inside tether,
+//! substrate under the hood (TETHER-7): its whole service built inside tether,
 //! and called with substrate's own client over LOCAL-6's in-memory
 //! transport — no substrate process, no port between them.
 //!
-//! The hub is gated as substrate's binary gates it: every call goes through
+//! The service is gated as substrate's binary gates it: every call goes through
 //! its gate, as [`TETHER_PRINCIPAL`], tether's own identity there, which
 //! holds `editor` on `*` and nothing else (claudecode sessions of its own;
 //! `bash`, `sessions_*` and the rest stay admin's, and nobody is). The
@@ -37,7 +37,7 @@ pub struct Engine {
 }
 
 impl Engine {
-    /// Build substrate's hub in this process, behind its gate. Its
+    /// Build substrate's service in this process, behind its gate. Its
     /// databases go where `plexus_substrate::activations::storage::set_data_dir`
     /// was pointed (the binary's `--data-dir`); `claude_path` is the Claude
     /// Code it runs (a stub in tests).
@@ -48,16 +48,16 @@ impl Engine {
         // "is this session alive" for a session it never minted.
         let backend = Arc::new(MemoryAuthBackend::new("about:blank"));
         let setup = AuthSetup::new(backend, roles.clone(), members, Arc::new(Global));
-        let hub = build_plexus_rpc_with(BuildOptions { auth: Some(setup), claude_path }).await;
-        roles.seed(&hub.declared_roles());
-        Self::over(hub)
+        let service = build_plexus_rpc_with(BuildOptions { auth: Some(setup), claude_path }).await;
+        roles.seed(&service.declared_roles());
+        Self::over(service)
     }
 
-    /// Call an already built substrate hub as tether.
-    pub fn over(hub: Arc<DynamicHub>) -> Self {
+    /// Call an already built substrate service as tether.
+    pub fn over(service: Arc<DynamicHub>) -> Self {
         let me = TETHER_PRINCIPAL.parse().expect("tether's principal");
         let caller = AuthContext::for_principal(&me, "tether", vec![], serde_json::json!({ "name": "tether" }));
-        Self { transport: HubTransport::as_(hub, caller) }
+        Self { transport: HubTransport::as_(service, caller) }
     }
 
     /// substrate's `claudecode`, through its own client.
@@ -65,8 +65,8 @@ impl Engine {
         ClaudeCodeClient::new(self.transport.clone())
     }
 
-    /// The hub, for what has no client yet.
-    pub fn hub(&self) -> &Arc<DynamicHub> {
+    /// The service, for what has no client yet.
+    pub fn service(&self) -> &Arc<DynamicHub> {
         self.transport.hub()
     }
 }

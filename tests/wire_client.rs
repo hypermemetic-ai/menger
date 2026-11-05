@@ -32,7 +32,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
-const HUB: &str = "menger";
+const SERVICE: &str = "menger";
 
 /// A port no other test in this binary has been handed (MNG-19). Binding
 /// `:0` and dropping the listener only *suggests* a port: the kernel can
@@ -85,7 +85,7 @@ async fn start_server() -> u16 {
 async fn connect(port: u16) -> WsTransport {
     let url = format!("ws://127.0.0.1:{port}");
     for _ in 0..100 {
-        if let Ok(transport) = WsTransport::connect(&url, HUB).await {
+        if let Ok(transport) = WsTransport::connect(&url, SERVICE).await {
             return transport;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;

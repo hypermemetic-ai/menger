@@ -6,7 +6,7 @@
 //! A `#[plexus_macros::child]` of `members` on the frame (ACCESS-13, README
 //! "The frame"): mounted by `Members::teams`, so its methods are
 //! `members.teams.<method>` on the wire, its client `TeamsClient` (reached
-//! from the parent's as `client.teams()`), and the hub gates each call by
+//! from the parent's as `client.teams()`), and the service gates each call by
 //! its whole path (MACRO-20). It lists no role: only admin holds its
 //! grants (admin holds every grant), so every caller is an admin of
 //! somewhere before a method runs. The rest of the rule (owner,

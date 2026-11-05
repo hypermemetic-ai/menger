@@ -70,7 +70,7 @@ fn with_permission_mode(dir: &Path, claude: Option<String>, mode: &str) -> anyho
     Ok(script.to_string_lossy().into_owned())
 }
 
-/// tether's hub (`tether`): `sessions`, `runs`, `listen`, the `auth`
+/// tether's service (`tether`): `sessions`, `runs`, `listen`, the `auth`
 /// activation, the gate — and the substrate inside it. With a remote and a
 /// listen config, the listener is running when this returns.
 pub async fn build(opts: Options) -> anyhow::Result<(Arc<DynamicHub>, login::Login)> {
@@ -96,11 +96,11 @@ pub async fn build(opts: Options) -> anyhow::Result<(Arc<DynamicHub>, login::Log
         (Some(_), Some(_), None) => anyhow::bail!("listening needs a data dir to keep its position"),
         _ => None,
     };
-    let hub = DynamicHub::new("tether")
+    let service = DynamicHub::new("tether")
         .register(SessionsActivation::new(runner.clone()))
         .register(runs::RunsActivation::new(runner, archetypes))
         .register(listen::ListenActivation::new(listener))
         .with_auth(login.auth_setup());
-    login.seed(&hub);
-    Ok((Arc::new(hub), login))
+    login.seed(&service);
+    Ok((Arc::new(service), login))
 }

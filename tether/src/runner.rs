@@ -4,7 +4,7 @@
 //! A turn runs in a task of tether's holding the `claudecode.chat` stream
 //! (through [`Engine`], in memory); its events become the session's tail,
 //! kept here and fanned out to every watch. `stop` aborts the task: the
-//! client's stream goes, the hub's with it (LOCAL-6), and substrate's
+//! client's stream goes, the service's with it (LOCAL-6), and substrate's
 //! executor kills Claude Code when its stream is dropped.
 //!
 //! TETHER-9: a session is resumed — `resume` runs another turn in the same

@@ -1,5 +1,5 @@
 //! ACCESS-16: `tickets nav`'s tests, moved from `tests/mod.rs` with its
-//! methods — each called through the parent's `nav` accessor, as the hub
+//! methods — each called through the parent's `nav` accessor, as the service
 //! routes `tickets.nav.<method>`.
 
 use super::*;
@@ -11,12 +11,12 @@ use super::*;
 /// its sub-shortcode completes, without hearing the ticket.
 #[tokio::test]
 async fn groups_yields_the_rows_and_watch_filters_group_changes_by_their_shortcode() {
-    let hub = hub();
-    one(hub.create(operator(), "PLX".into(), "host".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
-    one(hub.create(operator(), "SUB".into(), "hosted".into(), Some("scope".into()), None, None, None, Some("PLX-1".into()), None, None).await).await;
-    one(hub.create(operator(), "SUB".into(), "work".into(), None, None, None, None, None, None, None).await).await;
+    let service = service();
+    one(service.create(operator(), "PLX".into(), "host".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    one(service.create(operator(), "SUB".into(), "hosted".into(), Some("scope".into()), None, None, None, Some("PLX-1".into()), None, None).await).await;
+    one(service.create(operator(), "SUB".into(), "work".into(), None, None, None, None, None, None, None).await).await;
 
-    let evs: Vec<TicketsEvent> = Box::pin(flat(hub.nav().groups(operator()).await)).collect().await;
+    let evs: Vec<TicketsEvent> = Box::pin(flat(service.nav().groups(operator()).await)).collect().await;
     let groups: Vec<crate::types::Group> = evs
         .into_iter()
         .map(|ev| match ev {
@@ -30,8 +30,8 @@ async fn groups_yields_the_rows_and_watch_filters_group_changes_by_their_shortco
     );
     assert_eq!(serde_json::to_value(&groups[0]).unwrap()["host"], serde_json::Value::Null, "null, not missing");
 
-    let mut plx = Box::pin(hub.watch(operator(), Some("plx".into()), None, None, None, None).await);
-    one(hub.set_status(operator(), "SUB-2".into(), "Complete".into(), None, None, None).await).await;
+    let mut plx = Box::pin(service.watch(operator(), Some("plx".into()), None, None, None, None).await);
+    one(service.set_status(operator(), "SUB-2".into(), "Complete".into(), None, None, None).await).await;
     match plx.next().await.expect("change") {
         TicketsEvent::GroupChanged { group } => {
             assert_eq!((group.epic.as_str(), group.total, group.done), ("PLX", 3, 1))
@@ -46,15 +46,15 @@ async fn groups_yields_the_rows_and_watch_filters_group_changes_by_their_shortco
 /// `health`'s count.
 #[tokio::test]
 async fn extents_yields_each_shortcodes_last_seq_in_shortcode_order() {
-    let hub = hub();
+    let service = service();
     for (epic, kind) in [("ZED", "scope"), ("AB", "scope"), ("ZED", "build"), ("B", "scope"), ("ZED", "gap")] {
-        one(hub.create(operator(), epic.into(), "t".into(), Some(kind.into()), None, None, None, None, None, None).await).await;
+        one(service.create(operator(), epic.into(), "t".into(), Some(kind.into()), None, None, None, None, None, None).await).await;
     }
     // Refused: AB-2 would be its own blocker. Nothing is allocated.
-    let refused = one(hub.create(operator(), "AB".into(), "t".into(), None, None, Some(vec!["AB-2".into()]), None, None, None, None).await).await;
+    let refused = one(service.create(operator(), "AB".into(), "t".into(), None, None, Some(vec!["AB-2".into()]), None, None, None, None).await).await;
     assert!(matches!(refused, TicketsEvent::Error { .. }), "{refused:?}");
 
-    let evs: Vec<TicketsEvent> = Box::pin(flat(hub.nav().extents(operator()).await)).collect().await;
+    let evs: Vec<TicketsEvent> = Box::pin(flat(service.nav().extents(operator()).await)).collect().await;
     let extents: Vec<(String, u32)> = evs
         .into_iter()
         .map(|ev| match ev {
@@ -68,7 +68,7 @@ async fn extents_yields_each_shortcodes_last_seq_in_shortcode_order() {
         "byte order on the epic: AB before B"
     );
     let total: u64 = extents.iter().map(|(_, n)| u64::from(*n)).sum();
-    match one(hub.health(operator()).await).await {
+    match one(service.health(operator()).await).await {
         TicketsEvent::Health { ticket_count, .. } => assert_eq!(ticket_count, total),
         other => panic!("expected Health, got {other:?}"),
     }

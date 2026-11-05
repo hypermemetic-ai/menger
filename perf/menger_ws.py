@@ -57,7 +57,7 @@ class Throwaway:
 
 
 class Socket:
-    """One connection to the hub on :port, signed in with `token`."""
+    """One connection to the service on :port, signed in with `token`."""
 
     def __init__(self, port, token=None, timeout=600):
         self.sock = socket.create_connection(("127.0.0.1", port), timeout=timeout)
@@ -191,7 +191,7 @@ def _xor(data, mask):
 
 
 def wait_ready(proc, port, deadline_s=120, log=None):
-    """Returns once the hub on :port answers a call — `auth.providers`, the
+    """Returns once the service on :port answers a call — `auth.providers`, the
     anonymous view's, so no sign-in rides the timing (it was `health` over
     REST before ACCESS-24). Raises if the process dies first or the
     deadline passes."""

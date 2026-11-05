@@ -12,8 +12,8 @@ use base64::Engine as _;
 use plexus_auth_core::adapters::{key_principal, sign_key_proof};
 use plexus_client::WsTransport;
 
-/// The hub a menger serves.
-pub const HUB: &str = "menger";
+/// The service a menger serves.
+pub const SERVICE: &str = "menger";
 
 /// A remote menger and the key tether signs in to it with.
 #[derive(Clone)]
@@ -95,7 +95,7 @@ impl Remote {
     pub async fn connect(&self) -> Result<WsTransport, String> {
         let proof = sign_key_proof(&self.seed, &self.url, &self.agent, &nonce(), now());
         let headers = [("Authorization".to_string(), format!("Bearer {proof}"))];
-        WsTransport::connect_with_headers(&self.url, HUB, &headers).await.map_err(|e| e.to_string())
+        WsTransport::connect_with_headers(&self.url, SERVICE, &headers).await.map_err(|e| e.to_string())
     }
 
     /// Post `body` to `chat` as tether's key (a run's report).

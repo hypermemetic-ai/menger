@@ -34,10 +34,10 @@ fn ids(page: &Page) -> Vec<&str> {
 async fn seeded(store: &Store) {
     store.create(SYS, new("SYNAPSE", "synapse", Kind::Scope, None, &[])).await.unwrap();
     store.create(SYS, new("SYNAPSE", "a build in synapse", Kind::Build, Some("SYNAPSE-1"), &[])).await.unwrap();
-    let cc = store.create(SYS, new("synapse-cc", "synapse-cc and hub-codegen", Kind::Scope, Some("SYNAPSE-1"), &[])).await.unwrap();
+    let cc = store.create(SYS, new("synapse-cc", "synapse-cc and service-codegen", Kind::Scope, Some("SYNAPSE-1"), &[])).await.unwrap();
     assert_eq!((cc.id.as_str(), cc.epic.as_str(), cc.seq), ("SYNAPSE-CC-1", "SYNAPSE-CC", 1));
     assert_eq!(cc.address, "hypermemetic:SYNAPSE/SYNAPSE-CC-1");
-    let t = store.create(SYS, new("SYNAPSE-CC", "a gap in hub-codegen", Kind::Gap, Some("synapse-cc-1"), &["SYNAPSE-2"])).await.unwrap();
+    let t = store.create(SYS, new("SYNAPSE-CC", "a gap in service-codegen", Kind::Gap, Some("synapse-cc-1"), &["SYNAPSE-2"])).await.unwrap();
     assert_eq!((t.id.as_str(), t.parent.as_deref()), ("SYNAPSE-CC-2", Some("SYNAPSE-CC-1")));
     let t = store.create(SYS, new("SYNAPSE/SYNAPSE-CC", "after it", Kind::Build, Some("SYNAPSE-CC-1"), &["synapse-cc-2"])).await.unwrap();
     assert_eq!((t.id.as_str(), t.blocked_by.iter().map(|b| b.as_str()).collect::<Vec<_>>()), ("SYNAPSE-CC-3", vec!["SYNAPSE-CC-2"]));

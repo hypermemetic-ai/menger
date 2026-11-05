@@ -2,7 +2,7 @@
 //! the protocol's gate.
 //!
 //! AUTH-7: the rule in front of every call is no longer menger's. With login
-//! on, the hub carries plexus-core's gate (AUTH-2): every call needs the
+//! on, the service carries plexus-core's gate (AUTH-2): every call needs the
 //! method's grant (`tickets.set_status`), held through a role on the scope
 //! its target lives in, within the session's ceiling — default deny, decided
 //! before a method runs. What menger supplies the gate lives here, over the
@@ -189,7 +189,7 @@ fn now() -> i64 {
 
 /// AUTH-7: menger's roles, memberships and scopes, over the store — the
 /// three things the gate asks (and `auth.role_set`, `auth.grant`,
-/// `auth.revoke` write). One value implements every trait; the hub is
+/// `auth.revoke` write). One value implements every trait; the service is
 /// handed it once per trait. Answers from memory: the store's cache.
 pub struct Book {
     store: OnceLock<Arc<Store>>,
@@ -203,7 +203,7 @@ pub struct Book {
     /// stored grant.
     service: String,
     /// Each role's grants as the activations declare them
-    /// (`roles(...)`, merged by name) — seeded once the hub is built
+    /// (`roles(...)`, merged by name) — seeded once the service is built
     /// ([`Book::seed`]).
     defaults: RwLock<BTreeMap<String, BTreeSet<String>>>,
     waiting: Mutex<WaitingList>,
@@ -451,7 +451,7 @@ pub struct Access {
 }
 
 impl Access {
-    /// The rule: the hub carries the gate over this rule's [`Book`],
+    /// The rule: the service carries the gate over this rule's [`Book`],
     /// sessions are checked on every call, and `admins` hold admin on `*`
     /// from the operator; an anonymous caller reaches only the door.
     /// ACCESS-24: the only one there is — login is always on.
@@ -569,7 +569,7 @@ impl Access {
         self.book.clone()
     }
 
-    /// AUTH-7: a gate over the same book as the hub's — the same answers,
+    /// AUTH-7: a gate over the same book as the service's — the same answers,
     /// for the questions a method asks itself.
     pub fn gate(&self) -> &Gate {
         &self.gate

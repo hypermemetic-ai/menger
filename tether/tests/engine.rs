@@ -1,4 +1,4 @@
-//! TETHER-7: the substrate call path alone — substrate's hub built in this
+//! TETHER-7: the substrate call path alone — substrate's service built in this
 //! process behind its gate, called with its own `ClaudeCodeClient` over
 //! LOCAL-6's `HubTransport` as tether's identity. No socket anywhere.
 
@@ -54,7 +54,7 @@ async fn claudecode_through_its_own_client_in_memory_as_tether() {
     assert!(matches!(said.last(), Some(ChatEvent::Complete { .. })), "{said:?}");
 
     // The gate holds tether to editor in the substrate inside it: `bash`
-    // is admin's. (One hub per process — two would race on its databases.)
+    // is admin's. (One service per process — two would race on its databases.)
     drop(chat);
     let t = engine.claudecode().into_transport();
     let mut s = plexus_client::Transport::call(&t, plexus_client::MethodRef::new("bash", "execute"), serde_json::json!({ "command": "true" }));

@@ -12,7 +12,7 @@
 //! named; a wave's `waiting_on` names only tickets in reach.
 //!
 //! Its grants are `work.<method>` (its own namespace, listed in its own
-//! `roles(...)`); the hub's gate decides a call to `tickets.work.<method>`
+//! `roles(...)`); the service's gate decides a call to `tickets.work.<method>`
 //! by that dotted path, and seeds each role with the child's grants under
 //! it (`tickets.work.ready`; MACRO-20).
 //! Its tests are `activation/tests/work.rs`.

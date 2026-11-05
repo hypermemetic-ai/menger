@@ -164,7 +164,7 @@ async fn start_with(port: u16, providers: &[Provider], admins: &[&str]) {
     // As main wires it (IDENTITY-19): sessions, the per-call rule, the gate.
     let sessions = Arc::new(Sessions::new(3600, &menger::login_names()));
     let access = Access::with_login(menger::session_table(&sessions), admins.iter().map(|a| a.to_string()).collect());
-    let hub = build_rpc_offering(&dir.path().join("tickets.db"), None, Default::default(), offers, access.clone())
+    let service = build_rpc_offering(&dir.path().join("tickets.db"), None, Default::default(), offers, access.clone())
         .await
         .expect("open database");
     let carriers = login::boundary(providers).expect("providers").expect("a boundary");
@@ -172,7 +172,7 @@ async fn start_with(port: u16, providers: &[Provider], admins: &[&str]) {
     let conv = |arc: Arc<DynamicHub>| menger::calls::rpc_module(arc, menger::calls::CallLimits::default());
     tokio::spawn(async move {
         let _keep = dir;
-        TransportServer::builder(hub, conv)
+        TransportServer::builder(service, conv)
             .with_websocket(port)
             .with_session_validator(Arc::new(Gate::new(sessions, Some(carriers)).noticing(menger::MengerAccess(access))))
             .anonymous_view()

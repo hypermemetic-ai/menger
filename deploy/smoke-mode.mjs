@@ -7,7 +7,7 @@
 //   node deploy/smoke-mode.mjs <ws port> <shell port>
 // Prints one line, `login: off`, `login: on` or `login: required`, and exits
 // 0; exits 1 (saying why) when the server does not answer.
-//   off       the hub has no gate: an anonymous `_info` is the whole hub
+//   off       the service has no gate: an anonymous `_info` is the whole service
 //   on        AUTH-7's gate: an anonymous `_info` is the anonymous view
 //             (auth.providers, auth.login, auth.signup), but the app is served
 //             without a session
@@ -27,7 +27,7 @@ const timer = setTimeout(() => {
   process.exit(1);
 }, 10000);
 
-/** `gated` — the anonymous `_info` is a view; `refused` — no upgrade; `open` — the whole hub. */
+/** `gated` — the anonymous `_info` is a view; `refused` — no upgrade; `open` — the whole service. */
 function info() {
   return new Promise((resolve, reject) => {
     // No Origin, as synapse and smoke-health.mjs: a script, not a page.
@@ -54,11 +54,11 @@ async function behindLogin() {
 }
 
 try {
-  const [hub, login] = await Promise.all([info(), behindLogin()]);
+  const [service, login] = await Promise.all([info(), behindLogin()]);
   // A refused upgrade with the app served openly is a socket not up yet (or
   // broken), not a mode: said, and the smoke asks again.
-  if (hub === 'refused' && !login) throw new Error('the WebSocket refused the upgrade, and the app is served without a session');
-  const mode = hub === 'refused' ? 'required' : hub === 'open' ? 'off' : login ? 'required' : 'on';
+  if (service === 'refused' && !login) throw new Error('the WebSocket refused the upgrade, and the app is served without a session');
+  const mode = service === 'refused' ? 'required' : service === 'open' ? 'off' : login ? 'required' : 'on';
   clearTimeout(timer);
   console.log(`login: ${mode}`);
   process.exit(0);

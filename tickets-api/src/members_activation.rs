@@ -13,7 +13,7 @@
 //! the wire, for the browser app (its `MembersClient`). Its methods declare
 //! no role: `list`, `grant`, `revoke` and `requests` are admin's (admin
 //! holds every grant), `grant` and `revoke` held on their `scope` (the
-//! target); `mine` is any signed-in caller's (the hub's signed-in grants).
+//! target); `mine` is any signed-in caller's (the service's signed-in grants).
 //!
 //! ACCESS-19: **on the frame** (README "The frame", ACCESS-13) —
 //! `auth = "required"`, `request = MengerRequest`; every method's caller a
