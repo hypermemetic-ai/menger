@@ -347,7 +347,7 @@ origin, no cookie, no storage, no socket, no `top`. A `live` fence or
 scripts: the frame loads the shell's public **`GET /frame`** (`FRAME_CSP`:
 `connect-src 'none'; form-action 'none'; frame-ancestors 'self'; sandbox …`),
 which says `menger:boot` on its channel and is handed the page by
-`postMessage`, from its own parent only (`ui/src/page-frame.svelte`).
+`postMessage`, from its own parent only (`ui/src/page-frame.svelte`, real Svelte: `svelte/1`).
 
 The docs service (V2-29) asks two things through its seam (`docs/src/seam.rs`),
 never another's file: the gate, whether the caller holds a method's grant
