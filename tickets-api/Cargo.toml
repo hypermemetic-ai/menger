@@ -57,6 +57,10 @@ test-support = ["server"]
 # re-placement pass and its startup placement — the "without" half of the
 # spike's comparison (spike/WAVE-2/ at v0.0.1). Never enabled by anything that serves.
 wave3-no-replace = []
+# PERF-24, measurement only: `store::scale` — tickets written straight into a
+# store file in bulk, through the store's own insert and search index, for
+# the scale harness (`scripts/scale/`). Never enabled by anything that serves.
+scale = ["server"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
