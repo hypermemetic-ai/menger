@@ -6,7 +6,11 @@
      says `revised`, folded whole into a collection keyed by ticket
      (`revisions list { limit: 1 }`: this ticket's newest rev); each newer rev
      moves the list's `before` past it, so the list is asked again and holds
-     every revision, however many came at once. Restoring is SURFACE-4's: "pick" says `ticket.revision_picked
+     every revision, however many came at once. EDITOR-16: a write V2-37
+     coalesces says `revised` with the newest rev's own number (the fields of
+     both), so `before` does not move and nothing is asked again — the newest
+     row takes the fields `revised` said, and its moment is "just now".
+     Restoring is SURFACE-4's: "pick" says `ticket.revision_picked
      { id, rev }` on the bus for `ticket-actions`. `escape` closes the diff. -->
 <script module>
   export const uses = ["tickets.revisions.list", "tickets.watch", "tickets.revisions.diff", "tickets.revisions.get"];
@@ -30,7 +34,8 @@
   const diff = live({ snapshot: "tickets.revisions.diff", params: () => ({ id, from: a, to: z, text: true }), key: "to", when: () => open && a !== z });
   const opened = live({ snapshot: "tickets.revisions.get", params: () => ({ id, rev: z }), key: "ticket", when: () => open && view === "was", on: { revision_at: "upsert:." } });
 
-  const rows = $derived(revs.rows);
+  const told = $derived(latest.rows.find((r) => r.ticket === id));
+  const rows = $derived(revs.rows.map((r) => (told && r.rev === told.rev && String(r.fields ?? []) !== String(told.fields ?? []) ? { ...r, fields: told.fields, at_unix: null } : r)));
   const d = $derived(diff.rows.find((x) => x.from === a && x.to === z));
   const was = $derived(opened.rows.find((o) => o.ticket && o.revision?.rev === z));
   const changed = $derived(d ? [...d.fields, ...d.frontmatter] : []);

@@ -11,6 +11,7 @@
 // `[data-rf]`, `[data-ask]`, `[data-needs]`, `[data-archived]`, `[data-dry-answer]`, `[data-refused-on]`; both:
 // `[data-for=<method>]` on an answer — `[data-answer]`, `[data-refused]`, `[data-loading]` — and `[data-empty]`.
 // A write's answer is FRAME-37's `await bus.call(…)`: `{ ok, events, message }`.
+import fs from "node:fs";
 import { makeKey, readToken, sessionCookies, writeSession } from "../../scripts/throwaway-login.mjs";
 import { sentCalls } from "../../scripts/ui-throwaway.mjs";
 
@@ -101,7 +102,22 @@ export default async (ctx) => {
       assert(amends.length === 1 && amends[0].params.id === id, `one amend sent: ${JSON.stringify(amends)}`);
       assert((await sent(page, "tickets.update")).length === 0, "the body alone: no update sent");
       await page.evaluate((id) => (location.hash = `#/ticket/${id}`), id);
-      await eventually("the ticket page's body is the new one", async () => (await page.locator("[data-ticket-body] h1").textContent({ timeout: 500 })) === "The heading");
+      // EDITOR-18: a body holding raw HTML (the `<script>`) is drawn whole in a sandboxed frame (EDITOR-14):
+      // its markdown inside the frame, its script never in the page.
+      const shown = page.locator("[data-ticket-body] [data-surface=page-frame][data-kind=body] iframe[data-buffer=shown]");
+      const inFrame = async () => { const f = await (await shown.elementHandle({ timeout: 500 }).catch(() => null))?.contentFrame(); return f ? (await f.locator("h1").textContent({ timeout: 500 }).catch(() => null)) : null; };
+      await eventually("the ticket page frames the new body, its heading inside", async () => (await inFrame()) === "The heading", 10_000);
+      const sandbox = (await shown.getAttribute("sandbox")) ?? "";
+      assert(sandbox.split(/\s+/).includes("allow-scripts") && !sandbox.includes("allow-same-origin"), `sandboxed, an opaque origin: "${sandbox}"`);
+      assert((await page.locator("[data-ticket-body] script, [data-ticket-body] h1").count()) === 0, "neither the script nor the markdown is drawn in the page");
+      assert((await page.evaluate(() => window.__pwned)) === undefined, "the body's script never ran in the page");
+      // The markdown path: a body with no raw HTML is drawn in the page itself, live.
+      const plain = path.join(server.work, `writes-plain-${id}.md`);
+      fs.writeFileSync(plain, "# The heading, plain\n\nsome *words* and a [link](https://example.com)\n");
+      sy("tickets", "amend", "--id", id, "--body", `@${plain}`);
+      await eventually("the ticket page draws the plain body's markdown in the page", async () => (await page.locator("[data-ticket-body] h1").textContent({ timeout: 500 }).catch(() => null)) === "The heading, plain", 5_000);
+      assert((await page.locator("[data-ticket-body] em").first().textContent()) === "words", "the body's emphasis, in the page");
+      assert((await page.locator("[data-ticket-body] [data-surface=page-frame][data-kind=body]").count()) === 0, "no frame for a body without raw HTML");
     } finally {
       await context.close();
     }

@@ -689,16 +689,8 @@ async function main() {
         const kids = (await sentCalls(page)).filter((c) => c.method === "tickets.list" && c.params.parent === t.id);
         assert(kids.length === 1 && kids[0].params.parent === t.id, `one list { parent: ${t.id} } (${JSON.stringify(kids.map((k) => k.params))})`);
         const bodyEl = tp.locator("[data-ticket-body]");
-        const text = await bodyEl.textContent({ timeout: 1000 });
-        for (const want of ["A paragraph with weight in it.", "the first item", "the last line", "a link"]) assert(text.includes(want), `the body says "${want}": ${JSON.stringify(text)}`);
-        for (const not of ["__ranScript", "background", "__ranFrame", "__ranSvg"]) assert(!text.includes(not), `the body does not show the dropped "${not}"`);
-        assert(trimmed(await bodyEl.locator("strong").textContent({ timeout: 1000 })) === "weight", "the markdown is drawn (**weight** is strong)");
-        assert((await bodyEl.locator("li").count()) === 2, "the list is drawn");
-        await bodyEl.locator("a").first().click({ timeout: 1000 }).catch(() => {});
-        // A button the body kept, pressed (a form posting to javascript: would run now).
-        await page.evaluate((sel) => document.querySelectorAll(`${sel} [data-ticket-body] button`).forEach((b) => b.click()), B.page);
-        await sleep(300);
-        const ran = await page.evaluate((sel) => {
+        // What ran in the page: the body's script, handlers, links, frame, svg and form, and its style.
+        const ranInPage = () => page.evaluate((sel) => {
           const b = document.querySelector(`${sel} [data-ticket-body]`);
           const all = [...(b?.querySelectorAll("*") ?? [])];
           return {
@@ -711,14 +703,56 @@ async function main() {
             form: window.__ranForm === 1,
             bg: getComputedStyle(document.body).backgroundColor,
             banned: b?.querySelectorAll("script, style, iframe, svg, form, object, embed").length ?? -1,
+            frames: [...(b?.querySelectorAll("iframe") ?? [])].map((f) => ({ sandbox: f.getAttribute("sandbox") ?? "", body: !!f.closest("[data-surface=page-frame][data-kind=body]") })),
             onAttrs: all.flatMap((e) => [...e.attributes].filter((a) => a.name.toLowerCase().startsWith("on")).map((a) => `${e.tagName}.${a.name}`)),
             jsUrls: all.flatMap((e) => [...e.attributes].filter((a) => /^\s*(javascript|vbscript|data):/i.test(a.value)).map((a) => `${e.tagName}.${a.name}`)),
           };
         }, B.page);
-        assert(!ran.script && !ran.handler && !ran.link && !ran.frame && !ran.svg && !ran.mixed && !ran.form, `nothing in the body ran: ${JSON.stringify(ran)}`);
-        assert(ran.bg !== "rgb(1, 2, 3)", `the body's style did not apply (${ran.bg})`);
-        assert(ran.banned === 0, `no <script>, <style>, <iframe>, <svg>, <form>, <object> or <embed> in the body (${ran.banned})`);
-        assert(ran.onAttrs.length === 0 && ran.jsUrls.length === 0, `no on* attribute, no javascript:, vbscript: or data: URL: ${JSON.stringify(ran)}`);
+        const nothingRan = (ran) => {
+          assert(!ran.script && !ran.handler && !ran.link && !ran.frame && !ran.svg && !ran.mixed && !ran.form, `nothing in the body ran in the page: ${JSON.stringify(ran)}`);
+          assert(ran.bg !== "rgb(1, 2, 3)", `the body's style did not apply to the page (${ran.bg})`);
+          assert(ran.onAttrs.length === 0 && ran.jsUrls.length === 0, `no on* attribute, no javascript:, vbscript: or data: URL in the page: ${JSON.stringify(ran)}`);
+        };
+        if (B.name === "sv") {
+          // EDITOR-14, EDITOR-18: the Svelte page draws a body holding raw HTML whole in a sandboxed frame
+          // (ticket-view's holdsRaw): its markdown inside the frame, and nothing of it in the page.
+          const shown = bodyEl.locator("[data-surface=page-frame][data-kind=body] iframe[data-buffer=shown]");
+          const inner = async () => (await shown.elementHandle({ timeout: 500 }).catch(() => null))?.contentFrame();
+          await eventually("the body is framed, its markdown inside", async () => { const f = await inner(); return !!f && (await f.locator("strong").first().textContent({ timeout: 500 }).catch(() => null)) === "weight"; }, 10_000);
+          const f = await inner();
+          const said = await f.locator("body").textContent({ timeout: 1000 });
+          for (const want of ["A paragraph with weight in it.", "the first item", "the last line", "a link"]) assert(said.includes(want), `the frame says "${want}": ${JSON.stringify(said)}`);
+          assert((await bodyEl.locator("strong, li").count()) === 0, "the markdown is not drawn in the page: it is the frame's");
+          await sleep(300);
+          const ran = await ranInPage();
+          nothingRan(ran);
+          assert(ran.frames.length === 1 && ran.frames[0].body, `one frame in the body, page-frame's: ${JSON.stringify(ran.frames)}`);
+          const sandbox = ran.frames[0].sandbox.split(/\s+/);
+          assert(sandbox.includes("allow-scripts") && !sandbox.includes("allow-same-origin"), `sandboxed, an opaque origin: ${JSON.stringify(ran.frames[0])}`);
+          assert(ran.banned === 1, `no <script>, <style>, <svg>, <form>, <object> or <embed> in the page's body, the frame alone (${ran.banned})`);
+          // The markdown path: a body without raw HTML is drawn in the page itself, live.
+          const plain = path.join(server.work, "body-plain.md");
+          fs.writeFileSync(plain, ["A paragraph with **weight** in it.", "", "- the first item", "- the second item", "", "[a link](https://example.com)", "", "the last line", ""].join("\n"));
+          sy("tickets", "amend", "--id", t.id, "--body", `@${plain}`);
+          await eventually("the plain body is drawn in the page", async () => trimmed(await bodyEl.locator("strong").first().textContent({ timeout: 500 }).catch(() => "")) === "weight", 5_000);
+          const text = await bodyEl.textContent({ timeout: 1000 });
+          for (const want of ["A paragraph with weight in it.", "the first item", "the last line", "a link"]) assert(text.includes(want), `the body says "${want}": ${JSON.stringify(text)}`);
+          assert((await bodyEl.locator("li").count()) === 2, "the list is drawn");
+          assert((await bodyEl.locator("iframe").count()) === 0, "no frame for a body without raw HTML");
+        } else {
+          const text = await bodyEl.textContent({ timeout: 1000 });
+          for (const want of ["A paragraph with weight in it.", "the first item", "the last line", "a link"]) assert(text.includes(want), `the body says "${want}": ${JSON.stringify(text)}`);
+          for (const not of ["__ranScript", "background", "__ranFrame", "__ranSvg"]) assert(!text.includes(not), `the body does not show the dropped "${not}"`);
+          assert(trimmed(await bodyEl.locator("strong").textContent({ timeout: 1000 })) === "weight", "the markdown is drawn (**weight** is strong)");
+          assert((await bodyEl.locator("li").count()) === 2, "the list is drawn");
+          await bodyEl.locator("a").first().click({ timeout: 1000 }).catch(() => {});
+          // A button the body kept, pressed (a form posting to javascript: would run now).
+          await page.evaluate((sel) => document.querySelectorAll(`${sel} [data-ticket-body] button`).forEach((b) => b.click()), B.page);
+          await sleep(300);
+          const ran = await ranInPage();
+          nothingRan(ran);
+          assert(ran.banned === 0, `no <script>, <style>, <iframe>, <svg>, <form>, <object> or <embed> in the body (${ran.banned})`);
+        }
         for (const [chip, other] of [["parent", parent], ["blocker", blocker]]) {
           const c = tp.locator(`[data-chip=${chip}][data-chip-id="${other.id}"]`);
           assert((await c.count()) === 1, `a ${chip} chip for ${other.id}`);
