@@ -167,6 +167,17 @@ async fn fixture(port: u16) -> (WsClient, WsClient, WsClient, WsClient) {
     (boss, ada, builder, rui)
 }
 
+/// ACCESS-8, MACRO-31: a call refused at dispatch — one `error` item,
+/// `-32602 invalid_params`, naming the unknown `field`. Its message.
+fn refused_unknown(evs: &[Value], field: &str) -> String {
+    assert_eq!(evs.len(), 1, "{evs:?}");
+    let e = &evs[0];
+    assert_eq!((e["type"].as_str(), e["code"].as_str(), e["error_kind"].as_str()), (Some("error"), Some("-32602"), Some("invalid_params")), "{e}");
+    let m = e["message"].as_str().unwrap_or_default().to_string();
+    assert!(m.contains(&format!("unknown field `{field}`")), "{m}");
+    m
+}
+
 fn ids(rows: &[Value]) -> Vec<String> {
     rows.iter().filter_map(|e| e["ticket"]["id"].as_str().or(e["summary"]["id"].as_str())).map(str::to_string).collect()
 }
@@ -189,6 +200,14 @@ async fn each_kind_of_input_is_answered_and_asking_moves() {
     let rest = call(&ada, "tickets.inputs.list", json!({ "state": "open", "limit": 2, "after": end["next"] })).await;
     assert_eq!(rest.iter().filter_map(|e| e["input"]["id"].as_str()).collect::<Vec<_>>(), ["notes"], "{rest:?}");
 
+    // MACRO-33 (V2-44): an answer's source is the server's; a call that says
+    // one is refused at dispatch (MACRO-31: no parameter claims it), and
+    // writes nothing — `cone` is still open after it.
+    let says = call(&ada, "tickets.inputs.answer", json!({ "ticket": "KILN-2", "input": "cone", "value": { "type": "choice", "option": "6" }, "source": "app" })).await;
+    let refusal = refused_unknown(&says, "source");
+    assert!(refusal.contains("inputs.answer takes: input, rationale, ticket, value"), "{refusal}");
+    let still = call(&ada, "tickets.inputs.list", json!({ "ticket": "KILN-2", "state": "open" })).await;
+    assert!(still.iter().any(|e| e["input"]["id"] == "cone"), "a refused answer wrote: {still:?}");
     let a = one(&ada, "tickets.inputs.answer", json!({ "ticket": "KILN-2", "input": "cone", "value": { "type": "choice", "option": "6" }, "rationale": "hotter" })).await;
     assert_eq!((a["type"].as_str(), a["input"]["state"].as_str(), a["input"]["answer"]["rationale"].as_str()), (Some("input_changed"), Some("answered"), Some("hotter")), "{a}");
     let a = one(&ada, "tickets.inputs.answer", json!({ "ticket": "KILN-2", "input": "checks", "value": { "type": "multi", "options": ["wire", "unit"] } })).await;
@@ -200,7 +219,10 @@ async fn each_kind_of_input_is_answered_and_asking_moves() {
     let a = one(&ada, "tickets.inputs.answer", json!({ "ticket": "KILN-2", "input": "notes", "value": { "type": "text", "text": "ship it" } })).await;
     assert_eq!(a["input"]["state"], "answered", "{a}");
     assert!(asking(call(&ada, "tickets.list", json!({ "filter": "asking", "summary": true })).await).is_empty());
-    // A clear reopens it; a viewer reads and may not answer.
+    // A clear reopens it; a viewer reads and may not answer. MACRO-33: a
+    // clear that says a `source` is refused at dispatch and clears nothing.
+    refused_unknown(&call(&ada, "tickets.inputs.clear", json!({ "ticket": "KILN-2", "input": "notes", "source": "app" })).await, "source");
+    assert!(asking(call(&ada, "tickets.list", json!({ "filter": "asking", "summary": true })).await).is_empty(), "a refused clear reopened notes");
     let c = one(&ada, "tickets.inputs.clear", json!({ "ticket": "KILN-2", "input": "notes" })).await;
     assert_eq!(c["input"]["state"], "open", "{c}");
     assert_eq!(call(&builder, "tickets.inputs.list", json!({ "ticket": "KILN-2", "state": "open" })).await.iter().filter(|e| e["type"] == "input").count(), 1);

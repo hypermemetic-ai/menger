@@ -130,6 +130,44 @@ Content-Security-Policy (ACCESS-28, `PAGE_CSP`): no inline script but the
 page's own blocks, hashed; no script or image from another origin;
 connections only to itself, its socket and loopback.
 
+**MCP** (TRANSPORT-15; on v2, V2-43). menger is an MCP server too: `/mcp`
+on the app's origin (`http://127.0.0.1:4456/mcp` here,
+`https://app.menger.sh/mcp` deployed — the edge needs no route of its own;
+`--no-mcp` / `MENGER_NO_MCP` turns it off), served through
+plexus-transport-mcp's bridge mounted behind the same login. Its tools are
+every method of every service registered — `tickets`, `members`, `orgs`,
+`ui`, `media`, `docs`, `quota`, `auth`, `session` — as the caller may see
+them. Every `tools/call` goes through the gate as the caller the request's
+Bearer names — an agent's session, or a token an `--auth-provider` admits,
+exactly what the WebSocket takes — and `tools/list` is that caller's view; a
+request with no credential is the anonymous view (the `auth.*` door); a
+refused one is `401`. An MCP client that takes a static header signs in
+with the session synapse keeps after `_login` (its keychain item:
+`backend=<host:port>`, `agent=<name>`, `service=plexus-session`; the JSON's
+`token`), which ends with the session (12 h). A key proof will not do: it
+opens one upgrade, and MCP carries the header on every request, so its
+second use is refused.
+
+With `--mcp-authorization-server URL` (repeatable;
+`MENGER_MCP_AUTHORIZATION_SERVERS`, `;`-separated), `/mcp` is an OAuth 2.1
+protected resource: a request with no token is answered `401` naming
+`/.well-known/oauth-protected-resource/mcp`, so an MCP client signs in at
+that server by itself. On app.menger.sh and app-test that server is the
+environment's WorkOS AuthKit domain (TRANSPORT-24, `deploy/env/app-*.env`):
+the same sign-in as the app's, and a third `--auth-provider`, the generic
+`oidc:authkit=<domain>,<public-url>/mcp`, admits the tokens it mints as
+`oidc:authkit/<WorkOS user id>` (one principal with the app's cookie is
+TRANSPORT-20); `MENGER_LOGIN_PASSWORD=none` keeps the generic provider off
+the login page's password form. A person's entry then carries no header —
+Claude Code's `/mcp` shows **Authenticate** and the browser does the rest:
+
+```
+claude mcp add --transport http menger https://app.menger.sh/mcp
+```
+
+`tests/mcp.rs` pins the three callers, v2's services, and the protected
+resource's 401.
+
 **Hosts** (ACCESS-25). Every listener — the WebSocket and the shell —
 answers only its own names, so a page that rebinds its name to 127.0.0.1
 (DNS rebinding) gets nothing: any other `Host` is refused `421 Misdirected
@@ -184,8 +222,8 @@ where it has one (a list in it is `;`-separated).
 
 | group | flags |
 |---|---|
-| run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path`, `--ui-signer`, `--ui-compiler`, `--ui-author-key`, `--media-db-path` (`media.db` beside the database), `--media-store` (`disk`), `--media-blob-dir`, `--media-max-bytes`, `--quota-db-path` (`quota.db` beside the database), `--quota-plan` (the defaults a new quota file starts from; the built-in `free-1k`), `--ui-channel` (UI-15: the live pointer this environment serves in its ui file; default from `--env`: `test`, `prod`, else `default`), `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell` |
-| sign-in | `--auth-provider`, `--admin`, `--public-url`, `--login-button`, `--login-email`, `--login-password`, `--login-forgot`, `--identity`, `--workos-api-key-file`, `--allowed-origin`, `--frame-ancestor` (an origin that may frame the shell's pages; none by default), `--live-origin` (an origin the shell's pages may frame), `--allowed-host`, `--trusted-proxy`, `--return-origin`, `--session-hours` (12), `--session-idle-minutes` (120) |
+| run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path`, `--ui-signer`, `--ui-compiler`, `--ui-author-key`, `--media-db-path` (`media.db` beside the database), `--media-store` (`disk`), `--media-blob-dir`, `--media-max-bytes`, `--quota-db-path` (`quota.db` beside the database), `--quota-plan` (the defaults a new quota file starts from; the built-in `free-1k`), `--ui-channel` (UI-15: the live pointer this environment serves in its ui file; default from `--env`: `test`, `prod`, else `default`), `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell`, `--no-mcp` (V2-43: no `/mcp`), `--child NAME=stdio:CMD` or `NAME=ws://…` (POLYGLOT-5: an activation in another process mounted under NAME behind the gate; repeatable; `--child-timeout`, `--child-max-calls`, `--child-env`, `--child-key`: plexus-core's `ChildArgs`; one that does not answer stops the start, exit 2; NAME a service of menger's own is refused) |
+| sign-in | `--auth-provider`, `--admin`, `--public-url`, `--login-button`, `--login-email`, `--login-password`, `--login-forgot`, `--identity`, `--workos-api-key-file`, `--allowed-origin`, `--frame-ancestor` (an origin that may frame the shell's pages; none by default), `--live-origin` (an origin the shell's pages may frame), `--allowed-host`, `--trusted-proxy`, `--return-origin`, `--session-hours` (12), `--session-idle-minutes` (120), `--mcp-authorization-server` (V2-43: `/mcp` a protected resource naming it) |
 | maintenance and testing | `--dev-login`, `--dev-password`, `--dev-idp-ws`, `--dev-user` (all `--env test` only), `--verify-derived`, `--seed-synthetic`, `--seed-value`, `--seed-shape` (`flat`, `nested`), `--seed-into-existing` |
 | limits | `--max-body-bytes` (8 MiB), `--max-calls-per-connection` (256), `--idle-timeout-secs` (900), `--max-connections` (1,024), `--max-connections-per-ip` (256), `--max-connections-per-principal` (4; V2-31: a person's), `--max-connections-per-agent` (64; V2-31: a `key:` principal's), `--max-writes-per-second` (20; V2-31), `--max-anonymous-connections` (128), `--max-anonymous-connections-per-ip` (32) |
 
@@ -296,6 +334,20 @@ and a `media.get` asks `tickets.may { id, role: viewer }` for a ticket the
 image was put for. Its seam is `media/src/seam.rs`; it never opens the
 tickets file either. The shell's `GET /media/<hash>` is a client of the
 media service in turn (`menger_media::fetch`, as the request's session).
+
+**Pages in a body** (EDITOR-14) draw in frames, as v1 drew them: an
+`<m-mockup widths title description>…a page…</m-mockup>`, a ```` ```mockup ````
+(or ```` ```page ````, or ```` ```html ```` with a page's attributes) fence, a body
+that is a whole `<!doctype html>` page, and a body holding raw HTML the
+page's sanitizer cannot draw (then the whole body, its markdown around the
+HTML) — each in `<iframe sandbox>` with no `allow-same-origin`: an opaque
+origin, no cookie, no storage, no socket, no `top`. A `live` fence or
+`<m-live route>` frames the test app (`--live-origin`, APP-110). Not a
+`srcdoc`, which inherits the app's policy and would refuse the page's
+scripts: the frame loads the shell's public **`GET /frame`** (`FRAME_CSP`:
+`connect-src 'none'; form-action 'none'; frame-ancestors 'self'; sandbox …`),
+which says `menger:boot` on its channel and is handed the page by
+`postMessage`, from its own parent only (`ui/src/page-frame.svelte`).
 
 The docs service (V2-29) asks two things through its seam (`docs/src/seam.rs`),
 never another's file: the gate, whether the caller holds a method's grant
@@ -414,7 +466,7 @@ whole. synapse `-j` prints the `rows` event as one line (SYNAPSE-36).
 | `members requests` | | who signed in holding nothing (admin of `*`) |
 | `members pairing` | `--code` | the machines waiting on a pairing code (TETHER-12) |
 | `members teams list` · `show` · `create` · `rename` · `delete` · `add` · `remove` | `[--org]` · `--team` · `--name [--org]` · `--team --to` · `--team` · `--team --principal` · `--team --principal` | teams (ACCESS-22) |
-| `orgs list` · `create` · `rename` · `delete` | — · `--name [--admin]` · `--name --to` · `--name` | organizations (ORG-4) |
+| `orgs list` · `create` · `rename` · `delete` | — · `--name [--admin]` · `--name --to` · `--name` | organizations (ORG-4); each person's own, its `owner` (V2-41) |
 | `session whoami` · `providers` · `login` · `logout` | — · — · `[--ttl-secs] [--scope]` · — | the connection's identity; an agent's session |
 | `auth providers` · `login` · `signup` · `whoami` · `logout` · `requires` | — · `--flow` · `[--via]` · — · — · `--method` | the door (AUTH-7) |
 | `auth roles` · `role_set` · `grant` · `revoke` · `waiting` | — · `--role --grants` · `--principal --role --scope` · `--principal --scope [--role]` · — | roles and grants (admin) |
@@ -963,7 +1015,26 @@ synapse -P 4460 menger tickets get --id 7k3mq2xa
 
 Every ticket and shortcode is in one organization (`hypermemetic`).
 `orgs create --name N --admin P` (admin on `*`), `rename` (the old name an
-alias), `delete` (only empty). A grant's scope is `*`, `org:`, a shortcode
+alias), `delete` (only empty).
+
+**A person's own organization** (V2-41; owner, 2026-11-04: "users can join
+other orgs but they always have their personal org, and they are always
+editor inside it"). The write that accepts a person — their first grant, by
+name (`members grant`, `auth grant`, `orgs create --admin`), through a team,
+or being added to a team that holds one — also makes theirs, in the same
+transaction: `u-` and the first 10 hex of the SHA-256 of their principal
+(`u-3f9a02c1d4`; longer if taken), their `editor` on it signed
+`personal-org`, and `orgs list` naming them its `owner`. A person is an
+`idp`, `oidc` or `nostr` principal; an agent's `key` gets none. In it they
+stay editor: a grant to them there below editor is refused, a revoke of
+their editor refused, of their admin puts editor back; it is renamed like
+any, never deleted. So a person once accepted always holds a grant, and never
+waits again. It is named, never defaulted to: a `tickets create` of a new
+shortcode or a `teams create` with no `--org` goes to the caller's one
+organization that is no person's own (`--epic u-3f9a02c1d4:NOTES` or `--org`
+files in theirs). Every start gives one to each person who holds a grant (or is an
+`--admin`) and has none — the first start of this build is the backfill
+(`tickets-api/src/store/personal.rs`). A grant's scope is `*`, `org:`, a shortcode
 (`org:SHORTCODE`, with those hosted under it), a ticket alone (`MNG-40`) or
 a subtree (`under MNG-40`, ACCESS-21). A reader sees only the organizations
 it holds a role in.

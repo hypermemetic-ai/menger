@@ -179,6 +179,9 @@ pub(super) struct Registry {
     /// ORG-4: every name an organization had before a rename, to its row —
     /// an address written with it keeps resolving ([`super::orgs`]).
     pub(super) aliases: BTreeMap<String, i64>,
+    /// V2-41: each person's own organization, by row, to its owner's
+    /// principal ([`super::personal`]).
+    pub(super) owners: BTreeMap<i64, String>,
     pub(super) entries: BTreeMap<ShortcodeId, Entry>,
     /// The resolver's index from the letters to the shortcodes that have
     /// them — the one map keyed by a code's text, private to the resolver:

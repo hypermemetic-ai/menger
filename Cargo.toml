@@ -90,10 +90,13 @@ plexus-webapp = "0.2.0"
 # never by path outside this repository, so the graph resolves exactly one
 # of each; only what is unpublished (plexus-login, plexus-ui's crates) stays
 # by sibling path, and those take the same published versions.
-plexus-core = "0.7.0"
-# Slim: default features off keeps the rmcp/MCP stack out (default-off as
-# of 0.5.0 anyway); http-gateway enables the REST + SSE bridge (MNG-8).
-plexus-transport = { version = "0.6.0", default-features = false, features = ["http-gateway"] }
+# POLYGLOT-5 (V2-44): `clap` — plexus-core's ChildArgs, `--child` and its
+# flags spelled as every service spells them.
+plexus-core = { version = "0.7.0", features = ["clap"] }
+# Slim: default features off; http-gateway enables the REST + SSE bridge
+# (MNG-8). TRANSPORT-15 (V2-43): `mcp` mounts the MCP bridge
+# (plexus-transport-mcp) behind the login — menger's /mcp.
+plexus-transport = { version = "0.6.0", default-features = false, features = ["http-gateway", "mcp"] }
 # IDENTITY-14: login at the boundary — the provider adapters (IDENTITY-13)
 # turn each provider's credential into Plexus types at the WebSocket upgrade.
 # Used only when an --auth-provider is given.
@@ -142,6 +145,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 
 [dev-dependencies]
+# TRANSPORT-15 (V2-43): tests/mcp.rs drives menger's /mcp with an rmcp 3.x
+# client over streamable HTTP. rmcp's HTTP client is reqwest 0.13; menger's
+# own is 0.12 (plexus-login's), so the test names the newer one `reqwest13`.
+rmcp = { version = "3.8", default-features = false, features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
+reqwest13 = { package = "reqwest", version = "0.13", default-features = false }
 # Wire-level tests speak the same protocol as web/index.html.
 jsonrpsee = { version = "0.26", features = ["server", "macros", "ws-client"] }
 serde_json = "1"
@@ -222,3 +230,14 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.wasmtime-internal-core]
 opt-level = 3
+
+# PERF-6 (PLEXUS/PERF-6): the one build perf runs and releases use, PERF-1's
+# `profiles` fork built to its recommendation. Release, with LTO across every
+# crate and one codegen unit, and line tables kept for flamegraphs; `panic` is
+# release's (menger's tests rely on unwinding). Dev, test and release are
+# unchanged. `cargo build --profile perf`; plexus-bench measures with it.
+[profile.perf]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+debug = "line-tables-only"

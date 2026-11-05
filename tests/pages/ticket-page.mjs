@@ -398,7 +398,7 @@ export default async (ctx) => {
   // of menger — by its sibling import and by its bound mark — draws from props
   // alone: `uses` empty, and no call of a service's on the wire. EDITOR-9: and
   // what draws its diagrams and code beside it: mermaid-diagram (Pele) and the
-  // code card's components (code-card, code-paint, a painter per language), each
+  // code card's components (code-card, code-paint, a painter per language), EDITOR-14: and its pages' frame (page-frame), each
   // `uses` empty too.
   await test("ticket_view_draws_from_props_with_no_call", async () => {
     const live = () => sy("ui", "versions").find((e) => e.type === "version" && e.live)?.hash;
@@ -419,15 +419,15 @@ export default async (ctx) => {
     const alone = bundle(path.dirname(session), "view-alone", {
       engine: v1.engine,
       edit: (ui) => {
-        for (const f of fs.readdirSync(path.join(ui, "src"))) if (f !== "ticket-view.svelte" && f !== "mermaid-diagram.svelte" && !f.startsWith("code-")) fs.rmSync(path.join(ui, "src", f));
+        for (const f of fs.readdirSync(path.join(ui, "src"))) if (f !== "ticket-view.svelte" && f !== "mermaid-diagram.svelte" && f !== "page-frame.svelte" && !f.startsWith("code-")) fs.rmSync(path.join(ui, "src", f));
         fs.writeFileSync(path.join(ui, "src", "view-host.svelte"), host);
         fs.writeFileSync(path.join(ui, "routes.json"), JSON.stringify({ "#/": "view-host" }));
         fs.writeFileSync(path.join(ui, "slots.json"), "{}");
       },
     });
     const m = JSON.parse(alone.manifest);
-    const drawers = Object.keys(m.components).filter((c) => c === "mermaid-diagram" || c.startsWith("code-"));
-    assert(JSON.stringify(Object.keys(m.components).filter((c) => !drawers.includes(c)).sort()) === JSON.stringify(["ticket-view", "view-host"]) && drawers.includes("mermaid-diagram") && drawers.includes("code-card") && drawers.includes("code-rust"), `the bundle holds the view, what draws its diagrams and code, and its page: ${Object.keys(m.components)}`);
+    const drawers = Object.keys(m.components).filter((c) => c === "mermaid-diagram" || c === "page-frame" || c.startsWith("code-"));
+    assert(JSON.stringify(Object.keys(m.components).filter((c) => !drawers.includes(c)).sort()) === JSON.stringify(["ticket-view", "view-host"]) && drawers.includes("mermaid-diagram") && drawers.includes("page-frame") && drawers.includes("code-card") && drawers.includes("code-rust"), `the bundle holds the view, what draws its diagrams and code, and its page: ${Object.keys(m.components)}`);
     assert(Object.values(m.components).every((c) => c.uses.length === 0), "uses empty, every one");
     const was = live();
     const answer = push(server, session, path.join(path.dirname(session), "signer.key"), alone);
@@ -436,14 +436,20 @@ export default async (ctx) => {
     const { page, context, seen } = await openPage("#/");
     try {
       const v = (at) => page.locator(`#${at} [data-surface=ticket-view]`);
-      await eventually("the view draws", async () => (await v("inlined").locator("[data-ticket-body] strong").count()) === 1, 10_000);
-      await eventually("the bound one draws", async () => (await v("bound").locator("[data-ticket-body] strong").count()) === 1, 10_000);
+      // EDITOR-14: a body holding a script (raw HTML) is drawn whole in a sandboxed frame, its markdown inside it.
+      const framed = async (at) => {
+        const el = await v(at).locator("[data-surface=page-frame][data-kind=body] iframe[data-buffer=shown]").elementHandle({ timeout: 1000 }).catch(() => null);
+        const f = await el?.contentFrame();
+        return f ? f.locator("strong").count() : 0;
+      };
+      await eventually("the view draws", async () => (await framed("inlined")) === 1, 10_000);
+      await eventually("the bound one draws", async () => (await framed("bound")) === 1, 10_000);
       assert((await text(v("inlined").locator("[data-field=title]"))) === "KILN-1 the kiln", "the title, from its prop");
       assert((await v("inlined").locator("[data-field=status]").getAttribute("data-status")) === "Ready", "the status, from its prop");
       assert((await page.locator("#bound [data-component=ticket-view][data-slot]").count()) === 1, "the bound one is a section");
       assert((await text(v("bare").locator("[data-field=body][data-empty]"))) === "No body yet.", "no body: says so");
       assert((await v("bare").locator("[data-field=title], [data-field=status]").count()) === 0, "no title, no status: neither drawn");
-      assert((await page.locator("[data-ticket-body] script, [data-ticket-body] [onerror]").count()) === 0 && !(await page.evaluate(() => window.pwned)), "the body through the host's sanitizer");
+      assert((await page.locator("[data-ticket-body] script, [data-ticket-body] [onerror]").count()) === 0 && !(await page.evaluate(() => window.pwned)), "the body's script never reaches the app: framed, sandboxed");
       await sleep(300);
       const calls = (await sentCalls(page)).filter((c) => !String(c.method).startsWith("ui."));
       assert(calls.length === 0, `no call: ${calls.map((c) => c.method).join(", ")}`);

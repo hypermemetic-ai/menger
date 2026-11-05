@@ -240,11 +240,12 @@ fn the_binary_has_no_flag_for_them() {
 /// V2-8, acceptance 1: the words of what went, singular and plural, which
 /// README and AGENTS.md must no longer say — v1's services, its mockups, its
 /// browser toolchain and the old word for a service. V2-20: the queue's
-/// words left: it is back. Not
+/// words left: it is back. EDITOR-14: and a mockup's — a body's pages draw
+/// in frames again. Not
 /// `theme` (`data-theme` stays) and not `deployed` (the pipeline deploys).
 const GONE_WORDS: &[&str] = &[
     "chats", "chat", "comments", "comment", "deployments", "deployment", "themes", "trunk",
-    "Leptos", "sdk-codegen", "hub", "hubs", "mockup", "mockups",
+    "Leptos", "sdk-codegen", "hub", "hubs",
 ];
 
 /// V2-10: the words deploy/README.md alone must also no longer say — the

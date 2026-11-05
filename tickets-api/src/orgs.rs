@@ -10,6 +10,7 @@
 
 use crate::address::OrgId;
 use crate::members::Grant;
+use crate::vocab::Principal;
 use serde::{Deserialize, Serialize};
 
 /// One organization, as a reader of it sees it.
@@ -27,6 +28,10 @@ pub struct Org {
     pub shortcodes: u32,
     /// How many tickets it holds.
     pub tickets: u32,
+    /// V2-41: whose own organization it is — the person it was made for when
+    /// they were accepted, always editor in it; none for any other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<Principal>,
 }
 
 /// What the `orgs` activation's methods yield.

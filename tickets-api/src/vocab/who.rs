@@ -90,6 +90,10 @@ pub const DEV_LOGIN: &str = "dev-login";
 /// it — the gate decided it, the access layer wrote it.
 pub const AUTH_GRANT: &str = "auth.grant";
 
+/// V2-41: what a person's editor grant on their own organization says
+/// granted it — the store, as it accepted them.
+pub const PERSONAL: &str = "personal-org";
+
 /// IDENTITY-21: who gave a grant — a principal, or the operator (`--admin`
 /// on the command line, which no principal can be). ACCESS-48: or the
 /// server's own two writers — the dev sign-in (`dev-login`) and `auth.grant`
@@ -101,6 +105,7 @@ pub enum GrantedBy {
     Operator,
     DevLogin,
     AuthGrant,
+    Personal,
 }
 
 impl TryFrom<&str> for GrantedBy {
@@ -110,6 +115,7 @@ impl TryFrom<&str> for GrantedBy {
             OPERATOR => Ok(Self::Operator),
             DEV_LOGIN => Ok(Self::DevLogin),
             AUTH_GRANT => Ok(Self::AuthGrant),
+            PERSONAL => Ok(Self::Personal),
             t => t.parse().map(Self::Principal),
         }
     }
@@ -122,11 +128,12 @@ impl fmt::Display for GrantedBy {
             Self::Operator => f.write_str(OPERATOR),
             Self::DevLogin => f.write_str(DEV_LOGIN),
             Self::AuthGrant => f.write_str(AUTH_GRANT),
+            Self::Personal => f.write_str(PERSONAL),
         }
     }
 }
 
-as_text!(GrantedBy, "Who gave a grant: a Plexus principal, --admin (the operator), dev-login or auth.grant");
+as_text!(GrantedBy, "Who gave a grant: a Plexus principal, --admin (the operator), dev-login, auth.grant or personal-org");
 
 fn team_name(text: &str) -> Result<String, String> {
     let t = text.trim();

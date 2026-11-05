@@ -697,6 +697,14 @@ has "app.yml: the image is GHCR's" "$(<"$AY")" "name: ghcr.io/hypermemetic-ai/me
 for f in $(sed -n 's/^ *env_file: *//p' "$AY"); do [[ -f $REPO/$f ]] && ok || bad "app.yml: no $f"; done
 has "app-test.env: its public URL" "$(<"$REPO/deploy/env/app-test.env")" "MENGER_PUBLIC_URL=https://app-test.menger.sh"
 has "app-test.env: the edge trusted" "$(<"$REPO/deploy/env/app-test.env")" "MENGER_TRUSTED_PROXIES=172.30.0.2/32"
+# TRANSPORT-24: /mcp names the environment's AuthKit domain, and its tokens are admitted for that /mcp
+has "app-test.env: /mcp names staging's AuthKit" "$(<"$REPO/deploy/env/app-test.env")" "MENGER_MCP_AUTHORIZATION_SERVERS=https://stellar-fruit-82-staging.authkit.app"
+has "app-test.env: AuthKit's tokens admitted for its /mcp" "$(<"$REPO/deploy/env/app-test.env")" "oidc:authkit=https://stellar-fruit-82-staging.authkit.app,https://app-test.menger.sh/mcp"
+has "app-prod.env: /mcp names production's AuthKit" "$(<"$REPO/deploy/env/app-prod.env")" "MENGER_MCP_AUTHORIZATION_SERVERS=https://manageable-editor-54.authkit.app"
+has "app-prod.env: AuthKit's tokens admitted for its /mcp" "$(<"$REPO/deploy/env/app-prod.env")" "oidc:authkit=https://manageable-editor-54.authkit.app,https://app.menger.sh/mcp"
+# V2-43: v2's UI-15 lines stay beside them
+has "app-prod.env: UI-15's channel" "$(<"$REPO/deploy/env/app-prod.env")" "MENGER_UI_CHANNEL=prod"
+has "app-test.env: UI-15's channel" "$(<"$REPO/deploy/env/app-test.env")" "MENGER_UI_CHANNEL=test"
 MENGER_APP_YML=$SCRATCH/app.yml rrun remote prod
 same "remote prod: exits 0" "$code" 0
 has "remote prod: promote.yml only" "$(<"$SCRATCH/infra.argv")" "infra promote.yml -e app_dir="
@@ -821,6 +829,74 @@ ci6 suite --status "$SR"; same "suite --status: failed" "$(<"$SCRATCH/out")" "su
 [[ $(grep -c $'\tbuild\ttest\t' "$D/deployments.log") == 0 || $(tail -n 1 "$D/deployments.log") != *$'build\ttest'* ]] && ok || bad "a red suite logged as a build's gate"
 ci6 suite nonesuch
 same "suite: no such release" "$code" 1
+
+# ── PERF-6: plexus-bench beside the suite; a red bench marks the release failed ──
+# A stand-in plexus-bench beside the scratch repository: its scripts/gate.sh keeps
+# what it was run with, and is red when STUB_BENCH_RED=1. Its scripts/ci-check.sh below.
+mkdir -p "$SCRATCH/ci6/plexus-bench/scripts"
+printf '#!/usr/bin/env bash\necho "$*|${PLEXUS_BENCH_MENGER:-}|${CARGO_TARGET_DIR:-}" >>"%s"\nif [[ ${STUB_BENCH_RED:-} == 1 ]]; then echo "RED  call.one_item p50_us 63.3 against golden 55.0 (+15.0 %% worse)"; echo "check: red: call.one_item (20 held, 1 red, 2 skipped)"; exit 1; fi\necho "check: every golden holds (21 held, 0 red, 2 skipped)"\n' "$SCRATCH/ci6/bench-args" >"$SCRATCH/ci6/plexus-bench/scripts/gate.sh"
+chmod +x "$SCRATCH/ci6/plexus-bench/scripts/gate.sh"
+# The stand-in's scripts/ci-check.sh prints what the real one prints: the lines of
+# `plexus-bench check --ci`, red with STUB_COUNTS_RED=1. STUB_COUNTS_BROKEN=1 is one
+# that could not run at all (no image, no docker), which says no verdict, and
+# STUB_COUNTS_SILENT=1 one that exits 0 and says none (PLEXUS_BENCH_CI_NO_CHECK=1).
+printf '#!/usr/bin/env bash\necho "$*|${CARGO_TARGET_DIR:-}" >>"%s"\nif [[ ${STUB_COUNTS_BROKEN:-} == 1 ]]; then echo "ci-check: no valgrind here and no docker to run it in" >&2; exit 2; fi\nif [[ ${STUB_COUNTS_SILENT:-} == 1 ]]; then exit 0; fi\nif [[ ${STUB_COUNTS_RED:-} == 1 ]]; then echo "RED  call.one_item instructions_per_op 59,000 against golden 49,442 (+19.3 %% worse)"; echo "check --ci: red: call.one_item (20 held, 1 red, 0 skipped)"; exit 1; fi\necho "check --ci: every golden holds (21 held, 0 red, 0 skipped)"\n' "$SCRATCH/ci6/counts-args" >"$SCRATCH/ci6/plexus-bench/scripts/ci-check.sh"
+chmod +x "$SCRATCH/ci6/plexus-bench/scripts/ci-check.sh"
+: >"$SCRATCH/ci6/bench-args"
+ci6 suite "$SR"
+same "bench: a green bench, the suite exits 0" "$code" 0
+has "bench: plexus-bench's gate ran beside the suite" "$(<"$SCRATCH/ci6/bench-args")" "-bench|"
+has "bench: schema.* measure the release's own menger" "$(<"$SCRATCH/ci6/bench-args")" "|$D/releases/$SR/bin/menger|"
+has "bench: its verdict on the SUITE line" "$(<"$D/releases/$SR/SUITE")" "; bench every golden holds (21 held, 0 red, 2 skipped)"
+same "bench: green, the suite's line" "$(tail -n 1 "$D/deployments.log" | cut -f2,3,5)" $'suite\ttest\tpassed'
+STUB_BENCH_RED=1 ci6 suite "$SR"
+same "bench: red, the suite exits 1" "$code" 1
+has "bench: red marks the release failed" "$(<"$D/releases/$SR/SUITE")" "failed "
+has "bench: …and names the bench" "$(<"$D/releases/$SR/SUITE")" "bench red; log "
+same "bench: red, the suite's line" "$(tail -n 1 "$D/deployments.log" | cut -f2,3,5)" $'suite\ttest\tfailed bench'
+has "bench: red names the scenario" "$err" "RED  call.one_item"
+ci6 suite --status "$SR"; same "bench: red, suite --status" "$(<"$SCRATCH/out")" "suite: failed"
+MENGER_BENCH_DIR=none ci6 suite "$SR"
+same "bench: MENGER_BENCH_DIR=none, the suite exits 0" "$code" 0
+has "bench: none, said on the SUITE line" "$(<"$D/releases/$SR/SUITE")" "bench not run (MENGER_BENCH_DIR=none)"
+
+# ── PERF.115-29: plexus-bench's count check beside its gate ──────────────
+: >"$SCRATCH/ci6/counts-args"; : >"$SCRATCH/ci6/bench-args"
+ci6 suite "$SR"
+same "counts: green, the suite exits 0" "$code" 0
+has "counts: ci-check ran beside the gate" "$(<"$SCRATCH/ci6/counts-args")" "-counts"
+has "counts: in the gate's cargo target" "$(<"$SCRATCH/ci6/counts-args")" "|$HOME/.cache/cargo-target/plexus-bench"
+has "counts: the gate ran too" "$(<"$SCRATCH/ci6/bench-args")" "-bench"
+has "counts: the verdict on the SUITE line" "$(<"$D/releases/$SR/SUITE")" "; counts every golden holds (21 held, 0 red, 0 skipped)"
+has "counts: the bench's verdict stays there" "$(<"$D/releases/$SR/SUITE")" "; bench every golden holds (21 held, 0 red, 2 skipped)"
+has "counts: said at the end of the suite" "$(<"$SCRATCH/out")$err" "counts every golden holds"
+has "counts: green, releases says passed" "$("$CR/deploy/pipeline" releases 2>/dev/null)" "$SR  passed"
+: >"$SCRATCH/ci6/bench-args"
+STUB_COUNTS_RED=1 ci6 suite "$SR"
+same "counts: red, the suite exits 1" "$code" 1
+has "counts: red marks the release failed" "$(<"$D/releases/$SR/SUITE")" "failed "
+has "counts: …and names the counts" "$(<"$D/releases/$SR/SUITE")" "counts red; log "
+same "counts: red, the suite's line" "$(tail -n 1 "$D/deployments.log" | cut -f2,3,5)" $'suite\ttest\tfailed counts'
+has "counts: red names the scenario" "$err" "RED  call.one_item"
+ci6 suite --status "$SR"; same "counts: red, suite --status" "$(<"$SCRATCH/out")" "suite: failed"
+has "counts: red, releases says failed" "$("$CR/deploy/pipeline" releases 2>/dev/null)" "$SR  failed"
+same "counts: a count that is red is not waited on: no wall-clock bench after it" "$(<"$SCRATCH/ci6/bench-args")" ""
+STUB_COUNTS_BROKEN=1 ci6 suite "$SR"
+same "counts: a check that could not run, the suite exits 1" "$code" 1
+has "counts: …it is no pass" "$(<"$D/releases/$SR/SUITE")" "counts red; log "
+STUB_COUNTS_SILENT=1 ci6 suite "$SR"
+same "counts: exit 0 and no verdict, the suite exits 1" "$code" 1
+has "counts: …no count read, no pass" "$(<"$D/releases/$SR/SUITE")" "counts red; log "
+: >"$SCRATCH/ci6/counts-args"
+mv "$SCRATCH/ci6/plexus-bench/scripts/ci-check.sh" "$SCRATCH/ci6/ci-check.kept"
+ci6 suite "$SR"
+same "counts: a plexus-bench with no ci-check, the suite exits 1" "$code" 1
+has "counts: …nor with no ci-check" "$(<"$D/releases/$SR/SUITE")" "counts red; log "
+mv "$SCRATCH/ci6/ci-check.kept" "$SCRATCH/ci6/plexus-bench/scripts/ci-check.sh"
+MENGER_BENCH_DIR=none ci6 suite "$SR"
+same "counts: MENGER_BENCH_DIR=none, the suite exits 0" "$code" 0
+same "counts: none, not run" "$(<"$SCRATCH/ci6/counts-args")" ""
+has "counts: none, the line says bench not run" "$(<"$D/releases/$SR/SUITE")" "bench not run (MENGER_BENCH_DIR=none)"
 
 
 # ════ V2-7: the pipeline for v2 — its testing surface ═══════════════════════
@@ -1114,7 +1190,9 @@ printf '<!doctype html><title>{{TITLE}}</title><p>x</p>\n' >"$BR/ui/index.html";
 gitf() { git -C "$BR" -c user.name=t -c user.email=t@t "$@"; }
 printf '[workspace]\nmembers = ["."]\n' >"$BR/Cargo.toml"
 gitf init -q -b main && gitf add -A && gitf commit -qm "main: v2's shape"
-gitf checkout -q -b v2 main && gitf commit -q --allow-empty -m "v2: one commit on"
+# RUN-39: v2's tip defines the perf profile (PERF-6), main's here does not — a release of the
+# one is the perf build, of the other --release as before
+gitf checkout -q -b v2 main && printf '\n[profile.perf]\ninherits = "release"\n' >>"$BR/Cargo.toml" && gitf commit -qam "v2: one commit on, [profile.perf]"
 gitf checkout -q main
 MSHA=$(gitf rev-parse main) VSHA=$(gitf rev-parse v2)
 # the framework's compiler module script, a stand-in: says where it ran and what OUT it was given,
@@ -1133,10 +1211,11 @@ cat >"$B/bin/cargo" <<'CARGO'
 #!/usr/bin/env bash
 echo "$PWD: cargo $*" >>"$STUB_CARGO_LOG"
 case $1 in
-  build) prev=""; for a in "$@"; do
-           if [[ $prev == -p ]]; then mkdir -p "$CARGO_TARGET_DIR/release"
-             if [[ $a == plexus-ui-cli ]]; then cp "$STUB_PLEXUS_UI" "$CARGO_TARGET_DIR/release/plexus-ui"
-             else cp "$STUB_FAKE_MENGER" "$CARGO_TARGET_DIR/release/$a"; chmod +x "$CARGO_TARGET_DIR/release/$a"; fi
+  build) prev="" prof=debug; for a in "$@"; do [[ $a == --release ]] && prof=release; [[ $prev == --profile ]] && prof=$a; prev=$a; done
+         prev=""; for a in "$@"; do
+           if [[ $prev == -p ]]; then mkdir -p "$CARGO_TARGET_DIR/$prof"
+             if [[ $a == plexus-ui-cli ]]; then cp "$STUB_PLEXUS_UI" "$CARGO_TARGET_DIR/$prof/plexus-ui"
+             else cp "$STUB_FAKE_MENGER" "$CARGO_TARGET_DIR/$prof/$a"; chmod +x "$CARGO_TARGET_DIR/$prof/$a"; fi
            fi; prev=$a; done; exit 0 ;;
   test) echo "test result: ok. 3 passed; 0 failed"; exit 0 ;;
   # the workspace's packages: menger
@@ -1253,7 +1332,8 @@ same "$T1: the release's steps" "$(field steps "$RF")" "cargo build, plexus-ui, 
 has "$T1: the studio built by the tool, named studio" "$(<"$STUB_UI_TOOL_LOG")" "plexus-ui build $B/menger-build/../plexus-ui/studio --strict-colours --engine $B/menger-build/dist/engine --name studio"
 same "$T1: the release's dist/studio.tar is the studio's, named" "$(tar -xOf "$D5/releases/$VR/dist/studio.tar" manifest.json 2>/dev/null | jq -r .name 2>/dev/null)" "studio"
 same "$T1: no trunk, no npm ran" "$(<"$B/browser.log")" ""
-same "$T1: cargo build --release of the workspace's packages: menger alone" "$(grep -o 'cargo build --release -p .*' "$STUB_CARGO_LOG")" "cargo build --release -p menger"
+same "$T1: cargo build of the workspace's packages, the perf profile (RUN-39): menger alone" "$(grep -o 'cargo build --profile .*' "$STUB_CARGO_LOG")" "cargo build --profile perf -p menger"
+same "$T1: the release says it is the perf build (RUN-39)" "$(field profile "$RF")" "perf (RUN-39: the build the bench measures)"
 has "$T1: the tool built from ../plexus-ui beside the build checkout" "$(<"$STUB_CARGO_LOG")" "cargo build --release --manifest-path $B/menger-build/../plexus-ui/Cargo.toml -p plexus-ui-cli"
 has "$T1: the engine built by the tool, into dist/engine" "$(<"$STUB_UI_TOOL_LOG")" "plexus-ui build --prebuild --engine $B/menger-build/dist/engine"
 has "$T1: the bundle built by the tool on this machine" "$(<"$STUB_UI_TOOL_LOG")" "plexus-ui build $B/menger-build/ui --strict-colours --engine $B/menger-build/dist/engine --contract $CONTRACT_HASH --commit menger@${VSHA:0:7} -o $B/menger-build/dist/ui.tar"
@@ -1290,6 +1370,9 @@ same "$T1: no --branch: exits 0" "$code" 0
 MR=$(tail -n 1 "$SCRATCH/out")
 same "$T1: no --branch: the release is main's" "$(field branch "$D5/releases/$MR/RELEASE")" "main"
 same "$T1: no --branch: main's tip" "$(field commit "$D5/releases/$MR/RELEASE")" "$MSHA"
+# RUN-39: a tree with no [profile.perf] (older than PERF-6) builds the release profile, and says so
+same "$T1: no perf profile in the tree: the release profile" "$(grep -o 'cargo build --profile [a-z]* -p menger$' "$STUB_CARGO_LOG")" "cargo build --profile release -p menger"
+same "$T1: no perf profile in the tree: the release says release" "$(field profile "$D5/releases/$MR/RELEASE")" "release"
 # the suite of a v2 release: the workspace's alone (no frontend to test) — a release at v2's
 # tip made here, so the suite is checked whatever the build above did
 SR5=$(id=20261024T000000Z-${VSHA:0:7}; r=$D5/releases/$id; mkdir -p "$r/bin" "$r/dist"

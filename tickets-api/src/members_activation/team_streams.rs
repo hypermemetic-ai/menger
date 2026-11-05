@@ -83,7 +83,8 @@ pub(super) fn show_stream(access: Access, user: VerifiedUser, name: TeamName) ->
     }
 }
 
-/// `teams.create`: admin somewhere; in `org`, or the caller's only one.
+/// `teams.create`: admin somewhere; in `org`, or the caller's only one —
+/// V2-41: or its only one that is no person's own.
 pub(super) async fn create(store: Arc<Store>, user: VerifiedUser, name: TeamName, org: Option<OrgId>) -> MembersEvent {
     let made = || -> Result<(AdminOf, GrantedBy, OrgId), MembersEvent> {
         let by = signer(&user)?;
@@ -92,6 +93,9 @@ pub(super) async fn create(store: Arc<Store>, user: VerifiedUser, name: TeamName
             (Some(o), _) if in_reach(&user, &o) => o,
             (Some(o), _) => return Err(error(format!("no organization {o} of yours"))),
             (None, Some(held)) if held.len() == 1 => held[0].clone(),
+            (None, Some(held)) if held.iter().filter(|o| !store.is_personal(o)).count() == 1 => {
+                held.into_iter().find(|o| !store.is_personal(o)).expect("counted one")
+            }
             (None, Some(_)) => return Err(error("you are in more than one organization: name the team's with --org")),
             (None, None) => store.orgs().first().map(|o| o.name.clone()).ok_or_else(|| error("there is no organization"))?,
         };

@@ -21,9 +21,11 @@ substrate's `sqlx 0.8` links `libsqlite3-sys 0.30`, and cargo refuses two
 `links = "sqlite3"` in one resolve. `menger-tickets-api` with
 `default-features = false` (the client half, for the remote — TETHER-2)
 resolves beside substrate. It takes the plexus line by published version
-and needs the sibling `../../plexus-substrate`; `plexus-login` is the
-sibling `../../plexus-login` (FRAME-4), the one path substrate and everyone
-else name now (FRAME-9), so the graph has one.
+(PLEXUS-16); substrate and `plexus-login` from their public repositories,
+each at a revision (PLEXUS-13, V2-44). tether's `plexus-login` is the one
+substrate names (V2-19): two sources of one crate are two crates to cargo.
+When substrate moves, its revision here moves with it, and `plexus-login`'s
+with its own.
 
 ```sh
 cd tether

@@ -4,7 +4,7 @@ A plan is a program whose leaves are prose. menger is a Plexus RPC
 ticketing service and the seed of a Plexus-native reactive web framework.
 This is **v2**: the tickets service, the ui service, the media service, the docs service and the quota service, nothing else.
 
-v1 is tag `v0.0.1`; v2 cut its chats, comments, deployments, themes, notes, assignees and components, the Leptos app (trunk) and the frames' SDK (sdk-codegen), mockups and the diagrams service — read v1 there, never here. Media came back as a service of its own (V2-24, `media/`).
+v1 is tag `v0.0.1`; v2 cut its chats, comments, deployments, themes, notes, assignees and components, the Leptos app (trunk) and the frames' SDK (sdk-codegen), mockups and the diagrams service — read v1 there, never here. Media came back as a service of its own (V2-24, `media/`), and a body's pages as sandboxed frames (EDITOR-14, `ui/src/page-frame.svelte`).
 
 README.md is the reference: the services and their methods ("Surface"),
 the flags ("Run" → Every flag), the rules each ticket set down. This file is
@@ -276,15 +276,19 @@ deploy/pipeline image R                       # RUN-10: the release as an image 
 deploy/pipeline remote test --image ghcr.io/hypermemetic-ai/menger:R
                                               # app-test.menger.sh through infra, the bundle pushed through
                                               # ui.push as the pipeline key, then the smoke
-deploy/pipeline suite R                       # the full suite at R's commit, on this machine; marks R passed / failed
+deploy/pipeline suite R                       # the full suite at R's commit, on this machine, then plexus-bench's
+                                              # counts and bench (PERF-6, PERF.115-29: ../plexus-bench, every
+                                              # scenario against its golden); marks R passed / failed
 deploy/pipeline remote prod                   # what test runs → app.menger.sh, only once its suite passed; the owner's
 deploy/pipeline local --image menger:R        # RUN-25: the image on 127.0.0.1:4470/4471, a CI throwaway
 deploy/pipeline status                        # what test and prod run, their suites, the runner and its branch
 deploy/pipeline releases                      # every release: its suite, tested?, where it runs
 ```
 
-- **The release names its branch** (`build --branch B`: B's tip). A tree
-  with no `frontend/` builds `cargo build --release -p menger`, the
+- **The release names its branch** (`build --branch B`: B's tip), and is
+  **the perf build** (RUN-39: `[profile.perf]`, the one build perf runs and
+  releases use; `RELEASE` says `profile: perf`). A tree
+  with no `frontend/` builds `cargo build --profile perf -p menger`, the
   `plexus-ui` tool from `../plexus-ui` (FRAME-8; the release carries it as
   `bin/plexus-ui`), the engine (`plexus-ui build --prebuild`), the bundle
   (`plexus-ui build --contract HASH` → `dist/ui.tar`) and
@@ -627,9 +631,11 @@ question.
 - Plexus crates come from the **0.7 line by published version**
   (PLEXUS-16): `plexus-core`, `plexus-macros`, `plexus-client`,
   `plexus-transport`, `plexus-auth-core`, `plexus-webapp`. What is
-  unpublished stays by sibling path: `../plexus-login`, `../plexus-ui` and
-  tether's `../plexus-substrate`; a clone of menger alone does not build
-  until those are decided. Every activation is `impl FooActivation` (MACRO-13,
+  unpublished stays by sibling path: `../plexus-login` and `../plexus-ui`
+  (FRAME-1's rule, `tests/apart.rs`); a clone of menger alone does not build
+  until those are decided. tether takes plexus-substrate and plexus-login
+  from their public repositories, each at a revision (PLEXUS-13, V2-44), the
+  plexus-login being the one substrate names. Every activation is `impl FooActivation` (MACRO-13,
   MACRO-21): the stem names the namespace, the trait and the client.
 - **Workspace members** (`Cargo.toml`): `.`, `tickets-api`, `media`, `quota`;
   `tether/` is its own workspace. Three repositories
@@ -650,7 +656,9 @@ question.
   `src/shell.rs`'s `PAGE_CSP`): no inline script but the page's own blocks,
   hashed; nothing from another origin; connections only to itself, its
   socket and loopback. Something a page needs from elsewhere is a change to
-  that policy, made deliberately.
+  that policy, made deliberately. A page in a body (a mockup, a raw-HTML
+  body, EDITOR-14) runs in a sandboxed frame of the shell's `/frame`, under
+  `FRAME_CSP` alone — never a `srcdoc`, which would inherit `PAGE_CSP`.
 - Every RPC method returns `impl Stream<Item = …Event> + Send + 'static`;
   event enums use `#[serde(tag = "type", rename_all = "snake_case")]` with an
   in-band `Error { message }` variant.

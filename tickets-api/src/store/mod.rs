@@ -3108,6 +3108,8 @@ impl Store {
         shortcodes::settle(conn, &mut cache)?;
         // ORG-4: every grant from before organizations moved into its own.
         cache.members = orgs::settle(conn, &cache, grant_rows)?;
+        // V2-41: whose own each personal organization is.
+        personal::load(conn, &mut cache.shortcodes)?;
         // ACCESS-22: the teams and who is in each, beside the grants.
         teams::load(conn, &mut cache.members)?;
         // FILTER-46: the saved filters, as stored.
@@ -4311,6 +4313,9 @@ impl Store {
 
     /// IDENTITY-21: keeps a grant (replacing the principal's role on that
     /// scope): one row committed, then the cache moved. The grant as kept.
+    /// V2-41: a person it reaches who has no organization of their own is
+    /// given one in the same transaction; one below editor to an owner in
+    /// their own is refused ([`personal`]).
     ///
     /// ACCESS-11: by `by` — the system, or admin on exactly the grant's
     /// scope, minted while login is on ([`Authority::grants_on`]).
@@ -4326,21 +4331,48 @@ impl Store {
             }
             _ => {}
         }
-        let (stored, kept) = (g.clone(), g.clone());
+        // V2-41: a person's first grant makes their own organization; in it
+        // they stay editor or above.
+        let making = {
+            let cache = self.tickets.read().expect("store lock poisoned");
+            if let Some(why) = personal::grant_refused(&cache, &g) {
+                return Err(StoreError::Invalid(why));
+            }
+            personal::plan(&cache, personal::reached(&cache, &g.principal), personal::next_row(&cache), &[])
+        };
+        let (stored, kept, mine) = (g.clone(), g.clone(), making.clone());
         self.write(
             serial,
-            move |tx| Ok(members::store(tx, &stored)?),
-            move |cache, _| cache.members.put(kept),
-            move |(), (), _| g,
+            move |tx| {
+                members::store(tx, &stored)?;
+                Ok(personal::keep(tx, &mine)?)
+            },
+            move |cache, made| {
+                cache.members.put(kept);
+                personal::put(cache, making, made);
+            },
+            move |_, (), _| g,
         )
         .await
     }
 
     /// IDENTITY-21: removes a grant; whether there was one.
-    /// ACCESS-11: by `by`, as [`Store::grant`].
+    /// ACCESS-11: by `by`, as [`Store::grant`]. V2-41: an owner's editor in
+    /// their own organization is refused; their admin there goes back to
+    /// editor ([`personal`]).
     pub async fn revoke(&self, by: impl Into<Authority>, principal: crate::vocab::Grantee, scope: crate::members::Scope) -> Result<bool, StoreError> {
         by.into().grants_on(&scope)?;
         let serial = self.serial().await;
+        // V2-41: an owner keeps editor in their own organization.
+        let held = personal::revoke_held(&self.tickets.read().expect("store lock poisoned"), &principal, &scope);
+        match held {
+            Some(Err(why)) => return Err(StoreError::Invalid(why)),
+            Some(Ok(editor)) => {
+                let (stored, kept) = (editor.clone(), editor);
+                return self.write(serial, move |tx| Ok(members::store(tx, &stored)?), move |cache, _| cache.members.put(kept), |(), (), _| true).await;
+            }
+            None => {}
+        }
         let (p, sc) = (principal.clone(), scope.clone());
         self.write(
             serial,
@@ -4907,9 +4939,13 @@ mod teams;
 pub use teams::OnTeam;
 /// ACCESS-24: what open mode planted, purged once.
 mod open_purge;
+mod personal;
+pub use personal::{is_person, personal_name};
 pub use open_purge::OpenPurge;
 #[cfg(test)]
 mod tests_open_purge;
+#[cfg(test)]
+mod tests_personal;
 // ACCESS-9: the capability of acting for no user, minted here alone.
 mod system;
 pub use system::System;

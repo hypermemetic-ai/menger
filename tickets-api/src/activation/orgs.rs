@@ -49,7 +49,8 @@ pub(super) fn named_in(store: &Store, caller: &VerifiedUser, id: String) -> Stri
 /// - else the shortcode the epic names, when it is in one of the caller's
 ///   organizations; else the one organization of the caller's that holds a
 ///   shortcode of that name; else — a new shortcode — the caller's only
-///   organization, or refused, naming them.
+///   organization, or its only one that is no person's own (V2-41), or
+///   refused, naming them.
 pub(super) fn epic_in(store: &Store, caller: &VerifiedUser, epic: String, org: Option<crate::address::OrgId>, parent: Option<&str>) -> Result<String, TicketsEvent> {
     let error = |message: String| TicketsEvent::Error { message };
     let Ok(asked) = crate::address::Address::parse(&epic) else { return Ok(epic) };
@@ -74,10 +75,14 @@ pub(super) fn epic_in(store: &Store, caller: &VerifiedUser, epic: String, org: O
     }
     let holding: Vec<&crate::address::OrgId> = held.iter().filter(|o| store.org_of(&qualified(o)).is_some()).collect();
     let names = || held.iter().map(|o| o.as_str()).collect::<Vec<_>>().join(", ");
+    // V2-41: a person's own organization is named, never defaulted to — a
+    // new shortcode goes where it went before, the one shared organization.
+    let shared: Vec<&crate::address::OrgId> = held.iter().filter(|o| !store.is_personal(o)).collect();
     match (holding.as_slice(), held.as_slice()) {
         ([one], _) => Ok(qualified(one)),
         ([], [only]) => Ok(qualified(only)),
         ([], []) => Ok(epic),
+        ([], _) if shared.len() == 1 => Ok(qualified(shared[0])),
         ([], _) => Err(error(format!(
             "a new shortcode {epic}: name its organization with --org — you hold roles in {} (nothing was created)",
             names()

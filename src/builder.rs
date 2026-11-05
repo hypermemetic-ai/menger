@@ -442,7 +442,7 @@ where
     let media = MediaSetup::beside(db_path)?;
     let docs = DocsSetup::beside(db_path)?;
     let quota = QuotaSetup::beside(db_path)?;
-    build_rpc_services(db_path, seed, shape, offers, access, backend, resource_metadata, body_max, ui, media, docs, quota, tickets).await
+    build_rpc_services(db_path, seed, shape, offers, access, backend, resource_metadata, body_max, ui, media, docs, quota, Vec::new(), tickets).await
 }
 
 /// V2-24: [`build_rpc_ui_over`] with the media service over `media` (main's
@@ -452,7 +452,9 @@ where
 /// the hub built here, so a put asks `tickets.may` through it as the caller.
 /// V2-29: and the docs service over `docs` (`--docs-db-path`), its seam
 /// attached the same way (the gate on a document's organization,
-/// `orgs.list` as the caller).
+/// `orgs.list` as the caller). POLYGLOT-5 (V2-44): each of `children` — a
+/// `--child`, an activation in another process — mounted beside them, behind
+/// the same gate; one named like a service of menger's own is refused.
 #[allow(clippy::too_many_arguments)]
 pub async fn build_rpc_services<T, F>(
     db_path: &Path,
@@ -467,6 +469,7 @@ pub async fn build_rpc_services<T, F>(
     media: MediaSetup,
     docs: DocsSetup,
     quota: QuotaSetup,
+    children: Vec<plexus_core::plexus::RemoteChild>,
     tickets: F,
 ) -> anyhow::Result<Arc<DynamicHub>>
 where
@@ -535,6 +538,7 @@ where
     purge_daily(Arc::clone(&store), Arc::clone(&system));
     // ACCESS-24: grants planted while open, gone before anything is served.
     purge_planted(&store, &system, &access.admins()).await?;
+    personal_orgs(&store, &system, &access.admins()).await?;
     // IDENTITY-21: the members that decide, from the same store.
     access.attach_with(Arc::clone(&store), system);
     // UI-7: the activation registered as `tickets` is the caller's to make
@@ -581,6 +585,15 @@ where
         .register(MembersActivation::new(store, access.clone()))
         // IDENTITY-37: a signed-out connection is `anonymous` to whoami too.
         .register(SessionActivation::offering(offers, access.clone()));
+    // POLYGLOT-5: each `--child`, mounted like any activation — before the
+    // gate, so its roles are in `declared_roles` and the book seeds them.
+    for child in children {
+        let name = child.name().to_string();
+        if hub.list_activations_info().iter().any(|a| a.namespace == name) {
+            anyhow::bail!("--child {name}: `{name}` is one of menger's own activations; mount the child under another name");
+        }
+        hub = hub.register(child);
+    }
     // AUTH-7: the gate reads the same book the methods ask; the roles the
     // activations declare are what a role holds until an admin edits it.
     let book = access.book();
@@ -652,6 +665,19 @@ async fn purge_planted(store: &Store, system: &System, admins: &[String]) -> any
             tracing::info!("ACCESS-24: grants planted while open purged — {} removed, {} kept (recorded in open_purge)", removed.len(), kept.len());
         }
         Err(e) => anyhow::bail!("ACCESS-24: the purge of grants planted while open failed ({e}); refusing to serve them"),
+    }
+    Ok(())
+}
+
+/// V2-41: every person accepted — holding a grant, or an `--admin` — given
+/// an organization of their own when they have none
+/// ([`Store::ensure_personal_orgs`]); the first start of this build is the
+/// backfill. One that fails stops the start, as any write at open does.
+async fn personal_orgs(store: &Store, system: &System, admins: &[String]) -> anyhow::Result<()> {
+    match store.ensure_personal_orgs(system, admins).await {
+        Ok(made) if made.is_empty() => {}
+        Ok(made) => tracing::info!("V2-41: {} personal organization(s) made for people accepted before: {}", made.len(), made.iter().map(|o| o.as_str()).collect::<Vec<_>>().join(", ")),
+        Err(e) => anyhow::bail!("V2-41: the personal organizations could not be made ({e})"),
     }
     Ok(())
 }
