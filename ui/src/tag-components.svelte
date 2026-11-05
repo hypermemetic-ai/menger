@@ -27,6 +27,7 @@
        `this.root` and `this.menger`, the theme, the cleanup — CONTRACT.md "An element component"). The ones
        v1's bodies held were registered by the server at start (`src/v1_components.rs`). -->
 <script module>
+  import { tick } from "svelte";
   export const uses = ["ui.components", "ui.watch", "ui.history", "ui.author"];
 
   // ── definitions ────────────────────────────────────────────────────────
@@ -79,14 +80,14 @@
 
   // ── the table: what a name resolves to, and what each save answered ─────
   const listeners = new Set();
-  // COMPS-5: told on a microtask, never inside the caller's effect — a listener that reads and writes its
+  // COMPS-5: told after the flush (Svelte's tick(), COMPS-7), never inside the caller's effect — a listener that reads and writes its
   // own state there (the definition line's `tick++`) made that effect depend on what it wrote, and the page
   // looped until Svelte gave up the flush (`effect_update_depth_exceeded`), dropping the effects behind it.
   let saying = false;
   const say = () => {
     if (saying) return;
     saying = true;
-    queueMicrotask(() => { saying = false; for (const f of [...listeners]) f(); });
+    tick().then(() => { saying = false; for (const f of [...listeners]) f(); });
   };
   /** `table`: name → `ui.components`' row; `results`: name → the last save's answer on this page
    *  (`{ state: saving | authored | refused, source, version, own, reason, message, line }`). */
