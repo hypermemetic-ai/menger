@@ -1,15 +1,9 @@
 # CI-9: the suite's runner (deploy/pipeline's gate, `cargo nextest run --workspace`). Every
 # test is a process of its own and runs beside every other; what must not is said here.
 
-[test-groups]
-# tests/scripts.rs: the scripts share the machine's /tmp/claude-UID roots and PATH stand-ins —
-# one at a time, as the binary's own lock held them under cargo test (a lock nextest's
-# process-per-test does not share).
-scripts = { max-threads = 1 }
-
-[[profile.default.overrides]]
-filter = 'binary(scripts)'
-test-group = 'scripts'
+# tests/scripts.rs holds its scripts one at a time under cargo test (a lock in the binary);
+# here each is a process, and they run beside each other: each has its own TMPDIR and its own
+# root under /tmp/claude-UID (run21, ci2-disk, …), and ran green side by side (CI-9).
 
 # The long poles start first, so the run's wall is theirs, not theirs added to whatever ran
 # before them (nextest runs tests in order otherwise: these came last, past the 3-minute mark).
