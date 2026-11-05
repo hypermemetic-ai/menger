@@ -427,16 +427,19 @@ export default async (ctx) => {
     const alone = bundle(path.dirname(session), "view-alone", {
       engine: v1.engine,
       edit: (ui) => {
-        for (const f of fs.readdirSync(path.join(ui, "src"))) if (f !== "ticket-view.svelte" && f !== "mermaid-diagram.svelte" && !["m-mockup.svelte", "m-live.svelte", "m-page.svelte"].includes(f) && f !== "ticket-links.svelte" && !f.startsWith("code-")) fs.rmSync(path.join(ui, "src", f));
+        for (const f of fs.readdirSync(path.join(ui, "src"))) if (f !== "ticket-view.svelte" && f !== "mermaid-diagram.svelte" && !["m-mockup.svelte", "m-live.svelte", "m-page.svelte", "tag-components.svelte", "component-def.svelte"].includes(f) && f !== "ticket-links.svelte" && !f.startsWith("code-")) fs.rmSync(path.join(ui, "src", f));
         fs.writeFileSync(path.join(ui, "src", "view-host.svelte"), host);
         fs.writeFileSync(path.join(ui, "routes.json"), JSON.stringify({ "#/": "view-host" }));
         fs.writeFileSync(path.join(ui, "slots.json"), "{}");
       },
     });
     const m = JSON.parse(alone.manifest);
-    const drawers = Object.keys(m.components).filter((c) => c === "mermaid-diagram" || ["m-mockup", "m-live", "m-page"].includes(c) || c === "ticket-links" || c.startsWith("code-"));
+    // COMPS-4: and what draws its tags and says its definitions (tag-components, component-def).
+    const drawers = Object.keys(m.components).filter((c) => c === "mermaid-diagram" || ["m-mockup", "m-live", "m-page", "tag-components", "component-def"].includes(c) || c === "ticket-links" || c.startsWith("code-"));
     assert(JSON.stringify(Object.keys(m.components).filter((c) => !drawers.includes(c)).sort()) === JSON.stringify(["ticket-view", "view-host"]) && drawers.includes("mermaid-diagram") && ["m-mockup", "m-live", "m-page"].every((c) => drawers.includes(c)) && drawers.includes("code-card") && drawers.includes("code-rust"), `the bundle holds the view, what draws its diagrams and code, and its page: ${Object.keys(m.components)}`);
-    assert(Object.values(m.components).every((c) => c.uses.length === 0), "uses empty, every one");
+    // COMPS-4: nothing of menger's called — the only uses are the framework's ui service's (what a tag names,
+    // asked only once a tag or a definition is on screen; a definition's save), which every tenant mounts.
+    assert(Object.values(m.components).every((c) => c.uses.every((u) => u.startsWith("ui."))), `uses the ui service's alone, every one: ${JSON.stringify(Object.fromEntries(Object.entries(m.components).map(([k, c]) => [k, c.uses])))}`);
     const was = live();
     const answer = push(server, session, path.join(path.dirname(session), "signer.key"), alone);
     assert(answer?.type === "pushed", `pushed: ${JSON.stringify(answer)}`);

@@ -77,6 +77,8 @@
   import MMockup from "plexus-ui:m-mockup";
   import MLive from "plexus-ui:m-live";
   import MPage from "plexus-ui:m-page";
+  import TagComponents from "plexus-ui:tag-components";
+  import ComponentDef from "plexus-ui:component-def";
   import CodePaint from "plexus-ui:code-paint";
   import CodeRust from "plexus-ui:code-rust";
   import CodeJavascript from "plexus-ui:code-javascript";
@@ -227,6 +229,9 @@
       ["m-live", MLive, (t) => ({ source: "<m-live route=\"#/\" label=\"the board on test\"></m-live>" }), [], {}],
       // EDITOR-14, COMPS-3: a body of raw HTML, framed whole — its markdown and its HTML in one frame.
       ["m-page", MPage, (t) => ({ source: "## A raw body\n\n<div class=\"note\" style=\"padding:8px;border:1px solid\">raw HTML, framed</div>\n\nAnd **markdown** around it." }), [], {}],
+      // COMPS-4: a tag's table (no markup of its own), and a ```component definition's line under its block.
+      ["tag-components", TagComponents, (t) => ({}), [], {}],
+      ["component-def", ComponentDef, (t) => ({ name: "x-hello", source: "<p class=\"x-hello\">hello</p>\n" }), [], { html: { name: "x-card", source: "<div>a card</div>\n", html: true } }],
       ["code-paint", CodePaint, (t) => ({ code: "plain text, no language" }), [], {}],
       ["code-rust", CodeRust, (t) => ({ code: "fn main() { let x: u32 = 1; }" }), [], {}],
       ["code-javascript", CodeJavascript, (t) => ({ code: "const n = 1; // a comment", lang: "typescript" }), [], {}],

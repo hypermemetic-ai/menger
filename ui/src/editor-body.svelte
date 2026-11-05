@@ -149,6 +149,7 @@
   import { yCollab, yUndoManagerKeymap } from "y-codemirror.next";
   import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate, removeAwarenessStates } from "y-protocols/awareness";
   import { langOf } from "./code-card.svelte";
+  import { authorChanged } from "./tag-components.svelte";
 
   let { id, sheet = null, kind = "ticket" } = $props();
   // The document this instance edits: fixed at mount (editor-screen keys the editor by it), so a
@@ -226,10 +227,23 @@
     const r = await b.call("docs.update", { id: doc_id, update: toB64(update), session: SESSION });
     sending = false;
     const ok = r.events?.find((e) => e.type === "applied");
-    if (r.ok && ok) { known.add(ok.revision); state = { kind: "saved", text: `saved ${hhmm()}` }; }
+    if (r.ok && ok) { known.add(ok.revision); state = { kind: "saved", text: `saved ${hhmm()}` }; docSaved(); }
     else { outbox.unshift(update); state = { kind: "refused", text: said(r.ok ? { message: r.events?.[0]?.message ?? r.events?.[0]?.type } : r) }; }
     if (outbox.length) sendSoon();
   }
+  // COMPS-4: a doc's save is continuous, so its definitions are authored at a pause after it (PAUSE),
+  // each against the text last authored (the doc as it was first synced).
+  let docAuthored = null, docTimer = null;
+  function docSaved() {
+    if (docTimer) clearTimeout(docTimer);
+    docTimer = setTimeout(() => {
+      docTimer = null;
+      const now = ytext?.toString() ?? "";
+      if (docAuthored !== null && now !== docAuthored) authorChanged(b, docAuthored, now);
+      docAuthored = now;
+    }, PAUSE);
+  }
+  $effect(() => { if (synced && docAuthored === null) untrack(() => { docAuthored = ytext?.toString() ?? ""; }); });
   if (ydoc) ydoc.on("update", (u, origin) => { if (origin !== REMOTE && synced) { outbox.push(u); sendSoon(); } });
   // Carets: this page's awareness said by `docs.here`; everyone else's applied from their presence.
   let hereTimer = null;
@@ -356,8 +370,11 @@
     if (text === acked) { dirty = false; if (merged) state = { kind: "saved", text: `saved ${hhmm()}` }; return; }
     sent = text;
     state = { kind: "saving", text: "saving…" };
+    const before = acked ?? "";
     const r = await b.call("tickets.amend", { id: doc_id, body: text });
     if (r.ok) {
+      // COMPS-4: the ticket's save is its definitions' — each ```component fence it changed, ui.authored.
+      authorChanged(b, before, text);
       acked = text;
       if (sent === text) sent = null;
       dirty = view ? doc() !== acked : false;

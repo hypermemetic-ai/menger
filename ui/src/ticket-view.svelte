@@ -241,6 +241,12 @@
    *  piece's markdown; `pieces`, m-page's). ticket-view keeps no frame code: a page is these components'.
    *  COMPS-4 extends this table. */
   const TAGS = { "m-mockup": MMockup, "m-live": MLive, "m-page": MPage };
+  // COMPS-4: TAGS's general case — any other tag in a body drawn by the component it names (ours natively,
+  // anyone else's framed), and a ```component definition's save said under its block; tag-components'
+  // table (no markup) reads what names resolve to, once a tag or a definition asks.
+  import TagTable, { drawTags, defLines, houseOwns } from "./tag-components.svelte";
+  import DefLine from "./component-def.svelte";
+  houseOwns([...CARDS, ...INLINE, ...Object.keys(TAGS)]);
 
   // EDITOR-9: what the markdown drew, finished. Each ```mermaid fence (a bare one, or one inside a
   // house mark) gets the diagram's bound mark before it — its own module, fetched the first time one is
@@ -248,10 +254,11 @@
   // with no card of its own (an unknown `m-*`, a custom tag kept as `m-el`, a known inline mark used as
   // a box) is marked `any`: its words drawn in a neutral box, captioned by its label, name, title or
   // field — the tag's own name when it holds no words at all; inline among words, a caption beside them.
-  function enhance(node) {
+  function enhance(node, src) {
     let placed = [];
-    const clear = () => { for (const p of placed) { unmount(p.app); p.at.remove(); } placed = []; };
-    const place = () => {
+    let tags = null;
+    const clear = () => { tags?.destroy(); tags = null; for (const p of placed) { unmount(p.app); p.at.remove(); } placed = []; };
+    const place = (text) => {
       clear();
       const top = !node.parentElement?.matches?.(".h-mid, .h-close"); // a card's caption once, on its top piece
       for (const e of node.querySelectorAll("*")) {
@@ -289,8 +296,11 @@
         const props = { code: code.textContent.replace(/\n$/, ""), info, path: mc?.getAttribute("path") || "", why: mc?.getAttribute("why") || "" };
         placed.push({ at, app: mount(CodeCard, { target: at, props }) });
       }
+      // COMPS-4: each ```component fence's save, said under its card; each tag drawn by its component.
+      placed.push(...defLines(node, text, (at, d) => mount(DefLine, { target: at, props: { name: d.name, source: d.source, html: d.html } })));
+      tags = drawTags(node);
     };
-    place();
+    place(src);
     return { update: place, destroy: clear };
   }
 
@@ -302,7 +312,7 @@
 
 {#snippet drawn(p)}{#if p.page}{@const Tag = TAGS[pageTag(p)]}<div class="blk-in"><Tag source={p.text} pieces={p.raw ? rawPieces(p.text) : null}/></div>{:else}<div class="blk-in" use:enhance={p.text}>{@html markdown(mediaLinks(pieceSource(p)) + defs)}</div>{/if}{/snippet}
 
-{#if block}{@render drawn(piece ?? { text: body })}{:else}
+<TagTable/>{#if block}{@render drawn(piece ?? { text: body })}{:else}
 <article class="ticket-view" data-surface="ticket-view" data-editing={edit ? "" : undefined}>
   {#if title != null || status != null || titleEdit}
     <header class="head">

@@ -102,6 +102,16 @@ export function NODE_MODULES() {
   return nodeModules;
 }
 
+/** COMPS-4: the compiler as a wasm module (the framework checkout's scripts/ui-compiler-wasm.sh) at
+ *  `<work>/ui-compiler.wasm`, built once a run — what `--ui-compiler` names, so ui.author compiles. */
+export function compilerModule(work) {
+  const out = path.join(work, "ui-compiler.wasm");
+  if (!fs.existsSync(out)) {
+    const src = run(path.join(REPO, "scripts", "plexus-ui-src"), [REPO]).trim();
+    run(path.join(src, "scripts", "ui-compiler-wasm.sh"), [out], { cwd: REPO, stdio: ["ignore", "ignore", "inherit"] });
+  }
+  return out;
+}
 /** The plexus-ui tool (FRAME-8): the framework's cli/, built into this checkout's target by scripts/plexus-ui. */
 export const TOOL = path.join(REPO, "scripts", "plexus-ui");
 
@@ -155,6 +165,9 @@ export class Throwaway {
       "--seed-value", "6",
       // EDITOR-10: the ip:port pairs a test's local server stands in for the internet at.
       ...(this.fetchAllow ?? []).flatMap((a) => ["--media-fetch-allow", a]),
+      // COMPS-4: the compiler module and the author key, so ui.author runs (a ticket's definitions).
+      ...(this.uiCompiler ? ["--ui-compiler", this.uiCompiler] : []),
+      ...(this.authorKey ? ["--ui-author-key", this.authorKey] : []),
     ];
     this.child = spawn(path.join(TARGET, this.profile, "menger"), argv, { env, stdio: ["ignore", "ignore", "pipe"] });
     this.child.stderr.on("data", (d) => (this.stderr += d.toString()));

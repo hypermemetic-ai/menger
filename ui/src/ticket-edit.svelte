@@ -17,6 +17,7 @@
   import { bus, live, markdown } from "plexus-ui/host";
   import Chip from "./ticket-chip-sv.svelte";
   import Picker from "plexus-ui:ticket-picker";
+  import { authorChanged } from "./tag-components.svelte";
 
   let { id, sheet = null } = $props();
   const b = bus();
@@ -111,7 +112,10 @@
   }
   function saveBody(chained = false) {
     if (!open || !t || !dirty.body || (pending && !chained)) return;
-    write("tickets.amend", b.call("tickets.amend", { id, body: draft.body }), (e) => (e.changed?.length ? "saved the body" : "nothing changed"));
+    const before = t.body ?? "", after = draft.body;
+    write("tickets.amend", b.call("tickets.amend", { id, body: after }), (e) => (e.changed?.length ? "saved the body" : "nothing changed"))
+      // COMPS-4: the ticket's save is its definitions' — each ```component fence it changed, ui.authored.
+      .then((r) => { if (r?.ok) authorChanged(b, before, after); });
   }
   function save() {
     if (pending) return;
