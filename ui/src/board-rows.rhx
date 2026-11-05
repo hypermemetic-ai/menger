@@ -12,7 +12,7 @@
                         on: #{ extent: "upsert:.", created: "upsert:ticket" } });
   let counts = live(#{ snapshot: "tickets.nav.counts", params: #{ filter: filter }, key: "shortcode", on: #{ count: "upsert:." } });
   let rows = live(#{ snapshot: "tickets.list",
-                     params: #{ summary: true, limit: 200, fields: ["id", "title", "kind", "status"], filter: filter, after: state.after, at: state.at },
+                     params: #{ summary: true, limit: 200, fields: ["id", "uid", "title", "kind", "status"], filter: filter, after: state.after, at: state.at },
                      changes: "tickets.watch", changes_params: #{ filter: filter },
                      key: "id", debounce_ms: 20,
                      on: #{ created: "upsert:ticket", status_changed: "upsert:ticket", amended: "upsert:ticket",
@@ -59,7 +59,7 @@
     <div class="board-space" style={"height:" + (28 * (if filter == () { extents.rows.reduce(|a, e| a + (if e.last_seq == () { e.seq } else { e.last_seq }) - (if e.holes == () { 0 } else { e.holes.len() }), 0) } else { counts.rows.reduce(|a, c| a + c.held, 0) })) + "px"}>
       <div class="board-window" style={"transform:translateY(" + (28 * state.first) + "px)"}>
       {#each rows as r (r.id)}
-        <a class="board-row" data-id={r.id} data-status={r.status} href={"#/ticket/" + r.id}>
+        <a class="board-row" data-id={r.id} data-status={r.status} href={if r.uid == () { "#/ticket/" + r.id } else { "#/t/" + r.uid + "/" + r.id }}>
           <i class="kmark" data-kind={r.kind} aria-hidden="true"></i>
           <span class="row-id" data-field="id">{r.id}</span>
           <span class="row-title" data-field="title">{r.title}</span>

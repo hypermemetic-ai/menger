@@ -89,6 +89,10 @@
   import TicketChipSv from "plexus-ui:ticket-chip-sv";
   import TicketLinks from "plexus-ui:ticket-links";
   import PageT from "plexus-ui:page-t";
+  import PageTKey from "plexus-ui:page-t-key";
+  import PageNamed from "plexus-ui:page-named";
+  import TicketByName from "plexus-ui:ticket-by-name";
+  import TicketCollision from "plexus-ui:ticket-collision";
   import TicketCommits from "plexus-ui:ticket-commits";
   import TicketCreate from "plexus-ui:ticket-create";
   import TicketEdit from "plexus-ui:ticket-edit";
@@ -206,6 +210,9 @@
     ["the ticket", [
       ["ticket-page", TicketPage, ID, ["hover", "focus"], gone, true],
       ["ticket-head", TicketHead, ID, ["hover", "focus"], gone],
+      // V2-50: the collision page and a name's resolution, by the sheet's id (one ticket: no rows; its empty, a name none fits).
+      ["ticket-collision", TicketCollision, ID, [], gone],
+      ["ticket-by-name", TicketByName, ID, [], {}],
       ["ticket-body", TicketBody, ID, [], gone],
       ["ticket-view", TicketView, (t) => ({ title: t, status: "Ready", body: "## A ticket\n\nDrawn from its **props**, no call.\n\n- a list\n- of two\n\n<m-summary>\n\n<m-field data-field=\"standing\">**A house card**, drawn as the editor draws it.</m-field>\n\n<m-stat value=\"2\" tone=\"pass\">blocks</m-stat>\n\n</m-summary>\n" }), [], { empty: { body: "" } }],
       // EDITOR-9: a mermaid fence drawn by Pele, and one it refuses.
@@ -265,8 +272,11 @@
     // STUDIO-12: the pages — each route's rhx page, placing its components by their marks (#/sheet's own, page-sheet, aside: it places this).
     ["the pages", [
       ["page-ticket", PageTicket, ID, [], { loading: { sheet: "loading" }, ...gone }, true],
-      // V2-42: a ticket by its uid (get takes the id too, so the sheet's id draws it).
+      // V2-42: a ticket by its uid; V2-50: the sheet's id is no uid, so it draws "not a uid".
       ["page-t", PageT, (t) => ({ uid: t }), [], {}, true],
+      // V2-50: the key's page under page-t, and a name of several segments (#/sheet's own address names none: not found).
+      ["page-t-key", PageTKey, (t) => ({ key: t }), [], {}, true],
+      ["page-named", PageNamed, ID, [], {}, true],
       ["page-queue", PageQueue, F, [], {}, true],
       ["page-new", PageNew, (t) => ({ parent: t }), [], {}, true],
       ["page-search", PageSearch, (t) => ({ q: t }), [], { empty: { q: "zzqqxxjj" } }, true],

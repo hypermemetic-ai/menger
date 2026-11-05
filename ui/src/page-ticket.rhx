@@ -18,6 +18,11 @@
   // ticket-head's, which knows the siblings (and keeps the prefix). The key
   // strip says them; the palette is the page's `palette` section
   // (jump-palette-sv by ui/slots.json: app-top's jump button and ctrl+k).
+  // V2-50 (main's TICKETS-36): a name that fits several tickets — `get`
+  // answering `ambiguous { id, candidates, choices }` — draws the collision
+  // page in the ticket's place (ticket-collision: every choice with its
+  // parent, each a link by uid); one ticket is its page, its address put in
+  // the uid form (ticket-head); none, "No ticket"; a deleted one, as above.
   prop("id");
   prop("sheet"); // SURFACE-10: the sheet's held state, "loading" its skeleton
   state(#{ knocked: 0 });
@@ -57,7 +62,11 @@
         </div>
       {:else}
         {#if ticket.rows.filter(|r| r.title != ()).len() == 0}
-          <p class="tp empty" data-empty data-not-found>{"No ticket " + id + " here" + (if ticket.message == () { "" } else { " — " + ticket.message }) + "."}</p>
+          {#if ticket.rows.filter(|r| type_of(r.choices) == "array" || type_of(r.candidates) == "array").len() > 0}
+            <div class="tp one"><ticket-collision id={id}/></div>
+          {:else}
+            <p class="tp empty" data-empty data-not-found>{"No ticket " + id + " here" + (if ticket.message == () { "" } else { " — " + ticket.message }) + "."}</p>
+          {/if}
         {:else}
           <div class="tp">
             <div class="cell head"><ticket-head id={id}/></div>
@@ -110,6 +119,7 @@
   .bone.half { width: 50%; }
   @keyframes breathe { from { opacity: 1; } to { opacity: .45; } }
   .empty { display: block; color: var(--muted); }
+  .tp.one { display: block; }
   .gone { grid-column: 1 / -1; padding: 14px 16px; background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius-lg); }
   .gone-line { margin: 0 0 10px; }
   .badge { padding: 0 6px; font-size: 10px; line-height: 16px; text-transform: uppercase; letter-spacing: .06em; color: var(--warn); border: var(--border) dashed var(--warn); border-radius: var(--radius-sm); }

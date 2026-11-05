@@ -8,12 +8,21 @@
   // `get` answered (`/edit` after the tail is page-editor's route, which
   // resolves the uid itself). A deleted ticket's uid answers its tombstone:
   // page-ticket draws it as deleted. A uid naming nothing says so.
+  // V2-50 (main's TICKETS-36): a route by uid names a uid, nothing else —
+  // `#/t/PERF-2/x` is not found, never read as a name (which `get` would
+  // resolve): the page draws the ticket only when the segment is 8 of
+  // Crockford's base32, as a uid is written. A live ticket is drawn through
+  // page-t-key, which keeps the original of two namesakes off the collision
+  // page (its key is a name that fits both).
   prop("uid");
   prop("tail");
   let t = live(#{ snapshot: "tickets.get", params: #{ id: uid }, key: "id" });
 </script>
 
 <section class="page-t" data-surface="ticket-by-uid" data-uid={uid}>
+  {#if !(uid.len() == 8 && uid.to_lower().to_chars().all(|c| "0123456789abcdefghjkmnpqrstvwxyz".contains(c)))}
+    <p class="empty" data-empty data-not-found>{"No ticket " + uid + " here — a link by uid names 8 letters and digits."}</p>
+  {:else}
   {#if t.rows.filter(|r| r.title != () || type_of(r.ids) == "array").len() == 0}
     {#if t.status == "pending" || t.status == "resyncing"}
       <div class="wait" data-loading aria-busy="true"></div>
@@ -21,9 +30,13 @@
       <p class="empty" data-empty data-not-found>{"No ticket " + uid + " here" + (if t.message == () { "" } else { " — " + t.message }) + "."}</p>
     {/if}
   {:else}
-    {#each t.rows.filter(|r| r.title != () || type_of(r.ids) == "array").map(|r| if type_of(r.ids) == "array" { r.ids[0] } else { r.id }) as key (key)}
+    {#each t.rows.filter(|r| type_of(r.ids) == "array").map(|r| r.ids[0]) as key (key)}
       <page-ticket id={key}/>
     {/each}
+    {#each t.rows.filter(|r| r.title != () && type_of(r.ids) != "array") as r (r.id)}
+      <page-t-key key={r.id} address={r.address}/>
+    {/each}
+  {/if}
   {/if}
 </section>
 
