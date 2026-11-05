@@ -79,7 +79,15 @@
 
   // ── the table: what a name resolves to, and what each save answered ─────
   const listeners = new Set();
-  const say = () => { for (const f of [...listeners]) f(); };
+  // COMPS-5: told on a microtask, never inside the caller's effect — a listener that reads and writes its
+  // own state there (the definition line's `tick++`) made that effect depend on what it wrote, and the page
+  // looped until Svelte gave up the flush (`effect_update_depth_exceeded`), dropping the effects behind it.
+  let saying = false;
+  const say = () => {
+    if (saying) return;
+    saying = true;
+    queueMicrotask(() => { saying = false; for (const f of [...listeners]) f(); });
+  };
   /** `table`: name → `ui.components`' row; `results`: name → the last save's answer on this page
    *  (`{ state: saving | authored | refused, source, version, own, reason, message, line }`). */
   export const registry = { table: new Map(), results: new Map(), ready: false, wanted: false, bus: null };
@@ -269,7 +277,7 @@
   // The table: what every name resolves to (`ui.components`), read again when the bundle moves (the
   // history's top move) and kept by each namespace write (`component` on `ui.watch`) — asked only once a
   // tag or a definition is on screen (`want`). Placed once by ticket-view; no markup of its own.
-  import { onDestroy } from "svelte";
+  import { onDestroy, untrack } from "svelte";
   import { bus, live } from "plexus-ui/host";
   const b = bus();
   registry.bus ??= b;
@@ -281,14 +289,14 @@
   let top = null;
   $effect(() => {
     const rows = all.rows, status = all.status;
-    if (status === "live") took(rows, true);
+    if (status === "live") untrack(() => took(rows, true));
   });
   // Each write once (a row kept from an earlier write never undoes a read since).
   const heard = new Map();
   $effect(() => {
     const fresh = writes.rows.filter((r) => r?.name && heard.get(r.name) !== `${r.version}:${r.at}`);
     for (const r of fresh) heard.set(r.name, `${r.version}:${r.at}`);
-    if (fresh.length) took(fresh, false);
+    if (fresh.length) untrack(() => took(fresh, false));
   });
   $effect(() => {
     const seq = Math.max(0, ...moves.rows.map((r) => Number(r.seq) || 0));
