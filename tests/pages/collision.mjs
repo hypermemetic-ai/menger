@@ -94,6 +94,14 @@ export default async (ctx) => {
         assert((await overflow(page)) <= 0, `no horizontal scroll at ${width}: ${await overflow(page)} px over`);
         const linkShown = await rows(page).first().locator("[data-field=link]").isVisible();
         assert(width < 800 ? !linkShown : linkShown, `the link line ${width < 800 ? "is hidden on a phone" : "shows on a desktop"}`);
+        // COLLISION_SHOTS=DIR: the page at this width, light and dark, for the ticket.
+        if (process.env.COLLISION_SHOTS) {
+          for (const scheme of ["light", "dark"]) {
+            await page.emulateMedia({ colorScheme: scheme });
+            await page.waitForTimeout(300);
+            await page.screenshot({ path: path.join(process.env.COLLISION_SHOTS, `collision-${width}-${scheme}.png`), fullPage: width < 800 });
+          }
+        }
       } finally {
         await context.close();
       }
