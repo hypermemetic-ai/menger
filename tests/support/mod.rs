@@ -479,7 +479,9 @@ pub async fn next_item(s: &mut jsonrpsee::core::client::Subscription<serde_json:
 // ── UI-7: bundles with sources — the push compiles, compares and lints ────
 
 /// `dist/ui-compiler.wasm`, built once per test binary by the framework's
-/// `../plexus-ui/scripts/ui-compiler-wasm.sh OUT` (UI-5, FRAME-7) into this
+/// `scripts/ui-compiler-wasm.sh OUT` (UI-5, FRAME-7) — of the plexus-ui
+/// checkout `scripts/plexus-ui-src` names (V2-47: the tag of the version
+/// menger takes, or `PLEXUS_UI_SRC`) — into this
 /// checkout's `dist/`, cargo building into this checkout's target
 /// (`$CARGO_TARGET_DIR`, else `./target`) — what a test server takes as
 /// `--ui-compiler`.
@@ -488,7 +490,9 @@ pub fn ui_compiler_wasm() -> std::path::PathBuf {
     BUILT
         .get_or_init(|| {
             let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-            let script = root.join("../plexus-ui/scripts/ui-compiler-wasm.sh");
+            let src = std::process::Command::new(root.join("scripts/plexus-ui-src")).arg(root).output().expect("scripts/plexus-ui-src runs");
+            assert!(src.status.success(), "scripts/plexus-ui-src: {}", String::from_utf8_lossy(&src.stderr));
+            let script = std::path::PathBuf::from(String::from_utf8_lossy(&src.stdout).trim()).join("scripts/ui-compiler-wasm.sh");
             let path = root.join("dist/ui-compiler.wasm");
             let target = std::env::var_os("CARGO_TARGET_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| root.join("target"));
             let status = std::process::Command::new("bash")
@@ -498,8 +502,8 @@ pub fn ui_compiler_wasm() -> std::path::PathBuf {
                 .current_dir(root)
                 .stdout(std::process::Stdio::null())
                 .status()
-                .expect("../plexus-ui/scripts/ui-compiler-wasm.sh runs");
-            assert!(status.success(), "../plexus-ui/scripts/ui-compiler-wasm.sh failed: {status}");
+                .unwrap_or_else(|e| panic!("{} runs: {e}", script.display()));
+            assert!(status.success(), "{} failed: {status}", script.display());
             assert!(path.is_file(), "{} was written", path.display());
             path
         })
