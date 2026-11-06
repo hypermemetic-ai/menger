@@ -9,6 +9,8 @@
 
 
 /// ACCESS-24: the test provider — every server runs `key`, every client is its `--admin`.
+#[path = "support/ports.rs"]
+mod ports;
 mod support;
 use jsonrpsee::core::client::{Subscription, SubscriptionClientT};
 use jsonrpsee::core::params::ObjectParams;
@@ -21,16 +23,7 @@ use std::time::Duration;
 
 /// A port no other test in this binary has been handed (MNG-19).
 async fn free_port() -> u16 {
-    static HANDED: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
-    loop {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let mut handed = HANDED.lock().unwrap();
-        if !handed.contains(&port) {
-            handed.push(port);
-            return port;
-        }
-    }
+    ports::free_port()
 }
 
 /// A server on an isolated, throwaway database.

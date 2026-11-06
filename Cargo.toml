@@ -255,3 +255,14 @@ inherits = "release"
 lto = "fat"
 codegen-units = 1
 debug = "line-tables-only"
+
+# CI-9 (owner, 2026-11-05: "sub 5 minutes into test … ideally sub 30 seconds"): test's quick
+# build, `deploy/pipeline build --fast`. Release's optimisation without the perf profile's fat LTO
+# and single codegen unit (7½ of the 11 minutes into test), compiled incrementally in the build
+# checkout's warm target. Never a prod candidate: `remote prod` refuses a fast release, and its
+# suite runs no bench — prod takes the perf build, the one plexus-bench holds to its goldens.
+[profile.fast]
+inherits = "release"
+lto = false
+codegen-units = 256
+incremental = true

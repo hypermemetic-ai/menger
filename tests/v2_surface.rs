@@ -14,6 +14,8 @@
 //! Signed in as the fixture operator (`--admin`, admin on `*`), so the
 //! view is the whole service; its own throwaway database and a free port.
 
+#[path = "support/ports.rs"]
+mod ports;
 mod support;
 use jsonrpsee::core::client::{Subscription, SubscriptionClientT};
 use jsonrpsee::core::params::ObjectParams;
@@ -26,8 +28,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 async fn free_port() -> u16 {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    listener.local_addr().unwrap().port()
+    ports::free_port()
 }
 
 /// A server as the wire reference starts one: the service as `main` builds it,

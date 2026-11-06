@@ -48,7 +48,7 @@ use std::time::Duration;
 async fn start_server() -> u16 {
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("tempdir");
     let db_path = dir.path().join("tickets.db");
-    let port = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().port();
+    let port = support::free_port().await; // CI-9: a port no test beside this one holds
     let login = support::Login::new();
     let service = support::service(&db_path, &login).await;
     let gate = login.gate(port);

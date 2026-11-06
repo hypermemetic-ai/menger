@@ -74,8 +74,10 @@ not:
 ## The pipeline
 
 ```sh
-deploy/pipeline build [REV] [--branch B] [--no-gate]   # a commit → a release (prints its name); --branch B: B's tip,
-                                                       # named in the release; --no-gate: the suite comes after
+deploy/pipeline build [REV] [--branch B] [--no-gate] [--fast]
+                                                       # a commit → a release (prints its name); --branch B: B's tip,
+                                                       # named in the release; --no-gate: the suite comes after;
+                                                       # CI-9: --fast, test's quick build (never a prod candidate)
 deploy/pipeline image [RELEASE]                        # RUN-10: the release as an image (IMAGE_STORE=ghcr pushes it to GHCR)
 deploy/pipeline remote test --image IMG                # app-test.menger.sh through infra, the bundle pushed, then the smoke
 deploy/pipeline suite RELEASE                          # DEPLOY-52: the full suite at the release's commit, plexus-bench's counts
@@ -106,8 +108,8 @@ the owner's.
    another, `MENGER_BUILD_TARGET` its own cargo target) is moved to the
    commit and cleaned. A low disk refuses it before anything runs (CI-2:
    `scripts/disk-check.sh` — under 50 GB free or 90% used).
-2. **Gate** — only without `--no-gate`: `cargo test --workspace` at that
-   commit. Red: no release. The runner builds with `--no-gate`: the suite
+2. **Gate** — only without `--no-gate`: the workspace's tests at that
+   commit, as the suite runs them (step 5). Red: no release. The runner builds with `--no-gate`: the suite
    runs after the deploy (step 5).
 3. **Release.** A tree with no `frontend/` (v2) has no browser toolchain on
    this machine, and needs none — every step runs here, none in a container
@@ -118,7 +120,17 @@ the owner's.
      test and prod run is the one the suite's bench holds to its goldens);
      `RELEASE` says `profile: perf`. A tree older than PERF-6 defines no perf
      profile and builds the release profile, said `profile: release`. A tree
-     with no `ui/src` is refused;
+     with no `ui/src` is refused. **`--fast`** (CI-9; the owner, 2026-11-05:
+     "sub 5 minutes into test … ideally sub 30 seconds") builds
+     `[profile.fast]` instead — release's optimisation without the perf
+     profile's fat LTO and single codegen unit, incremental, in the build
+     checkout's warm target: about 15–35 s of cargo where perf takes 5–8
+     minutes, 1m31s from a commit to test against 6m23s. `RELEASE` says
+     `profile: fast (CI-9: test's quick build — never a prod candidate)`;
+     `remote prod` refuses a fast release, and its suite runs no bench (the
+     goldens are the perf build's). A prod candidate is the perf build:
+     `build` without `--fast`, image, `remote test`, `suite`, then `remote
+     prod`. A tree with no `[profile.fast]` builds perf, and says so;
    - `plexus-ui` — the framework's tool, `cargo build --release
      --manifest-path $PUI/Cargo.toml -p plexus-ui-cli`, `$PUI` the
      framework's checkout the tree's `scripts/plexus-ui-src` names (V2-47):
@@ -127,7 +139,9 @@ the owner's.
      no longer the tag's — never `../plexus-ui`'s working tree, and never
      `PLEXUS_UI_SRC`; a tree before V2-47 (no `scripts/plexus-ui-src`) builds
      from `../plexus-ui` as it did (`MENGER_PLEXUS_UI` names a tool built
-     already);
+     already). CI-9: the tool of a clean checkout is kept per framework
+     commit, `~/.cache/menger-deploy/plexus-ui-tool/<commit>/plexus-ui`
+     (`MENGER_PLEXUS_UI_CACHE`), and built once, not per release;
    - `ui-prebuild` — `plexus-ui build --prebuild --engine dist/engine`: the
      engine (wasm32, wasm-bindgen);
    - `ui-uses` (SURFACE-11) — the bundle built once unstamped
@@ -193,8 +207,16 @@ the owner's.
    pushed ("The bundle's push", below); then the smoke. Passing marks the
    release `TESTED` and records `test succeeded`, which sets Complete on the
    In Review work it carries (DEPLOY-22/28).
-5. **The suite** (`suite RELEASE`, DEPLOY-52). `cargo test --workspace` at
-   the release's commit — on v2 that is the whole of it — in its own sibling
+5. **The suite** (`suite RELEASE`, DEPLOY-52). The workspace's tests at
+   the release's commit — on v2 that is the whole of it (a frontend is one the
+   commit tracks: an untracked `frontend/target/` left in the checkout ran the
+   root package's tests a second time until CI-9) — under **cargo-nextest**
+   (CI-9: `cargo nextest run --workspace --no-fail-fast`, every test of every
+   binary at once, then `cargo test --workspace --doc`; `.config/nextest.toml`
+   starts the long poles first; `MENGER_GATE_RUNNER=cargo`, or no
+   cargo-nextest installed, is libtest's `cargo test --workspace` as before;
+   the counts read both), about 4 minutes on 12 cores where cargo test took
+   15 — in its own sibling
    checkout `../menger-suite` (`MENGER_SUITE_CHECKOUT`; its own `target/`),
    so a suite under way never holds up the next build; one at a time (a
    lock). It never touches a deployment. The release's `SUITE` says

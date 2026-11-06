@@ -18,6 +18,8 @@
 //! silent skip. `MENGER_BIN` names a copy of this build's binary (the shared
 //! target's `debug/menger` is another worktree's the moment it builds).
 
+#[path = "support/ports.rs"]
+mod ports;
 mod support;
 
 use serde_json::json;
@@ -42,7 +44,7 @@ impl Drop for Kill {
 }
 
 fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+    ports::free_port()
 }
 
 /// The fixture operator's seed as synapse keeps a key: base64 text, 0600.

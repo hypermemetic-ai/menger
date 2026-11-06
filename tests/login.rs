@@ -8,6 +8,8 @@
 //! test keys are synthetic, plexus-auth-core's test pair. Every server has
 //! its own throwaway database; prod and test are never touched.
 
+#[path = "support/ports.rs"]
+mod ports;
 use axum::{routing::get, Json, Router};
 use base64::Engine as _;
 use jsonrpsee::core::client::{Subscription, SubscriptionClientT};
@@ -97,16 +99,7 @@ const ALICE: &str = "c952acd3-60aa-4534-b2e3-83634591fee1";
 
 /// A port no other test in this binary has been handed (MNG-19).
 async fn free_port() -> u16 {
-    static HANDED: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
-    loop {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let mut handed = HANDED.lock().unwrap();
-        if !handed.contains(&port) {
-            handed.push(port);
-            return port;
-        }
-    }
+    ports::free_port()
 }
 
 /// A fixture OIDC issuer: discovery and one key, as a provider publishes

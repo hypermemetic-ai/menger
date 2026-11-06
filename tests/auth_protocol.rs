@@ -21,6 +21,8 @@
 
 #![cfg(unix)]
 
+#[path = "support/ports.rs"]
+mod ports;
 use ed25519_dalek::SigningKey;
 use jsonrpsee::core::client::{Subscription, SubscriptionClientT};
 use jsonrpsee::core::params::ObjectParams;
@@ -58,16 +60,7 @@ fn nonce() -> [u8; 32] {
 }
 
 async fn free_port() -> u16 {
-    static HANDED: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
-    loop {
-        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = l.local_addr().unwrap().port();
-        let mut handed = HANDED.lock().unwrap();
-        if !handed.contains(&port) {
-            handed.push(port);
-            return port;
-        }
-    }
+    ports::free_port()
 }
 
 /// A spawned `menger`. Dropping SIGKILLs.

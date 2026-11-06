@@ -10,6 +10,7 @@
 //! ([`LOGIN_ARGS`]): `--auth-provider key --admin <ADMIN's principal>`.
 #![allow(dead_code)]
 
+mod ports;
 use ed25519_dalek::SigningKey;
 use jsonrpsee::ws_client::{HeaderMap, HeaderValue, WsClient, WsClientBuilder};
 use menger::login::{self, Provider};
@@ -257,16 +258,7 @@ pub fn json_manifest(contract: &str, abi: &str) -> String {
 /// A loopback port the OS just handed out, never handed to another test in
 /// this process.
 pub async fn free_port() -> u16 {
-    static HANDED: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
-    loop {
-        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = l.local_addr().unwrap().port();
-        let mut handed = HANDED.lock().unwrap();
-        if !handed.contains(&port) {
-            handed.push(port);
-            return port;
-        }
-    }
+    ports::free_port()
 }
 
 /// A spawned `menger`. Dropping SIGKILLs it.
@@ -495,6 +487,16 @@ pub fn ui_compiler_wasm() -> std::path::PathBuf {
             let script = std::path::PathBuf::from(String::from_utf8_lossy(&src.stdout).trim()).join("scripts/ui-compiler-wasm.sh");
             let path = root.join("dist/ui-compiler.wasm");
             let target = std::env::var_os("CARGO_TARGET_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| root.join("target"));
+            // CI-9: under cargo-nextest every test is a process, many at once: the module is built
+            // under a lock all of them take, once per run (NEXTEST_RUN_ID) — a second writer of
+            // dist/ui-compiler.wasm under a server reading it failed the push tests.
+            std::fs::create_dir_all(&target).expect("the target directory");
+            let lock = std::fs::File::create(target.join("ui-compiler-wasm.lock")).expect("the module's lock file");
+            lock.lock().expect("the module's lock");
+            let run = std::env::var("NEXTEST_RUN_ID").ok().map(|id| target.join(format!("ui-compiler-wasm.{id}.built")));
+            if run.as_ref().is_some_and(|m| m.is_file()) && path.is_file() {
+                return path;
+            }
             let status = std::process::Command::new("bash")
                 .arg(&script)
                 .arg(&path)
@@ -505,6 +507,9 @@ pub fn ui_compiler_wasm() -> std::path::PathBuf {
                 .unwrap_or_else(|e| panic!("{} runs: {e}", script.display()));
             assert!(status.success(), "{} failed: {status}", script.display());
             assert!(path.is_file(), "{} was written", path.display());
+            if let Some(m) = run {
+                std::fs::write(m, b"").expect("the run's mark");
+            }
             path
         })
         .clone()

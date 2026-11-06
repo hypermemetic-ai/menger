@@ -12,6 +12,10 @@
 //! stalled 25 minutes in `deploy/tests/pipeline` with nothing in its log,
 //! and a hang inside a script must fail with what the script's own scratch
 //! logs say, not wait for the runner to be killed.
+//!
+//! CI-9: under cargo-nextest (the pipeline's gate) each test is a process,
+//! and the scripts run beside each other — the lock below holds only within
+//! one process (cargo test); each script has its own `TMPDIR` and its own root.
 
 #![cfg(unix)]
 
