@@ -7,7 +7,7 @@
 # client seam; it reads the other stores only through their own methods.
 [package]
 name = "menger-quota"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 license = "MIT"
 description = "menger's quota service — per-principal allowances per source, usage counted and tabulated, every write reserved against the cap over the client seam"

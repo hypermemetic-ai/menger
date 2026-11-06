@@ -2211,7 +2211,7 @@ dependencies = [
 
 [[package]]
 name = "menger"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2258,7 +2258,7 @@ dependencies = [
 
 [[package]]
 name = "menger-docs"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2280,7 +2280,7 @@ dependencies = [
 
 [[package]]
 name = "menger-media"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2304,7 +2304,7 @@ dependencies = [
 
 [[package]]
 name = "menger-quota"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2324,7 +2324,7 @@ dependencies = [
 
 [[package]]
 name = "menger-tickets-api"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "async-stream",

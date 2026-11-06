@@ -33,7 +33,7 @@ name = "menger"
 # SCAFFOLD-9: 0.6 — the login moved to plexus-login; `menger::sessions`,
 # `menger::login`, … are its re-exports, and their signatures changed
 # (`Sessions::new(ttl, &names)`, `LoginAuth::new(…, app)`).
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 license = "MIT"
 description = "A plan is a program whose leaves are prose — ticketing on Plexus RPC"
@@ -74,18 +74,18 @@ scale = ["menger-tickets-api/scale"]
 # and its generated client, from one declaration — shared with the browser
 # app (frontend/), which takes it with `default-features = false`. Default
 # features here: `server`, the real thing.
-menger-tickets-api = { path = "tickets-api", version = "0.7.0" }
+menger-tickets-api = { path = "tickets-api", version = "0.7.1" }
 # V2-24: the media service — `media.put` and `media.get`, its own file, the
 # ticket's permit asked of `tickets` through the seam; the shell's
 # `/media/<hash>` is its client too (menger_media::fetch).
-menger-media = { path = "media", version = "0.7.0" }
+menger-media = { path = "media", version = "0.7.1" }
 # V2-29: the docs service — documents on their own API and file (`docs.db`),
 # every write a revision, the organization's roles held by the gate.
-menger-docs = { path = "docs", version = "0.7.0" }
+menger-docs = { path = "docs", version = "0.7.1" }
 # V2-31: the quota service — allowances per principal and source, `quota.*`,
 # its own file (`quota.db`); the meter the tickets service's writes reserve
 # through; the write-rate bucket the call layer keeps.
-menger-quota = { path = "quota", version = "0.7.0" }
+menger-quota = { path = "quota", version = "0.7.1" }
 # UI-3, FRAME-5: the ui service — the framework's (plexus-ui's `service/`):
 # its activation registered beside `tickets`, its routes mounted on the
 # shell, serving `/`, `/app/` and `/app/<hash>/…` from its store.
