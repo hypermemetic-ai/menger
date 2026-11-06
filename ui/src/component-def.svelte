@@ -56,6 +56,6 @@
   .def[data-state=refused] .line { color: var(--warn); }
   .def[data-state=authored] .line { color: var(--live); }
   .src { font: inherit; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; }
-  .src:hover { text-decoration: underline; }
-  .src:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .src:hover, .src:global([data-sheet~=hover]) { text-decoration: underline; }
+  .src:focus-visible, .src:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
 </style>

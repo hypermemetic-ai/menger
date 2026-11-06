@@ -2217,7 +2217,7 @@ dependencies = [
 
 [[package]]
 name = "menger-tickets-api"
-version = "0.6.2"
+version = "0.7.0"
 dependencies = [
  "futures",
  "plexus-client 0.8.0",
