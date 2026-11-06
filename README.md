@@ -250,7 +250,7 @@ the bundle); the answer (saved, or the refusal with its line) is said on the
 definition's line. The definition's source is hidden wherever a body is
 drawn (COMPS-8): one line stands in its place — `<x-name> · component`, its
 save — and its `source` opens the code card and closes it again, closed on
-every load (`ui/src/component-def.svelte`); in the editor the block under
+every load (`ui/src/component-def.svelte`, real Svelte, svelte/1); in the editor the block under
 the caret is its source, as every block is. Any tag in any body (`<x-name attr="…">`, or an `m-*` the house
 draws no card for) is resolved by `ui.components` — the live bundle first,
 drawn natively (a bound mark), then the newest authored, drawn in a frame
