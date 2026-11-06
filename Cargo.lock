@@ -2774,9 +2774,9 @@ dependencies = [
 
 [[package]]
 name = "plexus-ui-compiler"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51c1c97574b69ef723ce8a030af5ca895f2e9d129af16c066a22c84831509a9c"
+checksum = "def1aec209ae9ca97b0f83cd1e7d4b9ccf1a50cc81cac154dda15c3fc420aede"
 dependencies = [
  "rhai",
  "serde",
@@ -2786,22 +2786,17 @@ dependencies = [
 
 [[package]]
 name = "plexus-ui-service"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a986c554b016449b809a7e77e8b794940291a9d0012fd5313e9dfe6300e4c25"
+checksum = "3d2ec3a06465c87a7af28f16f94a812831f3409bbf35638f7d2bc9ae6dece153"
 dependencies = [
  "async-stream",
- "async-trait",
  "axum",
  "base64 0.22.1",
  "brotli",
  "ed25519-dalek",
  "futures",
- "jsonrpsee",
- "plexus-auth-core",
- "plexus-client",
- "plexus-core",
- "plexus-macros",
+ "plexus-rpc",
  "plexus-webapp",
  "rusqlite",
  "schemars",
@@ -2811,7 +2806,6 @@ dependencies = [
  "tar",
  "thiserror 2.0.20",
  "tokio",
- "uuid",
  "wasmtime",
 ]
 
