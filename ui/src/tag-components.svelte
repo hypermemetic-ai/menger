@@ -257,7 +257,8 @@
     return { destroy() { off(); for (const f of found) clear(f); } };
   }
 
-  /** Each ```component fence's code under `node` (in the order of `src`'s definitions) given its line. */
+  /** Each ```component fence's code under `node` (in the order of `src`'s definitions) given its line;
+   *  COMPS-8: the fence's code card (`.code` before its <pre>, when drawn) handed to the line, which shows it. */
   export function defLines(node, src, mountLine) {
     const defs = definitions(src);
     const codes = [...node.querySelectorAll("pre > code.language-component")];
@@ -265,10 +266,12 @@
     codes.forEach((code, k) => {
       const d = defs[k];
       if (!d) return;
+      const pre = code.parentElement;
+      const card = pre.previousElementSibling?.classList.contains("code") ? pre.previousElementSibling : null;
       const at = document.createElement("div");
       at.className = "def-line";
-      code.parentElement.after(at);
-      placed.push({ at, app: mountLine(at, d) });
+      pre.after(at);
+      placed.push({ at, app: mountLine(at, d, card) });
     });
     return placed;
   }
