@@ -44,7 +44,7 @@ impl QuotaActivation {
 }
 
 /// Allowances per principal and source — every write reserved against the cap; usage counted and tabulated.
-#[plexus_macros::activation(
+#[plexus_rpc::macros::activation(
     auth = "required",
     request = QuotaRequest,
     typed_params,
@@ -65,7 +65,7 @@ impl QuotaActivation {
     /// with nothing held. Admins of `*` and the operator are never capped.
     /// The hold expires (the plan's hold time, an hour) unless committed or
     /// released, and is swept. Admin of `*` (the server's own caller).
-    #[plexus_macros::method(group = "write", example(note = "an upload of 5 MB", params = r#"{"principal": "key:4b1c", "source": "media.bytes", "amount": 5000000}"#))]
+    #[plexus_rpc::macros::method(group = "write", example(note = "an upload of 5 MB", params = r#"{"principal": "key:4b1c", "source": "media.bytes", "amount": 5000000}"#))]
     pub async fn reserve(
         &self,
         #[from_auth(self.callers.verify)] _user: Caller,
@@ -80,7 +80,7 @@ impl QuotaActivation {
     }
 
     /// Count a reservation: what was actually written (at most what was reserved; none: all of it); yields committed { ticket, source, amount, used }.
-    #[plexus_macros::method(group = "write")]
+    #[plexus_rpc::macros::method(group = "write")]
     pub async fn commit(
         &self,
         #[from_auth(self.callers.verify)] _user: Caller,
@@ -94,7 +94,7 @@ impl QuotaActivation {
     }
 
     /// Let a reservation go: the write did not land, nothing counts; yields released.
-    #[plexus_macros::method(group = "write")]
+    #[plexus_rpc::macros::method(group = "write")]
     pub async fn release(
         &self,
         #[from_auth(self.callers.verify)] _user: Caller,
@@ -106,7 +106,7 @@ impl QuotaActivation {
     }
 
     /// Give an amount back to a principal (a deletion); yields credited { principal, source, used }.
-    #[plexus_macros::method(group = "write")]
+    #[plexus_rpc::macros::method(group = "write")]
     pub async fn credit(
         &self,
         #[from_auth(self.callers.verify)] _user: Caller,
@@ -129,7 +129,7 @@ impl QuotaActivation {
     /// unlimited) and `from` — own, team:<name>, default, or exempt.
     /// `bytes` is what the principal stores: its byte sources counted for
     /// good. Anyone signed in, for themselves.
-    #[plexus_macros::method(group = "read", example(note = "mine", params = r#"{}"#))]
+    #[plexus_rpc::macros::method(group = "read", example(note = "mine", params = r#"{}"#))]
     pub async fn usage(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
@@ -148,7 +148,7 @@ impl QuotaActivation {
     /// principal granted a role in it), sorted by `sort`: bytes stored,
     /// most first (the default), principal, or a source's use, most first.
     /// Then `total { principals, bytes, sources }`.
-    #[plexus_macros::method(group = "read", example(note = "everyone, the most stored first", params = r#"{"sort": "bytes"}"#))]
+    #[plexus_rpc::macros::method(group = "read", example(note = "everyone, the most stored first", params = r#"{"sort": "bytes"}"#))]
     pub async fn table(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
@@ -167,7 +167,7 @@ impl QuotaActivation {
     /// `clear` removes it (it falls back; a default cleared is unlimited).
     /// A cap below what is used blocks new writes of the source and
     /// deletes nothing. Yields `allowance { holder, source, cap, cleared }`.
-    #[plexus_macros::method(
+    #[plexus_rpc::macros::method(
         group = "admin",
         example(note = "raise one person's media", params = r#"{"principal": "idp:c952", "source": "media.bytes", "cap": "20 GB"}"#),
         example(note = "the default for docs", params = r#"{"default": true, "source": "docs.bytes", "cap": "200 MB"}"#)
@@ -201,7 +201,7 @@ impl QuotaActivation {
     /// drifted, sources, not_counted }` — a store that has no such method
     /// yet is named in `not_counted`, with why. Daily sources are not
     /// recounted. The server runs one every night.
-    #[plexus_macros::method(group = "admin")]
+    #[plexus_rpc::macros::method(group = "admin")]
     pub async fn recount(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,

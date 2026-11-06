@@ -7,22 +7,21 @@
 # client seam; it reads the other stores only through their own methods.
 [package]
 name = "menger-quota"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 license = "MIT"
 description = "menger's quota service — per-principal allowances per source, usage counted and tabulated, every write reserved against the cap over the client seam"
 repository = "https://github.com/hypermemetic-ai/menger"
 
 [dependencies]
-# The 0.7 line, by published version (PLEXUS-16), as the server takes it.
-plexus-core = "0.8.0"
-plexus-macros = "0.8.0"
-plexus-client = { version = "0.8.0", default-features = false }
-plexus-auth-core = "0.3.0"
+# The 0.8 line, by published version (PLEXUS-16), as the server takes it,
+# through the umbrella (PLEXUS-44): plexus-core, plexus-macros, plexus-client,
+# plexus-auth-core and every crate the activation macro's expansion names.
+# No transport: the service is served by menger's binary.
+plexus-rpc = { version = "0.8.0", default-features = false, features = ["child-ws"] }
 async-trait = "0.1"
 async-stream = "0.3"
 futures = "0.3"
-jsonrpsee = { version = "0.26", features = ["server", "macros"] }
 uuid = { version = "1.6", features = ["v4", "serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

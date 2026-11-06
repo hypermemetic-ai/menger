@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use menger_tickets_api::access::{Access, Minted, SessionCheck, SessionMint, Waiting as MengerWaiting};
 use menger_tickets_api::members::{scope_of, Role};
 use menger_tickets_api::{ProviderKind, ProviderOffer};
-use plexus_core::plexus::{AuthContext, Session, Waiting};
+use plexus_rpc::core::plexus::{AuthContext, Session, Waiting};
 use plexus_login::login::{OfferKind, Provider};
 use plexus_login::sessions::Sessions;
 use plexus_login::{Branding, LoginAccess, LoginNames};

@@ -20,8 +20,8 @@ mod support;
 use jsonrpsee::core::client::{Subscription, SubscriptionClientT};
 use jsonrpsee::core::params::ObjectParams;
 use jsonrpsee::ws_client::WsClient;
-use plexus_core::plexus::DynamicHub;
-use plexus_transport::TransportServer;
+use plexus_rpc::core::plexus::DynamicHub;
+use plexus_rpc::transport::TransportServer;
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -199,7 +199,7 @@ async fn a_saved_filter_holding_a_dropped_cell_is_refused_when_used() {
     {
         let login = support::Login::new();
         let service = support::service(&db, &login).await;
-        let admin = plexus_core::plexus::AuthContext::for_principal(&support::admin().parse().unwrap(), "v2", vec![], json!({"name": "admin"}));
+        let admin = plexus_rpc::core::plexus::AuthContext::for_principal(&support::admin().parse().unwrap(), "v2", vec![], json!({"name": "admin"}));
         use futures::StreamExt;
         let items: Vec<_> = service
             .route_with_ctx("tickets.filters.save", json!({"name": "Held", "filter": "blocked"}), Some(&admin), None)

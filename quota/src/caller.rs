@@ -8,8 +8,8 @@
 //! (no one signed in, no principal). What a caller may do with a *ticket*
 //! is the tickets service's word, asked over the seam as this identity.
 
-use plexus_core::plexus::{AuthContext, PlexusError};
-use plexus_macros::PlexusRequest;
+use plexus_rpc::core::plexus::{AuthContext, PlexusError};
+use plexus_rpc::macros::PlexusRequest;
 
 /// The per-call context every method of the service reads: the identity the
 /// connection's upgrade proved, when one did.

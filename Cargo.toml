@@ -33,7 +33,7 @@ name = "menger"
 # SCAFFOLD-9: 0.6 — the login moved to plexus-login; `menger::sessions`,
 # `menger::login`, … are its re-exports, and their signatures changed
 # (`Sessions::new(ttl, &names)`, `LoginAuth::new(…, app)`).
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 license = "MIT"
 description = "A plan is a program whose leaves are prose — ticketing on Plexus RPC"
@@ -74,28 +74,28 @@ scale = ["menger-tickets-api/scale"]
 # and its generated client, from one declaration — shared with the browser
 # app (frontend/), which takes it with `default-features = false`. Default
 # features here: `server`, the real thing.
-menger-tickets-api = { path = "tickets-api", version = "0.7.0" }
+menger-tickets-api = { path = "tickets-api", version = "0.7.1" }
 # V2-24: the media service — `media.put` and `media.get`, its own file, the
 # ticket's permit asked of `tickets` through the seam; the shell's
 # `/media/<hash>` is its client too (menger_media::fetch).
-menger-media = { path = "media", version = "0.7.0" }
+menger-media = { path = "media", version = "0.7.1" }
 # V2-29: the docs service — documents on their own API and file (`docs.db`),
 # every write a revision, the organization's roles held by the gate.
-menger-docs = { path = "docs", version = "0.7.0" }
+menger-docs = { path = "docs", version = "0.7.1" }
 # V2-31: the quota service — allowances per principal and source, `quota.*`,
 # its own file (`quota.db`); the meter the tickets service's writes reserve
 # through; the write-rate bucket the call layer keeps.
-menger-quota = { path = "quota", version = "0.7.0" }
+menger-quota = { path = "quota", version = "0.7.1" }
 # UI-3, FRAME-5: the ui service — the framework's (plexus-ui's `service/`):
 # its activation registered beside `tickets`, its routes mounted on the
 # shell, serving `/`, `/app/` and `/app/<hash>/…` from its store.
 # V2-47: by published version; scripts/plexus-ui-release moves it.
-plexus-ui-service = "0.2.0"
+plexus-ui-service = "0.2.1"
 
 # SCAFFOLD-5: the shell (the app's build as a table, stamped and served) and
 # the local server (`menger::local`'s serving) — plexus-webapp, a repository
 # of its own (FRAME-4), published as the plexus line is (PLEXUS-16).
-plexus-webapp = "0.3.0"
+plexus-webapp = "0.3.1"
 
 # V2-58: the plexus 0.8 line — plexus-core 0.8.0, plexus-macros 0.8.0
 # (the `client` / `server_cfg` activation flags, MACRO-4), plexus-client
@@ -104,22 +104,22 @@ plexus-webapp = "0.3.0"
 # never by path outside this repository, so the graph resolves exactly one
 # of each — plexus-login and plexus-ui's crates too (V2-47), so a clone of
 # menger alone builds.
+# PLEXUS-44: plexus-core, plexus-transport and plexus-auth-core through the
+# plexus-rpc umbrella, with the features each had:
 # POLYGLOT-5 (V2-44): `clap` — plexus-core's ChildArgs, `--child` and its
 # flags spelled as every service spells them.
-plexus-core = { version = "0.8.0", features = ["clap"] }
-# Slim: default features off; http-gateway enables the REST + SSE bridge
-# (MNG-8). TRANSPORT-15 (V2-43): `mcp` mounts the MCP bridge
-# (plexus-transport-mcp) behind the login — menger's /mcp.
-plexus-transport = { version = "0.7.0", default-features = false, features = ["http-gateway", "mcp"] }
-# IDENTITY-14: login at the boundary — the provider adapters (IDENTITY-13)
-# turn each provider's credential into Plexus types at the WebSocket upgrade.
-# Used only when an --auth-provider is given.
-plexus-auth-core = { version = "0.3.0", features = ["adapters"] }
+# The transport slim: `http-gateway` enables the REST + SSE bridge (MNG-8);
+# TRANSPORT-15 (V2-43): `mcp` mounts the MCP bridge (plexus-transport-mcp)
+# behind the login — menger's /mcp.
+# IDENTITY-14: `auth-adapters` — login at the boundary, the provider adapters
+# (IDENTITY-13) turn each provider's credential into Plexus types at the
+# WebSocket upgrade. Used only when an --auth-provider is given.
+plexus-rpc = { version = "0.8.0", features = ["clap", "http-gateway", "mcp", "auth-adapters"] }
 # SCAFFOLD-3/SCAFFOLD-9: the login — providers, the page, sessions, the
 # gate, the auth backend, the wiring — its own crate and repository
 # (FRAME-4), by published version (V2-47); menger implements its `LoginAccess` over
 # `Access` (src/login_access.rs) and `main` runs on its `Wiring`.
-plexus-login = "0.3.0"
+plexus-login = "0.3.1"
 # IDENTITY-19: the login page — the shell asks the provider itself (discovery,
 # token endpoint), keeps sessions keyed by a random id (hashed), and runs the
 # code flow with PKCE. All already in the lock through plexus-auth-core.
@@ -168,14 +168,13 @@ reqwest13 = { package = "reqwest", version = "0.13", default-features = false }
 jsonrpsee = { version = "0.26", features = ["server", "macros", "ws-client"] }
 serde_json = "1"
 # MFE-11: tests/wire_client.rs drives the generated TicketsClient over the
-# native WebSocket transport against the in-process server.
-plexus-client = { version = "0.8.0", features = ["ws-native"] }
-# V2-4: tests/seam.rs declares a probe activation of its own, beside
-# `tickets` in a test service, that reads through the in-memory transport.
-plexus-macros = "0.8.0"
+# native WebSocket transport against the in-process server; V2-4:
+# tests/seam.rs declares a probe activation of its own, beside `tickets` in a
+# test service — plexus-client's ws-native and the macros, through the
+# umbrella (PLEXUS-44).
+plexus-rpc = { version = "0.8.0", features = ["client-ws"] }
 schemars = { version = "1.1", features = ["derive"] }
 async-stream = "0.3"
-uuid = { version = "1", features = ["v4"] }
 # tests/durability.rs inspects the database file directly.
 rusqlite = { version = "0.37", features = ["bundled"] }
 # Hermetic tests: every server gets its own isolated database location.
@@ -201,7 +200,7 @@ tar = { version = "0.4", default-features = false }
 # `tickets` — a probe activation (plexus-macros, schemars, async-stream:
 # V2-4's, above) — to show the lint reads the running service.
 # FRAME-3, V2-47: by published version, the service's; scripts/plexus-ui-release moves it.
-plexus-ui-compiler = "0.2.0"
+plexus-ui-compiler = "0.2.1"
 # UI-7: the in-process tests' stub compiler modules, written as text.
 wat = "1"
 # V2-29: tests/wire_docs.rs types into a document as two browsers would — two

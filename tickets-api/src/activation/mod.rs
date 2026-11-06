@@ -70,7 +70,7 @@ use std::sync::Arc;
 #[cfg(feature = "server")]
 use crate::access::{Access, Editor, MengerRequest, VerifiedUser, ADMINISTER};
 #[cfg(feature = "server")]
-use plexus_core::plexus::Grant;
+use plexus_rpc::core::plexus::Grant;
 
 /// The activation. Server-only: it holds the store.
 #[cfg(feature = "server")]

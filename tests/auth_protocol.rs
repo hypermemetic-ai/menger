@@ -27,7 +27,7 @@ use ed25519_dalek::SigningKey;
 use jsonrpsee::core::client::{Subscription, SubscriptionClientT};
 use jsonrpsee::core::params::ObjectParams;
 use jsonrpsee::ws_client::{HeaderMap, HeaderValue, WsClient, WsClientBuilder};
-use plexus_auth_core::adapters::{key_principal, sign_key_proof};
+use plexus_rpc::auth_core::adapters::{key_principal, sign_key_proof};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -403,7 +403,7 @@ async fn the_roles_are_what_identity_21_asked_method_by_method() {
     let mut seen = BTreeSet::new();
     // MACRO-20: the service lists them by path (`tickets.commits`), each schema
     // its own (namespace and grants as the macro wrote them).
-    let children = plexus_core::plexus::Activation::static_child_schemas(&menger_tickets_api::TicketsActivation::with_access(Arc::new(menger_tickets_api::store::Store::new()), menger_tickets_api::access::Access::with_login(menger::session_table(&sessions), Vec::new())))
+    let children = plexus_rpc::core::plexus::Activation::static_child_schemas(&menger_tickets_api::TicketsActivation::with_access(Arc::new(menger_tickets_api::store::Store::new()), menger_tickets_api::access::Access::with_login(menger::session_table(&sessions), Vec::new())))
         .into_iter()
         .map(|(path, s)| (format!("tickets.{path}"), s));
     let top = service.list_plugin_schemas().into_iter().map(|s| (s.namespace.clone(), s));
@@ -412,7 +412,7 @@ async fn the_roles_are_what_identity_21_asked_method_by_method() {
             continue;
         }
         for m in &schema.methods {
-            if m.name == "schema" || matches!(m.role, plexus_core::plexus::MethodRole::StaticChild) {
+            if m.name == "schema" || matches!(m.role, plexus_rpc::core::plexus::MethodRole::StaticChild) {
                 continue;
             }
             let own = format!("{}.{}", schema.namespace, m.name);

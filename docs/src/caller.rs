@@ -8,8 +8,8 @@
 //! asked of the gate again by the methods ([`crate::seam::Seam::holds`]).
 
 use crate::events::WatchEnd;
-use plexus_core::plexus::{current_reach, AuthContext, PlexusError, Reach, Refusal};
-use plexus_macros::PlexusRequest;
+use plexus_rpc::core::plexus::{current_reach, AuthContext, PlexusError, Reach, Refusal};
+use plexus_rpc::macros::PlexusRequest;
 
 /// The per-call context every method of the service reads: the identity the
 /// connection's upgrade proved, when one did.

@@ -17,7 +17,7 @@ use futures::TryStreamExt;
 use menger_tickets_api::members::Role;
 use menger_tickets_api::vocab::TicketRef;
 use menger_tickets_api::{TicketsClient, TicketsEvent};
-use plexus_core::plexus::{AuthContext, DynamicHub, HubTransport};
+use plexus_rpc::core::plexus::{AuthContext, DynamicHub, HubTransport};
 use std::sync::{Arc, OnceLock, Weak};
 
 /// Where the running service is, once the builder says. Weak: the service
@@ -93,7 +93,7 @@ impl Seam {
         let service = self.service()?;
         Some(match service.gate() {
             None => true,
-            Some(gate) => gate.held_on(caller, &plexus_auth_core::grants::Grant::new(grant)).iter().any(|s| s.is_everywhere()),
+            Some(gate) => gate.held_on(caller, &plexus_rpc::auth_core::grants::Grant::new(grant)).iter().any(|s| s.is_everywhere()),
         })
     }
 }

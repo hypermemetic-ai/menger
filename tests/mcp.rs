@@ -11,9 +11,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use plexus_core::plexus::{DynamicHub, SessionValidator};
-use plexus_transport::plexus_transport_mcp::{router, McpBridge, OAuthConfig};
-use plexus_transport::{McpConfig, ServiceUpstream, TransportServer};
+use plexus_rpc::core::plexus::{DynamicHub, SessionValidator};
+use plexus_rpc::transport::plexus_transport_mcp::{router, McpBridge, OAuthConfig};
+use plexus_rpc::transport::{McpConfig, ServiceUpstream, TransportServer};
 use rmcp::model::CallToolRequestParams;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::StreamableHttpClientTransport;

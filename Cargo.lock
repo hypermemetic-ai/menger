@@ -2211,7 +2211,7 @@ dependencies = [
 
 [[package]]
 name = "menger"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2232,12 +2232,8 @@ dependencies = [
  "menger-quota",
  "menger-tickets-api",
  "nostr",
- "plexus-auth-core",
- "plexus-client",
- "plexus-core",
  "plexus-login",
- "plexus-macros",
- "plexus-transport",
+ "plexus-rpc",
  "plexus-ui-compiler",
  "plexus-ui-service",
  "plexus-webapp",
@@ -2256,26 +2252,20 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
- "uuid",
  "wat",
  "yrs",
 ]
 
 [[package]]
 name = "menger-docs"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "async-stream",
- "async-trait",
  "base64 0.22.1",
  "futures",
- "jsonrpsee",
  "menger-tickets-api",
- "plexus-auth-core",
- "plexus-client",
- "plexus-core",
- "plexus-macros",
+ "plexus-rpc",
  "rusqlite",
  "schemars",
  "serde",
@@ -2290,20 +2280,15 @@ dependencies = [
 
 [[package]]
 name = "menger-media"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
- "async-stream",
  "async-trait",
  "base64 0.22.1",
  "futures",
- "jsonrpsee",
  "menger-docs",
  "menger-tickets-api",
- "plexus-auth-core",
- "plexus-client",
- "plexus-core",
- "plexus-macros",
+ "plexus-rpc",
  "reqwest 0.12.28",
  "rusqlite",
  "schemars",
@@ -2319,18 +2304,14 @@ dependencies = [
 
 [[package]]
 name = "menger-quota"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
  "futures",
- "jsonrpsee",
  "libc",
- "plexus-auth-core",
- "plexus-client",
- "plexus-core",
- "plexus-macros",
+ "plexus-rpc",
  "rusqlite",
  "schemars",
  "serde",
@@ -2343,7 +2324,7 @@ dependencies = [
 
 [[package]]
 name = "menger-tickets-api"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2352,14 +2333,12 @@ dependencies = [
  "chrono",
  "futures",
  "jiff",
- "jsonrpsee",
  "libc",
  "menger-quota",
  "menger-tickets-api",
- "plexus-auth-core",
  "plexus-client",
- "plexus-core",
  "plexus-macros",
+ "plexus-rpc",
  "pulldown-cmark",
  "roaring",
  "rusqlite",
@@ -2681,9 +2660,9 @@ dependencies = [
 
 [[package]]
 name = "plexus-login"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9dd1d061d55df24005d5aa7dcf6df5d859000807b4fdfa56f436429d4406838f"
+checksum = "0534a0018b0d22c450948eb1b54ab4b40a9148881eee89e642682a40be60d245"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2692,9 +2671,7 @@ dependencies = [
  "futures",
  "ipnet",
  "jsonrpsee",
- "plexus-auth-core",
- "plexus-core",
- "plexus-transport",
+ "plexus-rpc",
  "rand 0.8.8",
  "reqwest 0.12.28",
  "serde",
@@ -2708,15 +2685,39 @@ dependencies = [
 
 [[package]]
 name = "plexus-macros"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a9298423ad52ca15b4782057c08b1a6f37a06300b5a3d86d5bb50b9a58dbb16"
+checksum = "358c3689d6d3b6cccbcb324d8212ae62141ab561186b9e90cb9b80fe72e6181b"
 dependencies = [
+ "heck",
  "proc-macro-crate",
  "proc-macro2",
  "quote",
  "serde_json",
  "syn 2.0.119",
+ "uuid",
+]
+
+[[package]]
+name = "plexus-rpc"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f86270685c284a2599f566b776515585823c88c6d16cb5d021764acfee49cb16"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "async-trait",
+ "futures",
+ "jsonrpsee",
+ "plexus-auth-core",
+ "plexus-client",
+ "plexus-core",
+ "plexus-macros",
+ "plexus-transport",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tokio",
  "uuid",
 ]
 
@@ -2773,9 +2774,9 @@ dependencies = [
 
 [[package]]
 name = "plexus-ui-compiler"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51c1c97574b69ef723ce8a030af5ca895f2e9d129af16c066a22c84831509a9c"
+checksum = "def1aec209ae9ca97b0f83cd1e7d4b9ccf1a50cc81cac154dda15c3fc420aede"
 dependencies = [
  "rhai",
  "serde",
@@ -2785,22 +2786,17 @@ dependencies = [
 
 [[package]]
 name = "plexus-ui-service"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a986c554b016449b809a7e77e8b794940291a9d0012fd5313e9dfe6300e4c25"
+checksum = "3d2ec3a06465c87a7af28f16f94a812831f3409bbf35638f7d2bc9ae6dece153"
 dependencies = [
  "async-stream",
- "async-trait",
  "axum",
  "base64 0.22.1",
  "brotli",
  "ed25519-dalek",
  "futures",
- "jsonrpsee",
- "plexus-auth-core",
- "plexus-client",
- "plexus-core",
- "plexus-macros",
+ "plexus-rpc",
  "plexus-webapp",
  "rusqlite",
  "schemars",
@@ -2810,22 +2806,20 @@ dependencies = [
  "tar",
  "thiserror 2.0.20",
  "tokio",
- "uuid",
  "wasmtime",
 ]
 
 [[package]]
 name = "plexus-webapp"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "158b3ddb83902b080687e8c39dfc8fedaa7abdb238864c5fb085e893aa2e29f1"
+checksum = "7a94fb07089fcb44916d40a112f8555cb387be722aa69baaec9e68ea6f5a8724"
 dependencies = [
  "anyhow",
  "axum",
  "base64 0.22.1",
  "jsonrpsee",
- "plexus-core",
- "plexus-transport",
+ "plexus-rpc",
  "sha2",
  "tokio",
  "tracing",

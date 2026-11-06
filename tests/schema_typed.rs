@@ -3,7 +3,7 @@
 //! registers — `tickets`, `ui`, `media`, `docs`, `quota`, `orgs`, `members`,
 //! `session`, `auth` — and each of their children (`tickets.commits`,
 //! `ui.slots`, `members.teams`, …) answers a schema with no untyped site
-//! (`plexus_core::plexus::schema::untyped_sites`): no position that is
+//! (`plexus_rpc::core::plexus::schema::untyped_sites`): no position that is
 //! neither a typed schema nor the JSON type (a bare `object` or `array`, a
 //! type list like `["object","boolean"]`), and no RPC method without
 //! `returns`. A `serde_json::Value` is the JSON type — a type like any other
@@ -24,9 +24,9 @@ mod support;
 use jsonrpsee::core::client::{Subscription, SubscriptionClientT};
 use jsonrpsee::core::params::ObjectParams;
 use jsonrpsee::ws_client::WsClient;
-use plexus_core::plexus::schema::untyped_sites;
-use plexus_core::plexus::{DynamicHub, PluginSchema};
-use plexus_transport::TransportServer;
+use plexus_rpc::core::plexus::schema::untyped_sites;
+use plexus_rpc::core::plexus::{DynamicHub, PluginSchema};
+use plexus_rpc::transport::TransportServer;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::sync::Arc;

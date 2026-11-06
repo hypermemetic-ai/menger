@@ -8,7 +8,7 @@
 # methods, the same events.
 [package]
 name = "menger-media"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 license = "MIT"
 description = "menger's media service — images for tickets, kept by sha256 in a file of their own, the ticket's permit asked of the tickets service through the client seam"
@@ -17,21 +17,18 @@ repository = "https://github.com/hypermemetic-ai/menger"
 [dependencies]
 # The tickets service's client and vocabulary: `TicketsClient::may` is the
 # permit question, `TicketRef` names the ticket, `Role` the role asked.
-menger-tickets-api = { path = "../tickets-api", version = "0.7.0" }
+menger-tickets-api = { path = "../tickets-api", version = "0.7.1" }
 # V2-29: the docs service's client — `docs.may` is the permit question for an
 # image put for a document, asked through the seam as the caller.
-menger-docs = { path = "../docs", version = "0.7.0" }
-# The 0.7 line, by published version (PLEXUS-16), as the server takes it.
-plexus-core = "0.8.0"
-plexus-macros = "0.8.0"
-plexus-client = { version = "0.8.0", default-features = false }
-# The gate's types: where a caller holds a grant (`held_on`).
-plexus-auth-core = "0.3.0"
+menger-docs = { path = "../docs", version = "0.7.1" }
+# The 0.8 line, by published version (PLEXUS-16), as the server takes it,
+# through the umbrella (PLEXUS-44): plexus-core, plexus-macros, plexus-client,
+# plexus-auth-core and every crate the activation macro's expansion names.
+# No transport: the service is served by menger's binary.
+plexus-rpc = { version = "0.8.0", default-features = false, features = ["child-ws"] }
 async-trait = "0.1"
-async-stream = "0.3"
 futures = "0.3"
-jsonrpsee = { version = "0.26", features = ["server", "macros"] }
-# What the activation macro's server half emits paths into.
+# A blob's temporary name, a reservation's id.
 uuid = { version = "1.6", features = ["v4", "serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

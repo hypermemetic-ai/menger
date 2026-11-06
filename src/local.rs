@@ -40,8 +40,8 @@
 
 use crate::shell::{self, AppSource};
 use menger_tickets_api::access::Access;
-use plexus_core::plexus::AuthContext;
-use plexus_transport::websocket::UpgradeOptions;
+use plexus_rpc::core::plexus::AuthContext;
+use plexus_rpc::transport::websocket::UpgradeOptions;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -137,7 +137,7 @@ impl LocalServer {
         };
         // ACCESS-13: menger's own module — its calls' limits.
         let module = crate::calls::rpc_module(service.clone(), crate::calls::CallLimits::default())?;
-        let gate: Arc<dyn plexus_core::plexus::SessionValidator> = Arc::new(crate::sessions::Gate::new(sessions, None).noticing(crate::MengerAccess(access.clone())));
+        let gate: Arc<dyn plexus_rpc::core::plexus::SessionValidator> = Arc::new(crate::sessions::Gate::new(sessions, None).noticing(crate::MengerAccess(access.clone())));
         let options = UpgradeOptions { anonymous_view: true, credential_cookies: vec!["access_token".into()], ..UpgradeOptions::default() };
         let server = plexus_webapp::LocalServer::start_guarded(service, module, local, Some(gate), options).await?;
         Ok(LocalServer { server, access, owner })
@@ -206,7 +206,7 @@ pub fn shell_origins(shell_port: u16, public_url: Option<&str>) -> Vec<String> {
 /// `--allowed-host`, as given. Anything else is refused 421 before routing
 /// (DNS rebinding: a page that points its own name here names its own host).
 pub fn listener_hosts(port: u16, public_url: Option<&str>, extra: &[String]) -> Vec<String> {
-    let mut hosts = plexus_transport::host::loopback_hosts(port);
+    let mut hosts = plexus_rpc::transport::host::loopback_hosts(port);
     let mut add = |h: String| {
         let h = h.trim().to_ascii_lowercase();
         if !h.is_empty() && !hosts.contains(&h) {

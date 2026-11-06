@@ -38,7 +38,7 @@ use menger_tickets_api::store::scale::{self, Bulk, Sampled};
 use menger_tickets_api::store::Store;
 use menger_tickets_api::types::Ticket;
 use menger_tickets_api::Uid;
-use plexus_auth_core::adapters::{key_principal, sign_key_proof};
+use plexus_rpc::auth_core::adapters::{key_principal, sign_key_proof};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde::Deserialize;

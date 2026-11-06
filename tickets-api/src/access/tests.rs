@@ -622,7 +622,7 @@ async fn verify_needs_a_principal_and_never_falls_back_to_the_user_id() {
 /// for the call kept on the user (what a watch follows).
 #[tokio::test]
 async fn the_frames_resolver_answers_typed_and_keeps_the_calls_reach() {
-    use plexus_core::plexus::PlexusError;
+    use plexus_rpc::core::plexus::PlexusError;
     let a = login(vec![]);
     a.attach(store().await);
     match a.verify(&AuthContext::anonymous()).await {

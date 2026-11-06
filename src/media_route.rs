@@ -24,7 +24,7 @@ use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use menger_media::allowance::{source, Allowance};
 use menger_media::{kinds, MediaInfo, MediaStore};
-use plexus_core::plexus::DynamicHub;
+use plexus_rpc::core::plexus::DynamicHub;
 use std::sync::Arc;
 use std::time::Duration;
 

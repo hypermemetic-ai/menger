@@ -240,8 +240,8 @@ mod tests {
     }
 }
 
-impl plexus_client::FromClientError for QuotaEvent {
-    fn from_client_error(error: plexus_client::ClientError) -> Self {
+impl plexus_rpc::client::FromClientError for QuotaEvent {
+    fn from_client_error(error: plexus_rpc::client::ClientError) -> Self {
         QuotaEvent::Error { message: error.to_string() }
     }
 }

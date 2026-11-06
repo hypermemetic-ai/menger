@@ -14,7 +14,7 @@ fn lower_hex(s: &str, n: usize) -> bool {
     s.len() == n && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-/// The identity layer's grammar (`plexus_auth_core::identity::Principal`),
+/// The identity layer's grammar (`plexus_rpc::auth_core::identity::Principal`),
 /// read without it — that crate is the server's, and not wasm-safe:
 /// `issuer:subject`, the issuer one of five, the subject by its issuer's
 /// rule. Exactly; nothing is normalised but the trim (a principal has one
@@ -60,23 +60,23 @@ text_type!(
     /// IDENTITY-21: a Plexus principal — `idp:<uuid>`, `oidc:<provider>/<sub>`,
     /// `nostr:<hex>`, `key:<hex>`, `apikey:<id>` — checked by the identity
     /// layer's grammar, wasm-safe. On the server it converts to and from
-    /// `plexus_auth_core::identity::Principal` (`TryFrom` both ways).
+    /// `plexus_rpc::auth_core::identity::Principal` (`TryFrom` both ways).
     Principal,
     principal
 );
 
 #[cfg(feature = "server")]
-impl From<&plexus_auth_core::identity::Principal> for Principal {
-    fn from(p: &plexus_auth_core::identity::Principal) -> Self {
+impl From<&plexus_rpc::auth_core::identity::Principal> for Principal {
+    fn from(p: &plexus_rpc::auth_core::identity::Principal) -> Self {
         Self(p.to_string())
     }
 }
 
 #[cfg(feature = "server")]
-impl TryFrom<&Principal> for plexus_auth_core::identity::Principal {
+impl TryFrom<&Principal> for plexus_rpc::auth_core::identity::Principal {
     type Error = String;
     fn try_from(p: &Principal) -> Result<Self, String> {
-        p.as_str().parse().map_err(|e: plexus_auth_core::identity::PrincipalParseError| e.to_string())
+        p.as_str().parse().map_err(|e: plexus_rpc::auth_core::identity::PrincipalParseError| e.to_string())
     }
 }
 

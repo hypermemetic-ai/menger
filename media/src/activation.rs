@@ -92,7 +92,7 @@ impl MediaActivation {
 }
 
 /// Files for tickets and docs — any file kept by its hash (one message, or in chunks for any size), and links read into cards.
-#[plexus_macros::activation(
+#[plexus_rpc::macros::activation(
     auth = "required",
     request = MediaRequest,
     typed_params,
@@ -124,7 +124,7 @@ impl MediaActivation {
     /// `not_found { doc }` for one you may not write. The bytes count against your
     /// allowance. Through synapse the data is a file (`--data @shot.b64`)
     /// or stdin, never `"$(base64 …)"`. Editor.
-    #[plexus_macros::method(
+    #[plexus_rpc::macros::method(
         group = "write",
         example(note = "a 1×1 PNG for a ticket", params = r#"{"ticket": "KILN-4", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "name": "dot.png"}"#)
     )]
@@ -154,7 +154,7 @@ impl MediaActivation {
     /// (ACCESS-10: not found ≡ not yours) or put with no ticket by someone
     /// else. A file past 7 MiB is `refused { reason: too_large }`: read it
     /// at `GET /media/<hash>` on the shell, by range. Viewer.
-    #[plexus_macros::method(
+    #[plexus_rpc::macros::method(
         group = "read",
         example(note = "an image a body shows", params = r#"{"hash": "9f2c6ae2b4d1e1a8f7c3b0d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718"}"#)
     )]
@@ -173,7 +173,7 @@ impl MediaActivation {
     /// what the shell asks before it serves `GET /media/<hash>`, and what a
     /// page asks to draw a file's card. `not_found { hash }` alike for none
     /// and for one you may not see. Viewer.
-    #[plexus_macros::method(
+    #[plexus_rpc::macros::method(
         group = "read",
         example(note = "what a file in a body is", params = r#"{"hash": "9f2c6ae2b4d1e1a8f7c3b0d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718"}"#)
     )]
@@ -193,7 +193,7 @@ impl MediaActivation {
     /// anyone (`principal`), or asks `everyone: true` — one `usage` per
     /// uploader, each file counted once against whoever kept it first, as
     /// the quota service charged it (what `quota.recount` reads).
-    #[plexus_macros::method(group = "read", example(note = "my storage", params = r#"{}"#), example(note = "every uploader (admin of *)", params = r#"{"everyone": true}"#))]
+    #[plexus_rpc::macros::method(group = "read", example(note = "my storage", params = r#"{}"#), example(note = "every uploader (admin of *)", params = r#"{"everyone": true}"#))]
     pub async fn usage(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
@@ -221,7 +221,7 @@ impl MediaActivation {
     /// for a day is dropped. `not_found { ticket }` for a ticket you may
     /// not edit; `not_found { upload }` to resume one that is not yours or
     /// gone. Editor.
-    #[plexus_macros::method(
+    #[plexus_rpc::macros::method(
         group = "write",
         example(note = "a 300 MB video for a ticket", params = r#"{"ticket": "KILN-4", "name": "walkthrough.mp4", "size": 314572800}"#)
     )]
@@ -252,7 +252,7 @@ impl MediaActivation {
     /// leaves a gap is `refused { reason: out_of_order }` naming the offset
     /// expected; past the size said, `past_size`. At most `chunk` bytes
     /// (as `begin` said) of base64. Editor.
-    #[plexus_macros::method(
+    #[plexus_rpc::macros::method(
         group = "write",
         example(note = "the first chunk", params = r#"{"upload": "0f1e2d3c4b5a69788796a5b4c3d2e1f0", "offset": 0, "data": "AAAAIGZ0eXBpc29t"}"#)
     )]
@@ -274,7 +274,7 @@ impl MediaActivation {
     /// The file is hashed, its type read from its first bytes, and kept as
     /// `put` keeps one: `stored`, or `refused { reason: incomplete }` while
     /// bytes are missing (send them, then finish again). Editor.
-    #[plexus_macros::method(group = "write", example(note = "the upload done", params = r#"{"upload": "0f1e2d3c4b5a69788796a5b4c3d2e1f0"}"#))]
+    #[plexus_rpc::macros::method(group = "write", example(note = "the upload done", params = r#"{"upload": "0f1e2d3c4b5a69788796a5b4c3d2e1f0"}"#))]
     pub async fn finish(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
@@ -297,7 +297,7 @@ impl MediaActivation {
     /// `blocked_address`, `too_many_redirects`, `timeout`, `too_large`,
     /// `bad_type`, `http_status`, `unreachable`). Counts one call against
     /// your allowance. Viewer.
-    #[plexus_macros::method(group = "read", example(note = "a pasted link", params = r#"{"url": "https://github.com/hypermemetic-ai/menger"}"#))]
+    #[plexus_rpc::macros::method(group = "read", example(note = "a pasted link", params = r#"{"url": "https://github.com/hypermemetic-ai/menger"}"#))]
     pub async fn unfurl(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
@@ -314,7 +314,7 @@ impl MediaActivation {
     /// and 7 MiB at most; a page is refused as `bad_type` — unfurl it) and
     /// keeps it as `put` would, never hot-linked. Counts one call and its
     /// bytes against your allowance. Editor.
-    #[plexus_macros::method(group = "write", example(note = "an image from a pasted page", params = r#"{"url": "https://example.com/figure.png", "ticket": "KILN-4"}"#))]
+    #[plexus_rpc::macros::method(group = "write", example(note = "an image from a pasted page", params = r#"{"url": "https://example.com/figure.png", "ticket": "KILN-4"}"#))]
     pub async fn fetch(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,

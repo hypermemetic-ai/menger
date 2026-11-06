@@ -18,7 +18,7 @@ use crate::meter::{Hold, Meter, Refusal};
 use crate::vocab::QuotaEvent;
 use crate::QuotaClient;
 use futures::{StreamExt, TryStreamExt};
-use plexus_core::plexus::{AuthContext, DynamicHub, HubTransport, PlexusStreamItem};
+use plexus_rpc::core::plexus::{AuthContext, DynamicHub, HubTransport, PlexusStreamItem};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
@@ -88,7 +88,7 @@ impl Seam {
         let Some((service, _)) = self.service() else { return false };
         match service.gate() {
             None => true,
-            Some(gate) => gate.held_on(ctx, &plexus_auth_core::grants::Grant::new(ADMIN_GRANT)).iter().any(|s| s.is_everywhere()),
+            Some(gate) => gate.held_on(ctx, &plexus_rpc::auth_core::grants::Grant::new(ADMIN_GRANT)).iter().any(|s| s.is_everywhere()),
         }
     }
 
@@ -102,7 +102,7 @@ impl Seam {
         }
         match service.gate() {
             None => false,
-            Some(gate) => gate.held_on(&identity(principal), &plexus_auth_core::grants::Grant::new(ADMIN_GRANT)).iter().any(|s| s.is_everywhere()),
+            Some(gate) => gate.held_on(&identity(principal), &plexus_rpc::auth_core::grants::Grant::new(ADMIN_GRANT)).iter().any(|s| s.is_everywhere()),
         }
     }
 

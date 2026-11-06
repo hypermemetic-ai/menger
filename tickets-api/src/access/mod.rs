@@ -8,7 +8,7 @@
 //! before a method runs. What menger supplies the gate lives here, over the
 //! store ([`Book`]):
 //!
-//! - **roles** ([`plexus_core::plexus::Roles`] / `RoleStore`): each
+//! - **roles** ([`plexus_rpc::core::plexus::Roles`] / `RoleStore`): each
 //!   activation's declared `roles(...)` — `viewer` the reads, `editor` the
 //!   reads and the writes; `admin`, built in, every grant — and an admin's
 //!   edits (`auth.role_set`), kept in the store's `roles` table, which win;
@@ -44,9 +44,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use async_trait::async_trait;
-use plexus_auth_core::identity::Principal;
-use plexus_auth_core::RoleName;
-use plexus_core::plexus::{
+use plexus_rpc::auth_core::identity::Principal;
+use plexus_rpc::auth_core::RoleName;
+use plexus_rpc::core::plexus::{
     AuthContext, Ceiling as GateCeiling, Gate, Grant as GateGrant, GrantSet, Membership, MembershipStore, Memberships,
     Resolve, RoleOrGrant, RoleStore, Roles, ScopeRef, StoreError as GateStoreError, ADMIN,
 };
@@ -70,7 +70,7 @@ pub use user::{Admin, AdminOf, Chatter, Deployer, DeployerOf, Editor, EditorOf, 
 
 /// The gate's reach for one call (plexus-core's): the grant a method was
 /// admitted for, and where.
-pub use plexus_core::plexus::Reach as GateReach;
+pub use plexus_rpc::core::plexus::Reach as GateReach;
 
 /// The grantor named on `--admin` grants.
 pub use crate::vocab::OPERATOR;
@@ -94,8 +94,8 @@ pub const WAITING_MAX: usize = 1000;
 /// IDENTITY-42: the metadata key a minted session's ceiling rides under:
 /// a list of layers, each a list of `role@SCOPE` (AUTH-7: or
 /// `grant@SCOPE`); every layer must allow a check. The gate reads the same
-/// key ([`plexus_core::plexus::CEILING_KEY`]).
-pub const CEILING_KEY: &str = plexus_core::plexus::CEILING_KEY;
+/// key ([`plexus_rpc::core::plexus::CEILING_KEY`]).
+pub const CEILING_KEY: &str = plexus_rpc::core::plexus::CEILING_KEY;
 
 /// IDENTITY-42: the metadata key a key proof's agent id rides under.
 pub const AGENT_KEY: &str = "agent";
@@ -766,14 +766,14 @@ impl Access {
     /// (and before its parameters are read: auth before params, ACCESS-6).
     /// [`Access::verify_now`] for the call being dispatched: the identity the
     /// upgrade proved, the grant the gate admitted the call for
-    /// ([`plexus_core::plexus::current_reach`], read here, in the dispatch's
+    /// ([`plexus_rpc::core::plexus::current_reach`], read here, in the dispatch's
     /// scope) — kept on the user, with that reach, so an open watch can ask
     /// the gate again as the grants move ([`Following::of`]). Its refusal is
     /// typed on the wire (MACRO-14): a sign-in that does not stand is
     /// `unauthenticated` (-32001), anything else `forbidden` (-32003).
-    pub async fn verify(&self, ctx: &AuthContext) -> Result<VerifiedUser, plexus_core::plexus::PlexusError> {
-        let reach = plexus_core::plexus::current_reach();
-        let user = self.verify_now(ctx).map_err(plexus_core::plexus::PlexusError::from)?;
+    pub async fn verify(&self, ctx: &AuthContext) -> Result<VerifiedUser, plexus_rpc::core::plexus::PlexusError> {
+        let reach = plexus_rpc::core::plexus::current_reach();
+        let user = self.verify_now(ctx).map_err(plexus_rpc::core::plexus::PlexusError::from)?;
         Ok(user.for_call(reach.grant().cloned()).following(reach))
     }
 
