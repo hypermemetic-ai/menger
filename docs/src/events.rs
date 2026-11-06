@@ -316,8 +316,8 @@ pub enum DocsEvent {
     Error { message: String },
 }
 
-impl plexus_client::FromClientError for DocsEvent {
-    fn from_client_error(error: plexus_client::ClientError) -> Self {
+impl plexus_rpc::client::FromClientError for DocsEvent {
+    fn from_client_error(error: plexus_rpc::client::ClientError) -> Self {
         DocsEvent::Error { message: error.to_string() }
     }
 }

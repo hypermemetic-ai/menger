@@ -18,8 +18,8 @@ use menger_tickets_api::members::{Grant, Role};
 use menger_tickets_api::store::{NewTicket, Store};
 use menger_tickets_api::vocab::{GrantedBy, Grantee, TicketRef};
 use menger_tickets_api::{Kind, TicketsActivation, TicketsClient, TicketsEvent};
-use plexus_client::ClientError;
-use plexus_core::plexus::{AuthContext, AuthSetup, DynamicHub, HubTransport};
+use plexus_rpc::client::ClientError;
+use plexus_rpc::core::plexus::{AuthContext, AuthSetup, DynamicHub, HubTransport};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, OnceLock, Weak};
@@ -29,7 +29,7 @@ const READER: [u8; 32] = [0x5e; 32];
 
 fn principal_of(seed: &[u8; 32]) -> String {
     use ed25519_dalek::SigningKey;
-    plexus_auth_core::adapters::key_principal(SigningKey::from_bytes(seed).verifying_key().as_bytes()).to_string()
+    plexus_rpc::auth_core::adapters::key_principal(SigningKey::from_bytes(seed).verifying_key().as_bytes()).to_string()
 }
 
 /// What the probe answers: what `tickets.get` said to it, and as whom it
@@ -45,7 +45,7 @@ pub enum ProbeEvent {
     Error { message: String },
 }
 
-impl plexus_client::FromClientError for ProbeEvent {
+impl plexus_rpc::client::FromClientError for ProbeEvent {
     fn from_client_error(error: ClientError) -> Self {
         ProbeEvent::Error { message: error.to_string() }
     }
@@ -58,10 +58,10 @@ pub struct ProbeActivation {
     service: Arc<OnceLock<Weak<DynamicHub>>>,
 }
 
-#[plexus_macros::activation(version = "1.0.0", description = "V2-4: a second activation that reads through the seam", roles(viewer = ["read"]))]
+#[plexus_rpc::macros::activation(version = "1.0.0", description = "V2-4: a second activation that reads through the seam", roles(viewer = ["read"]))]
 impl ProbeActivation {
     /// Read one ticket through the seam, as the caller.
-    #[plexus_macros::method]
+    #[plexus_rpc::macros::method]
     pub async fn read(&self, auth: Option<&AuthContext>, id: String) -> impl Stream<Item = ProbeEvent> + Send + 'static {
         let service = self.service.get().and_then(Weak::upgrade);
         let caller = auth.cloned();

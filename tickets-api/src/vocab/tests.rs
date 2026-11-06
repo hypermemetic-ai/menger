@@ -160,7 +160,7 @@ fn a_principal_is_the_identity_layer_s_grammar() {
     #[cfg(feature = "server")]
     for t in ok.iter().chain(&bad) {
         let ours = t.trim().parse::<Principal>().is_ok();
-        let theirs = t.trim().parse::<plexus_auth_core::identity::Principal>().is_ok();
+        let theirs = t.trim().parse::<plexus_rpc::auth_core::identity::Principal>().is_ok();
         assert_eq!(ours, theirs, "{t:?}");
     }
 }

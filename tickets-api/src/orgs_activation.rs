@@ -30,7 +30,7 @@ use async_stream::stream;
 #[cfg(feature = "server")]
 use futures::Stream;
 #[cfg(feature = "server")]
-use plexus_core::plexus::{AuthContext, Reach};
+use plexus_rpc::core::plexus::{AuthContext, Reach};
 #[cfg(feature = "server")]
 use std::sync::Arc;
 

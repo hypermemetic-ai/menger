@@ -17,8 +17,8 @@ use crate::{DocsClient, DocsEvent};
 use futures::TryStreamExt;
 use menger_tickets_api::members::Role;
 use menger_tickets_api::{OrgsClient, OrgsEvent};
-use plexus_auth_core::grants::Grant;
-use plexus_core::plexus::{AuthContext, DynamicHub, HubTransport};
+use plexus_rpc::auth_core::grants::Grant;
+use plexus_rpc::core::plexus::{AuthContext, DynamicHub, HubTransport};
 use std::sync::{Arc, OnceLock, Weak};
 
 /// Where the running service is, once the builder says. Weak: the service

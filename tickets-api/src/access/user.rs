@@ -92,9 +92,9 @@ impl std::error::Error for Refusal {}
 /// `unauthenticated` (-32001), in its words; anything else is `forbidden`
 /// (-32003). The gate refuses a grant held nowhere before the resolver
 /// runs, so the second is rare: a reach no read can be made of.
-impl From<Refusal> for plexus_core::plexus::PlexusError {
+impl From<Refusal> for plexus_rpc::core::plexus::PlexusError {
     fn from(r: Refusal) -> Self {
-        use plexus_core::plexus::{AuthzDenyReason, PlexusError};
+        use plexus_rpc::core::plexus::{AuthzDenyReason, PlexusError};
         match r {
             Refusal::SignIn | Refusal::NoPrincipal | Refusal::Expired | Refusal::SignedOut | Refusal::Ceiling(_) => PlexusError::Unauthenticated(r.to_string()),
             Refusal::Nowhere { .. } | Refusal::OutsideCeiling { .. } | Refusal::Lacks(_) | Refusal::Unreadable(_) => {

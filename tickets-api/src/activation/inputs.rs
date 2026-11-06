@@ -243,7 +243,7 @@ impl InputsActivation {
 #[cfg(all(test, feature = "server"))]
 mod tests {
     use super::*;
-    use plexus_core::plexus::AuthContext;
+    use plexus_rpc::core::plexus::AuthContext;
     use serde_json::json;
 
     const ALICE: &str = "idp:c952acd3-60aa-4534-b2e3-83634591fee1";

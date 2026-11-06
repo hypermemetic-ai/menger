@@ -3,7 +3,7 @@
 //! browser's `SessionClient`.
 //!
 //! `whoami` reads the connection's
-//! [`AuthContext`](plexus_core::plexus::AuthContext), which the transport
+//! [`AuthContext`](plexus_rpc::core::plexus::AuthContext), which the transport
 //! attached at the upgrade, and reports it as Plexus types. IDENTITY-15:
 //! `providers` lists what menger was configured to admit, so a sign-in knows
 //! where to go. IDENTITY-42: `login` mints a session token for the caller
@@ -33,7 +33,7 @@ use std::sync::Arc;
 #[cfg(feature = "server")]
 use futures::Stream;
 #[cfg(feature = "server")]
-use plexus_core::plexus::AuthContext;
+use plexus_rpc::core::plexus::AuthContext;
 #[cfg(feature = "server")]
 use crate::access::{Access, MengerRequest, VerifiedUser};
 
@@ -210,8 +210,8 @@ mod tests {
         assert_eq!(whoami(&s, user).await.name(), Some("alice"));
         *live.0.lock().unwrap() = false;
         let refused = access.verify_now(&ctx).expect_err("signed out: it proves no one");
-        let wire = plexus_core::plexus::PlexusError::from(refused);
-        assert!(matches!(wire, plexus_core::plexus::PlexusError::Unauthenticated(_)), "{wire:?}");
+        let wire = plexus_rpc::core::plexus::PlexusError::from(refused);
+        assert!(matches!(wire, plexus_rpc::core::plexus::PlexusError::Unauthenticated(_)), "{wire:?}");
         // ACCESS-24: no open mode — an identity that proves no one is no user.
         assert!(access.verify_now(&AuthContext::anonymous()).is_err());
     }

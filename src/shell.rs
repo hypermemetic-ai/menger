@@ -108,7 +108,7 @@ pub use plexus_ui_service::frame::{FRAME_CSP, FRAME_ROUTE};
 pub struct Studio {
     /// Whether a session's identity may open it (menger: the framework's
     /// `routes::may_author` over the service's gate — `ui.author` held on `*`).
-    pub may: Arc<dyn Fn(&plexus_core::plexus::AuthContext) -> bool + Send + Sync>,
+    pub may: Arc<dyn Fn(&plexus_rpc::core::plexus::AuthContext) -> bool + Send + Sync>,
     /// `--ui-compiler`'s bytes, served at `/studio/ui-compiler.wasm`.
     pub compiler: Option<Vec<u8>>,
 }
@@ -564,7 +564,7 @@ async fn fonts_cors(req: Request, next: axum::middleware::Next) -> Response {
 /// localhost, the configured ones (ACCESS-25: the public URL's host and
 /// `--allowed-host`), and with login the hosts its origins name.
 fn allowed_hosts(port: u16, configured: &[String], login: Option<&crate::web_login::Login>) -> Vec<String> {
-    let mut hosts = plexus_transport::host::loopback_hosts(port);
+    let mut hosts = plexus_rpc::transport::host::loopback_hosts(port);
     for h in configured.iter().cloned().chain(login.map(|l| l.hosts()).unwrap_or_default()) {
         let h = h.to_ascii_lowercase();
         if !hosts.contains(&h) {
@@ -579,7 +579,7 @@ async fn host_is_ours(State(hosts): State<Arc<Vec<String>>>, req: Request, next:
     let host = req.headers().get(header::HOST).and_then(|h| h.to_str().ok()).map(str::to_ascii_lowercase);
     match host {
         Some(h) if hosts.iter().any(|a| *a == h) => next.run(req).await,
-        _ => (StatusCode::MISDIRECTED_REQUEST, plexus_transport::host::REFUSAL).into_response(),
+        _ => (StatusCode::MISDIRECTED_REQUEST, plexus_rpc::transport::host::REFUSAL).into_response(),
     }
 }
 

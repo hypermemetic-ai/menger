@@ -5,7 +5,7 @@ use menger::wiring::{LoginOptions, Wiring};
 use menger_tickets_api::access::Access;
 use menger::first_run::{self, Mode};
 use menger::{build_rpc_services, local, shell, MengerAccess};
-use plexus_transport::{ConnectionQuotas, TransportServer};
+use plexus_rpc::transport::{ConnectionQuotas, TransportServer};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -211,7 +211,7 @@ struct Args {
     // `--child-max-calls`, `--child-env`, `--child-key` (plexus-core's, so
     // every service spells them the same).
     #[command(flatten)]
-    children: plexus_core::plexus::ChildArgs,
+    children: plexus_rpc::core::plexus::ChildArgs,
 
     // IDENTITY-14 / IDENTITY-42 / IDENTITY-30. ACCESS-24: menger has no open
     // mode; DIST-14: with none on loopback, the local admin signs in by a
@@ -734,7 +734,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
     // ignored. ClientIp and SecureTransport read the same set.
     let mut builder = TransportServer::builder(service.clone(), move |service| menger::calls::rpc_module(service, limits))
         .bind(args.bind)
-        .with_trusted_proxies(plexus_transport::TrustedProxies::parse(&args.trusted_proxy).map_err(anyhow::Error::msg)?)
+        .with_trusted_proxies(plexus_rpc::transport::TrustedProxies::parse(&args.trusted_proxy).map_err(anyhow::Error::msg)?)
         .with_websocket(ws_port)
         .with_connection_quotas(ConnectionQuotas {
             max_connections: args.max_connections,
@@ -750,7 +750,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
         // RPC-5 (PERF-20): --idle-timeout-secs reaches the socket that never
         // makes a call too — the transport closes it; menger's sweep keeps
         // the ones that did (src/calls.rs). Pings find a dead peer.
-        .with_socket_limits(plexus_transport::SocketLimits { idle_timeout: limits.idle, max_message_size: args.max_message_bytes, ..Default::default() })
+        .with_socket_limits(plexus_rpc::transport::SocketLimits { idle_timeout: limits.idle, max_message_size: args.max_message_bytes, ..Default::default() })
         .with_allowed_hosts(hosts(ws_port));
     tracing::info!("WebSocket: ws://{}", std::net::SocketAddr::new(args.bind, ws_port));
     // IDENTITY-29: only menger's own pages may open the socket from a
@@ -801,19 +801,19 @@ async fn run(args: Args) -> anyhow::Result<()> {
             // protected resource and says so on a 401.
             mcp: (!args.no_mcp).then(|| {
                 let public = wiring_public_url(&args.public_url, shell_port);
-                let mut mcp = plexus_transport::McpConfig::at("/mcp");
+                let mut mcp = plexus_rpc::transport::McpConfig::at("/mcp");
                 mcp.allowed_hosts = hosts(shell_port);
                 if !args.mcp_authorization_server.is_empty() {
-                    mcp.oauth = Some(plexus_transport::plexus_transport_mcp::OAuthConfig {
+                    mcp.oauth = Some(plexus_rpc::transport::plexus_transport_mcp::OAuthConfig {
                         resource: format!("{public}/mcp"),
                         authorization_servers: args.mcp_authorization_server.clone(),
                         scopes: None,
                     });
                 }
-                let validator = wired.gate.clone().map(|g| g as std::sync::Arc<dyn plexus_core::plexus::SessionValidator>);
-                let bridge = plexus_transport::plexus_transport_mcp::McpBridge::new(plexus_transport::ServiceUpstream::new(service.clone(), validator), mcp);
+                let validator = wired.gate.clone().map(|g| g as std::sync::Arc<dyn plexus_rpc::core::plexus::SessionValidator>);
+                let bridge = plexus_rpc::transport::plexus_transport_mcp::McpBridge::new(plexus_rpc::transport::ServiceUpstream::new(service.clone(), validator), mcp);
                 tracing::info!("MCP:       {public}/mcp — the login's callers: a session or a key proof as the Bearer");
-                plexus_transport::plexus_transport_mcp::router(bridge)
+                plexus_rpc::transport::plexus_transport_mcp::router(bridge)
             }),
         };
         // DIST-14: bound before the banner, so the link answers when printed.

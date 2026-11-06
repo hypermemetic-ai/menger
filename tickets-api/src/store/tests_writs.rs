@@ -199,7 +199,7 @@ async fn a_grant_takes_admin_on_its_scope() {
     let s = tracker().await;
     let g = |scope: &Scope| crate::members::Grant { principal: SOMEONE.parse().unwrap(), scope: scope.clone(), role: Role::Editor, granted_by: crate::vocab::GrantedBy::AuthGrant, at: 0 };
     let open = scope(&s, "OPEN");
-    assert!(Access::for_tests().verify_call(None, &plexus_core::plexus::Reach::everywhere()).is_err(), "no one is no admin");
+    assert!(Access::for_tests().verify_call(None, &plexus_rpc::core::plexus::Reach::everywhere()).is_err(), "no one is no admin");
     // Admin on another scope: refused; on this one: kept.
     assert!(mismatched(&s.grant(AdminOf::for_tests(scope(&s, "OTHER")), g(&open)).await.unwrap_err()));
     let admin = holding(Role::Admin, &["OPEN"]).admin_of(&open, &s).unwrap();

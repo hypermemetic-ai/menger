@@ -77,7 +77,7 @@ async fn restore_write(store: &Arc<Store>, user: &VerifiedUser, id: &TicketRef, 
     client,
     typed_params,
     server_cfg = "feature = \"server\"",
-    crate_path = "plexus_core",
+    crate_path = "plexus_rpc::core",
     roles(viewer = ["list", "get", "diff"], editor = [viewer, "restore"])
 )]
 impl Revisions {

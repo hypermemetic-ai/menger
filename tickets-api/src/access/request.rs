@@ -4,7 +4,7 @@
 //! required one would refuse the call before the resolver
 //! ([`super::Access::verify`]) could say why.
 
-use plexus_core::plexus::AuthContext;
+use plexus_rpc::core::plexus::AuthContext;
 use plexus_macros::PlexusRequest;
 
 /// The per-call context: the identity the upgrade proved, when one did.

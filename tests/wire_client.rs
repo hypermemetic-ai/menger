@@ -1,6 +1,6 @@
 //! MFE-11: menger's wire test, re-expressed through the **generated
 //! client** — `TicketsClient<&WsTransport>`, emitted by
-//! `#[plexus_macros::activation(client, …)]` on the activation's own `impl`
+//! `#[plexus_rpc::macros::activation(client, …)]` on the activation's own `impl`
 //! in `menger-tickets-api` — against the in-process server on the real
 //! wire.
 //!
@@ -26,9 +26,9 @@ mod support;
 use futures::{StreamExt, TryStreamExt};
 use menger_tickets_api::vocab::TicketRef;
 use menger_tickets_api::{Group, Kind, Status, Ticket, TicketsClient, TicketsEvent};
-use plexus_client::{MethodRef, StreamItem, Transport, WsTransport};
-use plexus_core::plexus::DynamicHub;
-use plexus_transport::TransportServer;
+use plexus_rpc::client::{MethodRef, StreamItem, Transport, WsTransport};
+use plexus_rpc::core::plexus::DynamicHub;
+use plexus_rpc::transport::TransportServer;
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;

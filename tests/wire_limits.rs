@@ -12,7 +12,7 @@ use jsonrpsee::core::client::{Subscription, SubscriptionClientT};
 use jsonrpsee::core::params::ObjectParams;
 use jsonrpsee::ws_client::{WsClient, WsClientBuilder};
 use menger::calls::{CallLimits, TOO_MANY_CALLS};
-use plexus_transport::{ConnectionQuotas, TransportServer};
+use plexus_rpc::transport::{ConnectionQuotas, TransportServer};
 use serde_json::{json, Value};
 use std::time::Duration;
 

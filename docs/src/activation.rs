@@ -66,7 +66,7 @@ impl DocsActivation {
 }
 
 /// Documents: writing on its own, written by many hands at once — make one, read it, write it live (a Yjs CRDT), see who is on it, replay how it was built.
-#[plexus_macros::activation(
+#[plexus_rpc::macros::activation(
     auth = "required",
     request = DocsRequest,
     typed_params,
@@ -83,7 +83,7 @@ impl DocsActivation {
     /// held on its organization (`acme:`) or on `*`. Refused in band:
     /// `not_found { org }` for an organization you are not in, `refused {
     /// forbidden }` for one you only read. Editor.
-    #[plexus_macros::method(
+    #[plexus_rpc::macros::method(
         group = "write",
         example(note = "a document, titled", params = r#"{"title": "The kiln, in practice", "body": "Fire twice a week."}"#)
     )]
@@ -105,7 +105,7 @@ impl DocsActivation {
     ///
     /// A document in an organization you do not read is `not_found`, as one
     /// there is not. `replay` reads it as it stood at a moment. Viewer.
-    #[plexus_macros::method(group = "read", example(note = "a document by its id", params = r#"{"id": "7k3mq2xa"}"#))]
+    #[plexus_rpc::macros::method(group = "read", example(note = "a document by its id", params = r#"{"id": "7k3mq2xa"}"#))]
     pub async fn get(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
@@ -121,7 +121,7 @@ impl DocsActivation {
     /// `query` keeps those whose title holds every word of it, case-blind.
     /// A page is 50 rows unless `limit` says (at most 1,000); `after` is the
     /// last row's id of the page before (`page.next`). Viewer.
-    #[plexus_macros::method(group = "read", example(note = "the documents about the kiln", params = r#"{"query": "kiln", "limit": 20}"#))]
+    #[plexus_rpc::macros::method(group = "read", example(note = "the documents about the kiln", params = r#"{"query": "kiln", "limit": 20}"#))]
     pub async fn list(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
@@ -144,7 +144,7 @@ impl DocsActivation {
     /// in a paragraph the body did not change keeps its words). `base` is the
     /// revision you read (`doc.revision`). A body equal to the text writes
     /// nothing. The editor sends `update`s instead. Editor.
-    #[plexus_macros::method(group = "write", example(note = "a body, read at revision 3", params = r##"{"id": "7k3mq2xa", "body": "# The kiln\n\nFire twice a week.\n", "base": 3}"##))]
+    #[plexus_rpc::macros::method(group = "write", example(note = "a body, read at revision 3", params = r##"{"id": "7k3mq2xa", "body": "# The kiln\n\nFire twice a week.\n", "base": 3}"##))]
     pub async fn save(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
@@ -166,7 +166,7 @@ impl DocsActivation {
     /// kept as a change with you and the moment, and said to everyone on the
     /// document (`watch`'s `updated`) — not back to `session`, when you name
     /// the presence it came from. Editor.
-    #[plexus_macros::method(group = "write")]
+    #[plexus_rpc::macros::method(group = "write")]
     pub async fn update(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
@@ -186,7 +186,7 @@ impl DocsActivation {
     /// `vector` is your state vector (`Y.encodeStateVector`, base64); with
     /// none, the whole document. Send back what the document lacks of yours
     /// (`Y.encodeStateAsUpdate(ydoc, vector)`) as an `update`. Viewer.
-    #[plexus_macros::method(group = "read", example(note = "the whole document", params = r#"{"id": "7k3mq2xa"}"#))]
+    #[plexus_rpc::macros::method(group = "read", example(note = "the whole document", params = r#"{"id": "7k3mq2xa"}"#))]
     pub async fn state(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
@@ -205,7 +205,7 @@ impl DocsActivation {
     /// `update` (live typing), `save` (a whole body, merged), `rename`,
     /// `delete`, and `snapshot` (a squash: its `authors` say who wrote what
     /// in it). `at` is unix milliseconds. `before` pages back by `seq`. Viewer.
-    #[plexus_macros::method(group = "read", example(note = "the last twenty", params = r#"{"id": "7k3mq2xa", "limit": 20}"#))]
+    #[plexus_rpc::macros::method(group = "read", example(note = "the last twenty", params = r#"{"id": "7k3mq2xa", "limit": 20}"#))]
     pub async fn history(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
@@ -226,7 +226,7 @@ impl DocsActivation {
     /// milliseconds) after the last change made by then. A moment before the
     /// first change kept — squashed away — is `not_found`. With neither, now.
     /// Viewer.
-    #[plexus_macros::method(group = "read", example(note = "after its tenth change", params = r#"{"id": "7k3mq2xa", "seq": 10}"#))]
+    #[plexus_rpc::macros::method(group = "read", example(note = "after its tenth change", params = r#"{"id": "7k3mq2xa", "seq": 10}"#))]
     pub async fn replay(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
@@ -249,7 +249,7 @@ impl DocsActivation {
     /// grant, `docs.squash`, on the document's organization — admin's by
     /// default, grantable to a role by the role table; refused typed
     /// without it. Admin.
-    #[plexus_macros::method(group = "admin", example(note = "everything before change 200", params = r#"{"id": "7k3mq2xa", "until": 200}"#))]
+    #[plexus_rpc::macros::method(group = "admin", example(note = "everything before change 200", params = r#"{"id": "7k3mq2xa", "until": 200}"#))]
     pub async fn squash(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
@@ -267,7 +267,7 @@ impl DocsActivation {
     /// A connection is on it while its `watch { id, session }` is open; a
     /// writer without one (an agent's `save`) while it writes, idling out
     /// after 30 s. Viewer.
-    #[plexus_macros::method(group = "read", example(note = "who is here", params = r#"{"id": "7k3mq2xa"}"#))]
+    #[plexus_rpc::macros::method(group = "read", example(note = "who is here", params = r#"{"id": "7k3mq2xa"}"#))]
     pub async fn present(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
@@ -284,7 +284,7 @@ impl DocsActivation {
     /// caret, your selection — and `client` your Yjs client id; `session`
     /// your page's, as your watch named it (one someone else holds is
     /// refused). Viewer.
-    #[plexus_macros::method(group = "read")]
+    #[plexus_rpc::macros::method(group = "read")]
     pub async fn here(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
@@ -302,7 +302,7 @@ impl DocsActivation {
     }
 
     /// Retitle a document; yields renamed { id, title, revision, at, by }. Editor.
-    #[plexus_macros::method(group = "write", example(note = "a new title", params = r#"{"id": "7k3mq2xa", "title": "The kiln, weekly"}"#))]
+    #[plexus_rpc::macros::method(group = "write", example(note = "a new title", params = r#"{"id": "7k3mq2xa", "title": "The kiln, weekly"}"#))]
     pub async fn rename(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
@@ -316,7 +316,7 @@ impl DocsActivation {
     }
 
     /// Delete a document; yields deleted { id, at, by }. Its changes stay in the service's file. Admin.
-    #[plexus_macros::method(group = "admin", example(note = "gone", params = r#"{"id": "7k3mq2xa"}"#))]
+    #[plexus_rpc::macros::method(group = "admin", example(note = "gone", params = r#"{"id": "7k3mq2xa"}"#))]
     pub async fn delete(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
@@ -328,7 +328,7 @@ impl DocsActivation {
     }
 
     /// Put a document's body back as it stood after a change; yields saved { id, revision, at, by } — the restore is a change more, merged like a save. Editor.
-    #[plexus_macros::method(group = "write", example(note = "back to change 2", params = r#"{"id": "7k3mq2xa", "seq": 2}"#))]
+    #[plexus_rpc::macros::method(group = "write", example(note = "back to change 2", params = r#"{"id": "7k3mq2xa", "seq": 2}"#))]
     pub async fn restore(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
@@ -347,7 +347,7 @@ impl DocsActivation {
     /// something of a document's, as the caller (the service that keeps
     /// images asks `editor` before it keeps one for a document, `viewer`
     /// before it answers one). Nothing is written. Viewer.
-    #[plexus_macros::method(group = "read", values(role = ["viewer", "editor", "admin"]), example(note = "may I write it?", params = r#"{"id": "7k3mq2xa", "role": "editor"}"#))]
+    #[plexus_rpc::macros::method(group = "read", values(role = ["viewer", "editor", "admin"]), example(note = "may I write it?", params = r#"{"id": "7k3mq2xa", "role": "editor"}"#))]
     pub async fn may(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
@@ -371,7 +371,7 @@ impl DocsActivation {
     /// a question is listed by `waiting` and said to every watch of the
     /// organization's documents, so an agent picks it up, and may answer
     /// with `reply` or edit the document itself. Editor.
-    #[plexus_macros::method(group = "write", example(note = "a question on characters 10 to 42", params = r#"{"id": "7k3mq2xa", "from": 10, "to": 42, "text": "Is this still true after the move?", "to_whom": "agent"}"#))]
+    #[plexus_rpc::macros::method(group = "write", example(note = "a question on characters 10 to 42", params = r#"{"id": "7k3mq2xa", "from": 10, "to": 42, "text": "Is this still true after the move?", "to_whom": "agent"}"#))]
     pub async fn ask(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
@@ -391,7 +391,7 @@ impl DocsActivation {
     }
 
     /// Answer in a thread — words, links, images; yields replied { thread }, said on watch. Editor.
-    #[plexus_macros::method(group = "write", example(note = "an answer", params = r#"{"id": "7k3mq2xa", "thread": "q4k9m2xa", "body": "Yes — see [the move](https://example.com)."}"#))]
+    #[plexus_rpc::macros::method(group = "write", example(note = "an answer", params = r#"{"id": "7k3mq2xa", "thread": "q4k9m2xa", "body": "Yes — see [the move](https://example.com)."}"#))]
     pub async fn reply(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
@@ -407,7 +407,7 @@ impl DocsActivation {
     }
 
     /// Resolve a thread (it folds in the margin), or open it again; yields resolved { thread }, said on watch. Editor.
-    #[plexus_macros::method(group = "write", example(note = "done", params = r#"{"id": "7k3mq2xa", "thread": "q4k9m2xa"}"#))]
+    #[plexus_rpc::macros::method(group = "write", example(note = "done", params = r#"{"id": "7k3mq2xa", "thread": "q4k9m2xa"}"#))]
     pub async fn resolve(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
@@ -428,7 +428,7 @@ impl DocsActivation {
     /// page to resolve in its own copy), its range now in characters, the
     /// text it quoted, the question, whom it was asked of, its answers, and
     /// whether it is resolved. Viewer.
-    #[plexus_macros::method(group = "read", example(note = "the threads", params = r#"{"id": "7k3mq2xa"}"#))]
+    #[plexus_rpc::macros::method(group = "read", example(note = "the threads", params = r#"{"id": "7k3mq2xa"}"#))]
     pub async fn threads(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
@@ -443,7 +443,7 @@ impl DocsActivation {
     ///
     /// `to` keeps those asked of that name (`builder`, or `agent` for the
     /// ones asked of any agent). Viewer.
-    #[plexus_macros::method(group = "read", example(note = "what any agent is asked", params = r#"{"to": "agent"}"#))]
+    #[plexus_rpc::macros::method(group = "read", example(note = "what any agent is asked", params = r#"{"to": "agent"}"#))]
     pub async fn waiting(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
@@ -467,7 +467,7 @@ impl DocsActivation {
     /// `refused`); each write is asked of the gate on its organization as it
     /// stands then. `lagged { missed }` when it fell behind: read again
     /// (`state` with your vector). Viewer.
-    #[plexus_macros::method(group = "read")]
+    #[plexus_rpc::macros::method(group = "read")]
     pub async fn watch(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
@@ -484,7 +484,7 @@ impl DocsActivation {
     /// V2-31: from the changes kept — `count` the documents a principal
     /// made, `bytes` every change they wrote (a squash's snapshot is
     /// nobody's). Admin of `*`.
-    #[plexus_macros::method(group = "read", example(note = "every author", params = r#"{"everyone": true}"#))]
+    #[plexus_rpc::macros::method(group = "read", example(note = "every author", params = r#"{"everyone": true}"#))]
     pub async fn usage(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,

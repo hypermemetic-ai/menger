@@ -32,10 +32,8 @@ default = ["server"]
 # the activation's real bodies. The menger binary is the only consumer that
 # enables it; the browser app turns it off.
 server = [
-    "dep:plexus-core",
-    "dep:plexus-auth-core",
+    "dep:plexus-rpc",
     "dep:async-trait",
-    "dep:jsonrpsee",
     "dep:tokio",
     "dep:uuid",
     "dep:serde_json",
@@ -83,12 +81,11 @@ plexus-client = { version = "0.8.0", default-features = false }
 pulldown-cmark = { version = "0.13", default-features = false }
 
 # Server-only. None of these builds for wasm32-unknown-unknown.
-plexus-core = { version = "0.8.0", optional = true }
-# IDENTITY-21: a grant names a Plexus principal, checked as the identity
-# layer parses one. Server-only, like plexus-core.
-plexus-auth-core = { version = "0.3.0", optional = true }
+# PLEXUS-44: plexus-core and plexus-auth-core (IDENTITY-21: a grant names a
+# Plexus principal, checked as the identity layer parses one) through the
+# umbrella, which the activation macro's server half emits its paths into.
+plexus-rpc = { version = "0.8.0", default-features = false, features = ["child-ws"], optional = true }
 async-trait = { version = "0.1", optional = true }
-jsonrpsee = { version = "0.26", features = ["server", "macros"], optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
 uuid = { version = "1.6", features = ["v4", "serde"], optional = true }
 serde_json = { version = "1", optional = true }

@@ -9,7 +9,7 @@
 //! identity from the upgrade, `service.route`, each item piped out by
 //! plexus-core's own pipe (PERF-7: encoded once into its frame) — and two
 //! things added, per connection (the transport's
-//! [`plexus_transport::websocket::Connection`], AUTH-11):
+//! [`plexus_rpc::transport::websocket::Connection`], AUTH-11):
 //!
 //! - **Calls open** ([`CALLS_PER_CONNECTION`], `--max-calls-per-connection`):
 //!   past it, the call is accepted and answered with one error item,
@@ -43,8 +43,8 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use jsonrpsee::RpcModule;
-use plexus_core::plexus::{error_item, AuthContext, DynamicHub, PlexusContext, PlexusStreamItem, RemoteError, StreamMetadata};
-use plexus_transport::websocket::Connection;
+use plexus_rpc::core::plexus::{error_item, AuthContext, DynamicHub, PlexusContext, PlexusStreamItem, RemoteError, StreamMetadata};
+use plexus_rpc::transport::websocket::Connection;
 use serde_json::Value;
 
 /// The calls one connection may have open at once: room for the app's
@@ -188,7 +188,7 @@ pub fn rpc_module(service: Arc<DynamicHub>, limits: CallLimits) -> anyhow::Resul
                     // the socket writes. Until the stream ends or the caller
                     // lets go (an unsubscribe, the socket closed): a watch let
                     // go of gives its place back at once, not at its next event.
-                    Ok(stream) => plexus_core::plexus::wire::pipe(sink, stream, &ext).await,
+                    Ok(stream) => plexus_rpc::core::plexus::wire::pipe(sink, stream, &ext).await,
                     Err(e) => {
                         let _ = sink.send(serde_json::value::to_raw_value(&error_item(ns, &e))?).await;
                         Ok(())
@@ -246,7 +246,7 @@ fn too_many(ns: &str, max: usize) -> Value {
 /// V2-31: an admin of `*` (the operator among them) writes at any rate, as
 /// it stores past any cap — asked of the gate only once its bucket is empty.
 fn admin_everywhere(service: &DynamicHub, caller: &AuthContext) -> bool {
-    service.gate().is_none_or(|g| g.held_on(caller, &plexus_auth_core::grants::Grant::new(menger_quota::seam::ADMIN_GRANT)).iter().any(|s| s.is_everywhere()))
+    service.gate().is_none_or(|g| g.held_on(caller, &plexus_rpc::auth_core::grants::Grant::new(menger_quota::seam::ADMIN_GRANT)).iter().any(|s| s.is_everywhere()))
 }
 
 /// V2-31: the connections `principal` may hold: an agent's key (a `key:`

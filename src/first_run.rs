@@ -25,7 +25,7 @@
 //! provider, menger refuses, saying which flag to add ([`refusal`]).
 
 use crate::login::Provider;
-use plexus_core::plexus::AuthContext;
+use plexus_rpc::core::plexus::AuthContext;
 use sha2::Digest;
 use std::io::Write;
 use std::net::IpAddr;
@@ -146,7 +146,7 @@ pub fn local_admin(dir: &Path) -> anyhow::Result<String> {
         seed
     };
     let public = ed25519_dalek::SigningKey::from_bytes(&seed).verifying_key().to_bytes();
-    Ok(plexus_auth_core::adapters::key_principal(&public).to_string())
+    Ok(plexus_rpc::auth_core::adapters::key_principal(&public).to_string())
 }
 
 fn now() -> i64 {

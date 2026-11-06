@@ -13,8 +13,8 @@ use menger_docs::{DocsActivation, DocsStore, DOCS_DB_FILE};
 // ledger its own file; every write reserved against the cap through the seam.
 use menger_quota::{DiskUsage, Ledger, Plan, QuotaActivation, QuotaSeam, Statvfs, QUOTA_DB_FILE};
 use menger_tickets_api::store::{OpenPurge, SeedShape, SeedSpec, Store, StoreError, System, PURGE_EVERY};
-use plexus_auth_core::grants::GrantsGeneration;
-use plexus_core::plexus::{Activation, AuthBackend, AuthSetup, ChildRouter, DynamicHub, Provider as AuthProvider, ProviderKind as AuthKind};
+use plexus_rpc::auth_core::grants::GrantsGeneration;
+use plexus_rpc::core::plexus::{Activation, AuthBackend, AuthSetup, ChildRouter, DynamicHub, Provider as AuthProvider, ProviderKind as AuthKind};
 
 use crate::auth_backend::MengerAuth;
 
@@ -469,7 +469,7 @@ pub async fn build_rpc_services<T, F>(
     media: MediaSetup,
     docs: DocsSetup,
     quota: QuotaSetup,
-    children: Vec<plexus_core::plexus::RemoteChild>,
+    children: Vec<plexus_rpc::core::plexus::RemoteChild>,
     tickets: F,
 ) -> anyhow::Result<Arc<DynamicHub>>
 where

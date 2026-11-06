@@ -18,8 +18,8 @@ mod support;
 
 use jsonrpsee::ws_client::WsClient;
 use menger::login_access::BRANDING;
-use plexus_core::plexus::DynamicHub;
-use plexus_transport::TransportServer;
+use plexus_rpc::core::plexus::DynamicHub;
+use plexus_rpc::transport::TransportServer;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Duration;
@@ -355,8 +355,8 @@ pub enum ProbeEvent {
     Error { message: String },
 }
 
-impl plexus_client::FromClientError for ProbeEvent {
-    fn from_client_error(error: plexus_client::ClientError) -> Self {
+impl plexus_rpc::client::FromClientError for ProbeEvent {
+    fn from_client_error(error: plexus_rpc::client::ClientError) -> Self {
         ProbeEvent::Error { message: error.to_string() }
     }
 }
@@ -365,10 +365,10 @@ impl plexus_client::FromClientError for ProbeEvent {
 #[derive(Clone)]
 pub struct TicketsActivation;
 
-#[plexus_macros::activation(version = "0.1.0", description = "a reduced tickets: list alone")]
+#[plexus_rpc::macros::activation(version = "0.1.0", description = "a reduced tickets: list alone")]
 impl TicketsActivation {
     /// Lists nothing.
-    #[plexus_macros::method]
+    #[plexus_rpc::macros::method]
     async fn list(&self) -> impl futures::Stream<Item = ProbeEvent> + Send + 'static {
         async_stream::stream! { yield ProbeEvent::Listed { count: 0 }; }
     }
@@ -385,7 +385,7 @@ async fn start_probe(dir: &std::path::Path) -> u16 {
 /// `module` — with `tickets` what `make` registers; its port.
 async fn start_inproc<T, F>(dir: &std::path::Path, make: F, module: Vec<u8>) -> u16
 where
-    T: plexus_core::plexus::Activation + plexus_core::plexus::ChildRouter + Clone + 'static,
+    T: plexus_rpc::core::plexus::Activation + plexus_rpc::core::plexus::ChildRouter + Clone + 'static,
     F: FnOnce(Arc<menger::store::Store>, menger_tickets_api::access::Access) -> T,
 {
     let login = support::Login::new();
