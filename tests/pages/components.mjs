@@ -259,6 +259,40 @@ export default async (ctx) => {
     await asDoc.context.close();
   });
 
+  // COMPS-8, the owner (2026-11-05): "we want to hide the code of the definition of a component." A
+  // definition's code card is closed: its line names it, says its save, and `source` opens and closes it;
+  // any other fence's card stays drawn, and the tag draws as before — on a ticket and on a doc alike.
+  await test("a_definitions_source_is_hidden_until_asked", async () => {
+    const BODY8 = "Before.\n\n```rust\nfn main() {}\n```\n\n```component x-film\n" + FILM + "```\n\n<x-film label=\"Hidden\"></x-film>\n\nAfter.\n";
+    const t = make("a definition, hidden", BODY8);
+    const docId = sy("docs", "create", "--title", "a definition, hidden, as a doc", "--body", bodyFile("hidden-doc", BODY8)).find((e) => e.type === "created")?.doc.id;
+    assert(docId, "the doc made");
+    const SRC = "[data-surface=component-def][data-name=x-film] [data-field=source]";
+    const sourceShown = (page) => page.evaluate(() => [...document.querySelectorAll(".code.def-src")].some((c) => c.offsetParent !== null));
+    const check = async (page, what) => {
+      await eventually(`${what}: x-film's line drawn`, async () => (await page.locator(SRC).count()) === 1, 20_000);
+      await eventually(`${what}: the film drawn`, async () => (await page.locator("[data-surface=tag-component][data-name=x-film] iframe").count()) === 1, 20_000);
+      assert(!(await sourceShown(page)), `${what}: the definition's source is hidden on load`);
+      assert(!(await page.evaluate(() => document.body.innerText.includes("this.root.querySelector"))), `${what}: none of its code shows`);
+      assert(await page.evaluate(() => [...document.querySelectorAll("[data-surface=code-card]")].some((c) => c.dataset.lang === "rust" && c.offsetParent !== null)), `${what}: another fence's card still drawn`);
+      assert((await page.locator(SRC).getAttribute("aria-expanded")) === "false", `${what}: closed`);
+      await page.locator(SRC).click();
+      await eventually(`${what}: source opens it`, async () => await sourceShown(page), 5_000);
+      assert((await page.locator(SRC).getAttribute("aria-expanded")) === "true", `${what}: open`);
+      await page.locator(SRC).click();
+      await eventually(`${what}: and closes it`, async () => !(await sourceShown(page)), 5_000);
+    };
+    const asTicket = await ticketPage(t);
+    await check(asTicket.page, "the ticket");
+    noLoop(asTicket.seen, "the ticket");
+    await shoot(asTicket.page, "comps8-hidden");
+    await asTicket.context.close();
+    const asDoc = await openPage(`#/doc/${docId}`);
+    await eventually("the doc's editor is drawn", async () => (await asDoc.page.locator(`${BODY} .cm-content`).count()) === 1, 15_000);
+    await check(asDoc.page, "the doc");
+    await asDoc.context.close();
+  });
+
   await test("a_tag_nothing_names_keeps_its_words", async () => {
     const a = make("an unknown tag", "<x-nobody-here>the words stay</x-nobody-here>\n");
     const view = await ticketPage(a);

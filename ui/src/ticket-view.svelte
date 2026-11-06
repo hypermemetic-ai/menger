@@ -291,13 +291,14 @@
         const mc = pre.closest("m-code");
         const info = [...code.classList].find((c) => c.startsWith("language-"))?.slice("language-".length) || mc?.getAttribute("lang") || "";
         const at = document.createElement("div");
-        at.className = "code";
+        at.className = info === "component" ? "code def-src" : "code"; // COMPS-8: a definition's source, closed
         pre.before(at);
         const props = { code: code.textContent.replace(/\n$/, ""), info, path: mc?.getAttribute("path") || "", why: mc?.getAttribute("why") || "" };
         placed.push({ at, app: mount(CodeCard, { target: at, props }) });
       }
       // COMPS-4: each ```component fence's save, said under its card; each tag drawn by its component.
-      placed.push(...defLines(node, text, (at, d) => mount(DefLine, { target: at, props: { name: d.name, source: d.source, html: d.html, v1: d.v1 } })));
+      // COMPS-8: the card is closed; its line names the component and opens its source.
+      placed.push(...defLines(node, text, (at, d, card) => mount(DefLine, { target: at, props: { name: d.name, source: d.source, html: d.html, v1: d.v1, card } })));
       tags = drawTags(node);
     };
     place(src);
@@ -428,6 +429,8 @@
   .md :global(.diagram:has([data-state=drawn]) + pre) { display: none; }
   /* EDITOR-9: a fence drawn as its code card (code-card); the fence it was drawn from goes. */
   .md :global(.code + pre) { display: none; }
+  /* COMPS-8: a ```component definition's source is closed until its line's `source` opens it. */
+  .md :global(.code.def-src:not(.def-open)) { display: none; }
   /* EDITOR-10: what a doc absorbed, drawn (media-draw's widgets), on EDITOR-9's one smooth page: a player,
      an image and a PDF bare, in the flow; a file card and a link card a hairline frame and nothing more. */
   .md :global(.mx) { display: block; margin: 8px 0; max-width: 100%; }
