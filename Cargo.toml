@@ -266,3 +266,14 @@ inherits = "release"
 lto = false
 codegen-units = 256
 incremental = true
+
+# CI-9: the tests' code optimised a little — tickets-api's (680 of the suite's 1600
+# test-seconds unoptimised: seeded-store scans, bodies read at the cap) and every dependency's
+# (SQLite, serde, the servers' stacks; built once, then sccache's). tickets-api's own tests: 72 s
+# → 25 s on 12 cores, 513 → 161 CPU-seconds; its build after a change the same. In the test
+# profile alone, so `cargo build`'s dev builds stay as they were; debug assertions and overflow
+# checks stay on.
+[profile.test.package.menger-tickets-api]
+opt-level = 1
+[profile.test.package."*"]
+opt-level = 1
