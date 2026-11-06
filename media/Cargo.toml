@@ -8,7 +8,7 @@
 # methods, the same events.
 [package]
 name = "menger-media"
-version = "0.6.2"
+version = "0.7.0"
 edition = "2021"
 license = "MIT"
 description = "menger's media service — images for tickets, kept by sha256 in a file of their own, the ticket's permit asked of the tickets service through the client seam"
@@ -17,10 +17,10 @@ repository = "https://github.com/hypermemetic-ai/menger"
 [dependencies]
 # The tickets service's client and vocabulary: `TicketsClient::may` is the
 # permit question, `TicketRef` names the ticket, `Role` the role asked.
-menger-tickets-api = { path = "../tickets-api", version = "0.6.2" }
+menger-tickets-api = { path = "../tickets-api", version = "0.7.0" }
 # V2-29: the docs service's client — `docs.may` is the permit question for an
 # image put for a document, asked through the seam as the caller.
-menger-docs = { path = "../docs", version = "0.6.2" }
+menger-docs = { path = "../docs", version = "0.7.0" }
 # The 0.7 line, by published version (PLEXUS-16), as the server takes it.
 plexus-core = "0.8.0"
 plexus-macros = "0.8.0"
