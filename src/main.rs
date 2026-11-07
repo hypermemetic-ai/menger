@@ -813,7 +813,11 @@ async fn run(args: Args) -> anyhow::Result<()> {
                 let validator = wired.gate.clone().map(|g| g as std::sync::Arc<dyn plexus_rpc::core::plexus::SessionValidator>);
                 let bridge = plexus_rpc::transport::plexus_transport_mcp::McpBridge::new(plexus_rpc::transport::ServiceUpstream::new(service.clone(), validator), mcp);
                 tracing::info!("MCP:       {public}/mcp — the login's callers: a session or a key proof as the Bearer");
-                plexus_rpc::transport::plexus_transport_mcp::router(bridge)
+                // V2-64: how to find it from the domain alone — the AI
+                // Catalog, the Server Card, llms.txt; public, like the
+                // metadata, and only where /mcp is.
+                menger::discovery::router(&public, !args.mcp_authorization_server.is_empty())
+                    .merge(plexus_rpc::transport::plexus_transport_mcp::router(bridge))
             }),
         };
         // DIST-14: bound before the banner, so the link answers when printed.

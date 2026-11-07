@@ -54,6 +54,8 @@ pub mod wiring {
 }
 
 pub mod shell;
+// V2-64: MCP discovery from a domain — the AI Catalog, the Server Card, llms.txt.
+pub mod discovery;
 // EDITOR-10: `GET /media/<hash>` — by kind, by range, or redirected to a signed address.
 pub mod media_route;
 // V2-31: the media service's allowance, answered by the quota service.

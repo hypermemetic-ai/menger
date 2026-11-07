@@ -1,0 +1,17 @@
+# menger
+
+> Tickets, plans and documents: a plan is a program whose leaves are prose.
+
+menger is an MCP server (Streamable HTTP) at https://app.menger.sh/mcp. Sign-in is OAuth 2.1: a request without a token is answered 401 naming https://app.menger.sh/.well-known/oauth-protected-resource/mcp, and an MCP client signs in at the authorization server it names, in the browser, with the same account as the menger app. Every menger method the caller may call is a tool, and each call runs as the caller.
+
+## Connect
+
+- [MCP endpoint](https://app.menger.sh/mcp): add it as a remote HTTP server, e.g. `claude mcp add --transport http menger https://app.menger.sh/mcp`
+- [Server card](https://app.menger.sh/mcp/server-card): SEP-2127, `application/mcp-server-card+json`
+- [AI catalog](https://menger.sh/.well-known/ai-catalog.json): `application/ai-catalog+json`
+- [Source](https://github.com/hypermemetic-ai/menger)
+
+## Optional
+
+- [The guide](https://menger.sh/guide/): menger's reference for people
+- [Test environment](https://app-test.menger.sh/mcp): the same server, ahead of prod
