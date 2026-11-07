@@ -1,0 +1,16 @@
+{
+  "specVersion": "1.0",
+  "host": {
+    "displayName": "menger",
+    "identifier": "menger.sh",
+    "documentationUrl": "https://github.com/hypermemetic-ai/menger"
+  },
+  "entries": [
+    {
+      "identifier": "urn:air:app.menger.sh:mcp:menger",
+      "displayName": "menger",
+      "type": "application/mcp-server-card+json",
+      "url": "https://app.menger.sh/mcp/server-card"
+    }
+  ]
+}

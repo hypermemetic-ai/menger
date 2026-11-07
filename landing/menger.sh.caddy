@@ -3,7 +3,8 @@
 # Deployed by hypermemetic-infra's Ansible edge role (SCAFFOLD-19), which
 # copies menger's landing/ (index.html, style.css, main.js, favicon.svg,
 # icons/ — APP-64's home-screen icon — guide/ — the reference — and
-# media/ — the app's stills and clips, made by v1's regenerator at tag v0.0.1) to
+# media/ — the app's stills and clips, made by v1's regenerator at tag v0.0.1 —
+# and V2-64's MCP discovery, .well-known/ai-catalog.json and llms.txt) to
 # /srv/menger.sh and this file into the edge's sites/ — replacing the inline
 # placeholder there. Not deployed by hand. The
 # hosted app is app.menger.sh (MENGER-8), a site of its own; nothing here
@@ -65,6 +66,30 @@ menger.sh {
 	# compressed already
 	@fonts path /fonts/*
 	header @fonts Cache-Control "public, max-age=86400, stale-while-revalidate=604800"
+
+	# V2-64: MCP discovery from the bare domain (SEP-2127, the AI Catalog):
+	# the catalog names app.menger.sh's Server Card (a catalog may list a
+	# server on another domain), llms.txt says the same in prose. Public,
+	# read by any origin (a non-simple If-None-Match is preflighted), an
+	# hour's cache; file_server answers the ETag and 304 itself, and keeps a
+	# Content-Type already set.
+	@discovery path /.well-known/ai-catalog.json /llms.txt
+	header @discovery {
+		Access-Control-Allow-Origin "*"
+		Access-Control-Allow-Methods "GET"
+		Access-Control-Allow-Headers "Content-Type, If-None-Match"
+		Access-Control-Expose-Headers "ETag"
+		Cache-Control "public, max-age=3600"
+	}
+	@catalog path /.well-known/ai-catalog.json
+	header @catalog Content-Type "application/ai-catalog+json"
+	@llms path /llms.txt
+	header @llms Content-Type "text/plain; charset=utf-8"
+	@preflight {
+		method OPTIONS
+		path /.well-known/ai-catalog.json /llms.txt
+	}
+	respond @preflight 204
 
 	# the stills and clips: regenerated under the same names whenever the app
 	# changes (DESIGN-41), so no-cache — the browser keeps each file and asks

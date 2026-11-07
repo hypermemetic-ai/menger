@@ -168,6 +168,17 @@ claude mcp add --transport http menger https://app.menger.sh/mcp
 `tests/mcp.rs` pins the three callers, v2's services, and the protected
 resource's 401.
 
+**Found from the domain** (V2-64; SEP-2127, MCP Server Cards). Wherever
+`/mcp` is served, so are three public documents (`src/discovery.rs`) that
+let an agent knowing only the host find it: `/.well-known/ai-catalog.json`
+(`application/ai-catalog+json`, an AI Catalog of one entry) names
+`/mcp/server-card` (`application/mcp-server-card+json`: the card's name —
+the host reversed, `sh.menger.app/menger` — version, description and the
+`/mcp` remote, never the tools), and `/llms.txt` says the same in prose.
+Each carries CORS `*`, an hour's cache and an `ETag` that `If-None-Match`
+answers `304`. menger.sh, the landing page, has its own catalog and
+llms.txt (`landing/`), naming app.menger.sh's card.
+
 **Hosts** (ACCESS-25). Every listener — the WebSocket and the shell —
 answers only its own names, so a page that rebinds its name to 127.0.0.1
 (DNS rebinding) gets nothing: any other `Host` is refused `421 Misdirected
