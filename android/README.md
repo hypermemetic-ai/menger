@@ -18,6 +18,13 @@ with no Gradle and no network. It signs with `~/.android-keys/menger-app.jks`
 it; the first build makes both. Neither is ever in the repository. Android 10
 (API 29) and up; target SDK 35.
 
+| the picker | prod | test | the board | docs |
+|---|---|---|---|---|
+| <img src="screenshots/picker.png" width="160"> | <img src="screenshots/prod-sign-in.png" width="160"> | <img src="screenshots/test-sign-in.png" width="160"> | <img src="screenshots/board.png" width="160"> | <img src="screenshots/docs.png" width="160"> |
+
+The emulator, Android 15. The board and docs are a local menger on test's
+release (`20261106T051426Z-640acbe`) with one synthetic ticket.
+
 ## Using it
 
 - The first start asks which server: **prod** (`https://app.menger.sh`),
