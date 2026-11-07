@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Long-press the launcher icon: prod, test, or Switch server (the picker). -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="prod"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/prod_short"
+        android:shortcutLongLabel="@string/prod_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="ai.hypermemetic.menger.app"
+            android:targetClass="ai.hypermemetic.menger.app.MainActivity">
+            <extra android:name="server" android:value="https://app.menger.sh" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="test"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/test_short"
+        android:shortcutLongLabel="@string/test_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="ai.hypermemetic.menger.app"
+            android:targetClass="ai.hypermemetic.menger.app.MainActivity">
+            <extra android:name="server" android:value="https://app-test.menger.sh" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="switch"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/switch_short"
+        android:shortcutLongLabel="@string/switch_long">
+        <intent
+            android:action="ai.hypermemetic.menger.app.SWITCH"
+            android:targetPackage="ai.hypermemetic.menger.app"
+            android:targetClass="ai.hypermemetic.menger.app.MainActivity" />
+    </shortcut>
+</shortcuts>
