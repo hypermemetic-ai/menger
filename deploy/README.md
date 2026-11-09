@@ -171,7 +171,7 @@ the owner's.
      `dist/ui.tar` (`../plexus-ui/CONTRACT.md`'s bytes), which must hold
      `index.html`; no socket asked;
    - SV-6: **no studio step.** The studio is plexus-studio's (SV-5): it is
-     seeded once from that repository (its `scripts/build.sh`, then
+     seeded once from that repository (its own build script, then
      `plexus-ui push --no-live`, the bundle named `studio`) and from then on
      edited in place in the database (`ui.author { bundle: "studio" }`).
      A build makes no `dist/studio.tar`, and a deploy pushes none — not even
