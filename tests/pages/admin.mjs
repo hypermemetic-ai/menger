@@ -84,7 +84,7 @@ export default async (ctx) => {
     const live = () => sy("ui", "versions").find((e) => e.type === "version" && e.live)?.hash;
     assert(live() === v2.version, "v2 is live as the runner left it");
     const tickets = ok(sy("ui", "contract", "--uses", "tickets.list"), "contract").contract;
-    sy("ui", "slots", "set", "--layout", "board-layout", "--slot", "nav", "--component", "nav-flat");
+    sy("ui", "slots", "set", "--layout", "board-frame", "--slot", "nav", "--component", "nav-flat-sv");
     const { page, context } = await openPage("#/releases");
     const root = page.locator("[data-surface=ui-versions]");
     let v3;
@@ -93,11 +93,11 @@ export default async (ctx) => {
       assert((await root.locator(`[data-id="${v2.version}"][data-live=true]`).count()) === 1, "v2 is marked live");
       assert((await root.locator(`[data-id="${v1.version}"][data-live=true]`).count()) === 0, "v1 is not");
       await eventually("the tickets contract", async () => (await text(root.locator("[data-field=contract]"))) === tickets);
-      await eventually("the section set is a row", async () => (await text(root.locator("[data-field=slots] [data-id='board-layout/nav'] [data-field=component]"))) === "nav-flat");
+      await eventually("the section set is a row", async () => (await text(root.locator("[data-field=slots] [data-id='board-frame/nav'] [data-field=component]"))) === "nav-flat-sv");
       assert((await root.locator("[data-field=routes] [data-id], [data-field=routes] [data-empty]").count()) > 0, "the routes table is drawn");
 
       // A second push: the list moves, the new one live.
-      v3 = bundle(work, "s9-v3", { engine: v1.engine, edit: (ui) => fs.appendFileSync(path.join(ui, "src", "hello-list.rhx"), '<p class="s9-v3">v3</p>\n') });
+      v3 = bundle(work, "s9-v3", { engine: v1.engine, edit: (ui) => fs.appendFileSync(path.join(ui, "src", "hello-list.svelte"), '<p class="s9-v3">v3</p>\n') });
       const pushed = push(server, session, path.join(work, "signer.key"), v3);
       assert(pushed?.type === "pushed" && pushed.version === v3.version, `v3 pushed: ${JSON.stringify(pushed)}`);
       await eventually("v3 appears, live", async () => (await root.locator(`[data-id="${v3.version}"][data-live=true]`).count()) === 1);
@@ -132,7 +132,7 @@ export default async (ctx) => {
       await context.close();
       sy("ui", "preview");
       if (live() !== v2.version) sy("ui", "rollback", "--to", v2.version);
-      sy("ui", "slots", "clear", "--layout", "board-layout", "--slot", "nav");
+      sy("ui", "slots", "clear", "--layout", "board-frame", "--slot", "nav");
     }
 
     // An admin of one shortcode is offered rollback, and the service refuses it on `*`: said on the row.

@@ -1,6 +1,6 @@
 // SURFACE-3: the ticket page, whole — composed of its parts, each a svelte/1
-// component the host fills into its bound mark; STUDIO-12: the page is the rhx
-// page-ticket, its root still `[data-surface=ticket-page]`.
+// component the host fills into its bound mark; STUDIO-12: the page is
+// page-ticket (SV-4: svelte/1), its root still `[data-surface=ticket-page]`.
 // Marks: `[data-surface=ticket-page]` (`[data-loading]`, `[data-empty]` "No
 // ticket …", `[data-deleted]`), `[data-surface=ticket-head]`
 // `[data-field=id|title|kind|status|severity|labels|parent|address]`,
@@ -14,8 +14,8 @@
 // `[data-surface=ticket-revisions]` (`[data-open]`, `li[data-id=<rev>]` `[data-ab=a|b]`, `[data-view=side|text|was]`,
 // `[data-revision-open]`, `[data-diff]` `[data-side-by-side]` `[data-text]`, `[data-pick]`), and the other
 // tickets' marks `[data-mark=X]` (carrying `data-id`) holding — or being — the bound mark
-// `[data-slot=X][data-component=X]` for ticket-edit, ticket-actions (SURFACE-4; the rhx page's
-// wrapper around its `<ticket-edit id/>`, STUDIO-12) and work-blockers (SURFACE-7, ticket-relations' own).
+// `[data-slot=X][data-component=X]` for ticket-edit, ticket-actions (SURFACE-4; the page's
+// wrapper around its ticket-edit mark, STUDIO-12) and work-blockers (SURFACE-7, ticket-relations' own).
 import { bundle, push, sentCalls } from "../../scripts/ui-throwaway.mjs";
 
 export default async (ctx) => {

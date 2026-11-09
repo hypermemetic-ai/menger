@@ -12,7 +12,7 @@
 <script>
   import { live } from "plexus-ui/host";
   import { ticketHref } from "./ticket-links.svelte";
-  import TicketChip from "plexus-ui:ticket-chip";
+  import TicketChip from "plexus-ui:ticket-chip-sv";
 
   let { id, row = null, live: watching = true } = $props();
   const held = live({ snapshot: "tickets.get", params: () => ({ id }), changes: "tickets.watch", key: "id", when: () => row == null && watching,

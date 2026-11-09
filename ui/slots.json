@@ -1,9 +1,4 @@
 {
-  "board-layout": {
-    "nav": "nav-tree",
-    "main": "board-rows",
-    "palette": "jump-palette"
-  },
   "page-shell": {
     "main": "hello-list"
   },

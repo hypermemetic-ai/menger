@@ -15,8 +15,8 @@
 //   - #/ticket/<full address> is replaced by its #/t/… (no history entry);
 //     #/ticket/NOPE-1 and #/t/<not a uid> are not found; a stale slug is
 //     rewritten, warm and cold (the uid in capitals).
-//   - The boards' rows for the original link by its uid — the Svelte board's
-//     and the rhx twin's.
+//   - The board's rows for the original link by its uid (SV-4: the rhx
+//     twin's went with rhx).
 //   - The shell: /CLX-2 lands on the collision page, /t/<uid>/x on the page.
 //   - A reader of CLA's tree alone, asking for CLX-2, is taken to the one
 //     ticket the name fits for them.
@@ -196,7 +196,7 @@ export default async (ctx) => {
 
   await test("the_boards_rows_link_the_original_by_its_uid", async () => {
     const filter = encodeURIComponent(`under ${clb.id}`);
-    for (const [route, row, b] of [[`#/f/${filter}`, `[data-layout=board-frame][data-slot=main] .board-row[data-id="${orig.id}"]`, "sv"], [`#/rhx/f/${filter}`, `[data-layout=board-layout][data-slot=main] .board-row[data-id="${orig.id}"]`, "rhx"]]) {
+    for (const [route, row, b] of [[`#/f/${filter}`, `[data-layout=board-frame][data-slot=main] .board-row[data-id="${orig.id}"]`, "sv"]]) {
       const { context, page } = await openPage(route);
       try {
         const r = page.locator(row);

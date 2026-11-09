@@ -1,14 +1,13 @@
 #!/usr/bin/env node
 // UI-8's testing surface, in a browser: the first pages on a throwaway menger.
 //
-//   node tests/pages_browser.mjs [--seed N] [--debug] [--no-build] [--headed] [--keep] [--only NAME[,NAME]] [--board rhx,sv]
+//   node tests/pages_browser.mjs [--seed N] [--debug] [--no-build] [--headed] [--keep] [--only NAME[,NAME]] [--board sv]
 //
-// FRAME-14: every test of the board runs on both boards — the rhx one (`#/rhx/`,
-// named `NAME`) and the Svelte one (`#/`, svelte/1, named `NAME_sv`; SURFACE-2:
-// the default since the owner's "I want svelte components", `#/sv/` its alias),
-// which draw the same marks — and `a_section_swaps_to_the_svelte_one` puts
-// each Svelte component in its section of the rhx board by right-click.
-// `--board` runs one of them.
+// FRAME-14: every test of the board runs on the Svelte board (`#/board`, svelte/1,
+// named `NAME_sv`; SURFACE-2: the default since the owner's "I want svelte
+// components", `#/sv/` its alias). SV-4: rhx is retired — the rhx board, its
+// `#/rhx/` routes and `a_section_swaps_to_the_svelte_one` went (`#/rhx/…` is the
+// Svelte board's alias now); `--board` keeps its one name.
 //
 // V2-38: the run's work directory (ui8-pages-…, ~80 MB) goes when the run
 // ends — passed, failed, thrown, SIGINT or SIGTERM. KEEP_PAGES_TMP=1 (or
@@ -20,8 +19,8 @@
 // (default 100,000), release build (`--debug` for the debug one). Two
 // bundles from plexus-ui build, signed with plexus-ui sign and pushed over
 // synapse: v1 is ui/ as it is; v2 the same with one line added to
-// board-rows.rhx and to board-rows-sv.svelte (`<p class="board-newer">`),
-// so the two differ in the boards alone. v2 is pushed last, so it is live. Chromium from Playwright,
+// board-rows-sv.svelte (`<p class="board-newer">`), so the two differ in
+// the board alone. v2 is pushed last, so it is live. Chromium from Playwright,
 // signed in with the shell's session cookie (scripts/throwaway-login.mjs).
 //
 // Measured in the page (scripts/ui-throwaway.mjs's INIT, before the
@@ -31,28 +30,22 @@
 // The testing hooks the pages draw (UI-8's body: the named three, and
 // `data-*` attributes for the rest):
 //
-//   /app/#/rhx/ (#/rhx/f/:filter)  board-layout: sections `[data-layout=board-layout][data-slot=nav|main|palette]`;
-//                       in its own template the filter line, `input[data-filter-input]`, its refusal `[data-filter-refused]`
-//   main: board-rows    `.board-scroll[data-row-height]` (the scrolling element, one fixed pitch in px),
+//   main: board-rows-sv `.board-scroll[data-row-height]` (the scrolling element, one fixed pitch in px),
 //                       `.board-row[data-id]` (a row held; its `[data-field=title]`, `[data-field=status]`),
 //                       `.board-count` (the tickets' number)
-//   nav: nav-tree       `[data-nav-mode=tree|flat]` (the switch); in Tree `[data-nav-group=<shortcode>]` with
+//   nav: nav-tree-sv    `[data-nav-mode=tree|flat]` (the switch); in Tree `[data-nav-group=<shortcode>]` with
 //                       `[data-rollup-done]`, `[data-rollup-total]`, `[data-nav-toggle]`, its open children
 //                       `[data-nav-row=<id>]`; in Flat `[data-nav-flat-row=<id>]`
-//   palette             `input[data-palette-input]` (`/` focuses it), `[data-palette-hit=<id>]` (find, in
+//   palette             `input[data-palette-input]` (ctrl+k focuses it), `[data-palette-hit=<id>]` (find, in
 //                       order), `[data-search-hit=<id>]` (search's, below)
-//   #/ticket/:id        ticket-page: `[data-ticket-title]`, `[data-ticket-status]`, `[data-ticket-kind]`,
-//                       `[data-chip=parent|blocker|unlocks][data-chip-id]` each with `[data-chip-title]`,
-//                       `[data-ticket-body]`, `[data-ticket-child=<id>]`, `select[data-status-menu]`
 //
-// The Svelte board (FRAME-14), the same marks under its own names:
+// The board (FRAME-14):
 //
-//   /app/ (#/, #/f/:filter; #/sv/… the same)  board-frame, an rhx layout (a section is the host's, and only an
-//                       rhx template marks one): `[data-layout=board-frame][data-slot=top|bar|nav|keys|main|bulk|palette]`,
+//   /app/ (#/board, #/f/:filter; #/sv/… and #/rhx/… the same)  board-frame, a svelte/1 layout (SV-4: its
+//                       sections DOM marks): `[data-layout=board-frame][data-slot=top|bar|nav|keys|main|bulk|palette]`,
 //                       holding app-top (SURFACE-2), board-layout-sv (the top bar: `input[data-filter-input]`,
-//                       `[data-filter-refused]`), nav-tree-sv, keys-help, board-rows-sv, bulk-bar and jump-palette-sv;
-//                       the rhx board's links and filter line land here (`lands`)
-//   #/ticket/:id        page-ticket, the rhx page placing the ticket's Svelte parts (STUDIO-12; #/sv/ticket/:id too)
+//                       `[data-filter-refused]`), nav-tree-sv, keys-help, board-rows-sv, bulk-bar and jump-palette-sv
+//   #/ticket/:id        page-ticket, the page placing the ticket's parts (STUDIO-12; #/sv/ticket/:id too)
 //
 // Exit 0 when every test passed, 1 when one failed, 2 when setup failed.
 import fs from "node:fs";
@@ -72,8 +65,8 @@ const GROUP = opt("--group", null);
 let inGroup = false;
 // V2-42: whether `hash` is the page of the ticket `id` — its uid form,
 // `#/t/<uid>/<id>-<slug>` (what the UI links and what the page settles on),
-// or its name form `#/ticket/<id>` an rhx twin links by (put in the uid form
-// once the page has the ticket); under `#/sv/` either. Groups get it as `ticketAt`.
+// or its name form `#/ticket/<id>` (put in the uid form once the page has
+// the ticket); under `#/sv/` either. Groups get it as `ticketAt`.
 const ticketAt = (hash, id) => {
   const esc = String(id).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`^#/(?:sv/)?(?:t/[0-9a-z]{8}/${esc}(?:-[a-z0-9-]*)?|ticket/${esc})$`).test(String(hash).split("?")[0]);
@@ -85,22 +78,13 @@ const QUIET_MS = 80; // the palette's pause
 const KEY_MS = 20; // FRAME-25: one key per 20 ms inside a burst, on the page's clock
 const QUIET_CEIL_MS = 300; // … and no longer than this
 const SCROLL_ROW = Math.min(50_000, SEED); // the row the scroll goes to (1-based)
-const ROW_PITCH = 28; // board-rows.rhx's `data-row-height`: both boards scroll at one pitch
+const ROW_PITCH = 28; // board-rows-sv's `data-row-height`: the board scrolls at one pitch
 
-// FRAME-14: the two boards. `tag` ends each test's name; `epics` are the
+// FRAME-14: the board (SV-4: the one; the rhx board is retired). `tag` ends each test's name; `epics` are the
 // shortcodes the board's tests make (first in the store's order, apart per
 // board, so the second run finds its own); `module` is what a section
 // fetches for the board's rows from another version.
 const BOARDS = {
-  rhx: {
-    name: "rhx", tag: "", route: "#/rhx/", filterRoute: "#/rhx/f/", ticketRoute: "#/rhx/ticket/",
-    layout: "board-layout", top: "board-layout", nav: "nav-tree", main: "board-rows", palette: "jump-palette", page: "ticket-page",
-    sections: [["nav", "nav-tree"], ["main", "board-rows"], ["palette", "jump-palette"]],
-    module: "board-rows.json", epics: ["AAAA", "AAAB"],
-    // SURFACE-2: the comparison board's links and its filter line land on the Svelte pages (rhx reads no route
-    // prefix): where they go, not where it is drawn.
-    lands: { filterRoute: "#/f/", ticketRoute: "#/ticket/", layout: "board-frame", top: "board-layout-sv" },
-  },
   sv: {
     name: "sv", tag: "_sv", route: "#/board", filterRoute: "#/f/", ticketRoute: "#/ticket/",
     layout: "board-frame", top: "board-layout-sv", nav: "nav-tree-sv", main: "board-rows-sv", palette: "jump-palette-sv", page: "page-ticket",
@@ -109,8 +93,8 @@ const BOARDS = {
     siblings: ["nav-flat-sv", "nav-children-sv", "ticket-chip-sv"], // FRAME-25: imported by their parents, components in their own right
   },
 };
-const BOARD_NAMES = opt("--board", "rhx,sv").split(",");
-for (const b of BOARD_NAMES) if (!BOARDS[b]) throw new Error(`--board: ${b} is not rhx or sv`);
+const BOARD_NAMES = opt("--board", "sv").split(",");
+for (const b of BOARD_NAMES) if (!BOARDS[b]) throw new Error(`--board: ${b} is not sv (SV-4: the rhx board is retired)`);
 
 function assert(cond, msg) {
   if (!cond) throw new Error(`assertion failed: ${msg}`);
@@ -250,7 +234,7 @@ async function main() {
   const v2 = bundle(work, "v2", {
     engine: v1.engine,
     edit: (ui) => {
-      for (const f of ["board-rows.rhx", "board-rows-sv.svelte"]) {
+      for (const f of ["board-rows-sv.svelte"]) {
         const at = path.join(ui, "src", f);
         if (!fs.existsSync(at)) continue;
         // FRAME-30: and its count in another token — a sheet that moves with its version.
@@ -334,8 +318,8 @@ async function main() {
     const count = async (page, B) => digits(await main(page, B).locator(".board-count").textContent({ timeout: 1000 }));
     const boardUp = (page, B) => eventually(`the ${B.name} board shows its first rows' titles`, async () => trimmed(await main(page, B).locator(".board-row[data-id] [data-field=title]").first().textContent({ timeout: 1000 })).length > 0);
 
-    /** One of the board's tests, on board `B`: named `name` on the rhx board
-     *  and `name_sv` on the Svelte one; failed at once, saying why, when the
+    /** One of the board's tests, on board `B`: named `name_sv` (its
+     *  name since FRAME-14 put two boards side by side); failed at once, saying why, when the
      *  board's own first test found it not drawn. */
     const onBoard = (B, name, body) =>
       test(`${name}${B.tag}`, async () => {
@@ -358,14 +342,13 @@ async function main() {
           }
           // FRAME-26: the bundle's one svelte/1 runtime, asked once on either
           // board — the entrypoint's modulepreload and the modules' import
-          // share one fetch — and on the rhx board no svelte/1 module asked.
+          // share one fetch.
           // UI-19: the page's own version's files are asked by their content URL; read back through its files map.
           const asPath = await versionPaths(page);
           const asked = seen.requests.map((u) => new URL(u).pathname).map((p) => asPath[p] ?? p).filter((p) => /^\/app\/[0-9a-f]{64}\/components\/[^/]+\.js$/.test(p));
           const runtimes = asked.filter((p) => p.endsWith("/svelte-runtime.js"));
           assert(runtimes.length === 1, `${B.name} board: the svelte/1 runtime asked once, not ${runtimes.length}× (${asked.join(", ")})`);
-          if (!B.tag) assert(asked.length === 1, `the rhx board asks no svelte/1 module: ${asked.join(", ")}`);
-          else assert(asked.length > 1, `the Svelte board's modules beside the runtime: ${asked.join(", ")}`);
+          assert(asked.length > 1, `the Svelte board's modules beside the runtime: ${asked.join(", ")}`);
           console.log(`     ${B.name} board: ${asked.map((p) => path.basename(p)).join(", ")}`);
           await page.evaluate((r) => (location.hash = r), `${B.ticketRoute}NONE-1`);
           await eventually(`${B.ticketRoute}:id draws ${B.page}`, async () => (await page.locator(B.page).count()) === 1);
@@ -451,13 +434,7 @@ async function main() {
         assert(ext.length === 1, `nav.extents asked once (${ext.length})`);
         const lists = boardLists(calls);
         assert(lists.length === 1, `one list for the window (${lists.length}: ${JSON.stringify(lists.map((l) => l.params))})`);
-        // FRAME-17: the first page depends on no extents (after: null) — on
-        // the rhx board it is the first snapshot asked (its changes stream
-        // just before it), right after the boot.
-        if (!B.tag) {
-          const firstRead = calls.find((c) => !c.method.endsWith(".watch"));
-          assert(firstRead?.method === "tickets.list", `the board's list is the first call (${calls.slice(0, 4).map((c) => c.method).join(", ")})`);
-        }
+        // FRAME-17: the first page depends on no extents (after: null).
         assert(lists[0].params.limit === PAGE && lists[0].params.summary === true, `the page is limit ${PAGE}, summary: ${JSON.stringify(lists[0].params)}`);
         assert(lists[0].params.after == null, "the first page has no after");
         const rows = main(page, B).locator(".board-row[data-id]");
@@ -470,8 +447,7 @@ async function main() {
         const firstRow = await page.evaluate(() => window.__pages.firstRow);
         assert(firstRow != null, "the first row was stamped once its title showed");
         // FRAME-17: the host marks its steps on the page's clock, in order (CONTRACT.md's host
-        // chapter); a mark set twice keeps its first. On the rhx board the route's snapshots
-        // are asked before any section mounts; on the Svelte board a `live` is module code,
+        // chapter); a mark set twice keeps its first. On the board a `live` is module code,
         // asked when its module mounts — first-call is the frame's first section's (`top`,
         // board-layout-sv's nav.counts), before the main section.
         const marks = await page.evaluate(() => {
@@ -485,7 +461,6 @@ async function main() {
         assert(!lacking.length, `the board's page carries the host's marks; it lacks ${lacking.join(", ")} (it has: ${shownMarks})`);
         const m = (n) => marks[`plexus-ui:${n}`];
         assert(m("components-parsed") <= m("first-call") && m("first-call") < m("section-mounted:main") && m("section-mounted:main") <= m("layout-mounted"), `components parsed, the first call, the main section mounted, then the layout: ${shownMarks}`);
-        if (!B.tag) assert(slots.every((n) => m("first-call") < m(n)), `the rhx board's first call before any section mounts: ${shownMarks}`);
         assert(m("first-call") < m("first-answer") && m("first-answer") <= m("first-row") && m("first-row") <= firstRow, `the first call, its answer, its rows, no later than the board's first titled row (${firstRow.toFixed(0)}): ${shownMarks}`);
         console.log(`     first row (titled): ${firstRow.toFixed(0)} ms from timeOrigin · ${shown.length} rows drawn · ${total} tickets`);
       });
@@ -505,7 +480,7 @@ async function main() {
         assert(asked.length === 1, `one board list before the scroll (${asked.length})`);
         const scroller = main(page, B).locator(".board-scroll");
         const pitch = Number(await scroller.getAttribute("data-row-height", { timeout: 1000 }));
-        assert(pitch === ROW_PITCH, `the board says its row pitch, the rhx board's ${ROW_PITCH} px (${pitch})`);
+        assert(pitch === ROW_PITCH, `the board says its row pitch, ${ROW_PITCH} px (${pitch})`);
         await scroller.evaluate((el, top) => (el.scrollTop = top), (SCROLL_ROW - 1) * pitch);
         const row = main(page, B).locator(`.board-row[data-id="${target}"]`);
         await eventually(`row ${SCROLL_ROW} (${target}) is drawn`, async () => (await row.count()) === 1, 5_000);
@@ -524,8 +499,8 @@ async function main() {
       });
 
       await onBoard(B, "a_created_ticket_appears_without_a_reload", async () => {
-        // A shortcode near the front of the store's order (AAAA, or AAAC after the rhx
-        // board's AAAA and AAAB), so its tickets are among the board's first rows.
+        // A shortcode near the front of the store's order (AAAC; AAAA and AAAB were
+        // the retired rhx board's), so its tickets are among the board's first rows.
         const [root] = sy("tickets", "create", "--epic", B.epics[0], "--kind", "scope", "--title", "the board's first shortcode");
         assert(root?.type === "created", `the scope was made: ${JSON.stringify(root)}`);
         const total = rowsOf(extentsNow()).total;
@@ -761,9 +736,8 @@ async function main() {
         for (const [chip, other] of [["parent", parent], ["blocker", blocker]]) {
           const c = tp.locator(`[data-chip=${chip}][data-chip-id="${other.id}"]`);
           assert((await c.count()) === 1, `a ${chip} chip for ${other.id}`);
-          // V2-42: the Svelte page's chip by its uid once its `get` answered (`#/t/<uid>/<ID>-<slug>`);
-          // the rhx twin's by name (rhx/1 imports no code), which the page it opens rewrites.
-          const byUid = B.name === "sv";
+          // V2-42: the chip by its uid once its `get` answered (`#/t/<uid>/<ID>-<slug>`).
+          const byUid = true;
           await eventually(`the ${chip} chip goes to ${other.id}${byUid ? " by its uid" : ""}`, async () => (!byUid || /^#\/(?:sv\/)?t\/[0-9a-z]{8}\//.test((await c.getAttribute("href")) ?? "")) && ticketAt(await c.getAttribute("href"), other.id), 3_000);
           await eventually(`the ${chip} chip resolves to "${other.title}"`, async () => trimmed(await c.locator("[data-chip-title]").textContent({ timeout: 1000 })) === other.title.trim(), 3_000);
         }
@@ -805,8 +779,8 @@ async function main() {
         const atBoot = (await sentCalls(page)).filter((c) => c.method === "tickets.find" || c.method === "tickets.search");
         assert(atBoot.length === 0, `the palette asks nothing before a key (FRAME-16): ${JSON.stringify(atBoot.map((c) => [c.method, c.params]))}`);
         await page.locator("body").click({ position: { x: 5, y: 5 } }).catch(() => {});
-        // SURFACE-2: on the Svelte board `/` is the filter line's and ctrl+k the palette's; the rhx palette still opens on `/`.
-        const opener = B.tag ? "Control+k" : "/";
+        // SURFACE-2: on the board `/` is the filter line's and ctrl+k the palette's.
+        const opener = "Control+k";
         await page.keyboard.press(opener);
         const input = palette(page, B).locator("input[data-palette-input]");
         await eventually(`${opener} focuses the palette's field`, async () => input.evaluate((e) => e === document.activeElement), 2_000);
@@ -953,49 +927,6 @@ async function main() {
 
     for (const name of BOARD_NAMES) await boardTests(BOARDS[name]);
 
-    // FRAME-14: a right-click puts the Svelte one in a section of the rhx
-    // board — each of the three, beside rhx components on one page and one
-    // socket — and `ui slots clear` puts the rhx one back.
-    if (BOARD_NAMES.includes("rhx") && BOARD_NAMES.includes("sv")) {
-      await test("a_section_swaps_to_the_svelte_one", async () => {
-        const R = BOARDS.rhx;
-        const S = BOARDS.sv;
-        if (S.down) throw new Error(`the sv board is not drawn (the_bundle_draws_the_board_sv): ${S.down}`);
-        const { page, seen } = await openPage(R.route);
-        await boardUp(page, R);
-        await eventually("the nav's rows", async () => (await nav(page, R).locator("[data-nav-group]").count()) > 0);
-        const origin = await marked(page);
-        try {
-          for (const [slot, rhx, sv] of [["main", R.main, S.main], ["nav", R.nav, S.nav], ["palette", R.palette, S.palette]]) {
-            await section(page, R, slot).dispatchEvent("contextmenu", { button: 2 });
-            const menu = page.locator("[data-engine-menu]");
-            await eventually(`the engine's menu opens on the ${slot} section`, async () => menu.isVisible());
-            await eventually(`the menu offers ${sv}`, async () => (await menu.locator(`[data-component="${sv}"]`).count()) === 1, 3_000);
-            await menu.locator(`[data-component="${sv}"]`).click();
-            await eventually(`the ${slot} section holds ${sv}, not ${rhx}`, async () => (await section(page, R, slot).locator(sv).count()) === 1 && (await section(page, R, slot).locator(rhx).count()) === 0, 5_000);
-            const slots = sy("ui", "slots", "list", "--layout", R.layout);
-            const a = slots.find((s) => s.type === "assignment" && s.slot === slot);
-            assert(a?.component === sv, `ui slots list names ${sv} in ${slot}: ${JSON.stringify(slots)}`);
-          }
-          // The Svelte ones work there, among the rhx layout's own parts.
-          await boardUp(page, R);
-          assert((await main(page, R).locator(`${S.main} .board-row[data-id]`).count()) > 0, "the Svelte rows are drawn in the rhx board's main section");
-          await eventually("the Svelte nav draws its shortcodes", async () => (await nav(page, R).locator(`${S.nav} [data-nav-group]`).count()) > 0, 5_000);
-          await page.locator("body").click({ position: { x: 5, y: 5 } }).catch(() => {});
-          await page.keyboard.press("Control+k");
-          const input = palette(page, R).locator(`${S.palette} input[data-palette-input]`);
-          await eventually("ctrl+k focuses the Svelte palette's field", async () => input.evaluate((e) => e === document.activeElement), 2_000);
-          await page.keyboard.press("Escape");
-          await sameDocument(page, origin, "after the swaps");
-          assert(seen.sockets === 1, `one socket for both profiles (${seen.sockets})`);
-        } finally {
-          for (const slot of ["main", "nav", "palette"]) sy("ui", "slots", "clear", "--layout", R.layout, "--slot", slot);
-        }
-        for (const [slot, rhx] of [["main", R.main], ["nav", R.nav], ["palette", R.palette]]) {
-          await eventually(`clear puts ${rhx} back in ${slot}`, async () => (await section(page, R, slot).locator(rhx).count()) === 1, 5_000);
-        }
-      });
-    }
     // SURFACE-1: the groups' cases, each file given the runner's helpers.
     const groupsDir = path.join(path.dirname(new URL(import.meta.url).pathname), "pages");
     const groupFiles = fs.existsSync(groupsDir) ? fs.readdirSync(groupsDir).filter((f) => f.endsWith(".mjs")).sort() : [];

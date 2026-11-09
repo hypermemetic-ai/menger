@@ -6,7 +6,7 @@
      ctrl+enter, a key the host takes: FRAME-36) awaits `tickets.create`'s
      answer — `created { ticket }` goes to the ticket (its address, for one
      born outside the genesis epic), a refusal is said under the form.
-     STUDIO-12: the board link and the title are page-new's (rhx). -->
+     STUDIO-12: the board link and the title are page-new's. -->
 <script module>
   export const uses = ["tickets.get", "tickets.create"];
 

@@ -312,7 +312,8 @@ export default async ({ test, assert, eventually, sleep, openPage, sy, groupsNow
     assert(!(await page.evaluate(() => window.__xss)), "nothing ran");
     // The palette draws it as text too.
     await page.evaluate((r) => (location.hash = r), SV.route);
-    await eventually("the board's palette", async () => (await pal(page).count()) === 1);
+    // SV-4: the board's own palette, in board-frame's section, and the search page's gone with its page.
+    await eventually("the board's palette", async () => (await page.locator("[data-surface=jump-palette-sv]").count()) === 1 && (await page.locator("[data-layout=board-frame][data-slot=palette] [data-surface=jump-palette-sv]").count()) === 1);
     await page.keyboard.press("Control+k");
     await eventually("open", async () => (await palInput(page).count()) === 1, 2_000);
     await palInput(page).fill("qorvex");

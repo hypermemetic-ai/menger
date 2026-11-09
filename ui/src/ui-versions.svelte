@@ -10,7 +10,7 @@
      its answer (`live { version }`, or the refusal's words) is said in the
      row; preview's answer is the link to /app/, and a clear. Anyone else
      sees both disabled, with the roles `auth.requires` names for them.
-     STUDIO-12: the page's title is page-releases's (rhx). FRAME-52: each
+     STUDIO-12: the page's title is page-releases's. FRAME-52: each
      row says its label and tags, and an editor (`auth.requires` for
      `ui.tag`) names and tags it in the row (`ui.tag`); beside it the
      pointer's history (`ui.history`, read again on every move) with undo and

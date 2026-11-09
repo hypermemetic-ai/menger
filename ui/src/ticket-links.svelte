@@ -11,8 +11,8 @@
        import { ticketHref } from "./ticket-links.svelte";
 
      Nothing else in ui/src spells a ticket's route: tests/links_check.mjs
-     refuses one. rhx/1 imports no code, so the rhx twins spell two forms
-     inline, which the check allows: by uid, `"#/t/" + r.uid + "/" + r.id`
+     refuses one. rhx/1 imported no code, so the rhx twins (SV-4: retired to
+     ui/retired-rhx/) spelled two forms inline, which the check allows: by uid, `"#/t/" + r.uid + "/" + r.id`
      (V2-50: no slug, which the page puts right in place), and by name for a
      row with no uid (ticket-chip holds an id alone; the nav's shortcode root
      comes in a group, which carries no uid). V2-50 adds the link to share,

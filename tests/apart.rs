@@ -37,20 +37,23 @@
 //! - FRAME-6 (wave 4): the binary is the framework's — `plexus-ui` (its
 //!   `serve` beside `build`, `sign`, `push`) is built from `../plexus-ui`
 //!   and links the service; menger's tree builds no binary of that name.
-//! - FRAME-11: the dialect is named — rhx (Rhai in markup): `ui/src/*.rhx`,
-//!   profile `rhx/1`; no `.svelte` under `ui/` or `tests/`, every component
-//!   reached from `routes.json` or `slots.json` and every name there a
-//!   source, and README / AGENTS.md / deploy/README.md say Svelte only of
-//!   real Svelte (`svelte/1`, FRAME-13) or of what rhx borrowed.
+//! - FRAME-11, SV-4: the dialect is named — real Svelte (`svelte/1`):
+//!   `ui/src/*.svelte`; rhx is retired (the owner, 2026-11-09: "don't
+//!   remove, just port and stop using completely"), its sources kept out of
+//!   the bundle in `ui/retired-rhx/` and none in `ui/src`; a `.svelte` is
+//!   real Svelte and only in `ui/src`, every component reached from
+//!   `routes.json` or `slots.json` and every name there a source, and
+//!   README / AGENTS.md / deploy/README.md say Svelte only of real Svelte
+//!   (`svelte/1`, FRAME-13) or of what rhx borrowed.
 //! - FRAME-13: real Svelte (`svelte/1`) is the framework's tool's — it
 //!   compiles a `.svelte` in Node at build; `deploy/pipeline`'s `build_v2` checks
 //!   for `node` and for svelte and esbuild in `../plexus-ui/node_modules`
 //!   (`npm ci` there) before it builds a UI that holds one, and names
 //!   `--node-modules` to the tool.
-//! - FRAME-14: the board in both profiles — each of its five components as
-//!   `<name>.rhx` and as real Svelte, `<name>-sv.svelte` (one name is one
-//!   source); the Svelte board drawn at `#/` (SURFACE-2; `#/sv/…` its alias, the rhx one at `#/rhx/`) in an rhx frame whose
-//!   sections hold the Svelte ones, the rhx ones `slots.json`'s defaults.
+//! - FRAME-14, SV-4: the board in real Svelte — each of its components as
+//!   `<name>-sv.svelte` (the rhx twins retired to `ui/retired-rhx/`); the
+//!   board drawn at `#/board` (SURFACE-2, EDITOR-4; `#/sv/…` and `#/rhx/…`
+//!   its aliases) in a svelte/1 frame whose sections, DOM marks, hold them.
 //! - FRAME-25: the Svelte board rides FRAME-19's bus — no timer of its own
 //!   beside a `live`, no sanitizer or markdown of its own (`markdown` from
 //!   `plexus-ui/host`), the nav's children and the chips as imported
@@ -72,12 +75,11 @@
 //!   selected and checked state a component draws has its `data-sheet~=`
 //!   alias; and `scripts/plexus-ui build` refuses a literal colour
 //!   (`--strict-colours`).
-//! - STUDIO-12: a route's page is rhx — `ui/src/page-<name>.rhx`, a
-//!   `<section class="page page-<name>">` placing its Svelte components by
-//!   their marks and carrying the app's top as a section — so the studio
-//!   edits every page while the components stay svelte/1 and the
-//!   repository's; no route draws a svelte/1 component, and a placed one
-//!   keeps none of the page's chrome (the board link, the palette's mark).
+//! - STUDIO-12, SV-4: a route draws a page — `ui/src/page-<name>.svelte`, a
+//!   `<section class="page page-<name>">` placing its components by their
+//!   bound marks (`plexus-ui:<name>`) and carrying the app's top as a
+//!   section (`data-slot="top"`); a placed one keeps none of the page's
+//!   chrome (the board link, the palette's mark).
 //! - V2-19 (FRAME-9 before it): `tether/` takes `plexus-login` as
 //!   plexus-substrate (which tether takes) does — by the git URL and rev
 //!   substrate's manifest names (PLEXUS-26) — one `plexus-login` in its
@@ -1255,11 +1257,34 @@ fn svelte_said(text: &str) -> Vec<(usize, String)> {
         .collect()
 }
 
-/// FRAME-11: the dialect is rhx — `ui/src/<name>.rhx`, profile `rhx/1` — and
-/// nothing of menger's calls it Svelte (the owner, 2026-10-29: "Don't put
-/// .svelte if it's not .svelte"); a `.svelte` is real Svelte's (FRAME-13).
+/// SV-4: where each retired rhx component went, when its port is not
+/// `<name>.svelte` or its twin `<name>-sv.svelte`: board-layout's own part is
+/// board-layout-sv in board-frame's `bar`, the rhx ticket page's is page-ticket.
+const RETIRED_TO: [(&str, &str); 2] = [("board-layout", "board-layout-sv"), ("ticket-page", "page-ticket")];
+
+/// What SV-4 finds of rhx in the UI, given the names in `ui/src` and in
+/// `ui/retired-rhx`: an rhx source left in `ui/src`, and a retired one with
+/// no port in `ui/src` (`<name>.svelte`, `<name>-sv.svelte` or
+/// [`RETIRED_TO`]'s).
+fn retired_breaks(src: &[String], retired: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = src.iter().filter(|f| f.ends_with(".rhx")).map(|f| format!("ui/src/{f}: rhx is retired (SV-4) — its port is real Svelte, the source kept in ui/retired-rhx/")).collect();
+    for n in retired.iter().filter_map(|f| f.strip_suffix(".rhx")) {
+        let to = RETIRED_TO.iter().find(|(from, _)| *from == n).map(|(_, to)| to.to_string());
+        let ports = [Some(format!("{n}.svelte")), Some(format!("{n}-sv.svelte")), to.map(|t| format!("{t}.svelte"))];
+        if !ports.iter().flatten().any(|p| src.contains(p)) {
+            out.push(format!("ui/retired-rhx/{n}.rhx: no port in ui/src ({n}.svelte or {n}-sv.svelte)"));
+        }
+    }
+    out
+}
+
+/// FRAME-11, SV-4: the dialect is real Svelte — `ui/src/<name>.svelte`,
+/// profile `svelte/1` (FRAME-13) — and rhx is retired: its sources kept in
+/// `ui/retired-rhx/`, out of the bundle, each with its port in `ui/src`;
+/// nothing of menger's calls anything else Svelte (the owner, 2026-10-29:
+/// "Don't put .svelte if it's not .svelte").
 #[test]
-fn the_dialect_is_rhx() {
+fn the_dialect_is_svelte() {
     // The checks, on what they are given first.
     let given = |c: &[(&str, &str)]| c.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect::<Vec<_>>();
     let routes = r##"{ "#/": "a-layout", "#/x": "x-page" }"##;
@@ -1282,6 +1307,12 @@ fn the_dialect_is_rhx() {
     assert_eq!(svelte_imports(importer), ["c-chip"]);
     assert!(ui_breaks(&given(&[("a-layout.rhx", "<p/>"), ("b-rows.svelte", importer), ("c-chip.svelte", sv), ("x-page.rhx", "<p/>")]), routes, slots).is_empty());
     assert!(real_svelte(sv) && !real_svelte("<script>\n  prop(\"id\");\n</script>\n<p/>\n"));
+    let names = |n: &[&str]| n.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert!(retired_breaks(&names(&["a-page.svelte", "b-rows-sv.svelte", "page-ticket.svelte"]), &names(&["a-page.rhx", "b-rows.rhx", "ticket-page.rhx"])).is_empty());
+    assert_eq!(
+        retired_breaks(&names(&["a-page.rhx", "a-page.svelte"]), &names(&["c-lost.rhx"])),
+        ["ui/src/a-page.rhx: rhx is retired (SV-4) — its port is real Svelte, the source kept in ui/retired-rhx/", "ui/retired-rhx/c-lost.rhx: no port in ui/src (c-lost.svelte or c-lost-sv.svelte)"]
+    );
     assert_eq!(svelte_said("rhx: Svelte's template subset with Rhai folds.\n\nA `.svelte` file is real Svelte (`svelte/1`, FRAME-13) or refused.\n"), []);
     assert_eq!(
         svelte_said("Components are a Svelte-like subset. Files are\n`ui/src/*.svelte`.\n\n```svelte\n<p/>\n```\n- the Svelte subset (real Svelte aside)\n"),
@@ -1307,57 +1338,69 @@ fn the_dialect_is_rhx() {
         })
         .collect();
     broken.extend(ui_breaks(&sources, &read("ui/routes.json"), &read("ui/slots.json")));
+    let retired = names_in(&root.join("ui/retired-rhx"));
+    if !retired.iter().any(|f| f.ends_with(".rhx")) {
+        broken.push("ui/retired-rhx/ holds no .rhx: the retired sources are kept, not deleted (SV-4)".into());
+    }
+    broken.extend(retired_breaks(&names_in(&src), &retired));
 
     for doc in ["README.md", "AGENTS.md", "deploy/README.md"] {
         broken.extend(svelte_said(&read(doc)).into_iter().map(|(n, s)| format!("{doc}:{n}: {s}")));
     }
     let (readme, agents) = (read("README.md"), read("AGENTS.md"));
-    broken.extend(doc_breaks(&[("README.md", readme.as_str()), ("AGENTS.md", agents.as_str())], &[("AGENTS.md", "Adding a component", &["rhx", "ui/src/*.rhx", "ui/src/<name>.rhx:LINE"])]));
-    if !readme.contains("rhx/1") && !readme.contains(".rhx") {
-        broken.push("README.md: names no rhx (rhx/1, <name>.rhx)".into());
+    broken.extend(doc_breaks(&[("README.md", readme.as_str()), ("AGENTS.md", agents.as_str())], &[("AGENTS.md", "Adding a component", &["svelte/1", "ui/src/*.svelte", "ui/src/<name>.svelte:LINE", "ui/retired-rhx"])]));
+    if !readme.contains("ui/retired-rhx") {
+        broken.push("README.md: names no ui/retired-rhx (where rhx went, SV-4)".into());
     }
-    assert!(broken.is_empty(), "FRAME-11: the dialect is rhx, and Svelte is said only of real Svelte:\n  {}", broken.join("\n  "));
+    assert!(broken.is_empty(), "FRAME-11, SV-4: the dialect is real Svelte, rhx retired, and Svelte is said only of real Svelte:\n  {}", broken.join("\n  "));
 }
 
-/// FRAME-14: the board's components, each in both profiles — rhx's
-/// `<name>.rhx` and real Svelte's `<name>-sv.svelte` (one name is one
-/// source, so the Svelte one is named apart; `-sv` the one suffix). STUDIO-12:
-/// the ticket page left the list — its Svelte twin is the rhx page
-/// `page-ticket` placing the ticket's parts, `ticket-page.rhx` the rhx
-/// board's comparison at `#/rhx/ticket/:id`.
+/// FRAME-14, SV-4: the board's components in real Svelte, `<name>-sv.svelte`
+/// (one name was one source while rhx's `<name>.rhx` stood beside it; the
+/// rhx ones are retired to `ui/retired-rhx/`). STUDIO-12: the ticket page
+/// is `page-ticket`, placing the ticket's parts.
 const BOARD: [&str; 4] = ["board-layout", "board-rows", "nav-tree", "jump-palette"];
 
 /// FRAME-25: the components the board's draw inside another — the nav's
-/// Flat and an open shortcode's children, a ticket named on a page — each in
-/// both profiles too: rhx's drawn by tag, the Svelte one imported by its
-/// parent (`./<name>-sv.svelte`) and a component in its own right. Neither
-/// needs a route or a slot: a sibling no section defaults to is reached by
-/// its importer.
+/// Flat and an open shortcode's children, a ticket named on a page — each
+/// imported by its parent (`./<name>-sv.svelte`) and a component in its own
+/// right. Neither needs a route or a slot: a sibling no section defaults to
+/// is reached by its importer.
 const BOARD_SIBLINGS: [&str; 3] = ["nav-flat", "nav-children", "ticket-chip"];
 
-/// FRAME-14: the frame the Svelte board is drawn in — an rhx layout, since a
-/// section is the host's and only an rhx template marks one (`<slot name>`;
-/// a svelte/1 module mounts no section, plexus-ui@40aa390). Its sections
-/// hold the Svelte components: `top` the app's top (app-top, SURFACE-2), `bar`
-/// the Svelte half of `board-layout` (the top bar and its filter line), then
-/// the nav, the facets (nav-facets) and the saved filters (filters-saved,
-/// SURFACE-6) under it, the board's keymap (keys-help), the board, the bulk
-/// bar under it (bulk-bar, SURFACE-5) and the palette.
+/// FRAME-14, SV-4: the frame the board is drawn in — a svelte/1 layout
+/// (CONTRACT.md "A layout in any profile": its sections DOM marks,
+/// `<div data-slot="…">`, which the host fills). Its sections hold the
+/// board: `top` the app's top (app-top, SURFACE-2), `bar` board-layout-sv
+/// (the top bar and its filter line), then the nav, the facets (nav-facets)
+/// and the saved filters (filters-saved, SURFACE-6) under it, the board's
+/// keymap (keys-help), the board, the bulk bar under it (bulk-bar,
+/// SURFACE-5) and the palette.
 const SV_FRAME: &str = "board-frame";
 
-/// What FRAME-14 finds missing from the board's two profiles, given the
-/// sources in `ui/src` (file name → text), `routes.json` and `slots.json`:
-/// a component without its `.rhx` or its real `-sv.svelte`; a route of
-/// either board that is not there; a section default that is not the rhx
-/// one on the rhx board, or not the Svelte one in the frame; a frame that
-/// marks not all nine of its sections.
+/// The frame's sections and their defaults.
+const FRAME_SLOTS: [(&str, &str); 9] = [
+    ("top", "app-top"),
+    ("bar", "board-layout-sv"),
+    ("nav", "nav-tree-sv"),
+    ("facets", "nav-facets"),
+    ("saved", "filters-saved"),
+    ("keys", "keys-help"),
+    ("main", "board-rows-sv"),
+    ("bulk", "bulk-bar"),
+    ("palette", "jump-palette-sv"),
+];
+
+/// What FRAME-14 and SV-4 find missing from the board, given the sources in
+/// `ui/src` (file name → text), `routes.json` and `slots.json`: a component
+/// without its real `-sv.svelte`; a route of the board that is not there (the
+/// `#/rhx/…` ones the board's aliases now); a section default that is not
+/// the Svelte one in the frame; a frame that is not svelte/1, marks not all
+/// nine of its sections, or does more than place them.
 fn board_breaks(sources: &[(String, String)], routes: &str, slots: &str) -> Vec<String> {
     let mut out = Vec::new();
     let text = |f: &str| sources.iter().find(|(n, _)| n == f).map(|(_, t)| t.as_str());
     for n in BOARD.iter().chain(BOARD_SIBLINGS.iter()) {
-        if text(&format!("{n}.rhx")).is_none() {
-            out.push(format!("ui/src/{n}.rhx is missing (the rhx {n})"));
-        }
         match text(&format!("{n}-sv.svelte")) {
             None => out.push(format!("ui/src/{n}-sv.svelte is missing (the Svelte {n})")),
             Some(t) if !real_svelte(t) => out.push(format!("ui/src/{n}-sv.svelte is not real Svelte (svelte/1: <script module> export const uses = [...])")),
@@ -1365,15 +1408,15 @@ fn board_breaks(sources: &[(String, String)], routes: &str, slots: &str) -> Vec<
         }
     }
     let routes: Value = serde_json::from_str(routes).unwrap_or_else(|e| panic!("routes.json: {e}"));
-    // SURFACE-2: the Svelte board is the default (owner, 2026-10-30), the rhx
-    // one the comparison at #/rhx/, and #/sv/ the Svelte board's alias.
+    // SURFACE-2: the Svelte board is the board (owner, 2026-10-30); #/sv/
+    // its alias, and SV-4: #/rhx/ too, where the rhx one stood.
     for (route, want) in [
         ("#/board", SV_FRAME),
         ("#/f/:filter", SV_FRAME),
         ("#/ticket/:id", "page-ticket"),
-        ("#/rhx/", "board-layout"),
-        ("#/rhx/f/:filter", "board-layout"),
-        ("#/rhx/ticket/:id", "ticket-page"),
+        ("#/rhx/", SV_FRAME),
+        ("#/rhx/f/:filter", SV_FRAME),
+        ("#/rhx/ticket/:id", "page-ticket"),
         ("#/sv/", SV_FRAME),
         ("#/sv/f/:filter", SV_FRAME),
         ("#/sv/ticket/:id", "page-ticket"),
@@ -1384,32 +1427,32 @@ fn board_breaks(sources: &[(String, String)], routes: &str, slots: &str) -> Vec<
         }
     }
     let slots: Value = serde_json::from_str(slots).unwrap_or_else(|e| panic!("slots.json: {e}"));
-    let rhx = [("nav", "nav-tree"), ("main", "board-rows"), ("palette", "jump-palette")];
-    let sv = [("top", "app-top"), ("bar", "board-layout-sv"), ("nav", "nav-tree-sv"), ("facets", "nav-facets"), ("saved", "filters-saved"), ("keys", "keys-help"), ("main", "board-rows-sv"), ("bulk", "bulk-bar"), ("palette", "jump-palette-sv")];
-    for (layout, want) in [("board-layout", &rhx[..]), (SV_FRAME, &sv[..])] {
-        for (slot, component) in want {
-            let have = slots.get(layout).and_then(|l| l.get(slot)).and_then(Value::as_str);
-            if have != Some(component) {
-                out.push(format!("slots.json: {layout}'s {slot} defaults to {}, not {component}", have.unwrap_or("nothing")));
-            }
+    for (slot, component) in FRAME_SLOTS {
+        let have = slots.get(SV_FRAME).and_then(|l| l.get(slot)).and_then(Value::as_str);
+        if have != Some(component) {
+            out.push(format!("slots.json: {SV_FRAME}'s {slot} defaults to {}, not {component}", have.unwrap_or("nothing")));
         }
     }
-    match text(&format!("{SV_FRAME}.rhx")) {
-        None => out.push(format!("ui/src/{SV_FRAME}.rhx is missing (the rhx frame the Svelte board is drawn in)")),
+    match text(&format!("{SV_FRAME}.svelte")) {
+        None => out.push(format!("ui/src/{SV_FRAME}.svelte is missing (the frame the board is drawn in)")),
         Some(t) => {
+            if !real_svelte(t) {
+                out.push(format!("ui/src/{SV_FRAME}.svelte is not real Svelte (svelte/1: <script module> export const uses = [...])"));
+            }
             // The frame only places the sections: no state, no live, no call, no
-            // component of its own — so the Svelte board's numbers are Svelte's.
-            for word in ["live(", "call(", "state(", "fn "] {
-                if t.contains(word) {
-                    out.push(format!("ui/src/{SV_FRAME}.rhx holds `{word}`: the frame only places its sections"));
+            // component of its own — so the board's numbers are its sections'.
+            let code = svelte_code(t);
+            for word in ["live(", "call(", "$state(", "bus("] {
+                if code.contains(word) {
+                    out.push(format!("ui/src/{SV_FRAME}.svelte holds `{word}`: the frame only places its sections"));
                 }
             }
-            for tag in t.split('<').skip(1).filter_map(|r| r.split(|c: char| c.is_whitespace() || c == '/' || c == '>').next()).filter(|n| n.contains('-')) {
-                out.push(format!("ui/src/{SV_FRAME}.rhx draws <{tag}>: the frame only places its sections"));
+            for i in svelte_imports(&code) {
+                out.push(format!("ui/src/{SV_FRAME}.svelte imports {i}: the frame only places its sections"));
             }
-            for (slot, _) in sv {
-                if !t.contains(&format!("<slot name=\"{slot}\"")) {
-                    out.push(format!("ui/src/{SV_FRAME}.rhx marks no section {slot} (<slot name=\"{slot}\" …/>)"));
+            for (slot, _) in FRAME_SLOTS {
+                if !code.contains(&format!("data-slot=\"{slot}\"")) {
+                    out.push(format!("ui/src/{SV_FRAME}.svelte marks no section {slot} (<div data-slot=\"{slot}\" …>)"));
                 }
             }
         }
@@ -1417,49 +1460,47 @@ fn board_breaks(sources: &[(String, String)], routes: &str, slots: &str) -> Vec<
     out
 }
 
-/// FRAME-14: menger's board in real Svelte beside the rhx one — each of the
-/// five as `<name>.rhx` and `<name>-sv.svelte`, the Svelte board at `#/`
-/// (SURFACE-2; `#/sv/…` its alias), the rhx one at `#/rhx/`, the rhx ones the defaults
-/// (`slots.json`); a right-click puts a Svelte one in a section of the rhx
-/// board (tests/pages_browser.mjs). FRAME-13's `svelte_is_not_in_menger_yet`
-/// went with it: its time has come.
+/// FRAME-14, SV-4: menger's board in real Svelte — each component as
+/// `<name>-sv.svelte`, the frame a svelte/1 layout, the board at `#/board`
+/// (SURFACE-2, EDITOR-4; `#/sv/…` and `#/rhx/…` its aliases).
 #[test]
-fn each_board_component_has_both_profiles() {
+fn the_board_is_svelte() {
     // The check, on what it is given first.
     let sv = "<script module>\n  export const uses = [];\n</script>\n<p/>\n";
-    let mut good: Vec<(String, String)> = BOARD.iter().chain(BOARD_SIBLINGS.iter()).flat_map(|n| [(format!("{n}.rhx"), "<p/>".to_string()), (format!("{n}-sv.svelte"), sv.to_string())]).collect();
-    good.push((format!("{SV_FRAME}.rhx"), r#"<slot name="top" filter={filter}/><slot name="bar"/><slot name="nav"/><slot name="facets"/><slot name="saved"/><slot name="keys"/><slot name="main"/><slot name="bulk"/><slot name="palette"/>"#.into()));
-    let routes = r##"{ "#/board": "board-frame", "#/f/:filter": "board-frame", "#/ticket/:id": "page-ticket", "#/rhx/": "board-layout", "#/rhx/f/:filter": "board-layout", "#/rhx/ticket/:id": "ticket-page", "#/sv/": "board-frame", "#/sv/f/:filter": "board-frame", "#/sv/ticket/:id": "page-ticket" }"##;
-    let slots = r#"{ "board-layout": { "nav": "nav-tree", "main": "board-rows", "palette": "jump-palette" }, "board-frame": { "top": "app-top", "bar": "board-layout-sv", "nav": "nav-tree-sv", "facets": "nav-facets", "saved": "filters-saved", "keys": "keys-help", "main": "board-rows-sv", "bulk": "bulk-bar", "palette": "jump-palette-sv" } }"#;
+    let frame = format!("{sv}{}", FRAME_SLOTS.iter().map(|(s, _)| format!("<div data-slot=\"{s}\"></div>")).collect::<String>());
+    let mut good: Vec<(String, String)> = BOARD.iter().chain(BOARD_SIBLINGS.iter()).map(|n| (format!("{n}-sv.svelte"), sv.to_string())).collect();
+    good.push((format!("{SV_FRAME}.svelte"), frame.clone()));
+    let routes = r##"{ "#/board": "board-frame", "#/f/:filter": "board-frame", "#/ticket/:id": "page-ticket", "#/rhx/": "board-frame", "#/rhx/f/:filter": "board-frame", "#/rhx/ticket/:id": "page-ticket", "#/sv/": "board-frame", "#/sv/f/:filter": "board-frame", "#/sv/ticket/:id": "page-ticket" }"##;
+    let slots = r#"{ "board-frame": { "top": "app-top", "bar": "board-layout-sv", "nav": "nav-tree-sv", "facets": "nav-facets", "saved": "filters-saved", "keys": "keys-help", "main": "board-rows-sv", "bulk": "bulk-bar", "palette": "jump-palette-sv" } }"#;
     assert_eq!(board_breaks(&good, routes, slots), Vec::<String>::new());
     let chipless: Vec<(String, String)> = good.iter().filter(|(f, _)| f != "ticket-chip-sv.svelte").cloned().collect();
     assert_eq!(board_breaks(&chipless, routes, slots), ["ui/src/ticket-chip-sv.svelte is missing (the Svelte ticket-chip)"]);
     let mut bad = good.clone();
-    bad.retain(|(f, _)| f != "nav-tree-sv.svelte" && f != "board-rows.rhx");
+    bad.retain(|(f, _)| f != "nav-tree-sv.svelte");
     bad.iter_mut().filter(|(f, _)| f == "jump-palette-sv.svelte").for_each(|(_, t)| *t = "<script>\n</script>\n<p/>\n".into());
-    let swapped = r#"{ "board-layout": { "nav": "nav-tree", "main": "board-rows-sv", "palette": "jump-palette" }, "board-frame": { "top": "app-top", "bar": "board-layout-sv", "nav": "nav-tree-sv", "facets": "nav-facets", "saved": "filters-saved", "keys": "keys-help", "main": "board-rows-sv", "bulk": "bulk-bar", "palette": "jump-palette-sv" } }"#;
+    let swapped = r#"{ "board-frame": { "top": "app-top", "bar": "board-layout-sv", "nav": "nav-tree-sv", "facets": "nav-facets", "saved": "filters-saved", "keys": "keys-help", "main": "board-rows", "bulk": "bulk-bar", "palette": "jump-palette-sv" } }"#;
     assert_eq!(
-        board_breaks(&bad, r##"{ "#/board": "board-frame", "#/f/:filter": "board-frame", "#/ticket/:id": "page-ticket", "#/rhx/": "board-layout", "#/rhx/f/:filter": "board-layout", "#/rhx/ticket/:id": "ticket-page", "#/sv/": "board-frame", "#/sv/ticket/:id": "ticket-page" }"##, swapped),
+        board_breaks(&bad, r##"{ "#/board": "board-frame", "#/f/:filter": "board-frame", "#/ticket/:id": "page-ticket", "#/rhx/": "board-layout", "#/rhx/f/:filter": "board-frame", "#/rhx/ticket/:id": "page-ticket", "#/sv/": "board-frame", "#/sv/ticket/:id": "ticket-page" }"##, swapped),
         [
-            "ui/src/board-rows.rhx is missing (the rhx board-rows)",
             "ui/src/nav-tree-sv.svelte is missing (the Svelte nav-tree)",
             "ui/src/jump-palette-sv.svelte is not real Svelte (svelte/1: <script module> export const uses = [...])",
+            "routes.json: #/rhx/ draws board-layout, not board-frame",
             "routes.json: #/sv/f/:filter draws nothing, not board-frame",
             "routes.json: #/sv/ticket/:id draws ticket-page, not page-ticket",
-            "slots.json: board-layout's main defaults to board-rows-sv, not board-rows",
+            "slots.json: board-frame's main defaults to board-rows, not board-rows-sv",
         ]
     );
-    let frameless: Vec<(String, String)> = good.iter().filter(|(f, _)| f != "board-frame.rhx").cloned().chain([("board-frame.rhx".to_string(), r#"<slot name="nav"/>"#.to_string())]).collect();
+    let frameless: Vec<(String, String)> = good.iter().filter(|(f, _)| f != "board-frame.svelte").cloned().chain([("board-frame.svelte".to_string(), format!("{sv}<div data-slot=\"nav\"></div>"))]).collect();
     assert_eq!(board_breaks(&frameless, routes, slots).len(), 8, "a frame that marks one section of nine");
     let busy: Vec<(String, String)> = good
         .iter()
-        .filter(|(f, _)| f != "board-frame.rhx")
+        .filter(|(f, _)| f != "board-frame.svelte")
         .cloned()
-        .chain([("board-frame.rhx".to_string(), "<script>\n  prop(\"filter\");\n  let n = live(#{ snapshot: \"tickets.nav.counts\", key: \"shortcode\" });\n</script>\n<div class=\"board-layout\"><filter-line filter={filter}/><slot name=\"top\"/><slot name=\"bar\"/><slot name=\"nav\"/><slot name=\"facets\"/><slot name=\"saved\"/><slot name=\"keys\"/><slot name=\"main\"/><slot name=\"bulk\"/><slot name=\"palette\"/></div>".to_string())])
+        .chain([("board-frame.svelte".to_string(), frame.replace("<p/>", "<script>\n  import { live } from \"plexus-ui/host\";\n  import Line from \"plexus-ui:filter-line-sv\";\n  const n = live({ snapshot: \"tickets.nav.counts\", key: \"shortcode\" });\n</script>\n<Line/>"))])
         .collect();
     assert_eq!(
         board_breaks(&busy, routes, slots),
-        ["ui/src/board-frame.rhx holds `live(`: the frame only places its sections", "ui/src/board-frame.rhx draws <filter-line>: the frame only places its sections"]
+        ["ui/src/board-frame.svelte holds `live(`: the frame only places its sections", "ui/src/board-frame.svelte imports filter-line-sv: the frame only places its sections"]
     );
 
     // Then menger's.
@@ -1468,7 +1509,7 @@ fn each_board_component_has_both_profiles() {
     let sources: Vec<(String, String)> = names_in(&src).into_iter().filter(|f| f.ends_with(".rhx") || f.ends_with(".svelte")).map(|f| (f.clone(), std::fs::read_to_string(src.join(&f)).unwrap())).collect();
     let read = |f: &str| std::fs::read_to_string(root.join(f)).unwrap_or_else(|e| panic!("{f}: {e}"));
     let broken = board_breaks(&sources, &read("ui/routes.json"), &read("ui/slots.json"));
-    assert!(broken.is_empty(), "FRAME-14: the board in both profiles, rhx the default:\n  {}", broken.join("\n  "));
+    assert!(broken.is_empty(), "FRAME-14, SV-4: the board in real Svelte:\n  {}", broken.join("\n  "));
 }
 
 /// A svelte/1 source's code: its text without comments — `<!-- … -->`,
@@ -1870,8 +1911,8 @@ fn the_look_is_the_components_and_the_themes() {
         assert!(theme.contains(t), "ui/theme.toml keeps {t}");
     }
     let mut bare = Vec::new();
-    for c in ["board-layout", "board-frame", "board-rows", "nav-tree", "nav-children", "nav-flat", "jump-palette", "ticket-page", "ticket-chip", "filter-line"] {
-        for f in [format!("{c}.rhx"), format!("{c}-sv.svelte")] {
+    for c in ["board-layout", "board-frame", "board-rows", "nav-tree", "nav-children", "nav-flat", "jump-palette", "page-ticket", "ticket-chip", "filter-line"] {
+        for f in [format!("{c}.svelte"), format!("{c}-sv.svelte")] {
             let p = root.join("ui/src").join(&f);
             if let Ok(text) = std::fs::read_to_string(&p) {
                 if !text.contains("<style>") {
@@ -1884,9 +1925,9 @@ fn the_look_is_the_components_and_the_themes() {
 }
 
 /// SURFACE-10: what the sheet lacks — each component of `ui/src` (its name
-/// from `<name>.rhx` or `<name>.svelte`, the sheet aside) the sheet does not
+/// from `<name>.svelte`, the sheet aside) the sheet does not
 /// import as `plexus-ui:<name>`, and the route that is not `#/sheet`'s.
-/// STUDIO-12: `#/sheet` draws `page-sheet`, the rhx page that places the
+/// STUDIO-12: `#/sheet` draws `page-sheet`, the page that places the
 /// sheet — the one component the sheet does not place (it would hold itself).
 fn sheet_breaks(names: &[String], sheet: &str, routes: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -2104,17 +2145,19 @@ fn the_tokens_are_whole() {
     assert!(builds_strict(&script), "SURFACE-10: scripts/plexus-ui builds with --strict-colours (a literal colour is refused, not warned)");
 }
 
-/// STUDIO-12: a route's page is rhx — a component of components the studio
-/// edits in the browser — placing the Svelte components, which stay the
-/// repository's. Each page (its name holds a hyphen, as a component's must:
-/// `page-<name>`), the routes that draw it and the Svelte components it
-/// places by their marks (`<ticket-head id={id}/>`, a bound mark the host
-/// fills). The first ten are the app's pages (EDITOR-4: `page-editor` at `#/`, V2-29: a doc at `#/doc/:doc`; the board at `#/board`) and carry the app's top
-/// (`<slot name="top"/>`, app-top by `slots.json`) and the palette its jump
-/// button opens (`<slot name="palette"/>`, jump-palette-sv); the rest draw one
-/// component alone for its browser cases. V2-25: `page-epics` (`#/epics`)
-/// and `page-me` (`#/me`) went with the `epics` activation and the owner's
-/// call on `session`'s page.
+/// STUDIO-12, SV-4: a route draws a page — a component of components the
+/// studio edits in the browser — placing the components by their bound
+/// marks. Each page (its name holds a hyphen, as a component's must:
+/// `page-<name>`, `ui/src/page-<name>.svelte`), the routes that draw it and
+/// the components it places (`import Head from "plexus-ui:ticket-head"`, a
+/// bound mark the host fills). The first ten are the app's pages (EDITOR-4:
+/// `page-editor` at `#/`, V2-29: a doc at `#/doc/:doc`; the board at
+/// `#/board`) and carry the app's top (`<div data-slot="top">`, app-top by
+/// `slots.json`) and the palette its jump button opens (`<div
+/// data-slot="palette">`, jump-palette-sv); the rest draw one component
+/// alone for its browser cases. V2-25: `page-epics` (`#/epics`) and
+/// `page-me` (`#/me`) went with the `epics` activation and the owner's call
+/// on `session`'s page.
 const PAGES: [(&str, &[&str], &[&str]); 16] = [
     ("page-editor", &["#/", "#/edit/:id", "#/doc/:doc"], &["editor-screen"]),
     ("page-ticket", &["#/ticket/:id", "#/sv/ticket/:id"], &["ticket-head", "ticket-body", "ticket-edit", "ticket-relations", "ticket-actions", "ticket-commits", "ticket-history", "ticket-revisions"]),
@@ -2137,48 +2180,61 @@ const PAGES: [(&str, &[&str], &[&str]); 16] = [
 /// The app's pages: [`PAGES`]' first nine, each with the top.
 const APP_PAGES: usize = 10;
 
-/// What STUDIO-12 finds wrong, given the sources in `ui/src` (file name →
-/// text), `routes.json` and `slots.json`: a route drawing a svelte/1
-/// component; a route's rhx page that places no component (no tag of one,
-/// no `<slot>`); a page of [`PAGES`] missing, not routed as the table says,
-/// not a `<section class="page page-…">`, not placing one of its
-/// components, or placing one that is not svelte/1; an app page without its
-/// top (`<slot name="top"`, app-top by default); and a placed component
-/// that kept the page's chrome — the board link (`data-back`, app-top's
-/// now) or the palette's mark (`plexus-ui:jump-palette…`, the page's
-/// `palette` section now).
+/// The components a svelte/1 source places by their bound marks
+/// (FRAME-29: `import X from "plexus-ui:<name>"`), by name.
+fn bound_imports(src: &str) -> Vec<String> {
+    src.lines()
+        .filter(|l| l.trim_start().starts_with("import "))
+        .filter_map(|l| l.rsplit_once(" from ").map(|(_, r)| r))
+        .filter_map(|r| r.trim().trim_end_matches(';').trim_matches(|c| c == '"' || c == '\'').strip_prefix("plexus-ui:").map(str::to_string))
+        .collect()
+}
+
+/// What STUDIO-12 and SV-4 find wrong, given the sources in `ui/src` (file
+/// name → text), `routes.json` and `slots.json`: a route's page that places
+/// no component (no bound mark, no section); a page of [`PAGES`] missing,
+/// not real Svelte, not routed as the table says, not a `<section
+/// class="page page-…">`, not placing one of its components by its bound
+/// mark, or placing one that is not svelte/1; an app page without its top
+/// and palette (`data-slot="top"`, app-top by default; `data-slot="palette"`,
+/// jump-palette-sv); and a placed component that kept the page's chrome —
+/// the board link (`data-back`, app-top's now) or the palette's mark
+/// (`plexus-ui:jump-palette…`, the page's `palette` section now).
 fn page_breaks(sources: &[(String, String)], routes: &str, slots: &str) -> Vec<String> {
     let mut out = Vec::new();
     let text = |f: &str| sources.iter().find(|(n, _)| n == f).map(|(_, t)| t.as_str());
-    let names: Vec<&str> = sources.iter().filter_map(|(f, _)| f.strip_suffix(".rhx").or_else(|| f.strip_suffix(".svelte"))).collect();
     let routes: Value = serde_json::from_str(routes).unwrap_or_else(|e| panic!("routes.json: {e}"));
     let slots: Value = serde_json::from_str(slots).unwrap_or_else(|e| panic!("slots.json: {e}"));
     for (route, c) in routes.as_object().into_iter().flatten().filter_map(|(r, v)| v.as_str().map(|c| (r, c))) {
-        if text(&format!("{c}.svelte")).is_some() {
-            out.push(format!("routes.json: {route} draws {c}, a svelte/1 component: a route draws an rhx page that places it"));
-        } else if let Some(t) = text(&format!("{c}.rhx")) {
-            if !t.contains("<slot name=") && !names.iter().any(|n| *n != c && draws_tag(t, n)) {
-                out.push(format!("ui/src/{c}.rhx, {route}'s page, places no component: a page is a component of components"));
+        if let Some(t) = text(&format!("{c}.svelte")) {
+            let code = svelte_code(t);
+            if !code.contains("data-slot=") && bound_imports(&code).is_empty() {
+                out.push(format!("ui/src/{c}.svelte, {route}'s page, places no component: a page is a component of components"));
             }
         }
     }
     for (i, (page, at, places)) in PAGES.iter().enumerate() {
-        let Some(t) = text(&format!("{page}.rhx")) else {
-            out.push(format!("ui/src/{page}.rhx is missing (the page of {})", at.join(", ")));
+        let Some(t) = text(&format!("{page}.svelte")) else {
+            out.push(format!("ui/src/{page}.svelte is missing (the page of {})", at.join(", ")));
             continue;
         };
+        let code = svelte_code(t);
+        if !real_svelte(t) {
+            out.push(format!("ui/src/{page}.svelte is not real Svelte (svelte/1: <script module> export const uses = [...])"));
+        }
         for route in *at {
             let have = routes.get(route).and_then(Value::as_str);
             if have != Some(page) {
                 out.push(format!("routes.json: {route} draws {}, not {page}", have.unwrap_or("nothing")));
             }
         }
-        if !t.contains(&format!("class=\"page {page}\"")) {
-            out.push(format!("ui/src/{page}.rhx: no <section class=\"page {page}\">"));
+        if !code.contains(&format!("class=\"page {page}\"")) {
+            out.push(format!("ui/src/{page}.svelte: no <section class=\"page {page}\">"));
         }
+        let placed = bound_imports(&code);
         for c in *places {
-            if !draws_tag(t, c) {
-                out.push(format!("ui/src/{page}.rhx places no {c} (<{c} …/>)"));
+            if !placed.iter().any(|p| p == c) {
+                out.push(format!("ui/src/{page}.svelte places no {c} (import … from \"plexus-ui:{c}\")"));
             }
             match text(&format!("{c}.svelte")) {
                 Some(s) if real_svelte(s) => {
@@ -2189,13 +2245,13 @@ fn page_breaks(sources: &[(String, String)], routes: &str, slots: &str) -> Vec<S
                         }
                     }
                 }
-                _ => out.push(format!("ui/src/{page}.rhx places {c}, which is no svelte/1 component")),
+                _ => out.push(format!("ui/src/{page}.svelte places {c}, which is no svelte/1 component")),
             }
         }
         if i < APP_PAGES {
             for (slot, want) in [("top", "app-top"), ("palette", "jump-palette-sv")] {
-                if !t.contains(&format!("<slot name=\"{slot}\"")) {
-                    out.push(format!("ui/src/{page}.rhx marks no section {slot} (<slot name=\"{slot}\" …/>)"));
+                if !code.contains(&format!("data-slot=\"{slot}\"")) {
+                    out.push(format!("ui/src/{page}.svelte marks no section {slot} (<div data-slot=\"{slot}\" …>)"));
                 }
                 let have = slots.get(page).and_then(|l| l.get(slot)).and_then(Value::as_str);
                 if have != Some(want) {
@@ -2208,18 +2264,20 @@ fn page_breaks(sources: &[(String, String)], routes: &str, slots: &str) -> Vec<S
 }
 
 #[test]
-fn every_route_is_an_rhx_page() {
+fn every_route_is_a_page() {
     // The check reads what it is given: a page per route of the table, each
-    // placing its Svelte components; then a Svelte route, a page placing
-    // nothing, a component kept chrome.
-    let sv = |extra: &str| format!("<script module>\n  export const uses = [];\n</script>\n<p{extra}/>\n");
+    // placing its components; then a page placing nothing, a missing one, a
+    // component kept chrome.
+    let head = "<script module>\n  export const uses = [];\n</script>\n";
+    let sv = |extra: &str| format!("{head}<p{extra}/>\n");
     let mut good: Vec<(String, String)> = Vec::new();
     let mut routes = serde_json::Map::new();
     let mut slots = serde_json::Map::new();
     for (i, (page, at, places)) in PAGES.iter().enumerate() {
-        let top = if i < APP_PAGES { "<slot name=\"top\"/><slot name=\"palette\"/>" } else { "" };
-        let marks: String = places.iter().map(|c| format!("<{c} id={{id}}/>")).collect();
-        good.push((format!("{page}.rhx"), format!("<section class=\"page {page}\">{top}{marks}</section>")));
+        let top = if i < APP_PAGES { "<div data-slot=\"top\"></div><div data-slot=\"palette\"></div>" } else { "" };
+        let imports: String = places.iter().enumerate().map(|(n, c)| format!("  import C{n} from \"plexus-ui:{c}\";\n")).collect();
+        let marks: String = (0..places.len()).map(|n| format!("<C{n} {{id}}/>")).collect();
+        good.push((format!("{page}.svelte"), format!("{head}<script>\n{imports}</script>\n<section class=\"page {page}\">{top}{marks}</section>\n")));
         for c in *places {
             if !good.iter().any(|(f, _)| f == &format!("{c}.svelte")) {
                 good.push((format!("{c}.svelte"), sv("")));
@@ -2232,22 +2290,20 @@ fn every_route_is_an_rhx_page() {
             slots.insert(page.to_string(), serde_json::json!({ "top": "app-top", "palette": "jump-palette-sv" }));
         }
     }
-    good.push(("board-frame.rhx".into(), "<slot name=\"top\"/>".into()));
-    good.push(("ticket-page.rhx".into(), "<ticket-chip id={id}/>".into()));
-    good.push(("ticket-chip.rhx".into(), "<p/>".into()));
+    good.push(("board-frame.svelte".into(), format!("{head}<div data-slot=\"top\"></div>")));
     routes.insert("#/board".into(), Value::from("board-frame")); // EDITOR-4: the board; `#/` is page-editor's, from the table
-    routes.insert("#/rhx/ticket/:id".into(), Value::from("ticket-page"));
+    routes.insert("#/rhx/ticket/:id".into(), Value::from("page-ticket"));
     let (r, s) = (Value::Object(routes.clone()).to_string(), Value::Object(slots.clone()).to_string());
     assert_eq!(page_breaks(&good, &r, &s), Vec::<String>::new());
 
     let mut bad = good.clone();
-    bad.retain(|(f, _)| f != "page-orgs.rhx");
+    bad.retain(|(f, _)| f != "page-orgs.svelte");
     for (f, t) in bad.iter_mut() {
         match f.as_str() {
-            "page-ticket.rhx" => *t = t.replace("<ticket-commits id={id}/>", "").replace("<slot name=\"top\"/>", ""),
-            "page-releases.rhx" => *t = t.replace("class=\"page page-releases\"", "class=\"releases\""),
+            "page-ticket.svelte" => *t = t.replace("  import C5 from \"plexus-ui:ticket-commits\";\n", "").replace("<div data-slot=\"top\"></div>", ""),
+            "page-releases.svelte" => *t = t.replace("class=\"page page-releases\"", "class=\"releases\""),
             "search-page.svelte" => *t = sv(" data-back").replace("[]", "[]; // \"plexus-ui:jump-palette-sv\""),
-            "page-counts.rhx" => *t = "<section class=\"page page-counts\"><p/></section>".into(),
+            "page-counts.svelte" => *t = format!("{head}<section class=\"page page-counts\"><p/></section>"),
             _ => {}
         }
     }
@@ -2260,14 +2316,14 @@ fn every_route_is_an_rhx_page() {
     let mut got = page_breaks(&bad, &Value::Object(routes2).to_string(), &Value::Object(slots2).to_string());
     got.sort();
     let mut want = vec![
-        "routes.json: #/sv/ticket/:id draws ticket-page-sv, a svelte/1 component: a route draws an rhx page that places it",
+        "ui/src/ticket-page-sv.svelte, #/sv/ticket/:id's page, places no component: a page is a component of components",
         "routes.json: #/sv/ticket/:id draws ticket-page-sv, not page-ticket",
-        "ui/src/page-counts.rhx, #/counts/:filter's page, places no component: a page is a component of components",
-        "ui/src/page-counts.rhx places no nav-counts (<nav-counts …/>)",
-        "ui/src/page-releases.rhx: no <section class=\"page page-releases\">",
-        "ui/src/page-orgs.rhx is missing (the page of #/orgs)",
-        "ui/src/page-ticket.rhx places no ticket-commits (<ticket-commits …/>)",
-        "ui/src/page-ticket.rhx marks no section top (<slot name=\"top\" …/>)",
+        "ui/src/page-counts.svelte, #/counts/:filter's page, places no component: a page is a component of components",
+        "ui/src/page-counts.svelte places no nav-counts (import … from \"plexus-ui:nav-counts\")",
+        "ui/src/page-releases.svelte: no <section class=\"page page-releases\">",
+        "ui/src/page-orgs.svelte is missing (the page of #/orgs)",
+        "ui/src/page-ticket.svelte places no ticket-commits (import … from \"plexus-ui:ticket-commits\")",
+        "ui/src/page-ticket.svelte marks no section top (<div data-slot=\"top\" …>)",
         "slots.json: page-ready's top defaults to board-layout-sv, not app-top",
         "slots.json: page-ready's palette defaults to nothing, not jump-palette-sv",
         "slots.json: page-releases's palette defaults to nothing, not jump-palette-sv",
@@ -2280,8 +2336,8 @@ fn every_route_is_an_rhx_page() {
     // Then menger's own.
     let root = root();
     let src = root.join("ui/src");
-    let sources: Vec<(String, String)> = names_in(&src).into_iter().filter(|f| f.ends_with(".rhx") || f.ends_with(".svelte")).map(|f| (f.clone(), std::fs::read_to_string(src.join(&f)).unwrap())).collect();
+    let sources: Vec<(String, String)> = names_in(&src).into_iter().filter(|f| f.ends_with(".svelte")).map(|f| (f.clone(), std::fs::read_to_string(src.join(&f)).unwrap())).collect();
     let read = |f: &str| std::fs::read_to_string(root.join(f)).unwrap_or_else(|e| panic!("{f}: {e}"));
     let broken = page_breaks(&sources, &read("ui/routes.json"), &read("ui/slots.json"));
-    assert!(broken.is_empty(), "STUDIO-12: every route is an rhx page placing its Svelte components:\n  {}", broken.join("\n  "));
+    assert!(broken.is_empty(), "STUDIO-12, SV-4: every route is a page placing its components:\n  {}", broken.join("\n  "));
 }
