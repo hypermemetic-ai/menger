@@ -545,7 +545,7 @@ contract_read() { # LOG BINARY WHAT USES [WHAT USES…] → CONTRACTS (a hash pe
   contract_stop
   CONTRACT=${CONTRACTS[0]:-}
 }
-# V2-47 (the owner, 2026-11-05, "B"): the framework a v2 build makes its tool, engine, studio and
+# V2-47 (the owner, 2026-11-05, "B"): the framework a v2 build makes its tool, engine and
 # compiler module with is the plexus-ui release the tree's Cargo.lock takes plexus-ui-service at —
 # a checkout of its tag, plexus-ui-v<version>, never ../plexus-ui's working tree, so the ui service
 # in bin/menger and the tool, engine and wasm beside it come from one revision. The tree's own
@@ -564,7 +564,7 @@ plexus_ui_src() { # TREE LOG [keep] → PUI, the framework's checkout (keep: PLE
     say "plexus-ui: $PUI — by sibling path (a tree before V2-47)"; return 0
   fi
   PUI=$(env "${unset[@]}" "$tree/scripts/plexus-ui-src" "$tree" 2>>"$lg") || { pui_red; die "plexus-ui: $(tail -n 1 "$lg" 2>/dev/null) — $lg"; }
-  if compgen -G "$tree/ui/src/*.svelte" >/dev/null || compgen -G "$PUI/studio/src/*.svelte" >/dev/null; then
+  if compgen -G "$tree/ui/src/*.svelte" >/dev/null; then
     PUI=$(env "${unset[@]}" "$tree/scripts/plexus-ui-src" --node-modules "$tree" 2>>"$lg") || { pui_red; die "plexus-ui: $(tail -n 1 "$lg" 2>/dev/null) — $lg"; }
   fi
   say "plexus-ui: $PUI — $(grep '^plexus-ui-src: /' "$lg" 2>/dev/null | tail -n 1 | sed 's/^plexus-ui-src: [^ ]* //')"
@@ -598,15 +598,15 @@ ui_tool_build() { # LOG → UI_TOOL
       && say "plexus-ui: the tool of ${key:0:9} kept for the next build ($cached)"
   fi
 }
-# The app's bundle and the studio's, built by the tool — CONTRACT empty: unstamped (manifest.contract
+# The app's bundle, built by the tool — CONTRACT empty: unstamped (manifest.contract
 # unknown), the build that says the bundle's uses (SURFACE-11); else stamped --contract CONTRACT.
 # SURFACE-10: --strict-colours — a literal colour in a component's <style> refuses the build.
 ui_bundle() { # LOG CONTRACT → dist/ui.tar
   (cd "$BUILD" && "$UI_TOOL" build "$BUILD/ui" --strict-colours --engine "$BUILD/dist/engine" ${2:+--contract "$2"} --commit "menger@$short" -o "$BUILD/dist/ui.tar" --node-modules "$PUI/node_modules") >>"$1" 2>&1
 }
-studio_bundle() { # LOG CONTRACT PLEXUS_UI_SHORT → dist/studio.tar
-  (cd "$BUILD" && "$UI_TOOL" build "$PUI/studio" --strict-colours --engine "$BUILD/dist/engine" --name studio ${2:+--contract "$2"} --commit "plexus-ui@$3" -o "$BUILD/dist/studio.tar" --node-modules "$PUI/node_modules") >>"$1" 2>&1
-}
+# SV-6: no studio bundle. The studio is plexus-studio's (SV-5): pushed once from there as the
+# bundle named studio, then edited in place in the database (ui.author { bundle: "studio" }) — a
+# deploy builds none and pushes none, which would move bundle:studio off what was authored there.
 V2_STEPS=""
 build_v2() { # V2-7, FRAME-8: every step on this machine — the release, the tool, the engine, the contract, the bundle, the compiler module
   local lr f
@@ -628,44 +628,27 @@ build_v2() { # V2-7, FRAME-8: every step on this machine — the release, the to
   # the bundle: the components compiled in-process, the manifest, the tar — no cargo, no container.
   # FRAME-13: a svelte/1 component (ui/src/<name>.svelte, real Svelte) is compiled by the tool in Node 22+
   # with svelte and esbuild from the framework checkout's node_modules — its package.json pins them, `npm ci`
-  # there installs them (plexus_ui_src, for a tagged checkout); an rhx-only UI needs neither (FRAME-14: the board's real-Svelte twins, ui/src/*-sv.svelte)
+  # there installs them (plexus_ui_src, for a tagged checkout). SV-4: ui/src is svelte/1 alone; SV-6: the tool
+  # refuses an rhx source (no --allow-rhx here: the services run rhx switched off)
   if compgen -G "$BUILD/ui/src/*.svelte" >/dev/null; then command -v node >/dev/null || die "ui-build: ui/src holds svelte/1 components (.svelte), built in Node, and there is no node on PATH — install Node 22 or newer"; say "svelte/1: node $(node --version)"; fi
   if compgen -G "$BUILD/ui/src/*.svelte" >/dev/null; then [[ -f $PUI/node_modules/svelte/package.json && -f $PUI/node_modules/esbuild/package.json ]] || die "ui-build: ui/src holds svelte/1 components (.svelte) and $PUI has no node_modules/svelte and node_modules/esbuild — run npm ci in $PUI"; fi
-  # SURFACE-11: each bundle built once unstamped — its manifest says the methods its components use —
+  # SURFACE-11: the bundle built once unstamped — its manifest says the methods its components use —
   # then stamped with ui.contract's hash over the services they name, and built again
-  local app_uses studio_uses="" studio=0 pu=""
-  [[ -d $PUI/studio ]] && { studio=1; pu=$(git -C "$PUI" rev-parse --short HEAD 2>/dev/null || echo unknown); }
+  local app_uses
   step "ui-uses (plexus-ui build, unstamped: the methods the bundle's components use)"
   lr=$(log_path build-ui-uses); say "log: $lr"
   ui_bundle "$lr" "" || { red_run; die "ui-build failed — $lr"; }
   app_uses=$(bundle_uses "$BUILD/dist/ui.tar") || { red_run; die "ui-uses: $BUILD/dist/ui.tar holds no readable manifest.json — $lr"; }
-  if [[ $studio == 1 ]]; then
-    studio_bundle "$lr" "" "$pu" || { red_run; die "studio-build failed — $lr"; }
-    studio_uses=$(bundle_uses "$BUILD/dist/studio.tar") || { red_run; die "ui-uses: $BUILD/dist/studio.tar (the studio) holds no readable manifest.json — $lr"; }
-  fi
   step "contract (ui.contract over the services the bundle names, of the menger just built)"
   lr=$(log_path build-contract); say "log: $lr"
-  local asks=(contract "$app_uses")
-  [[ -n $studio_uses ]] && asks+=("studio contract" "$studio_uses")
-  contract_read "$lr" "$REL_OUT/menger" "${asks[@]}"
-  local studio_contract=${CONTRACTS[1]:-}
+  contract_read "$lr" "$REL_OUT/menger" contract "$app_uses"
   say "contract: $CONTRACT over $(uses_services "$app_uses") (ui.contract for the bundle's uses: $app_uses)"
-  if [[ $studio == 1 && -n $studio_contract ]]; then say "studio contract: $studio_contract over $(uses_services "$studio_uses") (ui.contract for the studio's uses: $studio_uses)"
-  elif [[ $studio == 1 ]]; then say "studio contract: none — the studio's components name no service, so it is built unstamped"; fi
   step "ui-build (plexus-ui build --contract $CONTRACT)"
   lr=$(log_path build-ui); say "log: $lr"
   ui_bundle "$lr" "$CONTRACT" || { red_run; die "ui-build failed — $lr"; }
   # DEPLOY-6: no -q under pipefail (b82f5bd's rule) — grep reads the whole listing, or tar dies of SIGPIPE
   tar -tf "$BUILD/dist/ui.tar" 2>/dev/null | grep -x 'index.html' >/dev/null || die "ui-build: $BUILD/dist/ui.tar is no tar holding index.html"
   V2_STEPS+=", ui-build"
-  # STUDIO-2: the studio — the framework's own bundle ($PUI/studio), built by the same tool
-  # with --name studio; a deploy pushes it --no-live, kept as bundle:studio and served at /studio/.
-  if [[ $studio == 1 ]]; then
-    step "studio-build (plexus-ui build $PUI/studio --name studio${studio_contract:+ --contract $studio_contract})"
-    lr=$(log_path build-studio); say "log: $lr"
-    studio_bundle "$lr" "$studio_contract" "$pu" || { red_run; die "studio-build failed — $lr"; }
-    V2_STEPS+=", studio-build"
-  fi
   # FRAME-7: the compiler module is the framework's script's — $PUI/scripts/ui-compiler-wasm.sh
   # OUT, cargo's (wasm32-unknown-unknown), on this machine into the build's target. A release of v2
   # always carries it: no script, a failed one, or no module after it fails the build, named.
@@ -684,7 +667,6 @@ build_v2() { # V2-7, FRAME-8: every step on this machine — the release, the to
   cp "$REPO/deploy/launch/run-menger" "$stage/bin/"
   chmod 0755 "$stage/bin/"*
   cp "$BUILD/dist/ui.tar" "$stage/dist/"
-  [[ -f $BUILD/dist/studio.tar ]] && cp "$BUILD/dist/studio.tar" "$stage/dist/"
   cp "$BUILD/dist/ui-compiler.wasm" "$stage/dist/"
   return 0
 }
@@ -937,20 +919,9 @@ ui_promote() { # WS FROM TO → 0 and UI_PROMOTED (the version TO's pointer took
   UI_WHY=$(tr '\t\n' '  ' <<<"${UI_WHY:-no answer}"); UI_WHY=${UI_WHY% }
   return 1
 }
-studio_push() { # WS REL — STUDIO-2: REL's studio bundle (dist/studio.tar) pushed --no-live as the pipeline key, kept as
-  # bundle:studio and served at /studio/; never the app. A release without one pushes nothing; a refusal is said and
-  # recorded, never fatal: the app's push already went live, and the studio stays on the version it had.
-  local ws=$1 r=$RELEASES/$2 tool out v; STUDIO_WHY=
-  [[ -f $r/dist/studio.tar ]] || return 0
-  tool=$(ui_tool "$2"); [[ -n $tool && -n $DEPLOY_KEY_FILE ]] || { say "FAIL the studio: no plexus-ui or no pipeline key to push it"; return 1; }
-  out=$(env -u MENGER_DEPLOY_KEY timeout 70 "$tool" push --url "$ws" --service menger --key-file "$DEPLOY_KEY_FILE" --as pipeline \
-          --timeout 50 --json --no-live "$r/dist/studio.tar" 2>&1) || true
-  v=$(jq -rR 'fromjson? | select(.type == "pushed") | .version' <<<"$out" 2>/dev/null | head -n 1)
-  if [[ -n $v ]]; then say "ok   the studio kept on $ws: ${v:0:12} (bundle:studio, /studio/)"; return 0; fi
-  STUDIO_WHY=$(head -c 200 <<<"$out" | tr '\t\n' '  ')
-  say "FAIL the studio's push to $ws: $STUDIO_WHY"
-  return 1
-}
+# SV-6: a deploy pushes no studio — not even an older release's dist/studio.tar: the studio is
+# seeded once from plexus-studio and then edited in the database, and a push named studio would
+# move bundle:studio off what was authored there.
 page_is() { # BUNDLE-PAGE SERVED — SERVED is the bundle's page, its {{STAMPS}} filled: each piece between them, in order
   local piece rest=$2
   [[ -n $2 ]] || return 1
@@ -1090,7 +1061,6 @@ cmd_local() {
       die "the push to $LOCAL_CONTAINER answered contract_matches: ${UI_MATCHES:-null} — $rel's bundle was not built against the service it runs (UI-12)"
     fi
     say "ok   pushed $rel's bundle: ${UI_PUSHED:0:12} live, contract_matches: true"
-    studio_push "ws://127.0.0.1:$LOCAL_WS_PORT" "$rel" || record app-local studio "$rel" "refused: ${STUDIO_WHY:-no answer}"
     if ! ui_smoke "ws://127.0.0.1:$LOCAL_WS_PORT" "http://127.0.0.1:$LOCAL_SHELL_PORT" "$rel"; then
       record app-local run "$rel" "smoke failed"; die "$LOCAL_CONTAINER runs $rel and its /app/ smoke FAILED"
     fi
@@ -1157,7 +1127,6 @@ cmd_remote() {
         die "the push to $host answered contract_matches: ${UI_MATCHES:-null} — $rel's bundle was not built against the service it runs (UI-12)"
       fi
       say "ok   pushed $rel's bundle to $host: ${UI_PUSHED:0:12} live, contract_matches: true"
-      studio_push "wss://$host/ws" "$rel" || record test studio "$rel" "refused: ${STUDIO_WHY:-no answer}"
     fi
     if ! smoke_remote test "$rel"; then
       record test run "$rel" "smoke failed"; tell test failed "$rel" "$good"

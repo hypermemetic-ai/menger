@@ -141,6 +141,14 @@ struct Args {
     #[arg(long = "ui-compiler", env = "MENGER_UI_COMPILER", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
     ui_compiler: Option<PathBuf>,
 
+    // SV-6: rhx is switched off; this turns it back on.
+    /// Take rhx/1 components again: without it every `ui.push` and `ui.author` carrying one is refused `rhx_disabled`, naming it
+    ///
+    /// menger's UI is real Svelte (svelte/1, SV-4); the rhx compiler and the
+    /// engine's interpreter are kept for a service that opts in.
+    #[arg(long = "ui-allow-rhx", env = "MENGER_UI_ALLOW_RHX", action = clap::ArgAction::SetTrue, value_parser = clap::builder::FalseyValueParser::new(), help_heading = RUN, hide_short_help = true)]
+    ui_allow_rhx: bool,
+
     // STUDIO-3: the key the ui service signs an editor's authored version with.
     /// The ui service's author key: a file holding an Ed25519 seed `ui.author` signs an editor's version with
     ///
@@ -641,7 +649,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
         Some(path) => Some(std::fs::read(path).map_err(|e| anyhow::anyhow!("--ui-compiler {}: {e}", path.display()))?),
         None => None,
     };
-    let ui = ui.compiling(compiler);
+    let ui = ui.compiling(compiler).allowing_rhx(args.ui_allow_rhx);
     // STUDIO-3: the author key, made at first start when its file is missing.
     let author = match &args.ui_author_key {
         Some(path) => {

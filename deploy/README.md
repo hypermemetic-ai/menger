@@ -145,8 +145,8 @@ the owner's.
    - `ui-prebuild` — `plexus-ui build --prebuild --engine dist/engine`: the
      engine (wasm32, wasm-bindgen);
    - `ui-uses` (SURFACE-11) — the bundle built once unstamped
-     (`plexus-ui build ui --engine dist/engine --commit menger@<short>`,
-     and the studio's likewise) for its manifest: every method its
+     (`plexus-ui build ui --engine dist/engine --commit menger@<short>`)
+     for its manifest: every method its
      components use (`components.*.uses`), read from the tar;
    - `contract` (UI-12, SURFACE-11) — the contract over every service the
      bundle names, as `ui.push` computes it (`contract_named` in
@@ -156,9 +156,7 @@ the owner's.
      scratch data directory, so the build holds no key material), under a
      scratch `HOME` and `XDG_RUNTIME_DIR`; synapse signs in with that key
      as `menger-local` and asks `ui contract --uses` the bundle's methods
-     (`--no-hold`, the list comma-separated), then the studio's — a studio
-     naming no service is never asked, and is built unstamped (`studio
-     contract: none` in the log) — and the
+     (`--no-hold`, the list comma-separated) — and the
      binary is stopped and the scratch removed — always, a failed build
      too. A binary that exits, does not answer within
      `MENGER_CONTRACT_WAIT` seconds (60), or a `ui contract` that answers no
@@ -172,11 +170,14 @@ the owner's.
      manifest naming that hash as its `contract`, and the tar,
      `dist/ui.tar` (`../plexus-ui/CONTRACT.md`'s bytes), which must hold
      `index.html`; no socket asked;
-   - `studio-build` (STUDIO-2) — the framework's studio,
-     `plexus-ui build $PUI/studio --name studio --contract HASH`
-     with its own contract over its own uses (over `ui` today), or with no
-     `--contract` when its components name no service, `dist/studio.tar`;
-     a deploy pushes it `--no-live`;
+   - SV-6: **no studio step.** The studio is plexus-studio's (SV-5): it is
+     seeded once from that repository (its `scripts/build.sh`, then
+     `plexus-ui push --no-live`, the bundle named `studio`) and from then on
+     edited in place in the database (`ui.author { bundle: "studio" }`).
+     A build makes no `dist/studio.tar`, and a deploy pushes none — not even
+     an older release's, whose push would move `bundle:studio` off what was
+     authored. The bundle is `svelte/1` alone (SV-4), and the tool refuses
+     an rhx source (SV-6; no `--allow-rhx` here);
    - `ui-compiler-wasm` — the framework's `$PUI/scripts/ui-compiler-wasm.sh
      dist/ui-compiler.wasm` (rustup's `wasm32-unknown-unknown`; FRAME-7):
      the compiler module. A release of v2 always carries it: no script, a
@@ -189,7 +190,6 @@ the owner's.
    bin/run-menger              its launcher (deploy/launch/run-menger)
    bin/plexus-ui               the tool that built the bundle, and pushes it (not in the image)
    dist/ui.tar                 the UI's bundle, pushed after the deploy
-   dist/studio.tar             the framework's studio, pushed --no-live after it
    dist/ui-compiler.wasm       the compiler module, --ui-compiler
    RELEASE                     release, commit, branch, subject, built, rustc, profile, steps, gate
    SUITE, TESTED               marks, once its suite ran and once test passed it

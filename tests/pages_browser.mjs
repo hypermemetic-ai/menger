@@ -264,6 +264,10 @@ async function main() {
   // ```component definitions save (tests/pages/components.mjs).
   server.uiCompiler = compilerModule(work);
   server.authorKey = path.join(work, "author.key");
+  // SV-6: a ticket's ```component definition is rhx (rhx/1) unless it says html or is v1's —
+  // components.mjs tests that feature, so this run allows rhx (--ui-allow-rhx); the bundle is
+  // svelte/1 alone and pushes clean either way.
+  server.allowRhx = true;
   const session = path.join(work, "session");
   let browser;
   // FRAME-14: from the start on, a failure anywhere stops the server.

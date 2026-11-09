@@ -6,7 +6,9 @@
 //!
 //! FRAME-8: the bundle is built by the framework's tool, `plexus-ui build`
 //! (`scripts/plexus-ui`, ../plexus-ui's cli/ built into this checkout's
-//! target) — `--ui` a one-component fixture compiled for real, `--engine` a
+//! target) — `--ui` a one-component fixture compiled for real (SV-6: real
+//! Svelte, svelte/1 — rhx is switched off; svelte and esbuild from the
+//! checkout's node_modules, `scripts/plexus-ui-src --node-modules`), `--engine` a
 //! stand-in engine — and `--contract-from` signs in to the spawned server as
 //! the fixture operator's key file and asks it `tickets.schema` (its `hash`
 //! is what the push's seam reads, `../plexus-ui/service/src/seam.rs`), never the whole
@@ -90,7 +92,10 @@ fn fixture(dir: &Path) {
     write(&dir.join("ui/index.html"), "<!doctype html><title>contract</title>\n");
     write(&dir.join("ui/routes.json"), &json!({ "#/": X }).to_string());
     write(&dir.join("ui/slots.json"), "{}");
-    write(&dir.join(format!("ui/src/{X}.rhx")), "<script>\n  prop(\"id\");\n  fn open(state, ev) { call(\"tickets.list\", #{ id: ev.props.id }); state }\n</script>\n<p class=\"row\" on:click={open}>{id}</p>\n");
+    write(
+        &dir.join(format!("ui/src/{X}.svelte")),
+        "<script module>\n  export const uses = [\"tickets.list\"];\n</script>\n<script>\n  import { bus } from \"plexus-ui/host\";\n  let { id } = $props();\n  const b = bus();\n  const open = () => b.call(\"tickets.list\", { id });\n</script>\n<button class=\"row\" onclick={open}>{id}</button>\n",
+    );
     write(&dir.join("engine/engine.js"), "export default function () {}\n");
     write(&dir.join("engine/engine.wasm"), "\0asm");
     // FRAME-12: the engine is three files — host.js is the JS face the tool copies into the bundle.
@@ -102,6 +107,7 @@ fn fixture(dir: &Path) {
 fn ui_build_run(dir: &Path, args: &[String]) -> (bool, String) {
     let root = env!("CARGO_MANIFEST_DIR");
     let run = Command::new("bash")
+        .env("PLEXUS_UI_NODE_MODULES", node_modules())
         .arg(format!("{root}/scripts/plexus-ui"))
         .arg("build")
         .arg(dir.join("ui"))
@@ -113,6 +119,20 @@ fn ui_build_run(dir: &Path, args: &[String]) -> (bool, String) {
         .expect("bash runs scripts/plexus-ui");
     let said = format!("{}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
     (run.status.success(), said)
+}
+
+/// SV-6: svelte and esbuild for the fixture's svelte/1 build — the plexus-ui
+/// checkout's node_modules (`scripts/plexus-ui-src --node-modules`, which
+/// runs `npm ci` there once when they are missing).
+fn node_modules() -> PathBuf {
+    static NM: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    NM.get_or_init(|| {
+        let root = env!("CARGO_MANIFEST_DIR");
+        let out = Command::new("bash").arg(format!("{root}/scripts/plexus-ui-src")).arg("--node-modules").arg(root).output().expect("bash runs scripts/plexus-ui-src");
+        assert!(out.status.success(), "scripts/plexus-ui-src --node-modules: {}", String::from_utf8_lossy(&out.stderr));
+        PathBuf::from(String::from_utf8_lossy(&out.stdout).trim()).join("node_modules")
+    })
+    .clone()
 }
 
 /// The text of `manifest.json` inside the tar `bytes`.
@@ -180,10 +200,10 @@ async fn another_hash_does_not_match() {
     let other = "0".repeat(16);
     assert_ne!(tickets_hash(&admin).await, other);
 
-    // FRAME-5: a component naming `tickets` — the contract is `tickets`' hash.
-    let mut manifest: Value = serde_json::from_str(&json_manifest(&other, "engine/1")).unwrap();
-    manifest["components"] = json!({ X: { "tree": "t", "handlers": "h", "uses": ["tickets.list"] } });
-    let evs = call(&admin, "ui.push", signed_params(&support::bundle(1), &manifest.to_string(), 1)).await;
+    // FRAME-5: a component naming `tickets` — the contract is `tickets`' hash
+    // (SV-6: a svelte/1 module, rhx being switched off).
+    let (params, _) = support::module_push_params(1, &other, X, &["tickets.list"]);
+    let evs = call(&admin, "ui.push", params).await;
     let p = pushed(&evs);
     assert_eq!(p["contract_matches"], false, "another hash is a difference, said: {p}");
 
