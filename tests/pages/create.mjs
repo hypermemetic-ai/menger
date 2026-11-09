@@ -20,21 +20,28 @@
 // (`genesis` on the throwaway), and `create_in_another_epic` went with `epics create`.
 import { bundle, push, sentCalls } from "../../scripts/ui-throwaway.mjs";
 
-const STUB = `<script>
-  // SURFACE-5's fixture: the rows' selection, until board-rows emits it (SURFACE-2).
-  prop("ids");
-  fn send(state, ev) { emit("board.selected", #{ ids: ev.props.ids.split(",") }); state }
+const STUB = `<script module>
+  export const uses = [];
+</script>
+
+<script>
+  // SURFACE-5's fixture: the rows' selection, until board-rows emits it (SURFACE-2). SV-4: real Svelte (svelte/1).
+  import { bus } from "plexus-ui/host";
+  import BulkBar from "plexus-ui:bulk-bar";
+  import BoardRows from "plexus-ui:board-rows-sv";
+  let { ids = "" } = $props();
+  const b = bus();
 </script>
 
 <div class="stub" data-surface="bulk-stub">
-  <button type="button" data-stub-select on:click={send}>select</button>
-  <bulk-bar/>
-  <div class="rows"><board-rows filter="in CRTB"/></div>
+  <button type="button" data-stub-select onclick={() => b.emit("board.selected", { ids: ids.split(",") })}>select</button>
+  <BulkBar/>
+  <div class="rows"><BoardRows filter="in CRTB"/></div>
 </div>
 
 <style>
-  :scope { display: block; }
   .rows { display: flex; height: 320px; }
+  .rows > :global(*), .rows > :global(*) > :global(*) { flex: 1; min-width: 0; display: flex; }
 </style>
 `;
 
@@ -256,7 +263,7 @@ export default async (ctx) => {
     const fixture = bundle(work, "create-fixture", {
       engine: v1.engine,
       edit: (ui) => {
-        fs.writeFileSync(path.join(ui, "src", "bulk-stub.rhx"), STUB);
+        fs.writeFileSync(path.join(ui, "src", "bulk-stub.svelte"), STUB);
         const routes = JSON.parse(fs.readFileSync(path.join(ui, "routes.json"), "utf8"));
         routes["#/bulk-stub/:ids"] = "bulk-stub";
         fs.writeFileSync(path.join(ui, "routes.json"), JSON.stringify(routes));

@@ -7,9 +7,11 @@ person reads in the browser and an agent reads with `synapse`, both over one
 signed-in WebSocket, every change pushed to every open page as it happens.
 v2 keeps v1's core — the tickets store, its filter language, its access
 rules — and replaces v1's browser app with a **ui service**: pages are
-components written in rhx (Rhai in markup, `ui/src/<name>.rhx`, profile
-`rhx/1`; `../plexus-ui/CONTRACT.md`), pushed as signed bundles,
-versioned by content hash and drawn by a small engine.
+components written in real Svelte (`ui/src/<name>.svelte`, profile
+`svelte/1`; `../plexus-ui/CONTRACT.md`), pushed as signed bundles,
+versioned by content hash and drawn by a small engine. SV-4: rhx (Rhai in
+markup, `rhx/1`) is retired from menger's UI — its sources are kept in
+`ui/retired-rhx/`, out of the bundle.
 
 v1 is tag `v0.0.1`; what v2 cut — the chats, comments, deployments, themes, notes, assignees and components, the Leptos app (trunk) with the frames' SDK (sdk-codegen) and mockups, the diagrams service — lives there. Media came back as a service of its own (V2-24, "The services"), and documents have a service of their own (V2-29, `docs`). Every input is held to a per-user allowance by the quota service (V2-31).
 
@@ -1393,17 +1395,18 @@ this is its layout. A bundle is a tar:
 ```
 index.html                 the entrypoint (the shell stamps it)
 engine.js  engine.wasm     the engine, abi engine/1
-manifest.json              abi, contract, commit, routes, slots, components (profile rhx/1, hashes, uses)
-components/<name>.json     each component's view tree
-components/<name>.rhai     its handlers
+manifest.json              abi, contract, commit, routes, slots, components (profile svelte/1, hashes, uses)
+components/svelte-runtime.js  FRAME-26: the bundle's one svelte/1 runtime
+components/<name>.js       each component's module (real Svelte, compiled at build)
 components/<name>.css      FRAME-30: its sheet, its <style> scoped to its element
 theme.css                  FRAME-30: the tokens, ui/theme.toml compiled
-src/<name>.rhx             the sources (rhx), kept
+src/<name>.svelte          the sources (real Svelte, svelte/1), kept
 ```
 
-UI-4 pins the source dialect, rhx (a `<script>` of Rhai and a template;
-a `.svelte` is real Svelte, `svelte/1`, FRAME-13), the tree's schema, the
-`engine/1` host interface, sections, and the sanitizer's allow-list.
+UI-4 pins the source dialects — rhx (a `<script>` of Rhai and a template;
+SV-4: retired from menger's UI, `ui/retired-rhx/`) and real Svelte
+(`svelte/1`, FRAME-13), menger's — the tree's schema, the `engine/1` host
+interface, sections, and the sanitizer's allow-list.
 
 ### The compiler (UI-5)
 
@@ -1462,11 +1465,9 @@ the UI holds no uid for is linked by its name, `#/ticket/<ID>`
 bookmarks; once the page has the ticket, the address bar is put in the uid
 form in place (`history.replaceState`: no history entry, no route change),
 and a stale tail is put right the same way. `tests/links_check.mjs` refuses
-a ticket's route spelled anywhere else in `ui/src`; rhx/1 imports no code,
-so the rhx twins (`#/rhx/…`) spell it inline, by uid (`"#/t/" + r.uid + "/"
-+ r.id`, V2-50: no slug, which the page puts right) or by name for a row
-with no uid (ticket-chip holds an id alone; the nav's shortcode root comes in
-a group, which carries no uid). `tests/pages/links.mjs` is the page group.
+a ticket's route spelled anywhere else in `ui/src` (SV-4: every component
+there is svelte/1, so every link comes from the helper).
+`tests/pages/links.mjs` is the page group.
 
 **V2-50 (the rest of main's TICKETS-36):**
 
@@ -1494,11 +1495,19 @@ on two shortcodes named CLX.
 `theme.css` loaded first), `theme.toml` (the tokens, light and dark —
 `[colour.paper]` `"--bg" = [light, dark, "what it paints"]`, …; every
 component's `<style>` paints with them, never a literal), `routes.json` (`#/board` and `#/f/:filter`
-→ `board-frame`, `#/` and `#/edit/:id` → `page-editor`, `#/ticket/:id` → `ticket-page`; V2-42: `#/t/:uid` and
+→ `board-frame`, `#/` and `#/edit/:id` → `page-editor`, `#/ticket/:id` → `page-ticket`; V2-42: `#/t/:uid` and
 `#/t/:uid/:tail` → `page-t`, `#/t/:uid/:tail/edit` → `page-editor` — "A ticket's link" below), `slots.json` (the
-layouts' default sections), `src/*.rhx` (`board-layout`, `board-rows`,
-`filter-line`, `jump-palette`, `nav-tree`, `nav-flat`, `nav-children`,
-`ticket-page`, `ticket-chip`, `page-shell`, `hello-list`).
+layouts' default sections), `src/*.svelte` (every component, real Svelte,
+`svelte/1`). **SV-4 (owner, 2026-11-09: "don't remove, just port and stop
+using completely"): rhx is retired.** menger's 34 rhx components moved to
+`ui/retired-rhx/` — kept in the repository, never built — each ported:
+the thin pages (`page-*`), `board-frame`, `page-shell` and `hello-list` to
+`src/<name>.svelte` (real Svelte, svelte/1) under the same name (so routes, sections and the
+studio's rows keep naming them), and the board's rhx half (`board-layout`,
+`board-rows`, `filter-line`, `jump-palette`, `nav-tree`, `nav-flat`,
+`nav-children`, `ticket-chip`) to the `-sv` twins already there, the rhx
+ticket page (`ticket-page`) to `page-ticket`. `routes.json` and
+`slots.json` name only svelte/1 components.
 
 SURFACE-10: the tokens are whole — APP-114's sheet (the designer's), every
 builder's addition folded in, each token once: the paper (`--bg`, `--panel`,
@@ -1524,36 +1533,33 @@ component to the sheet, every `var(--…)` to a token, every state to its
 alias; `tests/pages/sheet.mjs` draws it and writes `sheet-light.png` and
 `sheet-dark.png`.
 
-FRAME-14: the board is in two profiles. Beside each of the four board
-components above (`board-layout`, `board-rows`, `nav-tree`, `jump-palette`)
-is its real Svelte twin, `src/<name>-sv.svelte` (`svelte/1`:
-compiled at build in Node, `--node-modules ../plexus-ui/node_modules`), with
-the same calls and the same DOM marks. SURFACE-2 (owner, 2026-10-30: "I want
+FRAME-14: the board was in two profiles; SV-4 keeps the real Svelte one.
+Each board component is `src/<name>-sv.svelte` (`board-layout-sv`,
+`board-rows-sv`, `nav-tree-sv`, `jump-palette-sv`; `svelte/1`: compiled at
+build in Node, `--node-modules ../plexus-ui/node_modules`). SURFACE-2 (owner, 2026-10-30: "I want
 svelte components"): the real Svelte board is the default, at `#/board`
 (EDITOR-4, EDITOR-8: `#/` and `#/edit/:id` are the editor, `page-editor` placing
 `editor-screen`: one surface — `editor-body`, the ticket drawn by
 `ticket-view` and edited where it is drawn, a block away from the caret drawn
 as `#/ticket/:id` draws it, the caret's block its markdown — and the documents
 beside it, with `+ new`),
-`#/f/:filter` and `#/ticket/:id` (`#/sv/…` its alias), and the rhx board the
-comparison at `#/rhx/`, `#/rhx/f/:filter` and `#/rhx/ticket/:id`. The Svelte
-board is drawn in `board-frame.rhx`, an rhx layout that only places its
-sections (a section is the host's, and only an rhx template marks one), whose
-defaults are the svelte/1 ones — `top` the app's top (`app-top`: the live
+`#/f/:filter` and `#/ticket/:id` (`#/sv/…` its alias, and SV-4: `#/rhx/`,
+`#/rhx/f/:filter` and `#/rhx/ticket/:id` too, where the rhx board stood).
+The board is drawn in `board-frame`, a svelte/1 layout that only places its
+sections — DOM marks, `<div data-slot="nav" data-filter={filter}>`, which
+the host fills (`../plexus-ui/CONTRACT.md` "A layout in any profile") — whose
+defaults are — `top` the app's top (`app-top`: the live
 count, search, the links, the palette's button), `bar`
 `board-layout-sv` (the top bar and its filter line), `nav`, `keys` the
 board's keymap (`keys-help`), `main`, `bulk` the bulk bar (`bulk-bar`,
-hearing the rows' `board.selected`) and `palette`. The rhx board at `#/rhx/`
-is the comparison, and its links and filter line land on the real Svelte pages
-(`#/ticket/:id`, `#/f/:filter`) by design: rhx reads no route prefix. The board's keys are `board-rows-sv`'s (FRAME-36's
+hearing the rows' `board.selected`) and `palette`. The board's keys are `board-rows-sv`'s (FRAME-36's
 `bus.keys`: `j`/`k`, `enter`, `x`, `shift+x`, `c`, `/` the filter line,
 `g b`, `g r`, `g w`, `escape`; `ctrl+k` the palette's own; `?` the host's
 overlay), its selection
 `[data-selected]` and `[data-checked]`, said on the bus as `board.selected
-{ ids }` and `board.focus { id }`. The rhx components stay
-the defaults of `board-layout`'s sections; a right-click on one puts the
-real Svelte twin there (`ui slots set`), and `ui slots clear` takes it back.
-FRAME-25: the real Svelte twins ride FRAME-19's bus as the rhx ones do — the
+{ ids }` and `board.focus { id }`. A right-click on a section puts another
+component there (`ui slots set`), and `ui slots clear` takes it back.
+FRAME-25: the board rides FRAME-19's bus — the
 palette's `live` held by `when` and its typing coalesced by `debounce_ms: 80`,
 the window's by `debounce_ms: 20`, in the host's registry (no timer of
 menger's own); the body through `markdown` from `plexus-ui/host`, the engine's
@@ -1563,15 +1569,16 @@ shortcode's children and a page's chips as svelte/1 siblings
 parent and bundled into that module, and each a component in its own right
 with no route or slot of its own; `tests/apart.rs` holds it to that.
 
-STUDIO-12: **a page is an rhx component of components.** Every route but
-the board's draws an rhx page, `src/page-<name>.rhx` — a `<section
-class="page page-<name>">` that places the feature's svelte/1 components
-by their marks (`<search-page q={q} filter={filter}/>`, a bound mark the
+STUDIO-12: **a page is a component of components.** Every route but
+the board's draws a page, `src/page-<name>.svelte` (SV-4: svelte/1, the
+rhx pages' ports) — a `<section class="page page-<name>">` that places the
+feature's components by their bound marks (`import SearchPage from
+"plexus-ui:search-page"`, then `<SearchPage {q} {filter}/>`: a mark the
 host fills, its props from the route) and carries the app's top as its
-`top` section (`app-top`, `slots.json`) and the palette as its `palette`
-section (`jump-palette-sv`: the top's jump button and `ctrl+k` open it), so the studio's "edit this page"
-edits every page in the browser while the components stay svelte/1 and the
-repository's: `page-ticket` (`#/ticket/:id`; the head, body, edit,
+`top` section (`<div data-slot="top" data-here="search">`, `app-top` by
+`slots.json`) and the palette as its `palette` section (`jump-palette-sv`:
+the top's jump button and `ctrl+k` open it), so the studio's "edit this page"
+reaches every page while the components stay the repository's: `page-ticket` (`#/ticket/:id`; the head, body, edit,
 relations, actions, commits, history and revisions — the ticket page's
 skeleton, "no such ticket", the deleted notice and its keys `e`, `escape`,
 `g b` are the page's, `escape` and `g b` to `#/` under either prefix, and
@@ -1581,8 +1588,8 @@ its key strip), `page-new`, `page-search`, `page-ready` and `page-waves`
 `page-edit`, `page-actions`, `page-facets` and `page-counts` draw one
 component alone for its browser cases. A placed component keeps its
 behaviour and its look and loses the page's chrome to the page — the board
-link and the jump button (app-top's), the page's title, the palette's mark. No route draws a
-svelte/1 component; `tests/apart.rs` holds it to that.
+link and the jump button (app-top's), the page's title, the palette's mark;
+`tests/apart.rs` holds it to that.
 plexus-ui's `plexus-ui` tool (FRAME-8; `scripts/plexus-ui` builds it
 from the checkout `scripts/plexus-ui-src` names into this checkout's target and runs it) builds it into
 `dist/ui.tar`: `build --prebuild` the engine (cargo: `wasm32-unknown-unknown`

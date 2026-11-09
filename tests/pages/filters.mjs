@@ -13,8 +13,7 @@
 //       with `[data-held]`, `[data-selected]` when the filter holds the chip's `data-rule`
 //   nav-counts (#/counts/:filter)  `[data-surface=nav-counts] [data-field=count]`, `[data-refused]`
 //   filters-saved, nav-facets, nav-counts are svelte/1 (owner, 2026-10-30); the marks are the profile's own business
-//   filter-line (the top bar; filter-line.rhx on the rhx board, filter-line-sv on the Svelte one — `#/rhx/` and
-//       `#/` once SURFACE-2 makes the Svelte board the default, `#/` and `#/sv/` before)
+//   filter-line (the top bar: filter-line-sv, board-layout-sv's; SV-4: the rhx line, filter-line.rhx, is retired)
 //       `input[data-filter-input]`, `[data-filter-check=ok|refused]`
 //       (`[data-refused]`), saved names offered as `[data-complete=<name>]`
 //   PERF-22: the board's `[data-board][data-surface=board-rows]` gains `[data-drawn]` once its first
@@ -31,11 +30,8 @@ export default async (ctx) => {
   const hash = (page) => page.evaluate(() => decodeURIComponent(location.hash));
   const saved = (page) => page.locator("[data-surface=filters-saved]");
   const facets = (page) => page.locator("[data-surface=nav-facets]");
-  // SURFACE-2 makes the Svelte board the default (`#/`, `#/f/:filter` → board-frame; the rhx
-  // board at `#/rhx/…`); before it, the rhx board is at `#/` and the Svelte one at `#/sv/`.
-  const routes = JSON.parse(ctx.fs.readFileSync(new URL("../../ui/routes.json", import.meta.url), "utf8"));
-  const svelteFirst = routes["#/f/:filter"] === "board-frame";
-  const boardLayout = svelteFirst ? "board-frame" : "board-layout";
+  // SURFACE-2: the board is board-frame (`#/board`, `#/f/:filter`); SV-4: the rhx board is retired.
+  const boardLayout = "board-frame";
   const held = (filter) => sy("tickets", "nav", "counts", "--filter", filter).filter((e) => e.type === "count").reduce((a, c) => a + c.held, 0);
 
   // PERF-22: the rows are what the person waits for. On the board the nav's
@@ -94,7 +90,7 @@ export default async (ctx) => {
       engine: v2.engine,
       edit: (ui) => {
         // v2's own edit to the board, so the board's hash stays v2's…
-        for (const f of ["board-rows.rhx", "board-rows-sv.svelte"]) {
+        for (const f of ["board-rows-sv.svelte"]) {
           const at = path.join(ui, "src", f);
           if (!fs.existsSync(at)) continue;
           fs.writeFileSync(at, fs.readFileSync(at, "utf8").replace(".board-count { color: var(--ink);", ".board-count { color: var(--accent);"));
@@ -350,16 +346,8 @@ export default async (ctx) => {
     }
     // The filter line: checked on each pause, saved names completed, Escape clears.
     sy("tickets", "filters", "save", "--name", "S6 spikes", "--filter", "kind spike");
-    // On both boards: the rhx line (filter-line.rhx) and the Svelte one (filter-line-sv, board-layout-sv's).
-    for (const L of [
-      // the rhx line's Escape goes to `#/board` (it cannot know its board's route; EDITOR-4: `#/` is the editor), the Svelte line's to its board's root
-      svelteFirst
-        ? { name: "rhx", route: "#/rhx/", f: "#/rhx/f/", home: ["#/rhx/", "#/board"], focuses: false }
-        : { name: "rhx", route: "#/board", f: "#/f/", home: ["#/board", "#/board"], focuses: false },
-      svelteFirst
-        ? { name: "sv", route: "#/board", f: "#/f/", home: ["#/board", "#/board"], focuses: true, slash: true }
-        : { name: "sv", route: "#/sv/", f: "#/sv/f/", home: ["#/sv/", "#/sv/"], focuses: true },
-    ]) {
+    // On the board: the line is filter-line-sv, board-layout-sv's (SV-4: the rhx line is retired).
+    for (const L of [{ name: "sv", route: "#/board", f: "#/f/", home: ["#/board", "#/board"], focuses: true, slash: true }]) {
       {
         const { page, context } = await openPage(L.route);
         try {
@@ -386,10 +374,7 @@ export default async (ctx) => {
           await offer.click();
           assert(L.home.includes(await hash(page)), `${L.name}: a click on a completion applies nothing (Enter applies, a blur does not)`);
           await eventually("the name completes the line", async () => (await input().inputValue()) === 'kind build or saved "S6 spikes"', 3000);
-          // The rhx line draws the field again to set its text (the engine sets `value` as an
-          // attribute) and cannot focus it: `autofocus` on a later-inserted field is the
-          // browser's to ignore, and it does, now and then — FRAME-39's gap. The Svelte line
-          // binds the value and keeps the focus.
+          // The line binds the value and keeps the focus.
           const focused = await page.evaluate(() => document.activeElement?.matches("input[data-filter-input]") ?? false);
           if (L.focuses) assert(focused, `${L.name}: the field keeps the focus after a completion`);
           else console.log(`     the ${L.name} field after a completion: ${focused ? "focused" : "not focused (FRAME-39: the engine cannot focus)"}`);

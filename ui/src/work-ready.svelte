@@ -12,7 +12,7 @@
      of how many (`data-approx`). A write that moves more than 256 tickets is
      a `recount`, not their entered/left: the list is then marked stale
      (`data-state="stale"`) until it is read again.
-     STUDIO-12: the page's title is page-ready's (rhx). -->
+     STUDIO-12: the page's title is page-ready's. -->
 <script module>
   const FIELDS = ["id", "uid", "title", "kind", "status", "severity", "parent"];
   const RANK = { Critical: 0, High: 1, Medium: 2, Low: 3 };

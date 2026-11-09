@@ -27,25 +27,18 @@
   import { live } from "plexus-ui/host";
   import AppTop from "plexus-ui:app-top";
   import BoardFrame from "plexus-ui:board-frame";
-  import BoardLayout from "plexus-ui:board-layout";
   import BoardLayoutSv from "plexus-ui:board-layout-sv";
-  import BoardRows from "plexus-ui:board-rows";
   import BoardRowsSv from "plexus-ui:board-rows-sv";
   import BulkBar from "plexus-ui:bulk-bar";
-  import FilterLine from "plexus-ui:filter-line";
   import FilterLineSv from "plexus-ui:filter-line-sv";
   import FiltersSaved from "plexus-ui:filters-saved";
   import HelloList from "plexus-ui:hello-list";
-  import JumpPalette from "plexus-ui:jump-palette";
   import JumpPaletteSv from "plexus-ui:jump-palette-sv";
   import KeysHelp from "plexus-ui:keys-help";
-  import NavChildren from "plexus-ui:nav-children";
   import NavChildrenSv from "plexus-ui:nav-children-sv";
   import NavCounts from "plexus-ui:nav-counts";
   import NavFacets from "plexus-ui:nav-facets";
-  import NavFlat from "plexus-ui:nav-flat";
   import NavFlatSv from "plexus-ui:nav-flat-sv";
-  import NavTree from "plexus-ui:nav-tree";
   import NavTreeSv from "plexus-ui:nav-tree-sv";
   import OrgsList from "plexus-ui:orgs-list";
   import PageActions from "plexus-ui:page-actions";
@@ -89,7 +82,6 @@
   import CodeHtml from "plexus-ui:code-html";
   import CodeCss from "plexus-ui:code-css";
   import CodeLegacy from "plexus-ui:code-legacy";
-  import TicketChip from "plexus-ui:ticket-chip";
   import TicketChipSv from "plexus-ui:ticket-chip-sv";
   import TicketLinks from "plexus-ui:ticket-links";
   import PageT from "plexus-ui:page-t";
@@ -108,7 +100,6 @@
   import PageEditor from "plexus-ui:page-editor";
   import TicketHead from "plexus-ui:ticket-head";
   import TicketHistory from "plexus-ui:ticket-history";
-  import TicketPage from "plexus-ui:ticket-page";
   import TicketPicker from "plexus-ui:ticket-picker";
   import TicketRelations from "plexus-ui:ticket-relations";
   import TicketRevisions from "plexus-ui:ticket-revisions";
@@ -182,37 +173,29 @@
   const SHEET = [
     ["the board", [
       ["board-rows-sv", BoardRowsSv, F, ["hover", "focus", "selected", "checked"], fil],
-      ["board-rows", BoardRows, F, ["hover", "focus"], fil],
       ["app-top", AppTop, (t) => ({ here: "board" }), ["hover", "focus"], {}],
       ["board-layout-sv", BoardLayoutSv, F, ["hover", "focus"], { refused: { filter: REFUSED } }],
       ["filter-line-sv", FilterLineSv, (t) => ({ filter: "status Ready" }), ["hover", "focus"], { refused: { filter: REFUSED } }],
-      ["filter-line", FilterLine, (t) => ({ filter: "status Ready" }), ["hover", "focus"], { refused: { filter: REFUSED } }],
       ["bulk-bar", BulkBar, (t) => ({ ids: t }), ["hover", "focus", "disabled"], { loading: { sheet: "loading" } }, false, { disabled: ["[data-action=dry-run]"] }],
       ["keys-help", KeysHelp, F, [], {}],
       ["ticket-chip-sv", TicketChipSv, ID, ["hover", "focus"], gone],
-      ["ticket-chip", TicketChip, ID, ["hover", "focus"], gone],
       // V2-42: a ticket's link, from the one helper (by name here: the sheet's id has no uid in hand).
       ["ticket-links", TicketLinks, ID, [], {}],
     ]],
     ["the nav", [
       ["nav-tree-sv", NavTreeSv, F, ["hover", "focus", "checked"], fil, false, { checked: ["[data-nav-mode=flat]"] }],
-      ["nav-tree", NavTree, F, ["hover", "focus", "checked"], fil, false, { checked: ["[data-nav-mode=flat]"] }],
       ["nav-flat-sv", NavFlatSv, F, ["hover", "focus"], fil],
-      ["nav-flat", NavFlat, F, ["hover", "focus"], {}],
       ["nav-children-sv", NavChildrenSv, (t) => ({ parent: t }), ["hover", "focus"], { empty: { parent: NONE } }],
-      ["nav-children", NavChildren, (t) => ({ parent: t }), ["hover", "focus"], { empty: { parent: NONE } }],
       ["nav-facets", NavFacets, (t) => ({ filter: "status Ready" }), ["hover", "focus", "selected"], fil],
       ["nav-counts", NavCounts, (t) => ({ filter: "status Ready", label: "ready" }), ["hover", "focus"], fil],
       ["filters-saved", FiltersSaved, F, ["hover", "focus"], {}],
     ]],
     ["the palette and the search", [
       ["jump-palette-sv", JumpPaletteSv, (t) => ({ sheet: code(t) }), ["hover", "focus", "selected"], { empty: { sheet: "zzqqxxjj" } }, false, HITS],
-      ["jump-palette", JumpPalette, (t) => ({ sheet: code(t) }), ["hover", "focus"], { empty: { sheet: "zzqqxxjj" } }, false, HITS],
       // STUDIO-12: its jump button is app-top's now — disabled is the pager's prev, on a query the bodies answer.
       ["search-page", SearchPage, (t) => ({ q: t }), ["hover", "focus", "disabled", "selected"], { disabled: { q: "ready" }, loading: { q: t0(), sheet: "loading" }, empty: { q: "zzqqxxjj" }, refused: { q: "ready", filter: REFUSED } }, true, { disabled: ["[data-action=prev]"] }],
     ]],
     ["the ticket", [
-      ["ticket-page", TicketPage, ID, ["hover", "focus"], gone, true],
       ["ticket-head", TicketHead, ID, ["hover", "focus"], gone],
       // V2-50: the collision page and a name's resolution, by the sheet's id (one ticket: no rows; its empty, a name none fits).
       ["ticket-collision", TicketCollision, ID, [], gone],
@@ -280,7 +263,7 @@
       ["quota-table", QuotaTable, F, ["hover", "focus", "disabled"], { loading: { sheet: "loading" } }],
       ["ui-versions", UiVersions, F, ["hover", "focus", "disabled"], { loading: { sheet: "loading" } }, true],
     ]],
-    // STUDIO-12: the pages — each route's rhx page, placing its components by their marks (#/sheet's own, page-sheet, aside: it places this).
+    // STUDIO-12: the pages — each route's page (svelte/1, SV-4), placing its components by their marks (#/sheet's own, page-sheet, aside: it places this).
     ["the pages", [
       ["page-ticket", PageTicket, ID, [], { loading: { sheet: "loading" }, ...gone }, true],
       // V2-42: a ticket by its uid; V2-50: the sheet's id is no uid, so it draws "not a uid".
@@ -308,7 +291,6 @@
     ]],
     ["the layouts", [
       ["board-frame", BoardFrame, F, [], {}, true],
-      ["board-layout", BoardLayout, F, ["hover", "focus"], {}, true],
       ["page-shell", PageShell, F, [], {}, true],
       ["hello-list", HelloList, F, [], {}],
     ]],

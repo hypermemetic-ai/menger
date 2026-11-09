@@ -2,7 +2,7 @@
      svelte/1 — `orgs.list`, one `org { name, aliases, roots, shortcodes,
      tickets }` each, in the order they were made. A one-shot read: the
      organizations have no watch.
-     STUDIO-12: the page's title is page-orgs's (rhx). -->
+     STUDIO-12: the page's title is page-orgs's. -->
 <script module>
   export const uses = ["orgs.list"];
 </script>

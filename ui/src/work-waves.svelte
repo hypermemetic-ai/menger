@@ -10,7 +10,7 @@
      chip 26 px tall and 8 px apart; the sheet holds both). A hovered chip
      lights its lines and the chips they join; a click opens the ticket. A
      route or a kind moved asks again.
-     STUDIO-12: the page's title is page-waves's (rhx). -->
+     STUDIO-12: the page's title is page-waves's. -->
 <script module>
   const KINDS = ["scope", "execution", "build", "gap", "spike"];
   // The pitch the sheet draws at (.lanes, .lane, .lane-head, .chip).

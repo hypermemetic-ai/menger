@@ -1,8 +1,9 @@
 <!-- FRAME-14: board-layout's own part in real Svelte (svelte/1) — the top bar
      and its filter line, filter-line-sv (SURFACE-6: filter-line.rhx's twin,
      a sibling component of its own; the app's name and link are app-top's,
-     SURFACE-2). The sections are board-frame's, an rhx
-     layout: a svelte/1 module mounts no section. -->
+     SURFACE-2). The sections are board-frame's (SV-4: a svelte/1 layout,
+     its sections DOM marks the host fills; board-layout.rhx is retired to
+     ui/retired-rhx/). -->
 <script module>
   export const uses = [];
 </script>

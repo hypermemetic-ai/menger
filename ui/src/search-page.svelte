@@ -5,7 +5,7 @@
      first), each hit's title and passage marked as the method marked them,
      paged by offset eight at a time — the `searched` event (matched, next)
      is the pager, kept as a row by `upsert:.`. A filter the service refuses
-     is said in its words. STUDIO-12: the page is page-search's (rhx) — the
+     is said in its words. STUDIO-12: the page is page-search.s — the
      board link and the jump button are app-top's in its `top` section, the
      palette its `palette` section's; this is the query's lists. -->
 <script module>

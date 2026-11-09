@@ -43,7 +43,8 @@ export default async (ctx) => {
   const work = path.dirname(session);
   const repo = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", "..");
   const names = fs.readdirSync(path.join(repo, "ui", "src"))
-    .map((f) => f.replace(/\.(rhx|svelte)$/, ""))
+    .filter((f) => f.endsWith(".svelte"))
+    .map((f) => f.replace(/\.svelte$/, ""))
     .filter((n) => n !== "sheet-page" && n !== "page-sheet") // STUDIO-12: page-sheet places the sheet
     .sort();
   const tar = (...a) => execFileSync("tar", a, { encoding: "utf8", maxBuffer: 64 << 20 });

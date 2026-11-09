@@ -143,12 +143,11 @@ synapse -P 4460 menger ui watch          # open-ended
 
 **The UI's source** is `ui/` — `index.html` (the page's frame alone),
 `theme.toml` (the tokens, FRAME-30: the bundle's `theme.css`), `routes.json`, `slots.json`,
-`src/*.rhx` — each component carrying its look in a `<style>` on the tokens — compiled by `../plexus-ui`'s `plexus-ui-compiler`
-(UI-5: rhx, profile `rhx/1` → a view tree and Rhai handlers;
-native and as a wasm module with no imports) and drawn by its
-`plexus-ui-engine` (UI-6, UI-10: signals,
-`live()`, the DOM renderer, the Rhai folds, hot-swap on `ui.watch`,
-sections, the sanitized `{@html markdown()}`). The contract between them is
+`src/*.svelte` — each component real Svelte (`svelte/1`, FRAME-13), carrying its look in a `<style>` on the tokens — compiled at
+build by `../plexus-ui`'s tool (real Svelte's compiler in Node, one ES module per component and the bundle's one runtime)
+and drawn by its `plexus-ui-engine` (UI-6, UI-10: the host, `live()`, hot-swap on `ui.watch`,
+sections, the sanitized `{@html markdown()}`). SV-4: rhx (`rhx/1`, Rhai in markup, which
+`plexus-ui-compiler` compiles) is retired from menger's UI — its 34 sources are kept in `ui/retired-rhx/`, never built. The contract between them is
 `../plexus-ui/CONTRACT.md` (it was ticket **UI-4** on the tracker); README
 "The component contract" has the bundle's layout. The two crates and the
 tool that builds, signs and pushes a bundle — `plexus-ui` (FRAME-8) — are
@@ -169,41 +168,56 @@ plexus-ui-compiler --test golden` in `../plexus-ui`.
 ## Adding a component
 
 From an idea to a component on app-test, top to bottom. The dialect is
-rhx (Rhai in markup, `ui/src/<name>.rhx`, profile `rhx/1`), the
-framework's contract's, plexus-ui's `CONTRACT.md` (it was UI-4): a `<script>` of Rhai — `prop()`,
-`state()`, `live()`, and handlers as folds `fn name(state, ev) { …; state }`
-— and a template of `{expr}`, `{#if}`, `{#each … as x (key)}`,
-`on:event={handler}`, another component as `<name prop={…}/>`, and in a
-layout `<slot name="…"/>`. `ui/src/*.rhx` are the worked examples; a
-`.svelte` is real Svelte (`svelte/1`, FRAME-13): `ui/src/*-sv.svelte` are the board's real-Svelte twins, the default board at `#/` since SURFACE-2 (the rhx one at `#/rhx/`; FRAME-14, README "The bundle in the repository").
+real Svelte 5 with runes (`svelte/1`, FRAME-13; `ui/src/*.svelte`), the
+framework's contract's, plexus-ui's `CONTRACT.md` "svelte/1" (it was UI-4): a
+`<script module>` declaring `export const uses = [...]` (every method it
+calls, required), a `<script>` that imports `bus` and `live` from
+`plexus-ui/host`, takes `$props()` and keeps `$state`, a template of real
+Svelte, and one `<style>` on the tokens. Another component is placed by its
+bound mark, `import Rows from "plexus-ui:board-rows-sv"` (the host fills
+it, any profile); a sibling, real Svelte too, is bundled in, `import Chip from
+"./ticket-chip-sv.svelte"`; a layout declares its sections as DOM marks,
+`<div data-slot="main" data-filter={filter}></div>` (`board-frame`). The
+worked examples are `ui/src/*.svelte` — real Svelte all (svelte/1); rhx
+(`ui/retired-rhx/`, SV-4) is retired and never written again.
 
-**1. Write it** — `ui/src/ticket-kids.rhx`, a ticket's children, live (a
+**1. Write it** — `ui/src/ticket-kids.svelte` (real Svelte, svelte/1), a ticket's children, live (a
 new child appears, a status moves, a delete goes):
 
-```rhx
+```html
+<script module>
+  export const uses = ["tickets.list", "tickets.watch"];
+</script>
+
 <script>
-  prop("id");
-  state(#{ open_only: false });
-  let kids = live(#{ snapshot: "tickets.list", params: #{ parent: id, summary: true, limit: 200 },
-                     changes: "tickets.watch", key: "id",
-                     on: #{ created: "upsert:ticket", status_changed: "upsert:ticket", deleted: "remove:ids" } });
-  fn toggle(state, ev) { state.open_only = !state.open_only; state }
+  import { live } from "plexus-ui/host";
+  import { ticketHref } from "./ticket-links.svelte"; // the link helper (real Svelte)
+
+  let { id } = $props();
+  let openOnly = $state(false);
+  const kids = live({ snapshot: "tickets.list", params: () => ({ parent: id, summary: true, limit: 200 }),
+                      changes: "tickets.watch", key: "id",
+                      on: { created: "upsert:ticket", status_changed: "upsert:ticket", deleted: "remove:ids" } });
 </script>
 
 <section class="ticket-kids">
   <h2>{id}</h2>
-  <button on:click={toggle}>open only</button>
+  <button onclick={() => (openOnly = !openOnly)}>open only</button>
   <ul>
-    {#each kids as c (c.id)}
-      {#if !state.open_only || c.status != "Complete"}<li><a href={"#/ticket/" + c.id}>{c.id + " " + c.title}</a> {c.status}</li>{/if}
+    {#each kids.rows as c (c.id)}
+      {#if !openOnly || c.status !== "Complete"}<li><a href={ticketHref(c)}>{c.id} {c.title}</a> {c.status}</li>{/if}
     {/each}
   </ul>
 </section>
+
+<style>
+  .ticket-kids h2 { color: var(--muted); }
+</style>
 ```
 
 `live()` calls the snapshot once and folds the changes stream by `on`; an
 `upsert` keeps only rows that match the snapshot's params (`parent` here),
-so the list stays its own. Every method a component calls is its `uses`,
+so the list stays its own; `params: () => …` follows the prop. Every method a component calls is its `uses`,
 and a push checks each against the running tickets service.
 
 **2. Put it on screen.** A route names a component — `ui/routes.json`,
@@ -226,8 +240,8 @@ scripts/plexus-ui build --prebuild --engine dist/engine           # the engine (
 scripts/plexus-ui build ui --engine dist/engine -o dist/ui.tar    # the bundle; `--contract HASH` to stamp one
 ```
 
-A source the compiler refuses names its line (`ui/src/<name>.rhx:LINE:
-…`), and nothing is written. `scripts/plexus-ui --help` documents every
+A source the compiler refuses names its line (`ui/src/<name>.svelte:LINE:COLUMN:
+…`, real Svelte's compiler's words), and nothing is written. `scripts/plexus-ui --help` documents every
 command.
 
 **4. See it.** A dev server in local mode — no `--auth-provider`, so it
