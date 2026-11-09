@@ -242,9 +242,9 @@ async fn a_rollback_keeps_an_assignment_to_a_kept_version() {
     let token = support::mint_session(m.s.port).await;
     let cookie = format!("{}={token}", menger::login_names().session_cookie_for(&format!("http://127.0.0.1:{shell}")));
     let http = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
-    let file = http.get(format!("http://127.0.0.1:{shell}/app/{v2}/components/ticket-grid.json")).header("cookie", cookie).send().await.unwrap();
+    let file = http.get(format!("http://127.0.0.1:{shell}/app/{v2}/components/ticket-grid.js")).header("cookie", cookie).send().await.unwrap();
     assert_eq!(file.status(), 200, "v2's ticket-grid is served");
-    assert_eq!(file.text().await.unwrap(), support::component_json(2, "ticket-grid"), "as pushed");
+    assert_eq!(file.text().await.unwrap(), support::component_js(2, "ticket-grid"), "as pushed");
 }
 
 #[tokio::test]

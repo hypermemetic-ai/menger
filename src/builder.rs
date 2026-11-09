@@ -122,6 +122,9 @@ pub struct UiSetup {
     /// STUDIO-3: the key `ui.author` signs an editor's version with
     /// (`--ui-author-key`); none: every author refused `no_signer`.
     pub author: Option<plexus_ui_service::AuthorKey>,
+    /// SV-6: rhx taken (`--ui-allow-rhx`); false, the default: every push
+    /// and `ui.author` carrying an `rhx/1` component refused `rhx_disabled`.
+    pub allow_rhx: bool,
 }
 
 impl UiSetup {
@@ -142,7 +145,7 @@ impl UiSetup {
         }
         let store = UiStore::open_channel(path, channel).map_err(|e| anyhow::anyhow!("{} (--ui-channel {channel}): {e}", path.display()))?;
         tracing::info!("ui:        {} (channel {channel})", path.display());
-        Ok(Self { store: Arc::new(store), signers, compiler: None, author: None })
+        Ok(Self { store: Arc::new(store), signers, compiler: None, author: None, allow_rhx: false })
     }
 
     /// UI-15: the channel the store is on.
@@ -153,6 +156,12 @@ impl UiSetup {
     /// UI-7: pushes compile in `compiler` (`--ui-compiler`).
     pub fn compiling(mut self, compiler: Option<Compiler>) -> Self {
         self.compiler = compiler;
+        self
+    }
+
+    /// SV-6: rhx switched back on (`--ui-allow-rhx`).
+    pub fn allowing_rhx(mut self, allow: bool) -> Self {
+        self.allow_rhx = allow;
         self
     }
 
@@ -554,7 +563,8 @@ where
     // UI-7: and its pushes compiled in `--ui-compiler`'s module.
     // FRAME-5: the framework's, its caller the gate's (no access layer of
     // menger's in it).
-    let ui = UiActivation::new(ui.store, ui.signers).compiling(ui.compiler).authoring(ui.author);
+    // SV-6: rhx refused unless --ui-allow-rhx.
+    let ui = UiActivation::new(ui.store, ui.signers).compiling(ui.compiler).allowing_rhx(ui.allow_rhx).authoring(ui.author);
     // FRAME-5: the gate's grants generation moves with the store's count, so
     // a watch held by the gate (`ui.watch`) hears `members.*` too.
     let generation = grants_generation(&store);

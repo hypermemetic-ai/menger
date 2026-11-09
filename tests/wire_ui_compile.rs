@@ -13,6 +13,12 @@
 //! against the sandbox's answer, never a native compile. One server runs
 //! with no `--ui-compiler`: the lint and the contract check still run.
 //! Servers on ports the OS hands out, their files under /tmp/claude-1000.
+//!
+//! SV-6: rhx is switched off; these are rhx's own tests, so every server
+//! here is started `--ui-allow-rhx` (in process, `UiSetup::allowing_rhx`)
+//! — but `rhx_is_refused_without_ui_allow_rhx`, which starts one without
+//! it: an rhx push refused `rhx_disabled` naming the component, a svelte/1
+//! one taken.
 
 mod support;
 
@@ -56,6 +62,8 @@ async fn spawn(compiler: bool, shell: bool) -> Server {
     if compiler {
         extra.extend(["--ui-compiler".to_string(), support::ui_compiler_wasm().display().to_string()]);
     }
+    // SV-6: these are rhx's own tests — rhx is switched off unless allowed.
+    extra.push("--ui-allow-rhx".to_string());
     let s = spawn_menger(free_port().await, &dir.path().join("t.db"), &extra).await;
     if let Some(p) = shell_port {
         for _ in 0..100 {
@@ -393,7 +401,7 @@ where
     let backend = Arc::new(menger::auth_backend::MengerAuth::new(login.access.clone(), vec![], None, BRANDING.app));
     let signers = plexus_ui_service::Signers::parse(&[support::public_hex(&support::UI_SIGNER)]).expect("the test signer");
     let compiler = plexus_ui_service::Compiler::new(&module).expect("the module is taken");
-    let ui = menger::UiSetup::open(&dir.join("ui.db"), signers).unwrap().compiling(Some(compiler));
+    let ui = menger::UiSetup::open(&dir.join("ui.db"), signers).unwrap().compiling(Some(compiler)).allowing_rhx(true);
     let service = menger::build_rpc_ui_over(
         &dir.join("t.db"),
         None,
@@ -474,4 +482,23 @@ async fn ten_components_timing() {
         runs.push(took);
     }
     println!("ten components, sources only, call → pushed: {runs:?}");
+}
+
+/// SV-6: without `--ui-allow-rhx` (the default) a push carrying an rhx/1
+/// component is refused `rhx_disabled`, naming it, nothing kept; a bundle of
+/// svelte/1 modules is taken.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rhx_is_refused_without_ui_allow_rhx() {
+    let dir = scratch("menger-ui-rhx-off-");
+    let mut extra = vec!["--no-shell".to_string()];
+    extra.extend(ui_args(&dir.path().join("ui.db")));
+    extra.extend(["--ui-compiler".to_string(), support::ui_compiler_wasm().display().to_string()]);
+    let s = spawn_menger(free_port().await, &dir.path().join("t.db"), &extra).await;
+    let admin = connect(s.port).await;
+    let (params, _) = compiled_push_params(1, "unknown", &[Component::compiled(X, &row_source())]);
+    let e = refused(&call(&admin, "ui.push", params).await, "rhx_disabled", X).clone();
+    assert!(e["message"].as_str().is_some_and(|m| m.contains("rhx/1")), "{e}");
+    assert!(listed(&admin).await.is_empty(), "nothing kept");
+    let (params, _) = support::module_push_params(2, "unknown", X, &["tickets.list"]);
+    assert_eq!(pushed(&call(&admin, "ui.push", params).await)["live"], true);
 }

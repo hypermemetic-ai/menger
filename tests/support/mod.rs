@@ -283,7 +283,7 @@ pub async fn spawn_menger(port: u16, db: &Path, extra: &[String]) -> Spawned {
     cmd.arg("--port").arg(port.to_string()).arg("--db-path").arg(db).args(login_args()).args(extra);
     // Never the default data directory.
     cmd.arg("--data-dir").arg(db.parent().expect("a db in a directory"));
-    for var in ["MENGER_DB_PATH", "MENGER_AUTH_PROVIDERS", "MENGER_ADMINS", "MENGER_UI_DB_PATH", "MENGER_UI_SIGNERS", "MENGER_UI_COMPILER", "MENGER_UI_CHANNEL", "MENGER_ENV", "MENGER_MEDIA_DB_PATH", "MENGER_DOCS_DB_PATH", "MENGER_MAX_MESSAGE_BYTES", "RUST_LOG"] {
+    for var in ["MENGER_DB_PATH", "MENGER_AUTH_PROVIDERS", "MENGER_ADMINS", "MENGER_UI_DB_PATH", "MENGER_UI_SIGNERS", "MENGER_UI_COMPILER", "MENGER_UI_ALLOW_RHX", "MENGER_UI_CHANNEL", "MENGER_ENV", "MENGER_MEDIA_DB_PATH", "MENGER_DOCS_DB_PATH", "MENGER_MAX_MESSAGE_BYTES", "RUST_LOG"] {
         cmd.env_remove(var);
     }
     cmd.env("PLEXUS_NO_REGISTRY", "1").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
@@ -395,7 +395,7 @@ pub fn default_slots() -> serde_json::Value {
 pub fn sections_manifest(n: u32, components: &[&str], slots: &serde_json::Value) -> String {
     let components: serde_json::Map<String, serde_json::Value> = components
         .iter()
-        .map(|c| (c.to_string(), serde_json::json!({ "tree": format!("{n}-{c}-tree"), "handlers": format!("{n}-{c}-rhai"), "uses": [] })))
+        .map(|c| (c.to_string(), serde_json::json!({ "profile": "svelte/1", "module": sha_hex(component_js(n, c).as_bytes()), "uses": [] })))
         .collect();
     serde_json::json!({
         "abi": "engine/1", "contract": format!("c{n}"), "commit": format!("menger@{n:07x}"),
@@ -406,17 +406,22 @@ pub fn sections_manifest(n: u32, components: &[&str], slots: &serde_json::Value)
     .to_string()
 }
 
-/// Component `c` of version `n`'s compiled tree, as the bundle holds it.
-pub fn component_json(n: u32, c: &str) -> String {
-    format!("{{\"name\":\"{c}\",\"v\":{n}}}")
+/// Component `c` of version `n`'s module, as the bundle holds it — SV-6: a
+/// svelte/1 module (rhx is switched off), taken as given (menger runs no
+/// Svelte compiler).
+pub fn component_js(n: u32, c: &str) -> String {
+    format!("export function mount(target) {{ target.textContent = \"{c} v{n}\"; return {{}}; }}\n")
 }
 
 /// Version `n` with sections: `index.html` ([`index_html`]), `manifest.json`
-/// ([`sections_manifest`]) and each component's `components/<name>.json`
-/// ([`component_json`]).
+/// ([`sections_manifest`]) and each component's `components/<name>.js`
+/// ([`component_js`]) with its source, `src/<name>.svelte`.
 pub fn slotted_bundle(n: u32, components: &[&str], slots: &serde_json::Value) -> Vec<u8> {
     let mut files = vec![("index.html".to_string(), index_html(n)), ("manifest.json".to_string(), sections_manifest(n, components, slots))];
-    files.extend(components.iter().map(|c| (format!("components/{c}.json"), component_json(n, c))));
+    for c in components {
+        files.push((format!("components/{c}.js"), component_js(n, c)));
+        files.push((format!("src/{c}.svelte"), format!("<script module>\n  export const uses = [];\n</script>\n<p>{c} v{n}</p>\n")));
+    }
     let mut b = tar::Builder::new(Vec::new());
     for (name, body) in files {
         let mut h = tar::Header::new_gnu();
@@ -692,4 +697,31 @@ pub fn compiled_push_params_with(n: u32, contract: &str, components: &[Component
         "commit": format!("{n:07x}"),
     });
     (params, bytes)
+}
+
+/// SV-6: version `n` of a bundle of one svelte/1 component `name` — its
+/// module (taken as given: menger runs no Svelte compiler) and its source,
+/// its entry declaring `uses` — and `ui.push`'s params for it, signed by the
+/// test signer; with the bundle's bytes. rhx is switched off, so a bundle a
+/// test pushes for anything but rhx itself is this one.
+pub fn module_push_params(n: u32, contract: &str, name: &str, uses: &[&str]) -> (serde_json::Value, Vec<u8>) {
+    let js = format!("export function mount(target) {{ target.textContent = \"{name} v{n}\"; return {{}}; }}\n");
+    let src = format!("<script module>\n  export const uses = {};\n</script>\n<p>{name} v{n}</p>\n", serde_json::json!(uses));
+    let manifest = serde_json::json!({
+        "abi": "engine/1", "contract": contract, "commit": format!("menger@{n:07x}"),
+        "routes": { "#/": name },
+        "components": { name: { "profile": "svelte/1", "module": sha_hex(js.as_bytes()), "uses": uses } },
+        "slots": {},
+    })
+    .to_string();
+    let mut b = tar::Builder::new(Vec::new());
+    for (path, body) in [("index.html".to_string(), index_html(n)), ("manifest.json".to_string(), manifest.clone()), (format!("components/{name}.js"), js), (format!("src/{name}.svelte"), src)] {
+        let mut h = tar::Header::new_gnu();
+        h.set_size(body.len() as u64);
+        h.set_mode(0o644);
+        h.set_cksum();
+        b.append_data(&mut h, path, body.as_bytes()).expect("a tar entry");
+    }
+    let bytes = b.into_inner().expect("the tar");
+    (signed_params(&bytes, &manifest, n), bytes)
 }

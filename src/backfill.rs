@@ -28,7 +28,8 @@
 //! **Refused, with the reason, each logged**: an rhx definition (it is
 //! compiled into the live bundle by its ticket's save, which needs the
 //! compiler and a principal holding `ui.author` on `*` — not a start's to
-//! do); a source plexus-ui refuses (its words); and every start says
+//! do — and SV-6: a server without `--ui-allow-rhx` refuses an rhx save
+//! too); a source plexus-ui refuses (its words); and every start says
 //! `backfill: N registered, M kept again, K unchanged, R refused` — with no
 //! `--ui-author-key`, that it was skipped.
 
@@ -116,7 +117,7 @@ fn line(ui: &UiStore, key: &AuthorKey, d: &Definition) -> Line {
 
 fn decide(ui: &UiStore, key: &AuthorKey, d: &Definition) -> Outcome {
     if d.profile == PROFILE_RHX {
-        return Outcome::Refused("rhx/1 is compiled into the live bundle by its ticket's save (the compiler, and ui.author held on `*`), never kept by a start".into());
+        return Outcome::Refused("rhx/1 is compiled into the live bundle by its ticket's save (the compiler, ui.author held on `*`, and SV-6: --ui-allow-rhx), never kept by a start".into());
     }
     let now = match ui.resolve_components(Some(std::slice::from_ref(&d.name))) {
         Ok(r) => r.into_iter().next(),

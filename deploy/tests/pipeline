@@ -1106,7 +1106,8 @@ JS
 # what the stand-in cargo builds as plexus-ui-cli). Its argv kept in $STUB_ARGV (and, where it
 # ran, in $STUB_UI_TOOL_LOG); `build --prebuild --engine D` writes D's engine; `build UI --engine D
 # --contract H --commit C -o OUT` a GNU tar of UI/index.html and a manifest naming H and C, a
-# component per UI/src/<name>.rhx whose `uses` are the quoted `service.method` names in its source
+# component per UI/src/<name>.svelte (SV-6: svelte/1, rhx being switched off) whose `uses` are the
+# quoted `service.method` names in its source
 # (SURFACE-11: what the real compiler reads from live() and the handlers);
 # `push … TAR` makes ui.push's params here — the signature real, Ed25519 over the bundle's sha256
 # by --key-file's seed — and sends them to the stand-in ui service on stdin, as the agent --as
@@ -1127,12 +1128,12 @@ case $cmd in
     [[ -f $engine/engine.js && -f $engine/engine.wasm ]] || { echo "plexus-ui (stand-in): no engine in $engine" >&2; exit 1; }
     [[ -d $ui/src ]] || { echo "plexus-ui (stand-in): $ui: no src/" >&2; exit 1; }
     st=$(mktemp -d); cp "$ui/index.html" "$st/index.html"
-    comps='{}'; for f in "$ui"/src/*.rhx; do [[ -f $f ]] || continue
+    comps='{}'; for f in "$ui"/src/*.svelte; do [[ -f $f ]] || continue
       u=$(grep -oE '"[a-z_]+(\.[a-z_]+)+"' "$f" | tr -d '"' | jq -Rsc 'split("\n") | map(select(. != ""))')
-      comps=$(jq -c --arg n "$(basename "$f" .rhx)" --argjson u "$u" '. + {($n): {profile: "rhx/1", uses: $u}}' <<<"$comps"); done
+      comps=$(jq -c --arg n "$(basename "$f" .svelte)" --argjson u "$u" '. + {($n): {profile: "svelte/1", uses: $u}}' <<<"$comps"); done
     jq -n --arg c "$contract" --arg m "$commit" --arg n "$name" --argjson cs "$comps" '{abi: "engine/1"} + (if $n == "" then {} else {name: $n} end) + {contract: $c, commit: $m, routes: {}, slots: {}, components: $cs}' >"$st/manifest.json"
     mkdir -p "$(dirname "$out")"
-    # STUB_TOOL_BROKEN=app|studio: that bundle's manifest.json is no JSON (SURFACE-11: an unreadable manifest)
+    # STUB_TOOL_BROKEN=app: that bundle's manifest.json is no JSON (SURFACE-11: an unreadable manifest)
     [[ -n ${STUB_TOOL_BROKEN:-} && $STUB_TOOL_BROKEN == "${name:-app}" ]] && echo 'not json' >"$st/manifest.json"
     tar --mtime=@0 --owner=0 --group=0 --numeric-owner --format=gnu -C "$st" -cf "$out" index.html manifest.json; rm -rf "$st"; echo "$out" ;;
   push)
@@ -1235,9 +1236,11 @@ B=$SCRATCH/v2b; BR=$B/menger; H5=$SCRATCH/home5; D5=$H5/.local/share/menger-depl
 mkdir -p "$BR/deploy/launch" "$BR/scripts" "$BR/src" "$B/bin" "$D5/releases"
 cp "$DEPLOY/pipeline" "$BR/deploy/pipeline"; cp "$REPO"/deploy/launch/* "$BR/deploy/launch/"; cp "$REPO/scripts/disk-check.sh" "$BR/scripts/"
 mkdir -p "$BR/ui/src" "$B/plexus-ui" && : >"$B/plexus-ui/Cargo.toml"
-# STUDIO-6: the framework's studio beside it, a stand-in: a page and one source
-mkdir -p "$B/plexus-ui/studio/src" && printf '<!doctype html><title>studio</title>\n' >"$B/plexus-ui/studio/index.html" && printf '<p>{live(#{ snapshot: "ui.versions" })}</p>\n' >"$B/plexus-ui/studio/src/s-page.rhx"
-printf '<!doctype html><title>{{TITLE}}</title><p>x</p>\n' >"$BR/ui/index.html"; printf '<p>{live(#{ snapshot: "tickets.list" })}</p>\n' >"$BR/ui/src/x-row.rhx"
+# SV-6: the UI is svelte/1 (rhx switched off), so the build wants node and the framework checkout's
+# svelte and esbuild — stand-ins, there already (no npm). SV-5/SV-6: the framework holds no studio.
+for m in svelte esbuild; do mkdir -p "$B/plexus-ui/node_modules/$m" && printf '{"name":"%s"}\n' "$m" >"$B/plexus-ui/node_modules/$m/package.json"; done
+printf '<!doctype html><title>{{TITLE}}</title><p>x</p>\n' >"$BR/ui/index.html"
+printf '<script module>\n  export const uses = ["tickets.list"];\n</script>\n<p>x</p>\n' >"$BR/ui/src/x-row.svelte"
 gitf() { git -C "$BR" -c user.name=t -c user.email=t@t "$@"; }
 printf '[workspace]\nmembers = ["."]\n' >"$BR/Cargo.toml"
 gitf init -q -b main && gitf add -A && gitf commit -qm "main: v2's shape"
@@ -1378,10 +1381,10 @@ same "$T1: build --branch v2 exits 0" "$code" 0
 VR=$(tail -n 1 "$SCRATCH/out"); RF=$D5/releases/$VR/RELEASE
 same "$T1: a release of v2's tip" "$(field commit "$RF")" "$VSHA"
 same "$T1: the release names its branch" "$(field branch "$RF")" "v2"
-same "$T1: the release's steps" "$(field steps "$RF")" "cargo build, plexus-ui, ui-prebuild, ui-build, studio-build, ui-compiler-wasm"
-# STUDIO-6: the studio built by the same tool from ../plexus-ui/studio, named, carried by the release
-has "$T1: the studio built by the tool, named studio" "$(<"$STUB_UI_TOOL_LOG")" "plexus-ui build $B/menger-build/../plexus-ui/studio --strict-colours --engine $B/menger-build/dist/engine --name studio"
-same "$T1: the release's dist/studio.tar is the studio's, named" "$(tar -xOf "$D5/releases/$VR/dist/studio.tar" manifest.json 2>/dev/null | jq -r .name 2>/dev/null)" "studio"
+same "$T1: the release's steps" "$(field steps "$RF")" "cargo build, plexus-ui, ui-prebuild, ui-build, ui-compiler-wasm"
+# SV-6: no studio built, none carried — the studio is plexus-studio's, edited in the database
+same "$T1: no studio built" "$(grep -c -- '--name studio' "$STUB_UI_TOOL_LOG")" 0
+[[ ! -e $D5/releases/$VR/dist/studio.tar ]] && ok || bad "$T1: the release carries a dist/studio.tar"
 same "$T1: no trunk, no npm ran" "$(<"$B/browser.log")" ""
 same "$T1: cargo build of the workspace's packages, the perf profile (RUN-39): menger alone" "$(grep -o 'cargo build --profile .*' "$STUB_CARGO_LOG")" "cargo build --profile perf -p menger"
 same "$T1: the release says it is the perf build (RUN-39)" "$(field profile "$RF")" "perf (RUN-39: the build the bench measures)"
@@ -1465,7 +1468,7 @@ has "$T1: suite of a fast release: no bench, said" "$(cat "$D5/releases/$FR/SUIT
 
 # ── V2-47 a_tree_by_published_version_builds_the_framework_from_its_tag ─────
 # A tree whose Cargo.lock takes plexus-ui-service from crates.io (and carries scripts/plexus-ui-src)
-# builds the tool, the engine, the studio and the compiler module from a checkout of the tag
+# builds the tool, the engine and the compiler module from a checkout of the tag
 # plexus-ui-v<version>, cloned from PLEXUS_UI_REPO (here a local repository standing in for GitHub's)
 # into PLEXUS_UI_CHECKOUTS — with no ../plexus-ui beside the build at all, and PLEXUS_UI_SRC never
 # taken by a build. A version with no tag, and a checkout edited after its clone, fail the build named.
@@ -1484,11 +1487,10 @@ mv "$B/plexus-ui" "$B/plexus-ui.away"
 next_second0; pub build --branch v2pub --no-gate
 same "$T47: exits 0, no ../plexus-ui beside the build ($err)" "$code" 0
 has "$T47: the tool built from the tag's checkout" "$(<"$STUB_CARGO_LOG")" "cargo build --release --manifest-path $PCO/plexus-ui-v0.1.0/Cargo.toml -p plexus-ui-cli"
-has "$T47: the studio from the tag's checkout" "$(<"$STUB_UI_TOOL_LOG")" "plexus-ui build $PCO/plexus-ui-v0.1.0/studio --strict-colours"
 has "$T47: the compiler module by the tag's script" "$(<"$STUB_UI_COMPILER_RAN")" "tagged host CARGO_TARGET_DIR=$B/menger-build/target OUT=$B/menger-build/dist/ui-compiler.wasm"
 same "$T47: the checkout is the tag's" "$(git -C "$PCO/plexus-ui-v0.1.0" rev-parse HEAD)" "$(gitp rev-parse plexus-ui-v0.1.0)"
 has "$T47: the build says which" "$err" "plexus-ui-v0.1.0"
-same "$T47: no npm (an rhx-only UI and studio)" "$(<"$B/browser.log")" ""
+same "$T47: no npm (svelte and esbuild in the tag's checkout already)" "$(<"$B/browser.log")" ""
 # a second build takes the checkout it has, no clone
 next_second0; PLEXUS_UI_REPO=$B/no-such-origin PLEXUS_UI_CHECKOUTS=$PCO bb build --branch v2pub --no-gate
 same "$T47: the kept checkout, no clone" "$code" 0
@@ -1587,16 +1589,15 @@ done
 # build stamps that: a first build with no --contract, its manifest's components.*.uses read from
 # the tar, `ui contract --uses` them asked of the menger just built, the second build carrying
 # --contract with its answer. A bundle naming tickets.list and epics.current is stamped over both
-# services (not tickets.schema's hash); the studio likewise over its own uses; the log names the
-# services; a studio whose contract cannot be read fails the build as the app's does.
+# services (not tickets.schema's hash); the log names the services. SV-6: no studio is built.
 T10=the_contract_covers_every_service_the_bundle_names
 . "$STUB_CONTRACT_OVER"
 gitf checkout -q -b surface v2
-printf '<h1>{live(#{ snapshot: "epics.current" })}</h1>\n' >"$BR/ui/src/e-head.rhx"
+printf '<script module>\n  export const uses = ["epics.current"];\n</script>\n<h1>e</h1>\n' >"$BR/ui/src/e-head.svelte"
 gitf add -A && gitf commit -qm "surface: a component naming epics" && gitf checkout -q main
 SSHA=$(gitf rev-parse surface)
-BOTH=$(contract_over tickets epics) STUDIO_C=$(contract_over ui)
-[[ -n $BOTH && $BOTH != "$CONTRACT_HASH" && $STUDIO_C != "$BOTH" ]] && ok || bad "$T10: (setup) the stand-in's contracts are not distinct: '$BOTH' '$CONTRACT_HASH' '$STUDIO_C'"
+BOTH=$(contract_over tickets epics)
+[[ -n $BOTH && $BOTH != "$CONTRACT_HASH" ]] && ok || bad "$T10: (setup) the stand-in's contracts are not distinct: '$BOTH' '$CONTRACT_HASH'"
 next_second; bb build --branch surface --no-gate
 [[ $code == 0 ]] && ok || bad "$T10: build exits 0, got $code: $(tail -n 3 <<<"$err")"
 SR=$(tail -n 1 "$SCRATCH/out")
@@ -1608,39 +1609,14 @@ same "$T10: tickets.schema not asked" "$(grep -c 'tickets schema' <<<"$syn")" 0
 has "$T10: the second build stamped with that answer" "$(<"$STUB_UI_TOOL_LOG")" "plexus-ui build $B/menger-build/ui --strict-colours --engine $B/menger-build/dist/engine --contract $BOTH --commit menger@${SSHA:0:7} -o $B/menger-build/dist/ui.tar"
 same "$T10: the app built twice: once to read its uses, once stamped" "$(grep -c "plexus-ui build $B/menger-build/ui --strict-colours " "$STUB_UI_TOOL_LOG")" 2
 has "$T10: the log names the services the contract covers" "$err" "contract: $BOTH over epics, tickets"
-# the studio: its own uses (ui.versions), its own contract
-has "$T10: ui contract asked for the studio's uses" "$syn" "menger ui contract --uses ui.versions"
-has "$T10: the studio stamped with its own contract" "$(<"$STUB_UI_TOOL_LOG")" "plexus-ui build $B/menger-build/../plexus-ui/studio --strict-colours --engine $B/menger-build/dist/engine --name studio --contract $STUDIO_C --commit"
-same "$T10: the release's studio names its contract" "$(tar -xOf "$D5/releases/$SR/dist/studio.tar" manifest.json 2>/dev/null | jq -r .contract 2>/dev/null)" "$STUDIO_C"
-has "$T10: the log names the studio's services" "$err" "studio contract: $STUDIO_C over ui"
-same "$T10: the menger started once for both" "$(grep -c . "$STUB_MENGER_RAN")" 1
+same "$T10: ui contract asked once, for the app" "$(grep -c 'menger ui contract' <<<"$syn")" 1
+same "$T10: the menger started once" "$(grep -c . "$STUB_MENGER_RAN")" 1
 stopped "$T10: after the build"
 same "$T10: the build's scratch removed" "$(ls -A "$T5TMP")" ""
 # a tickets-only bundle still stamps the tickets service's hash, through the new call (T6 above)
 same "$T10: tickets alone: the old path's value" "$(contract_of "$CR")" "$CONTRACT_HASH"
-# the studio's contract unreadable: the build fails, named, and no release
-for how in fail refused; do
-  n=$(ls "$D5/releases" | wc -l)
-  next_second; STUB_CONTRACT=$how STUB_CONTRACT_ON=ui MENGER_CONTRACT_WAIT=2 bb build --branch surface --no-gate
-  same "$T10: the studio's contract read fails ($how): exits 1" "$code" 1
-  has "$T10: the studio's contract read fails ($how): said, naming the studio and ui.contract" "$err" "studio contract: ui.contract"
-  none_made "$T10: the studio's contract read fails ($how)" "$n"
-  [[ $(grep -c -- '--contract ' "$STUB_UI_TOOL_LOG") == 0 ]] && ok || bad "$T10: the studio's contract read fails ($how): a bundle stamped all the same"
-  stopped "$T10: the studio's contract read fails ($how)"
-done
-# a studio naming no service: built unstamped, never asked, said
-cp "$B/plexus-ui/studio/src/s-page.rhx" "$B/s-page.rhx.away"; printf '<p>s</p>\n' >"$B/plexus-ui/studio/src/s-page.rhx"
-next_second; bb build --branch surface --no-gate
-[[ $code == 0 ]] && ok || bad "$T10: a studio naming no service: build exits 0, got $code: $(tail -n 3 <<<"$err")"
-NR=$(tail -n 1 "$SCRATCH/out")
-same "$T10: a studio naming no service: its manifest says unknown" "$(tar -xOf "$D5/releases/$NR/dist/studio.tar" manifest.json 2>/dev/null | jq -r .contract 2>/dev/null)" "unknown"
-same "$T10: a studio naming no service: the app still stamped over both" "$(contract_of "$NR")" "$BOTH"
-same "$T10: a studio naming no service: ui contract asked once, for the app" "$(grep -c 'menger ui contract' "$STUB_BUILD_SYNAPSE")" 1
-same "$T10: a studio naming no service: no studio build stamped" "$(grep -- '--name studio' "$STUB_UI_TOOL_LOG" | grep -c -- '--contract ')" 0
-has "$T10: a studio naming no service: said" "$err" "studio contract: none"
-mv "$B/s-page.rhx.away" "$B/plexus-ui/studio/src/s-page.rhx"
-# a bundle whose manifest cannot be read: the build fails, naming it, never "names no service" nor a studio shipped unstamped
-for which in app studio; do
+# a bundle whose manifest cannot be read: the build fails, naming it, never "names no service"
+for which in app; do
   n=$(ls "$D5/releases" | wc -l)
   next_second; STUB_TOOL_BROKEN=$which bb build --branch surface --no-gate
   same "$T10: the $which's manifest unreadable: exits 1" "$code" 1
@@ -1868,36 +1844,26 @@ same "$T4: local: the version live before stays live" "$(cat "$STUB_UI_STATE/liv
 [[ $(cat "$STUB_UI_STATE/calls" "$STUB_SYNAPSE_ARGV" "$STUB_ARGV" 2>/dev/null | grep -c 'ui.rollback') == 0 ]] && ok || bad "$T4: the pipeline moved the pointer itself (ui.rollback)"
 unset STUB_UI_SIGNER
 
-# ── STUDIO-6 the_studio_is_pushed_after_the_app ────────────────────────────
-# A release carrying dist/studio.tar (the framework's studio, built --name studio): after the app's
-# push the deploy pushes it --no-live as the pipeline key — kept beside, the live pointer the app's —
-# before the smoke; a stand-in that refuses it leaves the run ok, the refusal said and recorded as
-# `studio … refused: <reason>`, never as a failed run (the backfill would make that a failed test).
-T9=the_studio_is_pushed_after_the_app
+# ── SV-6 an_old_releases_studio_is_never_pushed ───────────────────────────
+# The studio is plexus-studio's (SV-5), pushed once from there and edited in the database since
+# (ui.author { bundle: "studio" }); a deploy pushes none — not even a release from before SV-6
+# that carries dist/studio.tar, whose push would move bundle:studio off what was authored.
+T9=an_old_releases_studio_is_never_pushed
 export STUB_UI_SIGNER=$PUB2
 US=$V2/uis; mkdir -p "$US/stage" "$US/dist"
 printf '<!doctype html><title>studio</title>\n' >"$US/stage/index.html"
 printf '{"abi":"engine/1","name":"studio","contract":"unknown","routes":{},"components":{},"slots":{}}\n' >"$US/stage/manifest.json"
 tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --format=gnu -C "$US/stage" -cf "$US/dist/studio.tar" index.html manifest.json
-STUDIO_SHA=$(sha256sum "$US/dist/studio.tar" | cut -d' ' -f1)
 rm -rf "$STUB_UI_STATE"; mkdir -p "$STUB_UI_STATE"
 V9=$(STUDIO_TAR=$US/dist/studio.tar v2release "$D4/releases" 1 1 "" 19)
 m=$(mark); v2run remote test --image "menger:$V9"
-same "$T9: remote test with a studio: exits 0" "$code" 0
-has "$T9: the studio kept, said" "$err" "ok   the studio kept on wss://app-test.menger.sh/ws: ${STUDIO_SHA:0:12}"
+same "$T9: remote test of a release carrying a studio: exits 0" "$code" 0
 order=$(paste -sd' ' "$STUB_ORDER")
-[[ $order =~ (^|\ )push\ push-kept\ .*smoke ]] && ok || bad "$T9: the app's push, then the studio's, then the smoke: $order"
-same "$T9: the app live, the studio kept beside" "$(cat "$STUB_UI_STATE/live.test")" "$BUNDLE_SHA"
-same "$T9: the studio among the versions, by its name" "$(uivers '[.[] | select(.name == "studio") | .hash]')" "[\"$STUDIO_SHA\"]"
-has "$T9: pushed --no-live by the release's tool" "$(<"$STUB_ARGV")" "--no-live $D4/releases/$V9/dist/studio.tar"
+[[ $order != *push-kept* ]] && ok || bad "$T9: a push kept beside the app's (the studio's): $order"
+[[ $(grep -c -- 'dist/studio.tar' "$STUB_ARGV") == 0 ]] && ok || bad "$T9: the release's studio.tar was pushed"
+same "$T9: no studio among the versions" "$(uivers '[.[] | select(.name == "studio") | .hash]')" "[]"
+same "$T9: the app live" "$(cat "$STUB_UI_STATE/live.test")" "$BUNDLE_SHA"
 same "$T9: recorded started, succeeded" "$(since "$m" '[.environment, .state]')" '["test","started"] ["test","succeeded"]'
-# refused: the run still ok, the refusal its own record, never a run line
-m=$(mark); STUB_UI_REFUSE_KEPT=1 v2run remote test --image "menger:$V9"
-same "$T9: the studio refused: the deploy still exits 0" "$code" 0
-has "$T9: the refusal said" "$err" "FAIL the studio's push to wss://app-test.menger.sh/ws"
-has "$T9: recorded as studio, refused, with the reason" "$(grep -P '\tstudio\t' "$D4/deployments.log" | tail -n 1 | cut -f2-5)" $'test\tstudio\t'"$V9"$'\trefused: '
-same "$T9: the run itself succeeded" "$(since "$m" '[.environment, .state]')" '["test","started"] ["test","succeeded"]'
-same "$T9: the app still live" "$(cat "$STUB_UI_STATE/live.test")" "$BUNDLE_SHA"
 unset STUB_UI_SIGNER
 
 # ── UI-12 the_smoke_holds_the_push_to_its_contract ─────────────────────────
