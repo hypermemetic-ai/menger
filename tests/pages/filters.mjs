@@ -392,7 +392,9 @@ export default async (ctx) => {
           const input = page.locator("input[data-filter-input]");
           await eventually("the applied filter is on the line", async () => (await input.inputValue({ timeout: 500 })) === "kind spike", 5000);
           await input.press("Escape");
-          await eventually("Escape on an applied filter clears the route too", async () => (await hash(page)) === L.home[1] && (await page.locator("input[data-filter-input]").inputValue()) === "", 3000);
+          await eventually("Escape on an applied filter clears the route too", async () => (await hash(page)) === L.home[1] && (await page.locator("input[data-filter-input]").inputValue()) === "", 3000).catch(async (e) => {
+            throw new Error(`${e.message}: at ${await hash(page)}, the line says ${JSON.stringify(await page.locator("input[data-filter-input]").inputValue().catch(() => "?"))}, the bar's mark ${await page.locator("[data-slot=bar]").evaluate((m) => JSON.stringify([...m.attributes].map((a) => a.name + "=" + a.value))).catch(() => "?")}`);
+          });
         } finally {
           await context.close();
         }
