@@ -28,6 +28,7 @@
        v1's bodies held were registered by the server at start (`src/v1_components.rs`). -->
 <script module>
   import { tick } from "svelte";
+  import { childrenOf } from "./tag-source.svelte";
   export const uses = ["ui.components", "ui.watch", "ui.history", "ui.author"];
 
   // ── definitions ────────────────────────────────────────────────────────
@@ -177,15 +178,36 @@
   }
   let slotSeq = 0;
 
+  /** COMPS-16: a drawn tag's children as structure, from the DOM the markdown made (a tag drawn from its
+   *  source takes tag-source's `childrenOf` instead): `{ tag, attrs: [[name, value], …], text }`. */
+  function kidsOf(e) {
+    const out = [];
+    for (const c of e.children) {
+      const tag = c.localName === "m-el" ? c.getAttribute("data-tag") : c.localName;
+      if (!tag?.includes("-")) continue;
+      const attrs = [];
+      for (const a of c.attributes) if (a.name !== "data-tag") attrs.push([a.name.startsWith("data-prop-") ? a.name.slice(10) : a.name, a.value]);
+      out.push({ tag, attrs, text: c.textContent ?? "" });
+    }
+    return out;
+  }
+
   /** Every tag under `node` drawn by its component (framed through the page's bus, the one this file's
-   *  component holds), kept so as the table moves; `{ destroy }`. */
-  export function drawTags(node) {
+   *  component holds), kept so as the table moves; `{ destroy }`. COMPS-16: `ctx` is what the framer knows —
+   *  `src` (`{ name, n, source }`: the block-form tag this node draws, its own text and its place among the
+   *  body's tags of its name, ticket-view's `blocks()`) and `of` (`{ kind: ticket | doc, id, editor }`: the
+   *  body it sits in, from the context ticket-body and editor-body give). A native tag is handed them as
+   *  props — `source`, `n`, `ticket` or `doc`, `editor` — and its `children` as structure, always. */
+  export function drawTags(node, ctx = null) {
     const found = [];
+    let srcTaken = false;
     for (const e of node.querySelectorAll("*")) {
       const tag = e.localName === "m-el" ? e.getAttribute("data-tag") : e.localName;
       if (!tag || !tag.includes("-") || houseMarks.has(tag) || e.closest("[data-tag-host]")) continue;
       if (e.parentElement?.closest("m-el, [data-tag-name]") && found.some((f) => f.e.contains(e))) continue; // a tag inside a drawn tag is its body
-      found.push({ e, tag, inner: e.textContent ?? "", drawn: null });
+      const own = !srcTaken && ctx?.src?.name === tag ? ctx.src : null;
+      if (own) srcTaken = true;
+      found.push({ e, tag, inner: e.textContent ?? "", kids: own ? childrenOf(own.source) : kidsOf(e), src: own, drawn: null });
     }
     if (!found.length) return { destroy() {} };
     for (const f of found) f.e.setAttribute("data-tag-name", f.tag);
@@ -220,6 +242,12 @@
         let frame = null;
         if (mode === "native") {
           // Ours: a bound mark the engine fills with the live bundle's component, its props as data-*.
+          // COMPS-16: and what it sits in — its children as structure, its source and place, the body's owner.
+          if (!("children" in props)) props.children = f.kids;
+          if (f.src) { props.source = f.src.source; if (f.src.n != null) props.n = String(f.src.n); }
+          const of = ctx?.of;
+          if (of?.id) props[of.kind === "doc" ? "doc" : "ticket"] = String(of.id);
+          if (of?.editor) props.editor = "true";
           const mark = document.createElement("div");
           mark.setAttribute("data-slot", `tag-${++slotSeq}`);
           mark.setAttribute("data-component", f.tag);

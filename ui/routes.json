@@ -38,7 +38,6 @@
   "#/edit/:id": "page-editor",
   "#/doc/:doc": "page-editor",
   "#/form/:id": "page-edit",
-  "#/thread/:id": "page-thread",
   "#/actions/:id": "page-actions",
   "#/orgs": "page-orgs",
   "#/releases": "page-releases",
