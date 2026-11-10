@@ -211,7 +211,7 @@
   .seg { font: inherit; font-size: 12px; color: var(--muted); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); padding: 2px 10px; cursor: pointer; }
   .seg:hover, .seg:global([data-sheet~=hover]) { background: var(--hover); color: var(--ink); }
   .seg:focus-visible, .seg:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
-  .seg[aria-pressed=true] { color: var(--ink); background: var(--sel); border-color: var(--accent); }
+  .seg[aria-pressed=true], .seg:global([data-sheet~=checked]) { color: var(--ink); background: var(--sel); border-color: var(--accent); }
   .panel { position: relative; background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius-lg); }
   .charts { display: grid; gap: 12px; transition: opacity var(--motion-fast) var(--ease); }
   .refetch { opacity: 0.5; }
