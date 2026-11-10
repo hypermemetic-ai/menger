@@ -1,49 +1,81 @@
-<!-- FRAME-25: an open shortcode in the nav in real Svelte (svelte/1),
-     nav-children.rhx's twin — one page of its root's children, asked once
-     when it opens (its roll-up stays live on the row above). nav-tree-sv
-     imports it; it is a component in its own right too. -->
+<!-- FRAME-25: an open node of the nav in real Svelte (svelte/1) — v1's
+     tree (AGS-20, SCALE-24) — one page of its children, asked once when it
+     opens (`list { parent, limit: 200 }`; a shortcode with no root, `list
+     { epic }`) — the one call an open costs (a watch per open node would be
+     a stream of the whole store each; the roll-ups above stay live on the
+     tree's one `group_changed`). Each child is a row (nav-row-sv)
+     that opens in turn, at any depth, to its own children — this component
+     again — and after a ticket's children come the shortcodes hosted under
+     it (AGS-20: a sub-shortcode nests under its host), each a nav-group-sv —
+     in its root's place when its root is one of the children (AGS-23).
+     A node of more than a page says how many more and asks for the next
+     when told. nav-tree-sv imports it; it is a component in its own right
+     too. What is open is the nav's (nav-tree-sv's context), kept across
+     reloads. -->
 <script module>
-  // PERF-15: a row is the four fields drawn, not the whole summary row.
-  const FIELDS = ["id", "uid", "title", "kind", "status"];
+  // PERF-15: a row is the fields drawn, not the whole summary row.
+  const FIELDS = ["id", "uid", "title", "kind", "status", "child_count", "parent"];
+  const PAGE = 200;
   export const uses = ["tickets.list"];
 </script>
 
 <script>
+  import { getContext } from "svelte";
   import { live } from "plexus-ui/host";
   import { ticketHref } from "./ticket-links.svelte";
+  import Row from "./nav-row-sv.svelte";
+  import NavChildren from "./nav-children-sv.svelte";
+  import NavGroup from "./nav-group-sv.svelte";
 
-  let { parent } = $props();
+  let { parent = null, epic = null, count = null } = $props();
+  const nav = getContext("menger.nav") ?? { isOpen: () => false, toggle: () => {}, hosted: () => [] };
   const base = location.hash.startsWith("#/sv/") ? "#/sv/" : "#/";
-  const kids = live({ snapshot: "tickets.list", params: () => ({ parent, summary: true, limit: 200, fields: FIELDS }), key: "id" });
+  let pages = $state(1);
+  const kids = live({ snapshot: "tickets.list",
+                      params: () => ({ ...(parent != null ? { parent } : { epic }), summary: true, limit: PAGE * pages, fields: FIELDS }),
+                      key: "id" });
   const list = $derived($kids.rows);
+  const hosted = $derived(parent != null ? nav.hosted(parent) : []);
+  // AGS-23: a child that roots a shortcode hosted here is that shortcode's row, in its place.
+  const rooted = $derived(new Map(hosted.filter((g) => g.root != null).map((g) => [g.root, g])));
+  const listed = $derived(new Set(list.map((c) => c.id)));
+  const more = $derived(count != null ? Math.max(0, count - list.length) : 0);
+  const expandable = (c) => (c.child_count ?? 0) > 0 || nav.hosted(c.id).length > 0;
 </script>
 
-<ul class="nav-children" data-nav-children={parent}>
+<ul class="nav-children" role="group" data-nav-children={parent ?? epic}>
   {#each list as c (c.id)}
-    <li><a class="nav-row" data-nav-row={c.id} data-status={c.status} href={ticketHref(c, base)}><span class="row-id">{c.id}</span> <span class="row-title">{c.title}</span></a></li>
+    {@const open = nav.isOpen(c.id)}
+    {@const sub = rooted.get(c.id)}
+    {#if sub}
+      <NavGroup g={sub}/>
+    {:else}
+    <li class="nav-item" role="treeitem" aria-selected="false" aria-expanded={expandable(c) ? (open ? "true" : "false") : undefined}>
+      <Row id={c.id} href={ticketHref(c, base)} title={c.title} kind={c.kind} status={c.status} frozen={c.frozen}
+           expandable={expandable(c)} {open} children={c.child_count || null} ontoggle={() => nav.toggle(c.id)}/>
+      {#if open && expandable(c)}
+        <NavChildren parent={c.id} count={c.child_count}/>
+      {/if}
+    </li>
+    {/if}
   {/each}
-  {#if $kids.status === "live" && list.length === 0}<li class="empty">nothing under it</li>{/if}
+  {#each hosted.filter((g) => !listed.has(g.root)) as g (g.shortcode)}
+    <NavGroup {g}/>
+  {/each}
+  {#if more > 0 && $kids.status === "live" && list.length >= PAGE * pages}
+    <li class="nav-item more"><button class="more-btn" onclick={() => (pages += 1)}>{more} more</button></li>
+  {/if}
+  {#if $kids.status === "live" && list.length === 0 && hosted.length === 0}<li class="nav-item empty">nothing under it</li>{/if}
 </ul>
 
 <style>
-  .nav-children { list-style: none; margin: 0 0 4px 16px; padding: 0 0 0 10px; border-left: var(--border) solid var(--tree-line); }
-  li { position: relative; }
-  .nav-row { display: flex; gap: 6px; align-items: center; height: calc(var(--pitch) - 4px); padding: 0 6px; overflow: hidden; white-space: nowrap; color: var(--ink); text-decoration: none; border-radius: var(--radius); transition: background-color var(--motion-fast) var(--ease); }
-  .nav-row::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--st-draft-fg); }
-  .nav-row[data-status=Pending]::before { background: var(--st-pending-fg); }
-  .nav-row[data-status=Ready]::before { background: var(--st-ready-fg); }
-  .nav-row[data-status=Coding]::before { background: var(--st-coding-fg); }
-  .nav-row[data-status="In Review"]::before { background: var(--st-in-review-fg); }
-  .nav-row[data-status=Complete]::before { background: var(--st-complete-fg); }
-  .nav-row[data-status=Blocked]::before { background: var(--st-blocked-fg); }
-  .nav-row[data-status=Superseded]::before { background: var(--st-superseded-fg); }
-  .nav-row[data-status=Canceled]::before { background: var(--st-canceled-fg); }
-  .nav-row[data-status="Epic"]::before { background: var(--st-epic-fg); }
-  .nav-row[data-status="Doc"]::before { background: var(--st-doc-fg); }
-  .nav-row:hover, .nav-row:global([data-sheet~=hover]) { background: var(--hover); }
-  .nav-row:focus-visible, .nav-row:global([data-sheet~=focus]) { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
-  .row-id { flex: none; color: var(--accent); font-variant-numeric: tabular-nums; }
-  .row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .nav-children { list-style: none; margin: 0 0 0 9px; padding: 0 0 0 12px; }
+  .nav-item { position: relative; }
+  /* v1's connectors: ├─ for a row with a sibling after it, └─ for the last. */
+  .nav-item::before { content: ""; position: absolute; left: -12px; top: 0; bottom: 0; border-left: var(--border) solid var(--tree-line); }
+  .nav-item:last-child::before { bottom: auto; height: calc(var(--pitch) / 2); }
+  .nav-item::after { content: ""; position: absolute; left: -12px; top: calc(var(--pitch) / 2); width: 10px; border-top: var(--border) solid var(--tree-line); }
   .empty { padding: 4px 6px; color: var(--muted); font-size: 11px; }
-  li::after { content: ""; position: absolute; left: -10px; top: 50%; width: 8px; border-top: var(--border) solid var(--tree-line); }
+  .more-btn { margin: 2px 0; padding: 1px 9px; font-size: 11px; color: var(--muted); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; }
+  .more-btn:hover, .more-btn:global([data-sheet~=hover]) { color: var(--ink); }
 </style>

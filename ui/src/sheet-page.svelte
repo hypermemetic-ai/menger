@@ -39,6 +39,8 @@
   import NavCounts from "plexus-ui:nav-counts";
   import NavFacets from "plexus-ui:nav-facets";
   import NavFlatSv from "plexus-ui:nav-flat-sv";
+  import NavGroupSv from "plexus-ui:nav-group-sv";
+  import NavRowSv from "plexus-ui:nav-row-sv";
   import NavTreeSv from "plexus-ui:nav-tree-sv";
   import OrgsList from "plexus-ui:orgs-list";
   import PageActions from "plexus-ui:page-actions";
@@ -187,6 +189,9 @@
       ["nav-tree-sv", NavTreeSv, F, ["hover", "focus", "checked"], fil, false, { checked: ["[data-nav-mode=flat]"] }],
       ["nav-flat-sv", NavFlatSv, F, ["hover", "focus"], fil],
       ["nav-children-sv", NavChildrenSv, (t) => ({ parent: t }), ["hover", "focus"], { empty: { parent: NONE } }],
+      // v1's tree: a shortcode as its root's row, and the row both draw with.
+      ["nav-group-sv", NavGroupSv, (t) => ({ g: { shortcode: code(t), epic: code(t), root: t, root_row: { title: `the ticket ${t}`, status: "Ready", kind: "scope" }, done: 3, total: 12, docs: 0, host: null } }), ["hover", "focus"], {}],
+      ["nav-row-sv", NavRowSv, (t) => ({ id: t, href: `#/ticket/${t}`, title: `the ticket ${t}`, kind: "build", status: "Coding", expandable: true, children: 3 }), ["hover", "focus"], {}],
       ["nav-facets", NavFacets, (t) => ({ filter: "status Ready" }), ["hover", "focus", "selected"], fil],
       ["nav-counts", NavCounts, (t) => ({ filter: "status Ready", label: "ready" }), ["hover", "focus"], fil],
       ["filters-saved", FiltersSaved, F, ["hover", "focus"], {}],
