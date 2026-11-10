@@ -310,6 +310,38 @@ export default async (ctx) => {
     }
   });
 
+  // COMPS-19: a mockup is a window — its bar hidden until the pointer is over it, its viewport set by hand past a screen's height.
+  await test("a_mockup_is_a_window_sized_by_hand", async () => {
+    const { context, page } = await openPage(`#/ticket/${tid}`);
+    try {
+      const S = "[data-surface=ticket-page]";
+      await drawn(page, S, 3);
+      const pf = page.locator(`${S} ${PF}[data-kind=page]`).first();
+      const win = pf.locator("[data-field=window]");
+      await page.mouse.move(2, 2);
+      assert((await win.evaluate((e) => getComputedStyle(e).opacity)) === "0", "the window's bar is not drawn at rest");
+      await pf.hover();
+      assert((await win.evaluate((e) => getComputedStyle(e).opacity)) === "1", "the bar is drawn under the pointer");
+      assert((await win.locator("[data-field=h]").inputValue()) === "844", "it says the viewport's height");
+      await win.locator("[data-field=h]").fill("1300");
+      await win.locator("[data-field=h]").press("Enter");
+      await eventually("the frame is 1300 high", async () => Math.abs((await pf.locator("iframe[data-buffer=shown]").evaluate((e) => e.getBoundingClientRect().height / (e.getBoundingClientRect().width / e.offsetWidth))) - 1300) <= 3, 5_000);
+      // The corner drags it; the page takes the new viewport when the drag ends.
+      await pf.locator("[data-action=resize]").scrollIntoViewIfNeeded();
+      const grip = await pf.locator("[data-action=resize]").boundingBox();
+      await page.mouse.move(grip.x + 9, grip.y + 9);
+      await page.mouse.down();
+      await page.mouse.move(grip.x + 9 + 120, grip.y + 9 + 60, { steps: 4 });
+      await page.mouse.up();
+      await eventually("the drag set both", async () => (await win.locator("[data-field=w]").inputValue()) === "510" && (await win.locator("[data-field=h]").inputValue()) === "1360", 5_000);
+      await eventually("the page sees its new width", async () => (await (await inner(page, S, 0)).evaluate(() => window.innerWidth).catch(() => 0)) === 510, 5_000);
+      await win.locator("[data-action=reset-size]").click();
+      await eventually("reset: the size the body names", async () => (await win.locator("[data-field=h]").inputValue()) === "844" && (await win.locator("[data-field=w]").inputValue()) === "390", 5_000);
+    } finally {
+      await context.close();
+    }
+  });
+
   await test("a_whole_page_body_is_one_frame", async () => {
     const { context, page } = await openPage(`#/ticket/${wid}`);
     const S = "[data-surface=ticket-page]";

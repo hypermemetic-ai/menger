@@ -50,7 +50,10 @@
      wider than the column on a phone), with a switch when it names
      several; COMPS-17: a named width is a device — its screen's height by
      default (844, 1024, 900), its body drawn around the frame
-     (`[data-device=phone|tablet|screen]`), a longer page scrolling inside; the label and the description above the frame, never inside
+     (`[data-device=phone|tablet|screen]`), a longer page scrolling inside;
+     COMPS-19: a window — `[data-field=window]`'s w and h and the corner
+     `[data-action=resize]` set the viewport by hand (to 4,000 high), drawn
+     only under the pointer or the focus; the label and the description above the frame, never inside
      it; a frame that never says it is up (an older server) a note and the
      source. -->
 <script module>
@@ -199,30 +202,54 @@
   let phase = $state("loading"); // loading · drawn · failed
   let said = $state(null); // the content's height, as the frame said it
 
-  const W = $derived(size ? size.w : Math.max(1, col));
+  // COMPS-19 (the owner: "I want the mockup viewport to have a defined height, settable … implicit windows
+  // (don't render it unless we mouse over) where we can adjust the size"): a size set by hand — typed in the
+  // window's bar or dragged by its corner — over the one the body names. `drag` is the size while the corner
+  // is held: only the box follows it, and the page is handed its new viewport when the drag ends.
+  const LIMIT = 4000;
+  let own = $state(null);
+  let drag = $state(null);
+  const sized = $derived(!!(size || own));
+  const W = $derived(own?.w ?? (size ? size.w : Math.max(1, col)));
   // COMPS-17 (the owner: "default to the height of the viewport set inside the mockup. it should show it as if
   // it's inside a phone"): a named width is a device — its screen's height unless the page names one, its body
   // drawn around the frame, and a longer page scrolls inside it.
-  const device = $derived(size ? deviceOf(size.w) : null);
+  const device = $derived(sized ? deviceOf(W) : null);
   const edge = $derived(device ? EDGE[device] : 0);
-  const scale = $derived(size && col > 0 ? Math.min(1, col / (size.w + 2 * edge)) : 1);
+  const scale = $derived(sized && col > 0 ? Math.min(1, col / ((drag?.w ?? W) + 2 * edge)) : 1);
   const framed = $derived(spec?.kind === "page" || spec?.kind === "body");
   // A height the page names (`WxH`, or `height=`) is kept; else the device's screen at a named width; else the content's.
-  const fixed = $derived(size?.h ?? (Number(spec?.attrs?.height) > 0 ? Math.round(Number(spec.attrs.height)) : size ? startHeight(size.w, true) : null));
-  const H = $derived(Math.max(40, Math.min(MAX, fixed ?? said ?? startHeight(W, !!size))));
+  const fixed = $derived(own?.h ?? size?.h ?? (Number(spec?.attrs?.height) > 0 ? Math.round(Number(spec.attrs.height)) : size ? startHeight(size.w, true) : null));
+  const H = $derived(Math.max(40, Math.min(own ? LIMIT : MAX, fixed ?? said ?? startHeight(W, !!size))));
+  const Wv = $derived(drag?.w ?? W), Hv = $derived(drag?.h ?? H);
+  const fitW = (v) => Math.min(2560, Math.max(200, Math.round(Number(v) || 0)));
+  const fitH = (v) => Math.min(LIMIT, Math.max(120, Math.round(Number(v) || 0)));
+  const setSize = (w, h) => { own = { w: fitW(w), h: fitH(h) }; };
+  function grab(ev) {
+    const x0 = ev.clientX, y0 = ev.clientY, w0 = W, h0 = H, k = scale || 1, el = ev.currentTarget;
+    el.setPointerCapture(ev.pointerId);
+    const move = (e) => { drag = { w: fitW(w0 + (e.clientX - x0) / k), h: fitH(h0 + (e.clientY - y0) / k) }; };
+    const up = () => { el.removeEventListener("pointermove", move); el.removeEventListener("pointerup", up); el.removeEventListener("pointercancel", up); if (drag) setSize(drag.w, drag.h); drag = null; };
+    el.addEventListener("pointermove", move); el.addEventListener("pointerup", up); el.addEventListener("pointercancel", up);
+    ev.preventDefault();
+  }
+  function nudge(ev) {
+    const d = { ArrowRight: [20, 0], ArrowLeft: [-20, 0], ArrowDown: [0, 20], ArrowUp: [0, -20] }[ev.key];
+    if (d) { ev.preventDefault(); setSize(W + d[0], H + d[1]); }
+  }
 
   // COMPS-2: the frame, the engine's — made once its stage is drawn, handed every new page after.
   let stage = $state(null);
   let f = null, asked = 0;
   $effect(() => {
     if (!framed || !stage) return;
-    const html = spec.html, body = spec.kind === "body", width = size?.w, height = fixed ?? undefined, start = startHeight(W, !!size), title = label || (body ? "the body" : "a page");
+    const html = spec.html, body = spec.kind === "body", width = sized ? W : undefined, height = fixed ?? undefined, start = startHeight(W, !!size), title = label || (body ? "the body" : "a page");
     untrack(() => {
       const n = ++asked;
       const hand = (page) => {
         if (n !== asked) return;
         if (!f) {
-          f = bus.frame(stage, { html: page, width, height, max: MAX, start, title, popups: body, theme: body, uses: READS,
+          f = bus.frame(stage, { html: page, width, height, max: LIMIT, start, title, popups: body, theme: body, uses: READS,
             onsize: (h) => (said = h), onstate: (s) => { if (s !== "loading") phase = s; } });
         } else f.update({ html: page, width, height });
       };
@@ -240,7 +267,7 @@
       {#if label}<span class="pf-label" data-field="label">{label}</span>{/if}
       {#if sizes.length > 1}
         <span class="pf-widths" role="group" aria-label="width">
-          {#each sizes as s, i (i)}<button type="button" data-action="width" data-width={s.w} aria-pressed={i === pick} onclick={() => (pick = i)}>{s.w}{s.h ? `×${s.h}` : ""}</button>{/each}
+          {#each sizes as s, i (i)}<button type="button" data-action="width" data-width={s.w} aria-pressed={i === pick && !own} onclick={() => { pick = i; own = null; }}>{s.w}{s.h ? `×${s.h}` : ""}</button>{/each}
         </span>
       {/if}
       {#if about}<span class="pf-about" data-field="description">{about}</span>{/if}
@@ -250,12 +277,21 @@
     <p class="pf-note" data-field="note">The page is <a href={ticketHref({ id: encodeURIComponent(spec.attrs.ref) })}>{spec.attrs.ref}</a>'s body; open it there.</p>
   {:else}
     <div class="pf-stage" bind:clientWidth={col}>
-      <div class="pf-box" class:bare={spec.kind === "body" || !!device}
-           style:width={size ? `${Math.round((W + 2 * edge) * scale)}px` : "100%"} style:height={`${Math.round((H + 2 * edge) * scale)}px`}>
-        <div class="pf-dev" data-device={device ?? undefined} style:width={size ? `${W + 2 * edge}px` : "100%"} style:padding={edge ? `${edge}px` : null} style:transform={scale < 1 ? `scale(${scale})` : null}>
-          <div class="pf-frames" bind:this={stage} style:width={size ? `${W}px` : "100%"} style:height={`${H}px`}></div>
+      <div class="pf-box" class:bare={spec.kind === "body" || !!device} class:held={!!drag}
+           style:width={sized ? `${Math.round((Wv + 2 * edge) * scale)}px` : "100%"} style:height={`${Math.round((Hv + 2 * edge) * scale)}px`}>
+        <div class="pf-dev" data-device={device ?? undefined} style:width={sized ? `${Wv + 2 * edge}px` : "100%"} style:padding={edge ? `${edge}px` : null} style:transform={scale < 1 ? `scale(${scale})` : null}>
+          <div class="pf-frames" bind:this={stage} style:width={sized ? `${Wv}px` : "100%"} style:height={`${Hv}px`}></div>
         </div>
+        {#if framed}<button type="button" class="pf-grip" data-action="resize" aria-label="Resize the viewport (arrow keys move it by 20)" onpointerdown={grab} onkeydown={nudge}></button>{/if}
       </div>
+      {#if framed}
+        <div class="pf-win" data-field="window" class:held={!!drag}>
+          <label>w <input type="number" data-field="w" min="200" max="2560" step="10" value={Wv} onchange={(e) => setSize(e.currentTarget.value, H)}/></label>
+          <label>h <input type="number" data-field="h" min="120" max={LIMIT} step="10" value={Hv} onchange={(e) => setSize(W, e.currentTarget.value)}/></label>
+          {#if scale < 1}<span data-field="scale">{Math.round(scale * 100)}%</span>{/if}
+          {#if own}<button type="button" data-action="reset-size" onclick={() => (own = null)}>reset</button>{/if}
+        </div>
+      {/if}
     </div>
     {#if phase === "failed"}
       <p class="pf-note" data-field="note">This page could not be drawn here; its source is below.</p>
@@ -277,6 +313,18 @@
   .pf-box { position: relative; max-width: 100%; overflow: hidden; border: var(--border) solid var(--line); border-radius: var(--radius); background: var(--panel); }
   .pf-box.bare { border: 0; border-radius: 0; background: none; }
   .pf-dev { box-sizing: border-box; transform-origin: 0 0; }
+  /* COMPS-19: the window — its bar and its corner are drawn only while the pointer is over the mockup, a
+     control of it has the focus, or its corner is held; always where there is no pointer to hover with. */
+  .pf-win { display: flex; gap: 10px; align-items: center; height: 26px; font-family: var(--font-text); font-size: 11px; color: var(--muted); opacity: 0; }
+  .pf-win label { display: inline-flex; gap: 4px; align-items: center; }
+  .pf-win input { width: 7ch; padding: 1px 4px; font: inherit; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-sm); }
+  .pf-win button { padding: 0 7px; font: inherit; line-height: 18px; color: var(--muted); background: none; border: var(--border) solid var(--line); border-radius: var(--radius-md); cursor: pointer; }
+  .pf-win button:hover { color: var(--ink); }
+  .pf-grip { position: absolute; right: 0; bottom: 0; width: 18px; height: 18px; padding: 0; border: 0; border-radius: var(--radius-sm) 0 0 0; background: var(--accent); cursor: nwse-resize; opacity: 0; touch-action: none; }
+  .pf:hover .pf-win, .pf:focus-within .pf-win, .pf-win.held, .pf:hover .pf-grip, .pf-grip:focus-visible, .pf-box.held .pf-grip { opacity: 1; }
+  .pf-grip:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--focus); }
+  .pf-box.held :global(iframe) { pointer-events: none; }
+  @media (hover: none) { .pf-win, .pf-grip { opacity: 1; } }
   .pf-frames { position: relative; }
   /* COMPS-17: the device's body — the frame is its screen; it scales with the frame. */
   .pf-dev[data-device] { background: var(--ink); }
