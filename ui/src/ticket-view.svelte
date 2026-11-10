@@ -548,6 +548,9 @@
   .md :global(.mx-meta .mx-name) { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .md :global(.mx-size) { font-family: var(--font-text); font-size: 12px; color: var(--muted); }
   .md :global(.mx-dl) { flex: none; font-size: 12px; }
+  .md :global(.mx-again) { flex: none; margin-left: auto; padding: 1px 8px; font: inherit; color: var(--ink); background: none; border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; }
+  .md :global(.mx-again:hover) { border-color: var(--muted); }
+  .md :global(.mx-again[hidden]) { display: none; }
   .md :global(.mx-card) { display: flex; max-width: 560px; overflow: hidden; color: inherit !important; text-decoration: none !important; border: var(--border) solid var(--line); border-radius: var(--radius); }
   .md :global(.mx-card:hover), .md :global(.mx-card[data-sheet~=hover]) { border-color: var(--muted); }
   .md :global(.mx-card img) { flex: none; width: 120px; height: auto; max-height: 100px; object-fit: cover; border-radius: 0 !important; }
