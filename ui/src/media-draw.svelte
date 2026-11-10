@@ -5,7 +5,8 @@
 
      - `[name](media:<hash>)` alone on its line (rewritten to this origin's
        `/media/<hash>` before the render) — `media.info` says its kind: a
-       video or audio as the browser's own player, a PDF in the browser's
+       video or audio as the browser's own player (COMPS-22: with a "play
+       again" in its caption once it has ended, `[data-action=play-again]`), a PDF in the browser's
        viewer (an iframe of `/media/<hash>`, which only this origin may
        frame), any other file as a card: its name, its size, a download.
        An image is the render's own `<img>`, as before.
@@ -63,15 +64,27 @@
     return cards.get(url);
   }
 
+  /** COMPS-22: a player's "play again", shown in its caption once it has ended and gone when it plays or is sought back. */
+  function again(player) {
+    const b = el("button", { type: "button", class: "mx-again", "data-action": "play-again", hidden: "" }, "play again");
+    const hide = () => { b.hidden = true; };
+    player.addEventListener("ended", () => { b.hidden = false; });
+    for (const ev of ["play", "seeking", "emptied"]) player.addEventListener(ev, hide);
+    b.addEventListener("click", () => { hide(); player.currentTime = 0; player.play()?.catch?.(() => {}); });
+    return b;
+  }
+
   /** A kept file as its kind draws it. */
   export function fileWidget(i, href, label) {
     const name = label || i.name || "file";
     const box = el("div", { class: "mx", "data-media": i.kind, "data-media-live": "" });
-    if (i.kind === "video") box.append(el("video", { src: href, controls: "", preload: "metadata", playsinline: "", "aria-label": name }));
-    else if (i.kind === "audio") box.append(el("audio", { src: href, controls: "", preload: "metadata", "aria-label": name }));
+    let player = null;
+    if (i.kind === "video") box.append((player = el("video", { src: href, controls: "", preload: "metadata", playsinline: "", "aria-label": name })));
+    else if (i.kind === "audio") box.append((player = el("audio", { src: href, controls: "", preload: "metadata", "aria-label": name })));
     else if (i.kind === "pdf") box.append(el("iframe", { src: href, title: name, loading: "lazy" }));
     if (i.kind !== "file") {
       box.append(el("div", { class: "mx-cap" }, el("span", { class: "mx-name" }, name), el("span", { class: "mx-size" }, size(i.bytes)), el("a", { href, download: i.name || name, class: "mx-dl" }, "download")));
+      if (player) box.querySelector(".mx-cap").append(again(player));
       return box;
     }
     const ext = (/\.([a-z0-9]{1,6})$/i.exec(i.name || name)?.[1] ?? "file").toUpperCase();

@@ -664,6 +664,15 @@ graph TD
       const ro = await openPage(`#/ticket/${id}`);
       try {
         await eventually("the ticket page draws the player", async () => (await ro.page.locator(`[data-surface=ticket-body] video[src$="/media/${hash}"]`).count()) === 1, 10_000);
+        // COMPS-22: at its end the caption offers to play it again; pressing it goes back to the start and the offer goes.
+        const player = ro.page.locator(`[data-surface=ticket-body] video[src$="/media/${hash}"]`);
+        const again = ro.page.locator("[data-surface=ticket-body] [data-media=video] [data-action=play-again]");
+        assert((await again.count()) === 1 && !(await again.isVisible()), "no offer before the end");
+        await player.evaluate((v) => v.dispatchEvent(new Event("ended")));
+        await eventually("the offer shows at the end", async () => again.isVisible(), 3_000);
+        await again.click();
+        await eventually("the offer goes once pressed", async () => !(await again.isVisible()), 3_000);
+        assert((await player.evaluate((v) => v.currentTime)) === 0, "back at the start");
         if (shots) await ro.page.screenshot({ path: path.join(shots, "media-video-ticket.png") });
       } finally {
         await ro.context.close();
