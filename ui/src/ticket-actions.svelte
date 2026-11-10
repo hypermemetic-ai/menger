@@ -4,8 +4,11 @@
      first, every other move the store allows under "more…"; Canceled and
      Superseded ask why; leaving Canceled may restore what it canceled),
      labels (a chip with ×, a field to add), archive (a dry run first) and
-     restore, rename (a dry run first), a revision put back (the rev from
-     `ticket.revision_picked` on the bus, or typed), and the admin's
+     restore, rename (a dry run first), a revision put back (SURFACE-22: its
+     five newest listed in the group, `[data-pick-rev=N]`, a row picks one;
+     or the rev from `ticket.revision_picked` on the bus, or typed; live as
+     ticket-revisions is — `watch { revisions: true }` says `revised`, and
+     the list is asked again past it), and the admin's
      freeze/unfreeze, reshortcode (a dry run first), delete (what its children
      and waiters do) and undelete. Each action is [data-action=<method>] with
      a message of its own; its answer is said beside it, a refusal in the
@@ -16,7 +19,7 @@
      the permalink by uid ([data-group=link], [data-action=copy-link]). -->
 <script module>
   export const uses = ["tickets.get", "tickets.watch", "members.mine", "auth.requires",
-    "tickets.set_status", "tickets.label", "tickets.archive", "tickets.restore", "tickets.rename", "tickets.revisions.restore",
+    "tickets.set_status", "tickets.label", "tickets.archive", "tickets.restore", "tickets.rename", "tickets.revisions.restore", "tickets.revisions.list",
     "tickets.freeze", "tickets.unfreeze", "tickets.reshortcode", "tickets.delete", "tickets.undelete"];
   // The designer's next steps from each status; the store allows any move but
   // Complete over open children and nothing on a doc, so the rest are under "more…".
@@ -129,6 +132,21 @@
   let dlUnblock = $state(true);
   let rev = $state("");
   let revFields = $state([]);
+  // SURFACE-22: the newest revisions, in the group that restores one (the owner: "it should be right
+  // there"). Held live as ticket-revisions holds its list: `revised` names the newest rev, and the
+  // list's `before` moves past it, so it is asked again.
+  const REVS = 5;
+  const revLatest = live({ snapshot: "tickets.revisions.list", params: () => ({ id, limit: 1 }), changes: "tickets.watch", changes_params: { revisions: true },
+                           key: "ticket", on: { revised: "upsert:." } });
+  const revNewest = $derived(revLatest.rows.filter((r) => r.ticket === id).reduce((m, r) => Math.max(m, r.rev ?? 0), 0));
+  const revList = live({ snapshot: "tickets.revisions.list", params: () => (revNewest ? { id, limit: REVS, before: revNewest + 1 } : { id, limit: REVS }), key: "rev" });
+  const revRows = $derived([...revList.rows].filter((r) => r.rev != null).sort((x, y) => y.rev - x.rev).slice(0, REVS));
+  const two = (n) => String(n).padStart(2, "0");
+  const revWhen = (u) => { if (u == null) return "just now"; const d = new Date(u * 1000); return `${two(d.getUTCMonth() + 1)}-${two(d.getUTCDate())} ${two(d.getUTCHours())}:${two(d.getUTCMinutes())}`; };
+  function pickRev(n) {
+    rev = String(n);
+    answers["tickets.revisions.restore"] = undefined;
+  }
   let answers = $state({});
   let pending = $state(0);
   const busy = $derived(pending > 0);
@@ -405,9 +423,21 @@
 
     <div data-group="revision">
       <h2 class="sec">Restore a revision</h2>
+      {#if revRows.length}
+        <ul class="ta-revs" data-field="revisions">
+          {#each revRows as r (r.rev)}
+            <li><button type="button" class="ta-rev-row" data-pick-rev={r.rev} aria-pressed={String(r.rev) === rev} onclick={() => pickRev(r.rev)}>
+              <span class="rev-n">rev {r.rev}</span>
+              <span class="rev-at">{revWhen(r.at_unix)}</span>
+              <span class="rev-by">{r.name ?? (r.actor ? r.actor.slice(0, 10) + "…" : "")}</span>
+              <span class="rev-f">{#each r.fields?.length ? r.fields : [r.source === "baseline" ? "baseline" : "—"] as f (f)}<span>{f}</span>{/each}</span>
+            </button></li>
+          {/each}
+        </ul>
+      {/if}
       {#if !rev}
         <div class="ta-line">
-          <span class="hint" data-empty>pick one in Revisions, or</span>
+          <span class="hint" data-empty>{revRows.length ? "an older one, or its diff, is in Revisions; or" : "pick one in Revisions, or"}</span>
           <input class="in rev" data-field="rev" placeholder="rev" inputmode="numeric" autocomplete="off" onchange={(ev) => (rev = ev.currentTarget.value.trim())}/>
         </div>
       {:else}
@@ -518,6 +548,17 @@
   .ta-opts label { display: flex; gap: 4px; align-items: center; }
   .ta-rev { display: flex; gap: 8px; align-items: center; font-size: 12px; }
   .rev-n { color: var(--accent); }
+  .ta-revs { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+  .ta-revs + .ta-rev { margin-top: 8px; }
+  .ta-rev-row { display: grid; grid-template-columns: 44px 82px 58px minmax(0, 1fr); gap: 6px; align-items: center; width: 100%; height: var(--pitch); padding: 0 6px; font: inherit; font-size: 12px; text-align: left; color: var(--ink); background: none; border: 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .ta-rev-row:hover { background: var(--hover); }
+  .ta-rev-row:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
+  .ta-rev-row[aria-pressed="true"] { background: var(--row-sel); }
+  .ta-rev-row .rev-n { font-weight: var(--weight-medium); }
+  .ta-rev-row .rev-at { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .ta-rev-row .rev-by { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--weight-medium); }
+  .ta-rev-row .rev-f { display: flex; gap: 4px; overflow: hidden; }
+  .ta-rev-row .rev-f span { padding: 0 5px; font-size: 10px; line-height: 15px; color: var(--chip-fg); background: var(--chip-bg); border-radius: var(--radius-sm); }
   .ta-checks { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 6px; font-size: 12px; }
   .ta-checks label { display: flex; gap: 4px; align-items: center; }
   .ta-checks input, .check input, .ta-opts input { accent-color: var(--accent); }

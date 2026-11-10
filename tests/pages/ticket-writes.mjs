@@ -429,6 +429,39 @@ export default async (ctx) => {
     }
   });
 
+  // SURFACE-22: the group lists the revisions itself — a row picks one, and one made while the page is open is listed.
+  await test("a_revision_is_picked_from_its_list", async () => {
+    const id = child("the listed title");
+    sy("tickets", "update", "--id", id, "--title", "a later title", "--message", "kept as its own");
+    const revs = sy("tickets", "revisions", "list", "--id", id).filter((e) => e.type === "revision").map((e) => e.revision.rev);
+    const first = Math.min(...revs);
+    const { context, page } = await openPage(`#/actions/${id}`);
+    try {
+      const group = page.locator("[data-surface=ticket-actions] [data-group=revision]");
+      await eventually(`every revision listed (${revs})`, async () => (await group.locator("[data-pick-rev]").count()) === Math.min(revs.length, 5));
+      const order = await group.locator("[data-pick-rev]").evaluateAll((els) => els.map((e) => Number(e.dataset.pickRev)));
+      assert(JSON.stringify(order) === JSON.stringify([...order].sort((a, b) => b - a)), `newest first: ${order}`);
+      assert((await group.locator("[data-field=rev]").count()) === 1, "a rev can still be typed");
+      // One made while the page is open: its row appears, on top.
+      sy("tickets", "update", "--id", id, "--title", "a third title", "--message", "kept as its own too");
+      const top = Math.max(...sy("tickets", "revisions", "list", "--id", id).filter((e) => e.type === "revision").map((e) => e.revision.rev));
+      await eventually("the new revision is listed live", async () => (await group.locator(`[data-pick-rev="${top}"]`).count()) === 1, 5_000);
+      // A row picks it; restore sends that rev.
+      await group.locator(`[data-pick-rev="${first}"]`).click();
+      await eventually("the rev picked", async () => (await text(group.locator("[data-field=revision]"))).includes(`rev ${first}`));
+      assert((await group.locator(`[data-pick-rev="${first}"]`).getAttribute("aria-pressed")) === "true", "its row is marked");
+      if (process.env.PAGES_SHOTS) await page.screenshot({ path: path.join(process.env.PAGES_SHOTS, "ticket-actions-revisions.png"), fullPage: true });
+      await group.locator("[data-rf=title]").check();
+      await group.locator("[data-field=message]").fill("the first was right");
+      await group.locator("[data-action='tickets.revisions.restore']").click();
+      await eventually("the title is back", async () => get(id).title === "the listed title");
+      const p = (await sent(page, "tickets.revisions.restore")).at(-1).params;
+      assert(p.rev === first && JSON.stringify(p.fields) === '["title"]', `the rev its row named: ${JSON.stringify(p)}`);
+    } finally {
+      await context.close();
+    }
+  });
+
   await test("freeze_and_unfreeze_a_scope", async () => {
     const scope = scopeOf("WRITF", "a scope to freeze");
     const { context, page } = await openPage(`#/actions/${scope}`);
