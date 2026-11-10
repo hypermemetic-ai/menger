@@ -44,13 +44,18 @@
 <style>
   .board-layout { display: flex; flex-direction: column; height: 100vh; height: 100dvh; background: var(--bg); color: var(--ink); font-family: var(--font-text); font-size: var(--text-size); }
   .board-body { flex: 1; min-height: 0; display: flex; }
-  .board-side { width: 260px; flex: none; display: flex; flex-direction: column; border-right: var(--border) solid var(--line); overflow: auto; background: var(--panel); }
+  .board-side { width: 320px; flex: none; display: flex; flex-direction: column; border-right: var(--border) solid var(--line); overflow: auto; background: var(--panel); }
   .nav { flex: 1 0 auto; }
   .board-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
   .main { flex: 1; min-height: 0; min-width: 0; display: flex; }
   .main > :global(*) { flex: 1; min-width: 0; display: flex; }
   .board-layout > [data-slot=top] > :global(*), .board-layout > [data-slot=bar] > :global(*) { display: block; }
+  /* On a phone the board is the tree nav: the side column takes the width,
+     its nav alone (no facets, saved filters or keymap), and the rows and the
+     bulk bar are not drawn; a shortcode or a child opens its ticket. */
   @media (max-width: 720px) {
-    .board-side { display: none; }
+    .board-side { flex: 1; width: auto; border-right: 0; }
+    .board-side > :not(.nav) { display: none; }
+    .board-main { display: none; }
   }
 </style>
