@@ -639,6 +639,15 @@ async fn run(args: Args) -> anyhow::Result<()> {
     // UI-15: on this environment's channel (--ui-channel, else --env's).
     let ui_channel = args.ui_channel.clone().unwrap_or_else(|| menger::default_ui_channel(args.env.as_deref()).to_string());
     let ui = menger::UiSetup::open_on(&ui_db_path, plexus_ui_service::Signers::parse(&args.ui_signer).map_err(anyhow::Error::msg)?, &ui_channel)?;
+    // DIST-19: the bundle this binary carries, live where nobody else chose
+    // one — before anything is served. A bundle the store refuses leaves the
+    // placeholder, and is said even on a quiet terminal.
+    if let Some(bundle) = menger::embedded_ui::BUNDLE {
+        match menger::embedded_ui::seed(&ui.store, bundle) {
+            Ok(seeded) => tracing::info!("ui:        {seeded}"),
+            Err(e) => tracing::error!("the UI this binary carries was not made live: {e}"),
+        }
+    }
     // UI-7: refused at start when the module imports anything.
     let compiler = match &args.ui_compiler {
         Some(path) => Some(plexus_ui_service::Compiler::open(path).map_err(|e| anyhow::anyhow!("--ui-compiler {}: {e}", path.display()))?),
@@ -779,7 +788,8 @@ async fn run(args: Args) -> anyhow::Result<()> {
             port: shell_port,
             ws_port,
             // DIST-3: --app-dist given → that directory; else the
-            // checkout's frontend/dist (v2: nothing is embedded).
+            // checkout's frontend/dist (v2: none; the UI is the ui service's,
+            // DIST-19: the binary's own bundle seeded there at start).
             app: args.app_dist.clone().map(shell::AppSource::Dir).unwrap_or_else(shell::preferred_app),
             env: args.env.clone(),
             login: wired.login.clone(),

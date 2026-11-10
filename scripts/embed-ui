@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# DIST-19: put the UI's bundle where the build carries it — embed/ui.tar,
+# which build.rs includes in the menger binary and the published crate ships
+# (Cargo.toml's `include`). Run it before `cargo publish -p menger
+# --allow-dirty` (the bundle is ignored by git, which cargo calls dirty), or
+# before a build meant to be handed to someone; a checkout without
+# embed/ui.tar builds a menger that carries no UI.
+#
+#   scripts/embed-ui            build the bundle from ui/ (scripts/plexus-ui:
+#                               the engine once, then the bundle — Node 22 and
+#                               rustup's wasm32 target, as AGENTS.md "Build")
+#                               and put it in embed/. Its contract is unstamped
+#                               (manifest.contract: unknown).
+#   scripts/embed-ui TAR        put a bundle already built there — a release's
+#                               dist/ui.tar, stamped against the menger it was
+#                               built with (deploy/pipeline build).
+#   scripts/embed-ui --clear    take it out: the next build carries nothing.
+#
+# One build without touching embed/: MENGER_UI_BUNDLE=path/to/ui.tar cargo build.
+set -euo pipefail
+root=$(cd "$(dirname "$0")/.." && pwd)
+out=$root/embed/ui.tar
+die() { echo "embed-ui: $*" >&2; exit 1; }
+
+case ${1:-} in
+  -h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  --clear) [[ -e $out ]] && unlink "$out"; echo "embed-ui: $out is gone — the next build carries no UI"; exit 0 ;;
+  -*) die "unknown option $1 (--help)" ;;
+esac
+
+if [[ -n ${1:-} ]]; then
+  tar=$1
+  [[ -f $tar ]] || die "$tar is no file"
+else
+  src=$("$root/scripts/plexus-ui-src" "$root" 2>/dev/null) || exec "$root/scripts/plexus-ui-src" "$root" # says why
+  engine=$root/dist/engine
+  [[ -d $engine ]] || (cd "$root" && scripts/plexus-ui build --prebuild --engine "$engine")
+  tar=$root/dist/ui.tar
+  short=$(git -C "$root" rev-parse --short HEAD 2>/dev/null || echo unknown)
+  more=()
+  [[ -d $src/node_modules ]] && more+=(--node-modules "$src/node_modules")
+  (cd "$root" && scripts/plexus-ui build ui --engine "$engine" --commit "menger@$short" "${more[@]}" -o "$tar")
+fi
+
+# What the store asks of a version that goes live: a tar holding index.html
+# and manifest.json. No -q under pipefail (DEPLOY-6): grep reads the listing whole.
+names=$(tar -tf "$tar" 2>/dev/null) || die "$tar is no tar"
+for want in index.html manifest.json; do
+  grep -x -e "$want" -e "./$want" <<<"$names" >/dev/null || die "$tar holds no $want — not a bundle \`plexus-ui build\` wrote"
+done
+
+mkdir -p "$root/embed"
+if ! [[ $tar -ef $out ]]; then cp -- "$tar" "$out.tmp" && mv -- "$out.tmp" "$out"; fi
+echo "embed-ui: $out — $(sha256sum "$out" | cut -c1-12), $(du -h "$out" | cut -f1); the next build of menger carries it"

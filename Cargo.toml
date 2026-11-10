@@ -46,6 +46,10 @@ categories = ["web-programming::http-server", "development-tools"]
 # v0.0.1 holds it. The tests, deploy/ and perf/ stay in the repository.
 include = [
     "/src/**",
+    # DIST-19: the UI the binary carries — build.rs includes embed/ui.tar
+    # when scripts/embed-ui has put it there (never committed).
+    "/build.rs",
+    "/embed/**",
     "/README.md",
     "/LICENSE",
 ]

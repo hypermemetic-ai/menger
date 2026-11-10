@@ -33,6 +33,16 @@ as `--admin` (above), on its own ports and database. The tests run the same
 way: `tests/support` starts every server under `key` with a fixture key as
 `--admin`; `tests/first_run.rs` runs the no-flags start on a temp HOME.
 
+**A binary may carry the UI** (DIST-19): `build.rs` includes `embed/ui.tar`
+when `scripts/embed-ui` has put it there (or the file `MENGER_UI_BUNDLE`
+names), and at start `src/embedded_ui.rs` makes that bundle live where
+nothing is, or where the live version is an earlier binary's seed — never
+over a version somebody pushed, rolled back to or authored. The published
+crate ships it (run `scripts/embed-ui` before `cargo publish -p menger
+--allow-dirty` — the bundle is ignored by git, which cargo calls dirty); a
+checkout, the tests and the pipeline's releases carry none, so their
+`/app/` is the placeholder until a push. `embed/ui.tar` is never committed.
+
 Bare `cargo run` takes prod's ports (4455–4456, or the next free ones) and
 the default data directory, `~/.local/share/menger` — prod's directory on
 this machine; it writes `local.key`, `local.json` and `once/` beside prod's

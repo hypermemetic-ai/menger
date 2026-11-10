@@ -37,6 +37,33 @@ menger 0.6.2 — running
 `--open` opens that link in the browser too. `menger --help` is the short
 list; `menger --help-all` is every option, grouped; `menger --version`.
 
+**The installed binary carries the app** (DIST-19). The crate on crates.io
+ships the UI's bundle (`embed/ui.tar`, the tar `plexus-ui build` writes),
+`build.rs` includes it in the binary, and at start menger makes it live
+where nobody else chose a UI — so `/app/` is the app on a machine with no
+Node, no bundle and no `--ui-signer`. Whose move the live pointer last was
+decides it (`src/embedded_ui.rs`):
+
+| the ui file's channel | at start |
+|---|---|
+| nothing is live | the bundle is kept and made live, pushed by `menger:embedded`, unsigned |
+| the last move was an earlier binary's seed | this binary's bundle replaces it: an upgrade brings its UI |
+| anyone else moved it last — `ui push`, `rollback`, `author`, `promote`, an undo | nothing is written; a UI somebody chose stands across every restart |
+
+`ui versions` lists a seeded version like any other, and `ui rollback`
+reaches it. `ui.push` is unchanged: it wants a `--ui-signer`'s signature.
+A build that finds no bundle — a checkout, the tests, `deploy/pipeline`'s
+releases, whose bundle the deploy pushes — carries nothing and serves the
+placeholder until a push. To carry one:
+
+```sh
+scripts/embed-ui                 # build the bundle from ui/ into embed/ui.tar (never committed)
+scripts/embed-ui path/to/ui.tar  # or take one already built, e.g. a release's dist/ui.tar
+cargo build -p menger            # build.rs finds embed/ui.tar
+cargo publish -p menger --allow-dirty   # ships it: the bundle is ignored by git, which cargo calls dirty
+MENGER_UI_BUNDLE=path/to/ui.tar cargo build -p menger   # one build, embed/ untouched
+```
+
 **There is no open mode** (ACCESS-24). With no `--auth-provider` (or
 `--identity`) and every listener on loopback, menger signs its one person in
 by itself:
@@ -1710,6 +1737,8 @@ any Plexus service. Its `toy/` is its worked example.
 ```
 src/                 the binary: main.rs (flags), builder.rs (the services registered),
                      shell.rs, bind.rs, calls.rs, local.rs, first_run.rs, login_access.rs
+build.rs, embed/     the UI the binary carries (DIST-19): embed/ui.tar, when
+                     scripts/embed-ui put it there, included by build.rs
 tickets-api/         menger-tickets-api: the tickets service — vocabulary, store, filter
                      language, activations (activation/), access (access/)
 media/               menger-media: the media service — images by sha256 in media.db, the
