@@ -56,7 +56,10 @@
      only under the pointer or the focus; COMPS-20: `[data-action=side]`
      draws every size at once (`[data-field=side]`, a pane each, one scale),
      and `[data-action=full]` the page alone over the whole screen
-     (`[data-action=close-full]`, or Escape); the label and the description above the frame, never inside
+     (`[data-action=close-full]`, or Escape); COMPS-21: several pages in one
+     mockup — a whole document each under a comment line `page: NAME`, the
+     first shown; a link to `page:NAME` turns to another inside the same frame,
+     and `[data-action=page]` opens one from the head; the label and the description above the frame, never inside
      it; a frame that never says it is up (an older server) a note and the
      source. -->
 <script module>
@@ -179,6 +182,30 @@
 
   /** The height a frame starts at, before its page says its own: a device's screen at a named width. */
   export const startHeight = (w, named) => (!named ? 320 : w <= 480 ? 844 : w <= 1024 ? 1024 : 900);
+  /** COMPS-21: a mockup's pages — each a whole document under a line `<!-- page: NAME -->` — as `[{ name, html }]`;
+   *  a mockup with no such line is no list (it is one page, as written). */
+  export function pagesOf(html) {
+    const parts = String(html ?? "").split(/^[ \t]*<!--\s*page:\s*([\w .-]{1,40}?)\s*-->[ \t]*$/m);
+    if (parts.length < 5) return [];
+    const out = [];
+    for (let i = 1; i + 1 < parts.length; i += 2) if (parts[i + 1].trim()) out.push({ name: parts[i].trim(), html: parts[i + 1].trim() });
+    return out.length > 1 ? out.slice(0, 24) : [];
+  }
+  /** The document a frame is handed for several pages: it holds them all and shows one, in a frame of its own
+   *  that fills it. A page's `<a href="page:NAME">` asks it for another — a message taken only from that inner
+   *  frame's own window — so the pages turn inside the one sandboxed frame, and nothing new reaches the app. */
+  export function pagesDoc(pages, start) {
+    const hook = '<script>document.addEventListener("click",function(e){var a=e.target&&e.target.closest&&e.target.closest("a[href]");if(!a)return;var h=a.getAttribute("href")||"";if(h.indexOf("page:")===0){e.preventDefault();parent.postMessage({plexusPage:decodeURIComponent(h.slice(5))},"*");}});<\/script>';
+    const map = {};
+    for (const pg of pages) map[pg.name] = pg.html;
+    const json = JSON.stringify(map).replace(/</g, "\\u003c");
+    return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark">'
+      + '<style>html,body{margin:0;height:100%;overflow:hidden}iframe{display:block;width:100%;height:100%;border:0}</style></head><body><iframe id="p" title="page"></iframe>'
+      + '<script>var P=' + json + ',f=document.getElementById("p"),H=' + JSON.stringify(hook).replace(/</g, "\\u003c") + ';'
+      + 'function show(n){if(Object.prototype.hasOwnProperty.call(P,n)){f.setAttribute("data-page",n);f.srcdoc=P[n]+H;}}'
+      + 'addEventListener("message",function(e){if(e.source===f.contentWindow&&e.data&&typeof e.data.plexusPage==="string")show(e.data.plexusPage);});'
+      + 'show(' + JSON.stringify(start).replace(/</g, "\\u003c") + ');<\/script></body></html>';
+  }
   /** COMPS-17: the device a named width is drawn in — its body around the frame. */
   export const deviceOf = (w) => (w <= 480 ? "phone" : w <= 1024 ? "tablet" : "screen");
   /** The device's edge, in the page's own pixels (it scales with the frame). */
@@ -203,6 +230,10 @@
   let pick = $state(0);
   const size = $derived(sizes[Math.min(pick, Math.max(0, sizes.length - 1))] ?? null);
   const label = $derived(spec?.attrs?.label || spec?.attrs?.title || "");
+  // COMPS-21: several pages in one mockup — the frame is handed them all, opened at `at`.
+  const pages = $derived(spec?.kind === "page" ? pagesOf(spec.html) : []);
+  let at = $state(null);
+  const html0 = $derived(pages.length ? pagesDoc(pages, pages.some((x) => x.name === at) ? at : pages[0].name) : spec?.html);
   const about = $derived(spec?.attrs?.description || "");
   let col = $state(0);
   let phase = $state("loading"); // loading · drawn · failed
@@ -274,7 +305,7 @@
   let f = null, asked = 0;
   $effect(() => {
     if (!framed || !stage) return;
-    const html = spec.html, body = spec.kind === "body", width = sized ? W : undefined, height = fixed ?? undefined, start = startHeight(W, !!size), title = label || (body ? "the body" : "a page");
+    const html = html0, body = spec.kind === "body", width = sized ? W : undefined, height = fixed ?? undefined, start = startHeight(W, !!size), title = label || (body ? "the body" : "a page");
     untrack(() => {
       const n = ++asked;
       const hand = (page) => {
@@ -295,7 +326,7 @@
 
 {#if spec && spec.kind !== "live"}
 <figure class="pf" data-surface="page-frame" data-kind={spec.kind} data-state={framed ? phase : "note"} data-width={size?.w ?? undefined} data-device={device ?? undefined}>
-  {#if only == null && (label || about || sizes.length > 1)}
+  {#if only == null && (label || about || sizes.length > 1 || pages.length)}
     <figcaption class="pf-head">
       {#if label}<span class="pf-label" data-field="label">{label}</span>{/if}
       {#if sizes.length > 1}
@@ -303,6 +334,11 @@
           {#each sizes as s, i (i)}<button type="button" data-action="width" data-width={s.w} aria-pressed={i === pick && !own} onclick={() => { pick = i; own = null; }}>{s.w}{s.h ? `×${s.h}` : ""}</button>{/each}
         </span>
         <button type="button" class="pf-side" data-action="side" aria-pressed={side} onclick={() => { side = !side; own = null; }}>side by side</button>
+      {/if}
+      {#if pages.length}
+        <span class="pf-widths" role="group" aria-label="page" data-field="pages">
+          {#each pages as pg (pg.name)}<button type="button" data-action="page" data-page={pg.name} onclick={() => { at = null; queueMicrotask(() => (at = pg.name)); }}>{pg.name}</button>{/each}
+        </span>
       {/if}
       {#if about}<span class="pf-about" data-field="description">{about}</span>{/if}
     </figcaption>
