@@ -372,6 +372,32 @@ export default async (ctx) => {
     }
   });
 
+  // COMPS-21: several pages in one mockup, a link turning to another inside the same frame.
+  await test("a_mockup_of_several_pages_links_inside_one_frame", async () => {
+    const pg = (name, to) => `<!-- page: ${name} -->\n<!doctype html><html><head><title>${name}</title></head><body><h1 id="here">${name}</h1><a id="go" href="page:${to}">to ${to}</a><script>document.body.dataset.ran = "yes";</scr` + `ipt></body></html>`;
+    const mid = made("two pages", "A site of two pages.\n\n```mockup widths=390x500 title=\"Two pages\"\n" + pg("home", "about") + "\n" + pg("about", "home") + "\n```\n", root);
+    const { context, page } = await openPage(`#/ticket/${mid}`);
+    try {
+      const S = "[data-surface=ticket-page]";
+      await drawn(page, S, 1);
+      const pf = page.locator(`${S} ${PF}[data-kind=page]`).first();
+      assert(JSON.stringify(await pf.locator("[data-action=page]").evaluateAll((b) => b.map((e) => e.dataset.page))) === '["home","about"]', "a button a page");
+      const here = async () => { const outer = await inner(page, S, 0); const f = outer?.childFrames()[0]; return f ? await f.locator("#here").textContent({ timeout: 500 }).catch(() => null) : null; };
+      await eventually("it opens on the first page", async () => (await here()) === "home", 8_000);
+      const shown = await pf.locator("iframe[data-buffer=shown]").elementHandle();
+      await (await inner(page, S, 0)).childFrames()[0].locator("#go").click();
+      await eventually("the link turned the page", async () => (await here()) === "about", 8_000);
+      assert((await pf.locator("iframe[data-buffer=shown]").evaluate((e, was) => e === was, shown)), "in the same frame");
+      assert((await (await inner(page, S, 0)).childFrames()[0].evaluate(() => document.body.dataset.ran)) === "yes", "the page's script ran");
+      await (await inner(page, S, 0)).childFrames()[0].locator("#go").click();
+      await eventually("and back", async () => (await here()) === "home", 8_000);
+      await pf.locator("[data-action=page][data-page=about]").click();
+      await eventually("the head opens a page", async () => (await here()) === "about", 8_000);
+    } finally {
+      await context.close();
+    }
+  });
+
   await test("a_whole_page_body_is_one_frame", async () => {
     const { context, page } = await openPage(`#/ticket/${wid}`);
     const S = "[data-surface=ticket-page]";
