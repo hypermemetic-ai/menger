@@ -20,7 +20,8 @@
 </script>
 
 <script>
-  import { getContext } from "svelte";
+  import { getContext, setContext } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
   import { live } from "plexus-ui/host";
   import { ticketHref } from "./ticket-links.svelte";
   import Row from "./nav-row-sv.svelte";
@@ -28,7 +29,15 @@
   import NavGroup from "./nav-group-sv.svelte";
 
   let { parent = null, epic = null, count = null } = $props();
-  const nav = getContext("menger.nav") ?? { isOpen: () => false, toggle: () => {}, hosted: () => [] };
+  // STUDIO-24: alone (no nav-tree-sv above it, as on the studio's canvas) it keeps
+  // its own open set and hands it down, so its arrows open and close.
+  const nav = getContext("menger.nav") ?? ownNav();
+  function ownNav() {
+    const open = new SvelteSet();
+    const n = { isOpen: (id) => open.has(id), toggle: (id) => (open.has(id) ? open.delete(id) : open.add(id)), hosted: () => [] };
+    setContext("menger.nav", n);
+    return n;
+  }
   const base = location.hash.startsWith("#/sv/") ? "#/sv/" : "#/";
   let pages = $state(1);
   const kids = live({ snapshot: "tickets.list",
