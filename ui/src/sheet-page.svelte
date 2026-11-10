@@ -48,6 +48,7 @@
   import PageBulk from "plexus-ui:page-bulk";
   import PageCounts from "plexus-ui:page-counts";
   import PageEdit from "plexus-ui:page-edit";
+  import PageThread from "plexus-ui:page-thread";
   import PageFacets from "plexus-ui:page-facets";
   import PageFilters from "plexus-ui:page-filters";
   import PageNew from "plexus-ui:page-new";
@@ -96,6 +97,7 @@
   import TicketCommits from "plexus-ui:ticket-commits";
   import TicketCreate from "plexus-ui:ticket-create";
   import TicketEdit from "plexus-ui:ticket-edit";
+  import TweetThread from "plexus-ui:tweet-thread";
   import EditorBody from "plexus-ui:editor-body";
   import DocMargin from "plexus-ui:doc-margin";
   import MediaDraw from "plexus-ui:media-draw";
@@ -241,6 +243,8 @@
       ["ticket-history", TicketHistory, ID, ["hover"], { loading: { sheet: "loading" }, ...gone }],
       ["ticket-revisions", TicketRevisions, ID, ["hover", "focus", "selected"], { loading: { sheet: "loading" }, ...gone }],
       ["ticket-edit", TicketEdit, ID, ["hover", "focus", "disabled", "checked"], { checked: { sheet: "open" }, loading: { sheet: "loading" } }, false, { checked: ["[role=radio][aria-checked=false]"] }],
+      // COMPS-15: a thread on the sheet's ticket, as its body reads (the head alone: one empty post).
+      ["tweet-thread", TweetThread, ID, ["hover", "focus"], {}],
       // V2-30: a doc's margin, alone — its threads as a list (a ticket's id: none).
       ["doc-margin", DocMargin, ID, [], {}],
       // EDITOR-8: the rendering as the editor; hover and focus held on its revisions link (EDITOR-9: a block has no highlight).
@@ -294,6 +298,7 @@
       ["page-bulk", PageBulk, (t) => ({ ids: t }), [], {}, true],
       ["page-blockers", PageBlockers, ID, [], {}, true],
       ["page-edit", PageEdit, ID, [], {}, true],
+      ["page-thread", PageThread, ID, [], {}, true],
       ["page-editor", PageEditor, ID, [], {}, true],
       ["page-actions", PageActions, ID, [], {}, true],
       ["page-facets", PageFacets, (t) => ({ filter: "status Ready" }), [], fil, true],

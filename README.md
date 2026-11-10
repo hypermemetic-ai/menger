@@ -1588,7 +1588,14 @@ its key strip), `page-new`, `page-search`, `page-ready` and `page-waves`
 (full-height columns: the list scrolls in its own box under its bar), `page-filters`,
 `page-orgs`, `page-releases`, `page-sheet` (V2-25: `page-epics` and `page-me` went); `page-bulk`, `page-blockers`,
 `page-edit`, `page-actions`, `page-facets` and `page-counts` draw one
-component alone for its browser cases. A placed component keeps its
+component alone for its browser cases; `page-thread` (COMPS-15, `#/thread/:id`) draws
+`tweet-thread` alone — a ticket's body as a thread laid out like a post
+composer, MENGER-52's form (the text before the first `## Post N` kept as
+it is, each `## Post N` a post, a `[name](media:<hash>)` line alone its
+video, any other heading and what follows kept as it is), each post's count
+against 280, saved to the body by `tickets.amend` when asked; as a tag,
+`<tweet-thread id="X"></tweet-thread>`, it draws natively in any body
+(`tests/pages/thread.mjs`). A placed component keeps its
 behaviour and its look and loses the page's chrome to the page — the board
 link and the jump button (app-top's), the page's title, the palette's mark;
 `tests/apart.rs` holds it to that.
