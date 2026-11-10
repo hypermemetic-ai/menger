@@ -447,11 +447,13 @@
         if (ev.target?.closest?.("button, input, select, textarea, summary")) return; // a control drawn in the block is its own (a code card's copy)
         const a = ev.target?.closest?.("a[href]");
         if (a && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); window.open(a.href, "_blank", "noopener"); return; }
+        if (a?.classList.contains("tpill")) return; // EDITOR-23: a ticket pill is followed (the click below), the caret stays out
         if (this.hand) { accept(); }
         ev.preventDefault();
         enter(v, d, this.text, ev);
       });
-      d.addEventListener("click", (ev) => { if (ev.target?.closest?.("a[href]")) ev.preventDefault(); });
+      // A link in a block is not followed (the click enters the block) — but a ticket pill, plainly clicked, is (EDITOR-23).
+      d.addEventListener("click", (ev) => { const a = ev.target?.closest?.("a[href]"); if (a && !(a.classList.contains("tpill") && !ev.metaKey && !ev.ctrlKey)) ev.preventDefault(); });
       return d;
     }
     destroy(dom) { if (dom.view) { unmount(dom.view); dom.view = null; } }
