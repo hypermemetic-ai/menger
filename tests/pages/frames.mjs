@@ -241,10 +241,12 @@ export default async (ctx) => {
       const f2 = await inner(page, S, 2);
       assert((await f2.locator("#marked").textContent()) === "a fragment page, run", "the fragment's script ran");
 
-      // Its height is the content's: the frame grew past its start to the page's own height, and the fixed one kept its own.
+      // COMPS-17: a named width is a device — its screen's height, however long the page, drawn inside the device; the fixed one kept its own.
       const h = await page.locator(`${S} ${PF}[data-kind=page]`).evaluateAll((els) => els.map((e) => ({ box: e.querySelector(".pf-box").getBoundingClientRect().height, frame: e.querySelector("iframe").getBoundingClientRect().height })));
       const doc0 = await f0.evaluate(() => document.documentElement.scrollHeight);
-      assert(Math.abs(h[0].frame - doc0) <= 2 && doc0 > 844, `the element's frame is its content's height (${h[0].frame} for ${doc0})`);
+      assert(Math.abs(h[0].frame - 844) <= 2 && doc0 > 844, `the element's frame is a phone's screen, its page longer and scrolling inside (${h[0].frame} for ${doc0})`);
+      const dev = await page.locator(`${S} ${PF}[data-kind=page]`).evaluateAll((els) => els.map((e) => e.dataset.device ?? null));
+      assert(dev[0] === "phone" && dev[1] === "screen" && dev[2] === null, `a 390 is a phone, a 1440 a screen, no width no device: ${JSON.stringify(dev)}`);
       assert(Math.abs(h[2].frame - 300) <= 2, `height=300 is kept (${h[2].frame})`);
 
       // The sandbox: an opaque origin, nothing of the app's reachable.
@@ -317,7 +319,8 @@ export default async (ctx) => {
       assert(f.length === 1 && f[0].label === "A whole page" && JSON.stringify(f[0].widths) === '["390","768","1440"]', `one frame, its title and widths: ${JSON.stringify(f)}`);
       const fr = await inner(page, S, 0);
       assert((await fr.locator("#ran").textContent()) === "whole, run", "its script ran");
-      assert(f[0].h > 1400 && f[0].h <= 2000, `as tall as its content, capped: ${f[0].h}`);
+      // COMPS-17: it names widths, so it is a device — a phone's screen at its first, the 1,400px page scrolling inside.
+      assert(Math.abs(f[0].h - 844) <= 2, `a phone's screen at 390, the page scrolling inside: ${f[0].h}`);
     } finally {
       await context.close();
     }

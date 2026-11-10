@@ -48,7 +48,9 @@
      frame as outside. Here: which pages are frames, a width the page names
      drawn at that width and scaled down to the column (EDITOR-12: nothing
      wider than the column on a phone), with a switch when it names
-     several; the label and the description above the frame, never inside
+     several; COMPS-17: a named width is a device — its screen's height by
+     default (844, 1024, 900), its body drawn around the frame
+     (`[data-device=phone|tablet|screen]`), a longer page scrolling inside; the label and the description above the frame, never inside
      it; a frame that never says it is up (an older server) a note and the
      source. -->
 <script module>
@@ -171,6 +173,10 @@
 
   /** The height a frame starts at, before its page says its own: a device's screen at a named width. */
   export const startHeight = (w, named) => (!named ? 320 : w <= 480 ? 844 : w <= 1024 ? 1024 : 900);
+  /** COMPS-17: the device a named width is drawn in — its body around the frame. */
+  export const deviceOf = (w) => (w <= 480 ? "phone" : w <= 1024 ? "tablet" : "screen");
+  /** The device's edge, in the page's own pixels (it scales with the frame). */
+  const EDGE = { phone: 12, tablet: 14, screen: 10 };
 </script>
 
 <script>
@@ -194,10 +200,15 @@
   let said = $state(null); // the content's height, as the frame said it
 
   const W = $derived(size ? size.w : Math.max(1, col));
-  const scale = $derived(size && col > 0 ? Math.min(1, col / size.w) : 1);
+  // COMPS-17 (the owner: "default to the height of the viewport set inside the mockup. it should show it as if
+  // it's inside a phone"): a named width is a device — its screen's height unless the page names one, its body
+  // drawn around the frame, and a longer page scrolls inside it.
+  const device = $derived(size ? deviceOf(size.w) : null);
+  const edge = $derived(device ? EDGE[device] : 0);
+  const scale = $derived(size && col > 0 ? Math.min(1, col / (size.w + 2 * edge)) : 1);
   const framed = $derived(spec?.kind === "page" || spec?.kind === "body");
-  // A height the page names (`WxH`, or `height=`) is kept; else the content's.
-  const fixed = $derived(size?.h ?? (Number(spec?.attrs?.height) > 0 ? Math.round(Number(spec.attrs.height)) : null));
+  // A height the page names (`WxH`, or `height=`) is kept; else the device's screen at a named width; else the content's.
+  const fixed = $derived(size?.h ?? (Number(spec?.attrs?.height) > 0 ? Math.round(Number(spec.attrs.height)) : size ? startHeight(size.w, true) : null));
   const H = $derived(Math.max(40, Math.min(MAX, fixed ?? said ?? startHeight(W, !!size))));
 
   // COMPS-2: the frame, the engine's — made once its stage is drawn, handed every new page after.
@@ -223,7 +234,7 @@
 </script>
 
 {#if spec && spec.kind !== "live"}
-<figure class="pf" data-surface="page-frame" data-kind={spec.kind} data-state={framed ? phase : "note"} data-width={size?.w ?? undefined}>
+<figure class="pf" data-surface="page-frame" data-kind={spec.kind} data-state={framed ? phase : "note"} data-width={size?.w ?? undefined} data-device={device ?? undefined}>
   {#if label || about || sizes.length > 1}
     <figcaption class="pf-head">
       {#if label}<span class="pf-label" data-field="label">{label}</span>{/if}
@@ -239,8 +250,11 @@
     <p class="pf-note" data-field="note">The page is <a href={ticketHref({ id: encodeURIComponent(spec.attrs.ref) })}>{spec.attrs.ref}</a>'s body; open it there.</p>
   {:else}
     <div class="pf-stage" bind:clientWidth={col}>
-      <div class="pf-box" class:bare={spec.kind === "body"} style:width={size ? `${Math.round(W * scale)}px` : "100%"} style:height={`${Math.round(H * scale)}px`}>
-        <div class="pf-frames" bind:this={stage} style:width={size ? `${W}px` : "100%"} style:height={`${H}px`} style:transform={scale < 1 ? `scale(${scale})` : null}></div>
+      <div class="pf-box" class:bare={spec.kind === "body" || !!device}
+           style:width={size ? `${Math.round((W + 2 * edge) * scale)}px` : "100%"} style:height={`${Math.round((H + 2 * edge) * scale)}px`}>
+        <div class="pf-dev" data-device={device ?? undefined} style:width={size ? `${W + 2 * edge}px` : "100%"} style:padding={edge ? `${edge}px` : null} style:transform={scale < 1 ? `scale(${scale})` : null}>
+          <div class="pf-frames" bind:this={stage} style:width={size ? `${W}px` : "100%"} style:height={`${H}px`}></div>
+        </div>
       </div>
     </div>
     {#if phase === "failed"}
@@ -262,7 +276,17 @@
   .pf-stage { width: 100%; min-width: 0; }
   .pf-box { position: relative; max-width: 100%; overflow: hidden; border: var(--border) solid var(--line); border-radius: var(--radius); background: var(--panel); }
   .pf-box.bare { border: 0; border-radius: 0; background: none; }
-  .pf-frames { position: relative; transform-origin: 0 0; }
+  .pf-dev { box-sizing: border-box; transform-origin: 0 0; }
+  .pf-frames { position: relative; }
+  /* COMPS-17: the device's body — the frame is its screen; it scales with the frame. */
+  .pf-dev[data-device] { background: var(--ink); }
+  .pf-dev[data-device] .pf-frames { overflow: hidden; background: var(--panel); }
+  .pf-dev[data-device=phone] { border-radius: 40px; }
+  .pf-dev[data-device=phone] .pf-frames { border-radius: 28px; }
+  .pf-dev[data-device=tablet] { border-radius: 26px; }
+  .pf-dev[data-device=tablet] .pf-frames { border-radius: 12px; }
+  .pf-dev[data-device=screen] { border-radius: 12px; }
+  .pf-dev[data-device=screen] .pf-frames { border-radius: 3px; }
   .pf-note { margin: 0; font-family: var(--font-text); font-size: 12px; color: var(--muted); }
   .pf-src summary { cursor: pointer; font-family: var(--font-text); font-size: 12px; color: var(--muted); }
   .pf-src pre { max-height: 320px; overflow: auto; margin: 4px 0 0; padding: 8px 10px; font-family: var(--font-text); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--panel); border-radius: var(--radius); }
