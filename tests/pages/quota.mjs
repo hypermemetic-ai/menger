@@ -9,13 +9,16 @@
 // `[data-box][data-state]`, `[data-sort=<key>][aria-sort]`, a row
 // `[data-id=<principal>]` and its cells `[data-cell=<source>]`
 // (`[data-field=used]`, `[data-action=quota.set]`, `input[data-cap-input]`),
-// `[data-total]`, `[data-refused]`.
+// `[data-total]`, `[data-refused]`; V2-68's `[data-surface=quota-total]` (on
+// #/usage, an admin of *'s) with `[data-box]`, `[data-total]`
+// (`[data-field=bytes|principals]`), a row per source `[data-source]`, the
+// five storing the most `[data-top=<principal>]`, the link `[data-everyone]`.
 //
 // The owner (an admin of *, exempt) and an editor of its own, made here;
 // every case leaves the editor's allowance as the default.
 import path from "node:path";
 import { makeKey, sessionCookies, writeSession } from "../../scripts/throwaway-login.mjs";
-import { synapse } from "../../scripts/ui-throwaway.mjs";
+import { sentCalls, synapse } from "../../scripts/ui-throwaway.mjs";
 
 export default async (ctx) => {
   const { test, assert, eventually, openPage, sy, server, session } = ctx;
@@ -125,6 +128,62 @@ export default async (ctx) => {
       await shoot(page, "quota");
     } finally {
       sy("quota", "set", "--principal", editor, "--source", "tickets.bytes", "--cap", "clear");
+      await context.close();
+    }
+  });
+
+  // V2-68: the amount as the pages say it (bytes in powers of 1000).
+  const words = (n) => {
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let v = Number(n), u = 0;
+    while (v >= 1000 && u < units.length - 1) { v /= 1000; u += 1; }
+    return u === 0 ? `${n} B` : `${(Math.round(v * 10) / 10).toString()} ${units[u]}`;
+  };
+
+  await test("usage_page_shows_an_admin_the_whole_system", async () => {
+    const { page, context } = await openPage("#/usage");
+    const root = page.locator("[data-surface=quota-total]");
+    try {
+      await eventually("the system's total", async () => (await root.locator("[data-total]").count()) === 1, 5_000);
+      const ev = sy("quota", "table");
+      const total = ev.find((e) => e.type === "total");
+      const rows = ev.filter((e) => e.type === "usage");
+      assert((await text(root.locator("[data-total] [data-field=bytes]"))) === words(total.bytes), `stored: ${await text(root.locator("[data-total] [data-field=bytes]"))} vs ${words(total.bytes)}`);
+      assert(Number(await text(root.locator("[data-total] [data-field=principals]"))) === total.principals, `principals: ${total.principals}`);
+      assert((await root.locator("[data-source]").count()) === total.sources.length, "a row per source");
+      const tb = total.sources.find((x) => x.source === "tickets.bytes");
+      assert((await text(root.locator('[data-source="tickets.bytes"] [data-field=used]'))) === words(tb.used), "tickets' total used");
+      assert((await root.locator('[data-source="media.fetch.calls"]').getAttribute("data-window")) === "day", "a day's counter said");
+      const top = await root.locator("[data-top]").evaluateAll((rs) => rs.map((r) => r.getAttribute("data-top")));
+      assert(JSON.stringify(top) === JSON.stringify(rows.slice(0, 5).map((r) => r.principal)), `the five storing the most: ${top}`);
+      assert((await root.locator("[data-everyone]").getAttribute("href")) === "#/quota", "everyone's on #/quota");
+      assert(["ok", "warn", "full", "unknown"].includes(await root.locator("[data-box]").getAttribute("data-state")), "the box");
+      // Above the person's own.
+      const above = await page.evaluate(() => {
+        const t = document.querySelector("[data-surface=quota-total]"), u = document.querySelector("[data-surface=quota-usage]");
+        return !!(t && u && t.compareDocumentPosition(u) & Node.DOCUMENT_POSITION_FOLLOWING);
+      });
+      assert(above, "above the person's own");
+      // An admin looking at another person: the section too.
+      await page.goto(`${server.origin}/app/#/usage/${encodeURIComponent(editor)}`);
+      await eventually("the editor's usage", async () => (await page.locator("[data-surface=quota-usage] [data-id]").count()) === 9, 5_000);
+      await eventually("and the system's", async () => (await root.locator("[data-total]").count()) === 1, 5_000);
+      await shoot(page, "usage-admin");
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("usage_page_shows_no_one_else_the_whole_system", async () => {
+    const { page, context } = await openAs(s.token, "#/usage");
+    try {
+      await eventually("their own usage", async () => (await page.locator("[data-surface=quota-usage] [data-id]").count()) === 9, 5_000);
+      await eventually("the roles asked", async () => (await sentCalls(page)).some((c) => c.method === "auth.requires" && c.params.method === "quota.table"), 5_000);
+      await eventually("who they are asked", async () => (await sentCalls(page)).some((c) => c.method === "auth.whoami"), 5_000);
+      await page.waitForTimeout(500);
+      assert((await page.locator("[data-surface=quota-total]").count()) === 0, "no whole-system section");
+      assert(!(await sentCalls(page)).some((c) => c.method === "quota.table"), "quota.table never asked");
+    } finally {
       await context.close();
     }
   });
