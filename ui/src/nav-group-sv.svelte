@@ -11,13 +11,22 @@
 </script>
 
 <script>
-  import { getContext } from "svelte";
+  import { getContext, setContext } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
   import { ticketHref } from "./ticket-links.svelte";
   import Row from "./nav-row-sv.svelte";
   import NavChildren from "./nav-children-sv.svelte";
 
   let { g } = $props();
-  const nav = getContext("menger.nav") ?? { isOpen: () => false, toggle: () => {}, held: () => null, board: "#/board", base: "#/" };
+  // STUDIO-24: alone (no nav-tree-sv above it, as on the studio's canvas) it keeps
+  // its own open set and hands it down, so its arrows open and close.
+  const nav = getContext("menger.nav") ?? ownNav();
+  function ownNav() {
+    const open = new SvelteSet();
+    const n = { isOpen: (id) => open.has(id), toggle: (id) => (open.has(id) ? open.delete(id) : open.add(id)), hosted: () => [], held: () => null, board: "#/board", base: "#/" };
+    setContext("menger.nav", n);
+    return n;
+  }
   const open = $derived(nav.isOpen(g.shortcode));
   const r = $derived(g.root_row);
 </script>
