@@ -53,7 +53,10 @@
      (`[data-device=phone|tablet|screen]`), a longer page scrolling inside;
      COMPS-19: a window — `[data-field=window]`'s w and h and the corner
      `[data-action=resize]` set the viewport by hand (to 4,000 high), drawn
-     only under the pointer or the focus; the label and the description above the frame, never inside
+     only under the pointer or the focus; COMPS-20: `[data-action=side]`
+     draws every size at once (`[data-field=side]`, a pane each, one scale),
+     and `[data-action=full]` the page alone over the whole screen
+     (`[data-action=close-full]`, or Escape); the label and the description above the frame, never inside
      it; a frame that never says it is up (an older server) a note and the
      source. -->
 <script module>
@@ -186,14 +189,17 @@
   import { untrack } from "svelte";
   import { bus as member } from "plexus-ui/host";
   import { ticketHref } from "./ticket-links.svelte";
+  import Self from "./m-mockup.svelte";
 
   const bus = member();
 
   /** `source`: the piece's markdown. `doc`: a body framed whole (m-page built it), its kind `body`;
    *  `prepare(html, within)` → a promise of the html to hand over (m-page draws its diagrams, in `within`). */
-  let { source = "", doc = null, prepare = null } = $props();
+  /** COMPS-20: `only`: the one of its sizes this instance draws, with no head — a pane of its side-by-side row. */
+  let { source = "", doc = null, prepare = null, only = null } = $props();
   const spec = $derived(doc != null ? { kind: "body", attrs: {}, html: doc } : pageSpec(source));
-  const sizes = $derived(widthsOf(spec?.attrs ?? {}));
+  const all = $derived(widthsOf(spec?.attrs ?? {}));
+  const sizes = $derived(only != null ? all.slice(only, only + 1) : all);
   let pick = $state(0);
   const size = $derived(sizes[Math.min(pick, Math.max(0, sizes.length - 1))] ?? null);
   const label = $derived(spec?.attrs?.label || spec?.attrs?.title || "");
@@ -208,19 +214,44 @@
   // is held: only the box follows it, and the page is handed its new viewport when the drag ends.
   const LIMIT = 4000;
   let own = $state(null);
+  // COMPS-20 (the owner: "the option to show the two sizes side by side. only the aspect ratio has to be
+  // preserved. and … open them up like they are real sites. full screen"): `side` draws every size at once, a
+  // pane each, their columns in the proportion of their widths so one scale holds them all; `full` is the
+  // screen's own size while the page fills it, with no device around it.
+  let side = $state(false);
+  let full = $state(null);
+  let box = $state(null);
+  let wasFs = false;
+  const screenSize = () => ({ w: Math.max(200, window.innerWidth), h: Math.max(120, window.innerHeight) });
+  function openFull() {
+    full = screenSize();
+    try { box?.requestFullscreen?.()?.catch?.(() => {}); } catch { /* the overlay alone */ }
+  }
+  function closeFull() {
+    full = null; wasFs = false;
+    try { if (document.fullscreenElement) document.exitFullscreen?.()?.catch?.(() => {}); } catch { /* already out */ }
+  }
+  $effect(() => {
+    if (!full) return;
+    const fit = () => { full = screenSize(); };
+    const fs = () => { if (document.fullscreenElement) { wasFs = true; fit(); } else if (wasFs) closeFull(); };
+    const key = (e) => { if (e.key === "Escape") closeFull(); };
+    window.addEventListener("resize", fit); document.addEventListener("fullscreenchange", fs); window.addEventListener("keydown", key);
+    return () => { window.removeEventListener("resize", fit); document.removeEventListener("fullscreenchange", fs); window.removeEventListener("keydown", key); };
+  });
   let drag = $state(null);
-  const sized = $derived(!!(size || own));
-  const W = $derived(own?.w ?? (size ? size.w : Math.max(1, col)));
+  const sized = $derived(!!(size || own || full));
+  const W = $derived(full?.w ?? own?.w ?? (size ? size.w : Math.max(1, col)));
   // COMPS-17 (the owner: "default to the height of the viewport set inside the mockup. it should show it as if
   // it's inside a phone"): a named width is a device — its screen's height unless the page names one, its body
   // drawn around the frame, and a longer page scrolls inside it.
-  const device = $derived(sized ? deviceOf(W) : null);
+  const device = $derived(sized && !full ? deviceOf(W) : null);
   const edge = $derived(device ? EDGE[device] : 0);
-  const scale = $derived(sized && col > 0 ? Math.min(1, col / ((drag?.w ?? W) + 2 * edge)) : 1);
+  const scale = $derived(full ? 1 : sized && col > 0 ? Math.min(1, col / ((drag?.w ?? W) + 2 * edge)) : 1);
   const framed = $derived(spec?.kind === "page" || spec?.kind === "body");
   // A height the page names (`WxH`, or `height=`) is kept; else the device's screen at a named width; else the content's.
-  const fixed = $derived(own?.h ?? size?.h ?? (Number(spec?.attrs?.height) > 0 ? Math.round(Number(spec.attrs.height)) : size ? startHeight(size.w, true) : null));
-  const H = $derived(Math.max(40, Math.min(own ? LIMIT : MAX, fixed ?? said ?? startHeight(W, !!size))));
+  const fixed = $derived(full?.h ?? own?.h ?? size?.h ?? (Number(spec?.attrs?.height) > 0 ? Math.round(Number(spec.attrs.height)) : size ? startHeight(size.w, true) : null));
+  const H = $derived(Math.max(40, Math.min(own || full ? LIMIT : MAX, fixed ?? said ?? startHeight(W, !!size))));
   const Wv = $derived(drag?.w ?? W), Hv = $derived(drag?.h ?? H);
   const fitW = (v) => Math.min(2560, Math.max(200, Math.round(Number(v) || 0)));
   const fitH = (v) => Math.min(LIMIT, Math.max(120, Math.round(Number(v) || 0)));
@@ -258,31 +289,39 @@
     });
   });
   $effect(() => () => { f?.destroy(); f = null; });
+  // Side by side the panes hold the frames; this one's stage is gone, and its frame with it.
+  $effect(() => { if (!stage && f) { f.destroy(); f = null; } });
 </script>
 
 {#if spec && spec.kind !== "live"}
 <figure class="pf" data-surface="page-frame" data-kind={spec.kind} data-state={framed ? phase : "note"} data-width={size?.w ?? undefined} data-device={device ?? undefined}>
-  {#if label || about || sizes.length > 1}
+  {#if only == null && (label || about || sizes.length > 1)}
     <figcaption class="pf-head">
       {#if label}<span class="pf-label" data-field="label">{label}</span>{/if}
       {#if sizes.length > 1}
         <span class="pf-widths" role="group" aria-label="width">
           {#each sizes as s, i (i)}<button type="button" data-action="width" data-width={s.w} aria-pressed={i === pick && !own} onclick={() => { pick = i; own = null; }}>{s.w}{s.h ? `×${s.h}` : ""}</button>{/each}
         </span>
+        <button type="button" class="pf-side" data-action="side" aria-pressed={side} onclick={() => { side = !side; own = null; }}>side by side</button>
       {/if}
       {#if about}<span class="pf-about" data-field="description">{about}</span>{/if}
     </figcaption>
   {/if}
   {#if spec.kind === "ref"}
     <p class="pf-note" data-field="note">The page is <a href={ticketHref({ id: encodeURIComponent(spec.attrs.ref) })}>{spec.attrs.ref}</a>'s body; open it there.</p>
+  {:else if side && only == null && all.length > 1}
+    <div class="pf-row" data-field="side">
+      {#each all as s, i (i)}<div class="pf-pane" style:flex={`${s.w + 2 * EDGE[deviceOf(s.w)]} 1 0`}><Self {source} {doc} {prepare} only={i}/></div>{/each}
+    </div>
   {:else}
     <div class="pf-stage" bind:clientWidth={col}>
-      <div class="pf-box" class:bare={spec.kind === "body" || !!device} class:held={!!drag}
+      <div class="pf-box" bind:this={box} class:bare={spec.kind === "body" || !!device} class:held={!!drag} class:full={!!full}
            style:width={sized ? `${Math.round((Wv + 2 * edge) * scale)}px` : "100%"} style:height={`${Math.round((Hv + 2 * edge) * scale)}px`}>
         <div class="pf-dev" data-device={device ?? undefined} style:width={sized ? `${Wv + 2 * edge}px` : "100%"} style:padding={edge ? `${edge}px` : null} style:transform={scale < 1 ? `scale(${scale})` : null}>
           <div class="pf-frames" bind:this={stage} style:width={sized ? `${Wv}px` : "100%"} style:height={`${Hv}px`}></div>
         </div>
-        {#if framed}<button type="button" class="pf-grip" data-action="resize" aria-label="Resize the viewport (arrow keys move it by 20)" onpointerdown={grab} onkeydown={nudge}></button>{/if}
+        {#if full}<button type="button" class="pf-close" data-action="close-full" onclick={closeFull}>close</button>{/if}
+        {#if framed && !full}<button type="button" class="pf-grip" data-action="resize" aria-label="Resize the viewport (arrow keys move it by 20)" onpointerdown={grab} onkeydown={nudge}></button>{/if}
       </div>
       {#if framed}
         <div class="pf-win" data-field="window" class:held={!!drag}>
@@ -290,6 +329,7 @@
           <label>h <input type="number" data-field="h" min="120" max={LIMIT} step="10" value={Hv} onchange={(e) => setSize(W, e.currentTarget.value)}/></label>
           {#if scale < 1}<span data-field="scale">{Math.round(scale * 100)}%</span>{/if}
           {#if own}<button type="button" data-action="reset-size" onclick={() => (own = null)}>reset</button>{/if}
+          <button type="button" data-action="full" onclick={openFull}>full screen</button>
         </div>
       {/if}
     </div>
@@ -315,6 +355,15 @@
   .pf-dev { box-sizing: border-box; transform-origin: 0 0; }
   /* COMPS-19: the window — its bar and its corner are drawn only while the pointer is over the mockup, a
      control of it has the focus, or its corner is held; always where there is no pointer to hover with. */
+  /* COMPS-20: side by side — a pane a size, their columns in the proportion of their widths; and the page alone, filling the screen. */
+  .pf-row { display: flex; gap: 14px; align-items: flex-start; min-width: 0; }
+  .pf-pane { min-width: 0; }
+  .pf-pane > :global(.pf) { margin: 0; }
+  .pf-side { padding: 0 7px; font: inherit; font-size: 11px; line-height: 18px; color: var(--muted); background: none; border: var(--border) solid var(--line); border-radius: var(--radius-md); cursor: pointer; }
+  .pf-side[aria-pressed=true] { color: var(--ink); border-color: var(--muted); background: var(--panel); }
+  .pf-box.full { position: fixed; inset: 0; z-index: 2147483000; max-width: none; border: 0; border-radius: 0; background: var(--bg); }
+  .pf-close { position: fixed; top: 10px; right: 10px; z-index: 2147483001; padding: 2px 10px; font-family: var(--font-text); font-size: 12px; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-md); cursor: pointer; opacity: .35; }
+  .pf-close:hover, .pf-close:focus-visible { opacity: 1; }
   .pf-win { display: flex; gap: 10px; align-items: center; height: 26px; font-family: var(--font-text); font-size: 11px; color: var(--muted); opacity: 0; }
   .pf-win label { display: inline-flex; gap: 4px; align-items: center; }
   .pf-win input { width: 7ch; padding: 1px 4px; font: inherit; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-sm); }
