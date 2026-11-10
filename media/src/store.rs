@@ -702,6 +702,23 @@ impl MediaStore {
         .await
     }
 
+    /// V2-70: each keeper's charge by the UTC day they first kept each file
+    /// (days since 1970-01-01): (principal, day, files, bytes) — what the
+    /// quota service's history is backfilled from; summed, [`Self::usage_charged`].
+    pub async fn usage_daily(self: &Arc<Self>) -> Result<Vec<(String, i64, u64, u64)>, StoreError> {
+        self.blocking(move |conn| {
+            let mut stmt = conn.prepare(&format!(
+                "SELECT k, d, count(*), coalesce(sum(bytes), 0) FROM
+                   (SELECT {KEEPER} AS k, m.hash, m.bytes, min(o.at) / 86400 AS d FROM media m JOIN media_owners o ON o.hash = m.hash
+                     WHERE {KEEPER} IS NOT NULL GROUP BY k, m.hash)
+                  GROUP BY k, d ORDER BY k, d"
+            ))?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)? as u64, r.get::<_, i64>(3)? as u64)))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+        .await
+    }
+
     /// EDITOR-10: what `url` unfurled to, kept within `max_age` seconds.
     pub async fn unfurl_cached(self: &Arc<Self>, url: &str, max_age: i64) -> Result<Option<String>, StoreError> {
         let url = url.to_string();

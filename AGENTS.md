@@ -81,7 +81,9 @@ sha256 in `media.db`, `--media-db-path`), `docs` (V2-29: `docs/`,
 who may is the gate's word on the document's organization, asked through
 its seam; the editor writes it at `#/doc/:id`), and `quota` (V2-31: `quota/`, `menger-quota` —
 every principal's allowance per source in `quota.db`, `--quota-db-path`;
-every storing write reserved through its seam — README "`quota`"). A service reaches another as a
+every storing write reserved through its seam; V2-70: a point a day per
+principal and source kept as history, `quota.history`, backfilled by the
+recount and charted on `#/usage` — README "`quota`"). A service reaches another as a
 client, through plexus-core's `HubTransport::as_(service, caller)` — the ui
 service's seam (`../plexus-ui/service/src/seam.rs`) asks each service a
 component's `uses` names (`tickets`) as the server's own caller; the media

@@ -56,7 +56,15 @@ pub enum QuotaEvent {
     /// `recount`: a principal's total of a source was `was`, the store counts `counted`.
     Drift { principal: String, source: String, was: u64, counted: u64 },
     /// `recount`, last: what was counted, what drifted, and the sources no store answered for (and why).
-    Recounted { principals: u32, drifted: u32, sources: Vec<String>, not_counted: Vec<String> },
+    Recounted { principals: u32, drifted: u32, sources: Vec<String>, not_counted: Vec<String>, backfilled: u32 },
+    /// V2-70: `history`, one per source per day, oldest first: `used` that
+    /// UTC day (`day`, YYYY-MM-DD) — a total at the day's end (today: now),
+    /// a day's counter its day's total; `estimate` when backfilled from the
+    /// stores rather than counted as it happened.
+    Point { day: String, source: String, used: u64, estimate: bool },
+    /// V2-70: `history`, last: whose (`principal`, or `everyone`: the
+    /// system's sum), the first and last day, and how many days.
+    End { principal: Option<String>, everyone: bool, from: String, to: String, days: u32 },
     /// A refusal in words: nothing was changed.
     Error { message: String },
 }
@@ -146,6 +154,54 @@ impl CapText {
     }
 }
 
+/// V2-70: how many days of history, to today: 1 to 730.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HistoryDays(u32);
+
+impl HistoryDays {
+    pub fn get(self) -> u32 {
+        self.0
+    }
+}
+
+impl TryFrom<u32> for HistoryDays {
+    type Error = String;
+    fn try_from(n: u32) -> Result<Self, String> {
+        match (1..=crate::ledger::history::MAX_DAYS).contains(&n) {
+            true => Ok(Self(n)),
+            false => Err(format!("{n} is no number of days: 1 to {}", crate::ledger::history::MAX_DAYS)),
+        }
+    }
+}
+
+impl serde::Serialize for HistoryDays {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u32(self.0)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for HistoryDays {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Self::try_from(<u32 as serde::Deserialize>::deserialize(d)?).map_err(serde::de::Error::custom)
+    }
+}
+
+impl std::str::FromStr for HistoryDays {
+    type Err = String;
+    fn from_str(t: &str) -> Result<Self, String> {
+        Self::try_from(t.trim().parse::<u32>().map_err(|_| format!("`{t}` is no number of days: 1 to {}", crate::ledger::history::MAX_DAYS))?)
+    }
+}
+
+impl schemars::JsonSchema for HistoryDays {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "HistoryDays".into()
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({ "type": "integer", "minimum": 1, "maximum": 730, "description": "How many days of history, to today: 1 to 730." })
+    }
+}
+
 fn ticket(t: &str) -> Result<String, String> {
     let t = t.trim();
     match t.len() == 32 && t.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -227,6 +283,8 @@ mod tests {
         assert!("nobody".parse::<PrincipalName>().is_err());
         assert!("tickets.bytes".parse::<SortKey>().is_ok() && "principal".parse::<SortKey>().is_ok());
         assert!("size".parse::<SortKey>().is_err());
+        assert_eq!(serde_json::from_str::<HistoryDays>("90").unwrap().get(), 90);
+        assert!(serde_json::from_str::<HistoryDays>("731").is_err() && serde_json::from_str::<HistoryDays>("0").is_err());
         assert!(serde_json::from_str::<SourceName>("\"x\"").is_err(), "deserializing is the check");
     }
 

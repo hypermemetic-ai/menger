@@ -2003,6 +2003,10 @@ pub enum TicketsEvent {
     /// (`bytes`), as the quota service recounts `tickets.count` and
     /// `tickets.bytes`.
     Usage { principal: String, count: u64, bytes: u64 },
+    /// V2-70: `revisions.usage { daily }` — what one author's writes kept
+    /// on one UTC day (`day`: days since 1970-01-01), as the quota service's
+    /// history is backfilled.
+    UsageDay { principal: String, day: i64, count: u64, bytes: u64 },
     /// V2-31: a `create`, `amend` or `update` refused for the author's
     /// allowance — `used` of `source` (with what is in flight) and `asked`
     /// more would pass `cap` (`tickets.bytes`, `tickets.count`). Typed, so

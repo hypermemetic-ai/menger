@@ -303,31 +303,47 @@ impl DocsStore {
     /// documents they made (a `create` change, or, folded into a snapshot,
     /// its earliest author's). (principal, count, bytes), by principal.
     pub async fn usage_by_principal(self: &Arc<Self>) -> Result<Vec<(String, u64, u64)>, StoreError> {
-        self.blocking(|s| {
+        let rows = self.usage_rows(false).await?;
+        Ok(rows.into_iter().map(|((p, _), (n, b))| (p, n, b)).collect())
+    }
+
+    /// V2-70: [`Self::usage_by_principal`] by the UTC day each change was
+    /// kept (days since 1970-01-01; a snapshot's shares on its own day):
+    /// (principal, day, count, bytes) — what the quota service's history is
+    /// backfilled from; summed per principal, the same.
+    pub async fn usage_daily(self: &Arc<Self>) -> Result<Vec<(String, i64, u64, u64)>, StoreError> {
+        let rows = self.usage_rows(true).await?;
+        Ok(rows.into_iter().map(|((p, d), (n, b))| (p, d, n, b)).collect())
+    }
+
+    /// What each principal keeps, by (principal, day — 0 unless `by_day`).
+    async fn usage_rows(self: &Arc<Self>, by_day: bool) -> Result<std::collections::BTreeMap<(String, i64), (u64, u64)>, StoreError> {
+        self.blocking(move |s| {
             let conn = s.lock();
-            let mut stmt = conn.prepare("SELECT kind, principal, bytes, authors FROM doc_log")?;
-            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, Option<String>>(3)?)))?;
-            let mut out: std::collections::BTreeMap<String, (u64, u64)> = std::collections::BTreeMap::new();
+            let mut stmt = conn.prepare("SELECT kind, principal, bytes, authors, at FROM doc_log")?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, Option<String>>(3)?, r.get::<_, i64>(4)?)))?;
+            let mut out: std::collections::BTreeMap<(String, i64), (u64, u64)> = std::collections::BTreeMap::new();
             for row in rows {
-                let (kind, principal, bytes, authors) = row?;
+                let (kind, principal, bytes, authors, at) = row?;
+                let day = if by_day { at.div_euclid(86_400_000) } else { 0 };
                 match (kind.as_str(), authors) {
                     ("snapshot", Some(a)) => {
                         let authors: Vec<crate::events::Author> = serde_json::from_str(&a).unwrap_or_default();
                         if let Some(first) = authors.iter().min_by_key(|a| a.first) {
-                            out.entry(first.principal.clone()).or_default().0 += 1;
+                            out.entry((first.principal.clone(), day)).or_default().0 += 1;
                         }
                         for (who, n) in crate::events::shares(bytes.max(0) as u64, &authors) {
-                            out.entry(who).or_default().1 += n;
+                            out.entry((who, day)).or_default().1 += n;
                         }
                     }
                     (k, _) => {
-                        let e = out.entry(principal).or_default();
+                        let e = out.entry((principal, day)).or_default();
                         e.0 += u64::from(k == "create");
                         e.1 += bytes.max(0) as u64;
                     }
                 }
             }
-            Ok(out.into_iter().map(|(p, (n, b))| (p, n, b)).collect())
+            Ok(out)
         })
         .await
     }

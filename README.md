@@ -571,7 +571,7 @@ whole. synapse `-j` prints the `rows` event as one line (SYNAPSE-36).
 | `finish` | `--upload` | the upload hashed and kept: `stored { … }`, or `refused { reason: incomplete }` |
 | `get` | `--hash` | a file's bytes up to 7 MiB: `media { …, data }` (data base64); larger, `refused { reason: too_large }` — read it at `/media/<hash>` |
 | `info` | `--hash` | what a file is, without its bytes: `info { hash, mime, kind, name, bytes, width, height }` |
-| `usage` | `[--principal] [--everyone true]` | what you have put, each file once: `usage { principal, files, bytes }`; V2-31: an admin of `*` names anyone, or every keeper — V2-69: each file against each principal who put or fetched it, then `unattributed { files, bytes }`, what no one is charged for (what `quota.recount` reads) |
+| `usage` | `[--principal] [--everyone true]` | what you have put, each file once: `usage { principal, files, bytes }`; V2-31: an admin of `*` names anyone, or every keeper — V2-69: each file against each principal who put or fetched it, then `unattributed { files, bytes }`, what no one is charged for (what `quota.recount` reads); V2-70: `--daily true` with everyone, `usage_day { principal, day, files, bytes }` by the day each was first kept |
 | `unfurl` | `--url` | a public link read into a card: `unfurled { url, kind, title, description, site, image, provider, embed }` |
 | `fetch` | `--url [--ticket] [--doc] [--name]` | a remote image or file kept as yours (never hot-linked): `stored { … }` |
 
@@ -673,7 +673,7 @@ agents and image references.
 | `here` | `--id --session [--client] [--awareness]` | your caret (a Yjs awareness update, base64), said to everyone on it |
 | `delete` | `--id` | admin's: `deleted { id, at, by }`; its changes stay in the file |
 | `may` | `--id --role` | `may { id, role, held }` — the question the media service asks |
-| `usage` | `--everyone true` | admin of `*` (V2-31): one `usage { principal, count, bytes }` per writer — the documents they made and the bytes their changes keep (a squash's snapshot is nobody's); what `quota.recount` reads |
+| `usage` | `--everyone true` | admin of `*` (V2-31): one `usage { principal, count, bytes }` per writer — the documents they made and the bytes their changes keep (a squash's snapshot is nobody's); what `quota.recount` reads; V2-70: `--daily true`, `usage_day { principal, day, count, bytes }` by the day each change was kept |
 | `ask` | `--id --from --to --text [--to-whom]` | V2-30: a question on characters `from..to` of the text, anchored in the CRDT so it follows the words through every edit: `asked { thread }` — `{ thread, id, anchor { from, to }, from, to, detached, quote, question, to_whom?, by, at, resolved?, replies }` |
 | `reply` | `--id --thread --body` | an answer (markdown: links, images): `replied { thread }` |
 | `resolve` | `--id --thread [--open]` | the thread folded (or opened again): `resolved { thread }` |
@@ -738,7 +738,8 @@ use that to measure and prevent them from exceeding their cap."
 | `usage` | `[--principal]` | anyone signed in (their own); an admin of `*` names anyone | one `usage { principal, exempt, bytes, sources }`: per source its `unit`, `window`, `used`, `held` (reserved, in flight), `cap` (none: unlimited) and `from` (`own`, `team:<name>`, `default`, `exempt`); `bytes` is what they store |
 | `table` | `[--org] [--sort bytes\|principal\|<source>]` | admin of `*` | the tabulation: `box { used_percent, warn_percent, full_percent, state }`, one `usage` per principal (with `org`, everyone granted a role in it), sorted, then `total { principals, bytes, sources }` |
 | `set` | `--principal \| --team \| --default true`, `--source --cap` | admin of `*` | an allowance: `unlimited`, a number, `2 GB` (powers of 1000; `GiB` of 1024), or `clear`: `allowance { holder, source, cap, cleared }`. A cap below what is used blocks new writes and deletes nothing |
-| `recount` | `[--principal]` | admin of `*` | usage rebuilt from the stores, each through its own read: `drift { principal, source, was, counted }` per total that moved, then `recounted { principals, drifted, sources, not_counted }`; the server runs one nightly and logs the drift |
+| `history` | `[--principal] [--source] [--days] [--everyone true]` | anyone signed in (their own); an admin of `*` names anyone, or everyone | V2-70: consumption over time — one `point { day, source, used, estimate }` per source (or `--source`) per UTC day of the last `--days` (90; 1 to 730) to today, oldest first: a total at the day's end (today's: now), carried over days nothing moved; a day's counter its day's total; `everyone` the system's sum per day. Then `end { principal, everyone, from, to, days }` |
+| `recount` | `[--principal]` | admin of `*` | usage rebuilt from the stores, each through its own read: `drift { principal, source, was, counted }` per total that moved, then `recounted { principals, drifted, sources, not_counted, backfilled }`; the server runs one nightly and logs the drift. V2-70: and the history backfilled — each store asked by day (`daily: true` on `tickets.revisions.usage`, `media.usage { everyone }`, `docs.usage`) |
 | `reserve` | `--principal --source --amount` | the server's own caller (admin of `*`) | the seam's first step: `reserved { ticket, remaining, expires }`, or `over_allowance { source, used, cap, asked }`, `too_many_at_once { source, open, max }`, `box_full { used_percent, full_percent }` — nothing held |
 | `commit` | `--ticket [--amount]` | the server's | the write landed: `amount` (what was kept, at most what was held; none: all) counts — `committed { …, used }` |
 | `release` | `--ticket` | the server's | the write did not land: nothing counts |
@@ -773,6 +774,20 @@ hold not committed within the plan's hold time (an hour) — an abandoned
 upload — is swept, by the next reserve and by the service's minute sweep. A
 day's counter starts at nothing each UTC day.
 
+**History** (V2-70; `quota/src/ledger/history.rs`) — one point per
+principal per source per UTC day in `quota.db`'s `history`: every commit,
+credit and recounted total writes today's (the day's last write is its end;
+a day nothing moved has no row, and a total is carried from the last one),
+so a day's counter keeps its total after the counter's own row is swept.
+**Backfilled** by the recount where the past is knowable: media (each kept
+file on the day each keeper first kept it, from `media.db`), documents (each
+change on the day it was kept; a squash's snapshot on its own day) and
+tickets (each body on the day it was first kept, each ticket's current body
+on the day its writer last wrote it, each ticket on the day it was made) —
+only the days before a principal's first counted point of a source, marked
+`estimate`: what the stores keep now, laid back along when it was written;
+what was deleted since is not in it. Day counters are not backfilled.
+
 **The defaults are data** — a plan, read once into a fresh `quota.db`: the
 built-in `quota/plans/free-1k.json` (the owner's answer to `defaults`, "1k
 concurrent free users per day on a decent sized computer": media 2 GB,
@@ -797,9 +812,14 @@ synapse -P 4460 menger quota usage
 synapse -P 4460 menger quota table --sort bytes
 synapse -P 4460 menger quota set --default true --source docs.bytes --cap "200 MB"
 synapse -P 4460 menger quota recount
+synapse -P 4460 menger quota history --days 30
+synapse -P 4460 menger quota history --everyone true --source media.bytes --days 365
 ```
 
-The pages: `#/usage` (yours: a bar per source, used against the cap;
+The pages: `#/usage` (yours: a bar per source, used against the cap, and
+V2-70's charts of it over time — stored bytes by source, and the day's
+fetched and served bytes, each its own chart; 30 d, 90 d or 1 y; a table
+view of the same points; for an admin the whole system's too;
 `#/usage/:principal` an admin's look at another) and `#/quota` (an admin's
 table of everyone — sortable by stored or a source's use, the cap edited in
 place).

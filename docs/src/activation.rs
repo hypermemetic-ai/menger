@@ -490,9 +490,11 @@ impl DocsActivation {
         #[from_auth(self.callers.verify)] user: Caller,
         /// true: every principal (the only reading there is).
         everyone: Option<bool>,
+        /// V2-70: by the day each change was kept — usage_day { principal, day, count, bytes } (what quota history is backfilled from).
+        daily: Option<bool>,
     ) -> impl Stream<Item = DocsEvent> + Send + 'static {
         let _ = everyone;
         let (store, seam) = (self.store.clone(), self.seam.clone());
-        many(crate::streams::usage(store, seam, user))
+        many(crate::streams::usage(store, seam, user, daily.unwrap_or(false)))
     }
 }

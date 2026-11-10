@@ -9,7 +9,10 @@
 // `[data-box][data-state]`, `[data-sort=<key>][aria-sort]`, a row
 // `[data-id=<principal>]` and its cells `[data-cell=<source>]`
 // (`[data-field=used]`, `[data-action=quota.set]`, `input[data-cap-input]`),
-// `[data-total]`, `[data-refused]`; V2-68's `[data-surface=quota-total]` (on
+// `[data-total]`, `[data-refused]`; V2-70's `[data-surface=quota-history]` (`data-whose`)
+// with `[data-range]`, `[data-view]`, `[data-chart=stored|day] [data-series=<source>]`
+// (`data-points`, `data-last`), `[data-legend]`, `[data-tip]` (`data-day`), the table
+// `[data-history-table] tr[data-day] [data-col]`; V2-68's `[data-surface=quota-total]` (on
 // #/usage, an admin of *'s) with `[data-box]`, `[data-total]`
 // (`[data-field=bytes|principals]`), a row per source `[data-source]`, the
 // five storing the most `[data-top=<principal>]`, the link `[data-everyone]`.
@@ -52,7 +55,7 @@ export default async (ctx) => {
       for (const theme of ["light", "dark"]) {
         await page.setViewportSize({ width: w, height: h });
         await page.emulateMedia({ colorScheme: theme });
-        await page.evaluate((t) => document.querySelectorAll("[data-plexus-theme], quota-usage, quota-table").forEach((e) => e.setAttribute("data-plexus-theme", t)), theme);
+        await page.evaluate((t) => document.querySelectorAll("[data-plexus-theme], quota-usage, quota-table, quota-total, quota-history").forEach((e) => e.setAttribute("data-plexus-theme", t)), theme);
         await page.waitForTimeout(150);
         await page.screenshot({ path: path.join(shots, `${name}-${w}-${theme}.png`), fullPage: true });
       }
@@ -226,6 +229,78 @@ export default async (ctx) => {
       await page.waitForTimeout(500);
       assert((await page.locator("[data-surface=quota-total]").count()) === 0, "no whole-system section");
       assert(!(await sentCalls(page)).some((c) => c.method === "quota.table"), "quota.table never asked");
+    } finally {
+      await context.close();
+    }
+  });
+
+  // V2-70: consumption over time — the charts draw the points quota.history
+  // answers (a line per source, a point per day, the last its value now), the
+  // range moves them, the crosshair's tooltip says the day and every value,
+  // the table view the same points; the whole system's for an admin.
+  await test("history_charts_draw_what_quota_history_answers", async () => {
+    const { page, context } = await openPage("#/usage");
+    const root = page.locator("[data-surface=quota-history][data-whose=mine]");
+    const last = (pts, source) => pts.filter((p) => p.type === "point" && p.source === source).at(-1);
+    try {
+      const line = (chart, source) => root.locator(`[data-chart=${chart}] [data-series="${source}"]`);
+      await eventually("the stored chart", async () => (await line("stored", "tickets.bytes").count()) === 1, 10_000);
+      const h = sy("quota", "history", "--days", "90");
+      for (const [chart, source] of [["stored", "media.bytes"], ["stored", "tickets.bytes"], ["stored", "docs.bytes"], ["day", "media.fetch.bytes"], ["day", "media.egress.bytes"]]) {
+        const l = line(chart, source);
+        assert(Number(await l.getAttribute("data-points")) === 90, `${source}: a point a day`);
+        assert(Number(await l.getAttribute("data-last")) === last(h, source).used, `${source}: its last is quota.history's (${last(h, source).used})`);
+        assert((await root.locator(`[data-chart=${chart}] [data-legend="${source}"]`).count()) === 1, `${source} in the legend`);
+      }
+      assert((await root.locator("[data-range='90']").getAttribute("aria-pressed")) === "true", "90 days, unless said");
+      await root.locator("[data-range='30']").click();
+      await eventually("30 days", async () => Number(await line("stored", "media.bytes").getAttribute("data-points")) === 30, 5_000);
+      // The crosshair: the right end is today, every series said.
+      const svg = root.locator("[data-chart=stored] svg");
+      const box = await svg.boundingBox();
+      await page.mouse.move(box.x + box.width - 18, box.y + box.height / 2);
+      const tip = root.locator("[data-chart=stored] [data-tip]");
+      await eventually("the tooltip", async () => (await tip.count()) === 1, 3_000);
+      assert((await tip.getAttribute("data-day")) === h.find((e) => e.type === "end").to, "today");
+      assert((await tip.locator(".tip-row").count()) === 3, "every series at that day");
+      await shoot(page, "history");
+      // The keyboard finds the day too.
+      await page.mouse.move(0, 0);
+      await svg.focus();
+      await page.keyboard.press("ArrowLeft");
+      await eventually("a day back", async () => (await tip.getAttribute("data-day")) !== null && (await tip.getAttribute("data-day")) < h.find((e) => e.type === "end").to, 3_000);
+      // The table: the same points.
+      await root.locator("[data-view=table]").click();
+      const today = h.find((e) => e.type === "end").to;
+      const cell = root.locator(`[data-history-table] tr[data-day="${today}"] [data-col="media.bytes"]`);
+      await eventually("the table", async () => (await cell.count()) === 1, 3_000);
+      assert((await text(cell)) === words(last(h, "media.bytes").used), "today's files kept");
+      assert((await root.locator("[data-history-table] tbody tr").count()) === 30, "a row a day");
+      // The whole system's, for an admin: the system's sum.
+      await root.locator("[data-view=chart]").click();
+      const sys = page.locator("[data-surface=quota-history][data-whose=everyone]");
+      await eventually("the system's history", async () => (await sys.locator('[data-chart=stored] [data-series="media.bytes"]').count()) === 1, 10_000);
+      const all = sy("quota", "history", "--everyone", "true", "--days", "90");
+      assert(Number(await sys.locator('[data-chart=stored] [data-series="media.bytes"]').getAttribute("data-last")) === last(all, "media.bytes").used, "the system's files kept");
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await sys.scrollIntoViewIfNeeded();
+      await shoot(page, "history-admin");
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("a_viewer_cannot_read_anothers_history", async () => {
+    const owner = sy("quota", "usage").find((e) => e.type === "usage").principal;
+    for (const asked of [["--principal", owner], ["--everyone", "true"]]) {
+      const r = as("quota", "history", ...asked);
+      assert(r.some((e) => e.type === "error") && !r.some((e) => e.type === "point"), `${asked.join(" ")}: refused, nothing answered: ${JSON.stringify(r).slice(0, 200)}`);
+    }
+    assert(as("quota", "history", "--days", "7").filter((e) => e.type === "point").length === 7 * 9, "their own: every source, every day");
+    const { page, context } = await openAs(s.token, `#/usage/${encodeURIComponent(owner)}`);
+    try {
+      await eventually("refused on the page", async () => (await page.locator("[data-surface=quota-history] [data-refused]").count()) === 1, 5_000);
+      assert((await page.locator("[data-surface=quota-history] [data-series]").count()) === 0, "no line drawn");
     } finally {
       await context.close();
     }

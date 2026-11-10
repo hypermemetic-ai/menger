@@ -835,6 +835,37 @@ impl Store {
             .await
     }
 
+    /// V2-70: [`Self::revision_usage`] by the UTC day it was written (days
+    /// since 1970-01-01): each body kept on the day its first revision was,
+    /// each ticket's current body on the day its writer last wrote it, each
+    /// ticket on the day it was created — (principal, day, count, bytes),
+    /// what the quota service's history is backfilled from; summed per
+    /// principal, the same as `revision_usage`. Only a reader of everything.
+    pub async fn revision_usage_daily(&self, who: &(impl Reader + ?Sized)) -> Result<Vec<(String, i64, u64, u64)>, StoreError> {
+        if !Seen::of(who)?.all() {
+            return Err(StoreError::Invalid("what every author's revisions keep is read by a reader of everything (an admin of *)".into()));
+        }
+        self.readers
+            .read(move |conn| {
+                let mut stmt = conn.prepare(
+                    "WITH first AS (SELECT body_hash, actor, at_unix, min(rowid) FROM revisions GROUP BY body_hash),
+                          kept AS (SELECT f.actor AS actor, f.at_unix / 86400 AS d, length(CAST(b.body AS BLOB)) AS bytes FROM first f JOIN revision_bodies b ON b.hash = f.body_hash),
+                          wrote AS (SELECT ticket, actor, at_unix, max(rev) FROM revisions
+                                     WHERE fields LIKE '%\"body\"%' OR fields LIKE '%\"created\"%' OR source = 'baseline' GROUP BY ticket),
+                          live AS (SELECT w.actor AS actor, w.at_unix / 86400 AS d, length(CAST(t.body AS BLOB)) AS bytes FROM wrote w JOIN tickets t ON t.id = w.ticket),
+                          born AS (SELECT actor, at_unix / 86400 AS d, count(*) AS n FROM revisions WHERE fields LIKE '%\"created\"%' AND source NOT IN ('baseline', 'backup') GROUP BY actor, d),
+                          bytes AS (SELECT actor, d, sum(bytes) AS b FROM (SELECT * FROM kept UNION ALL SELECT * FROM live) GROUP BY actor, d),
+                          everyone AS (SELECT actor, d FROM bytes UNION SELECT actor, d FROM born)
+                     SELECT e.actor, e.d, coalesce(n.n, 0), coalesce(b.b, 0) FROM everyone e
+                       LEFT JOIN born n ON n.actor = e.actor AND n.d = e.d LEFT JOIN bytes b ON b.actor = e.actor AND b.d = e.d
+                      ORDER BY e.actor, e.d",
+                )?;
+                let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?.max(0) as u64, r.get::<_, i64>(3)?.max(0) as u64)))?;
+                Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            })
+            .await
+    }
+
     /// V2-31: what writing `body` to the ticket `id` (none: a new one) adds
     /// to what the store keeps, by [`Self::revision_usage`]'s rule: whether
     /// the body is kept already (its content in `revision_bodies`: a copy

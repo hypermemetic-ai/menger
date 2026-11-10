@@ -24,8 +24,8 @@ use crate::auth_backend::MengerAuth;
 /// before anything, and shows "no access yet" from it), and IDENTITY-42's
 /// sessions (an agent's key holds nothing until an admin grants it).
 /// V2-31: and their own usage (`quota.usage`) — a person with no grant yet
-/// still sees what they store.
-pub const SIGNED_IN_GRANTS: [&str; 6] = ["session.whoami", "session.login", "session.logout", "session.providers", "members.mine", "quota.usage"];
+/// still sees what they store; V2-70: and its history (`quota.history`).
+pub const SIGNED_IN_GRANTS: [&str; 7] = ["session.whoami", "session.login", "session.logout", "session.providers", "members.mine", "quota.usage", "quota.history"];
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;

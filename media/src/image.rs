@@ -356,6 +356,10 @@ pub enum MediaEvent {
     /// charged for (a link's preview, kept as anyone's; a ticket's file kept
     /// before its uploader was recorded), so a recount can say them.
     Unattributed { files: u64, bytes: u64 },
+    /// V2-70: `usage { everyone, daily }` — what a keeper began keeping on
+    /// one UTC day (`day`: days since 1970-01-01), each file on the day they
+    /// first kept it: what the quota service's history is backfilled from.
+    UsageDay { principal: String, day: i64, files: u64, bytes: u64 },
     /// `unfurl`'s answer: what a public page is — its title, description,
     /// site and preview image (kept, by its hash), the kind of card it
     /// draws as, and for an allow-listed provider the player's address.

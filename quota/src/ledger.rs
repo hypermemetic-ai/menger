@@ -17,6 +17,7 @@
 //! | `holds` | a reservation: ticket → principal, source, window, amount, expiry |
 //! | `allowances` | (kind: principal · team · default, who, source) → cap (`NULL`: unlimited) |
 //! | `settings` | the plan the file started from: concurrency, the box lines, the hold time |
+//! | `history` | V2-70: (principal, source, day) → used at the day's end, or the day's counter ([`history`]) |
 
 use crate::plan::{BoxLines, Cap, Plan};
 use crate::sources::{self, Source};
@@ -225,6 +226,7 @@ impl Ledger {
         let mut conn = Connection::open(path)?;
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;")?;
         conn.execute_batch(TABLES)?;
+        conn.execute_batch(history::TABLE)?;
         let had: Option<String> = conn.query_row("SELECT value FROM settings WHERE key = 'plan'", [], |r| r.get(0)).optional()?;
         if had.is_none() {
             let tx = conn.transaction()?;
@@ -357,8 +359,13 @@ impl Ledger {
 
     /// Commits reservation `ticket`: `amount` (what was actually written —
     /// at most what was reserved; none: all of it) moves into usage, the
-    /// hold goes, in one transaction.
+    /// hold goes, in one transaction; V2-70: today's point of its history written.
     pub fn commit(&self, ticket: &str, amount: Option<u64>) -> Result<Committed, LedgerError> {
+        self.commit_at(ticket, amount, now())
+    }
+
+    /// [`Self::commit`] at `now` (its history's day).
+    pub fn commit_at(&self, ticket: &str, amount: Option<u64>, now: i64) -> Result<Committed, LedgerError> {
         let mut conn = self.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let hold: Option<(String, String, i64, i64)> = tx
@@ -377,6 +384,7 @@ impl Ledger {
             params![principal, source, window, amount as i64],
         )?;
         let used = Self::used(&tx, &principal, &source, window)?;
+        history::record(&tx, &principal, &source, window, used, now)?;
         tx.commit()?;
         Ok(Committed { principal, source, amount, used })
     }
@@ -401,7 +409,9 @@ impl Ledger {
             "UPDATE usage SET used = max(0, used - ?4) WHERE principal = ?1 AND source = ?2 AND window = ?3",
             params![principal, source, window, amount.min(i64::MAX as u64) as i64],
         )?;
-        Ok(Self::used(&conn, principal, source, window)?)
+        let used = Self::used(&conn, principal, source, window)?;
+        history::record(&conn, principal, source, window, used, now)?;
+        Ok(used)
     }
 
     /// Removes every reservation expired by `now`, and windows a week old.
@@ -484,8 +494,13 @@ impl Ledger {
     }
 
     /// Recount: `principal`'s total usage of `source` is `counted`, from the
-    /// store that keeps it. What it was.
+    /// store that keeps it. What it was. V2-70: today's point written.
     pub fn replace_total(&self, principal: &str, source: &str, counted: u64) -> Result<u64, LedgerError> {
+        self.replace_total_at(principal, source, counted, now())
+    }
+
+    /// [`Self::replace_total`] at `now` (its history's day).
+    pub fn replace_total_at(&self, principal: &str, source: &str, counted: u64, now: i64) -> Result<u64, LedgerError> {
         known(source)?;
         let conn = self.lock();
         let was = Self::used(&conn, principal, source, 0)?;
@@ -494,6 +509,11 @@ impl Ledger {
              ON CONFLICT (principal, source, window) DO UPDATE SET used = excluded.used",
             params![principal, source, counted.min(i64::MAX as u64) as i64],
         )?;
+        // A point when the total moved, or the first one it has: unmoved, the history carries it.
+        let has: bool = conn.query_row("SELECT 1 FROM history WHERE principal = ?1 AND source = ?2 AND estimate = 0 LIMIT 1", params![principal, source], |_| Ok(())).optional()?.is_some();
+        if was != counted || !has {
+            history::record(&conn, principal, source, 0, counted, now)?;
+        }
         Ok(was)
     }
 
@@ -510,6 +530,8 @@ impl Ledger {
         self.lock().query_row("SELECT count(*) FROM holds", [], |r| r.get::<_, i64>(0)).unwrap_or(0) as usize
     }
 }
+
+pub mod history;
 
 #[cfg(test)]
 mod tests;

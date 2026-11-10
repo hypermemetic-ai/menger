@@ -358,9 +358,16 @@ pub(crate) async fn waiting(store: Arc<DocsStore>, seam: Seam, user: Caller, to:
 }
 
 /// `docs.usage`: every principal's documents made and bytes, for quota.recount — an admin of `*`'s.
-pub(crate) async fn usage(store: Arc<DocsStore>, seam: Seam, user: Caller) -> Vec<DocsEvent> {
+/// V2-70: `daily`, by the day each change was kept.
+pub(crate) async fn usage(store: Arc<DocsStore>, seam: Seam, user: Caller, daily: bool) -> Vec<DocsEvent> {
     if !seam.everywhere(user.context(), "quota.set") {
         return vec![DocsEvent::Error { message: "every principal's usage is an admin of *'s".into() }];
+    }
+    if daily {
+        return match store.usage_daily().await {
+            Ok(rows) => rows.into_iter().map(|(principal, day, count, bytes)| DocsEvent::UsageDay { principal, day, count, bytes }).collect(),
+            Err(e) => vec![DocsEvent::Error { message: e.to_string() }],
+        };
     }
     match store.usage_by_principal().await {
         Ok(rows) => rows.into_iter().map(|(principal, count, bytes)| DocsEvent::Usage { principal, count, bytes }).collect(),

@@ -356,6 +356,7 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("quota.release", Today::Admin, None),
     ("quota.credit", Today::Admin, None),
     ("quota.usage", Today::SignedIn, None),
+    ("quota.history", Today::SignedIn, None),
     ("quota.table", Today::Admin, None),
     ("quota.set", Today::Admin, None),
     ("quota.recount", Today::Admin, None),
@@ -506,14 +507,14 @@ async fn a_caller_s_view_lists_only_what_it_holds_and_refusals_are_typed() {
     tickets(&boss).await;
 
     // Nothing held: the signed-in door — whoami, its own grants, sessions;
-    // V2-31: and its own usage.
+    // V2-31: and its own usage; V2-70: and its history.
     let agent = as_key(s.port, &AGENT, "worker-1").await;
     assert_eq!(
         view(&agent).await,
         BTreeMap::from([
             ("auth".to_string(), names(&["providers", "login", "signup", "whoami", "logout", "requires"])),
             ("members".to_string(), names(&["mine"])),
-            ("quota".to_string(), names(&["usage"])),
+            ("quota".to_string(), names(&["usage", "history"])),
             ("session".to_string(), names(&["whoami", "login", "logout", "providers"])),
         ])
     );

@@ -60,6 +60,8 @@
   import QuotaUsage from "plexus-ui:quota-usage";
   // V2-68: the whole system's, on #/usage for an admin of *.
   import QuotaTotal from "plexus-ui:quota-total";
+  // V2-70: consumption over time.
+  import QuotaHistory from "plexus-ui:quota-history";
   import PageReady from "plexus-ui:page-ready";
   import PageReleases from "plexus-ui:page-releases";
   import PageSearch from "plexus-ui:page-search";
@@ -277,6 +279,7 @@
       ["orgs-list", OrgsList, F, ["hover"], { loading: { sheet: "loading" } }],
       ["quota-usage", QuotaUsage, F, [], { loading: { sheet: "loading" } }],
       ["quota-total", QuotaTotal, F, ["hover", "focus"], { loading: { sheet: "loading" } }],
+      ["quota-history", QuotaHistory, F, ["hover", "focus"], { loading: { sheet: "loading" } }],
       ["quota-table", QuotaTable, F, ["hover", "focus", "disabled"], { loading: { sheet: "loading" } }],
       ["ui-versions", UiVersions, F, ["hover", "focus", "disabled"], { loading: { sheet: "loading" } }, true],
     ]],

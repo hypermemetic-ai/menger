@@ -10,13 +10,15 @@
      `[data-total]` with `[data-field=bytes]` and `[data-field=principals]`,
      a row per source `[data-source=<source>]` (`data-window`) holding
      `[data-field=used]`, the top rows `[data-top=<principal>]` holding
-     `[data-field=stored]`, the link `[data-everyone]`, a refusal `[data-refused]`. -->
+     `[data-field=stored]`, the link `[data-everyone]`, a refusal `[data-refused]`.
+     V2-70: below them, quota-history `system` — the same charts as a person's, for the system's sum per day. -->
 <script module>
   export const uses = ["quota.table"];
 </script>
 
 <script>
   import { bus } from "plexus-ui/host";
+  import QuotaHistory from "plexus-ui:quota-history";
   let { sheet = null } = $props();
   const b = bus();
 
@@ -104,6 +106,7 @@
     <div class="panel"><div class="tr"><span data-loading="">media.bytes</span></div></div>
   {/if}
   {#if status === "refused"}<p class="empty" data-refused="">refused: {refused}</p>{/if}
+  {#if sheet !== "loading"}<QuotaHistory system={true}/>{/if}
 </section>
 
 <style>
