@@ -194,8 +194,8 @@ graph TD
       assert(calls.length === 1, `one batched read for sixty ids in sixty blocks: ${calls.length}`);
       const all = await sentCalls(page);
       const watches = all.filter((x) => x.method === "tickets.watch");
-      const tables = all.filter((x) => x.method === "tickets.list" && String(x.params.filter ?? "").includes("00000000"));
-      assert(tables.length === 1 && watches.length === w1, `one watch for the page's pills, never one a pill: ${watches.length} watches (one id: ${w1}), ${tables.length} tables`);
+      // EDITOR-21: the read is the collection's snapshot, the watch its changes: sixty ids hold what one does.
+      assert(watches.length === w1, `one watch for the page's pills, never one a pill: ${watches.length} watches (one id: ${w1})`);
     } finally {
       await context.close();
     }

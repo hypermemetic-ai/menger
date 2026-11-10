@@ -429,12 +429,23 @@
   .md :global(m-step) { display: block; margin: 2px 0; }
   .md :global(m-step)::before { content: attr(date) " · " attr(status) " · " attr(by) "  "; font-family: var(--font-text); font-size: 11px; color: var(--muted); }
   .md :global(m-ticket)::before { content: attr(ref); font-family: var(--font-text); font-size: 12.5px; color: var(--accent); }
-  /* EDITOR-20: a ticket id as a pill (ticket-pills): the chip's shape, its stage's colour (`--pill-bg`/`--pill-fg`,
-     the status tokens ticket-pills hands it). */
-  .md :global(a.tpill[data-pill]) { display: inline-flex; align-items: baseline; gap: 4px; max-width: 100%; padding: 0 7px; font-family: var(--font-text); font-size: 12px; line-height: 18px; white-space: nowrap; color: var(--pill-fg, var(--chip-fg)); text-decoration: none; background: var(--pill-bg, var(--chip-bg)); border: var(--border) solid var(--chip-line); border-radius: var(--radius-pill); }
+  /* EDITOR-20: a ticket id as a pill (ticket-pills): the chip's shape, its stage's colour (`data-stage`, the
+     status tokens). */
+  .md :global(a.tpill[data-pill]) { display: inline-flex; align-items: baseline; gap: 4px; max-width: 100%; padding: 0 7px; font-family: var(--font-text); font-size: 12px; line-height: 18px; white-space: nowrap; color: var(--chip-fg); text-decoration: none; background: var(--chip-bg); border: var(--border) solid var(--chip-line); border-radius: var(--radius-pill); }
   .md :global(a.tpill[data-pill]:hover), .md :global(a.tpill[data-pill][data-sheet~=hover]) { border-color: var(--line); }
   .md :global(a.tpill[data-pill]:focus-visible) { outline: 2px solid var(--focus); outline-offset: 1px; }
   .md :global(a.tpill[data-pill] .tpill-title) { max-width: 36ch; overflow: hidden; text-overflow: ellipsis; font-family: var(--sans); }
+  .md :global(a.tpill[data-stage=draft]) { color: var(--st-draft-fg); background: var(--st-draft-bg); border-color: transparent; }
+  .md :global(a.tpill[data-stage=pending]) { color: var(--st-pending-fg); background: var(--st-pending-bg); border-color: transparent; }
+  .md :global(a.tpill[data-stage=ready]) { color: var(--st-ready-fg); background: var(--st-ready-bg); border-color: transparent; }
+  .md :global(a.tpill[data-stage=coding]) { color: var(--st-coding-fg); background: var(--st-coding-bg); border-color: transparent; }
+  .md :global(a.tpill[data-stage=in-review]) { color: var(--st-in-review-fg); background: var(--st-in-review-bg); border-color: transparent; }
+  .md :global(a.tpill[data-stage=complete]) { color: var(--st-complete-fg); background: var(--st-complete-bg); border-color: transparent; }
+  .md :global(a.tpill[data-stage=blocked]) { color: var(--st-blocked-fg); background: var(--st-blocked-bg); border-color: transparent; }
+  .md :global(a.tpill[data-stage=superseded]) { color: var(--st-superseded-fg); background: var(--st-superseded-bg); border-color: transparent; }
+  .md :global(a.tpill[data-stage=canceled]) { color: var(--st-canceled-fg); background: var(--st-canceled-bg); border-color: transparent; }
+  .md :global(a.tpill[data-stage=epic]) { color: var(--st-epic-fg); background: var(--st-epic-bg); border-color: transparent; }
+  .md :global(a.tpill[data-stage=doc]) { color: var(--st-doc-fg); background: var(--st-doc-bg); border-color: transparent; }
   .md :global(m-ticket[data-pilled])::before { content: none; }
   .md :global(m-badge) { font-family: var(--font-text); font-size: 11px; color: var(--muted); }
   /* A mark with no look of its own (unknown, a custom tag, a known inline one standing alone): its words in
