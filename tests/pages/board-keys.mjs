@@ -5,7 +5,10 @@
 // Marks:
 //   [data-layout=board-frame][data-slot=top] app-top   `[data-surface=app-top]`, `[data-field=health]` (`[data-health-count]`, live;
 //                       V2-25: no `[data-field=epic]` — the switcher went with the `epics` activation),
-//                       `[data-form=search] input` (enter → #/search/:q), `[data-link=board|queue|ready|waves|filters|new]`,
+//                       `[data-form=search] input` (enter → #/search/:q); STUDIO-30: `[data-pages]`, the pages dropdown —
+//                       `[data-action="pages.open"]` (its toggle, `[data-pages-here]` the page you are on), open:
+//                       `[data-pages-menu]` with `input[data-pages-filter]` and `[data-page=<name>]` (href the pattern,
+//                       `[data-active]` the arrows' option, `aria-current=page` the one you are on);
 //                       `[data-action="palette.open"]` (emits palette.open); STUDIO-11: for an editor
 //                       (auth.requires ui.author, held on *) `[data-action="page.edit"]` — the pencil, ctrl+e —
 //                       to /studio/#/page/<the hash, encodeURIComponent'd>; a viewer has neither
@@ -22,7 +25,7 @@
 import { makeKey, readToken, sessionCookies, writeSession } from "../../scripts/throwaway-login.mjs";
 
 export default async (ctx) => {
-  const { test, assert, eventually, sleep, openPage, sy, main, section, boardUp, BOARDS, server, path, ticketAt } = ctx;
+  const { test, assert, eventually, sleep, openPage, marked, sameDocument, sy, main, section, boardUp, BOARDS, server, path, fs, ticketAt } = ctx;
   const B = BOARDS.sv;
 
   const SPY = () => {
@@ -75,11 +78,18 @@ export default async (ctx) => {
     const n0 = health();
     const shown = async () => Number((await t.locator("[data-field=health] [data-health-count]").textContent()).replace(/[^0-9]/g, ""));
     await eventually(`the health says ${n0}`, async () => (await shown()) === n0, 5_000);
-    for (const [link, href] of [["board", "#/board"], ["ready", "#/ready"], ["waves", "#/waves"], ["filters", "#/filters"], ["new", "#/new"]]) {
-      assert((await t.locator(`[data-link=${link}]`).getAttribute("href")) === href, `the ${link} link is ${href}`);
+    // STUDIO-30: the fixed links went for the pages dropdown; it says the board, and lists the board's pages.
+    assert((await t.locator("[data-link]").count()) === 0, "STUDIO-30: no fixed links");
+    assert((await t.locator("[data-pages-here]").textContent()).trim() === "board", "the dropdown says the board");
+    await t.locator('[data-action="pages.open"]').click();
+    await eventually("the dropdown lists the board's pages", async () => (await t.locator("[data-page]").count()) >= 6, 5_000);
+    for (const [link, href] of [["board", "#/board"], ["queue", "#/queue"], ["ready", "#/ready"], ["waves", "#/waves"], ["filters", "#/filters"], ["new", "#/new"]]) {
+      assert((await t.locator(`[data-page="${link}"]`).getAttribute("href")) === href, `the ${link} page is ${href}`);
     }
-    assert((await t.locator("[data-link=me]").count()) === 0, "V2-25: no me link");
-    assert((await t.locator("[data-link=board]").getAttribute("aria-current")) === "page", "the board is the current link");
+    assert((await t.locator('[data-page="me"]').count()) === 0, "V2-25: no me page");
+    assert((await t.locator('[data-page="board"]').getAttribute("aria-current")) === "page", "the board is the current page");
+    await page.keyboard.press("Escape");
+    await eventually("escape closes the dropdown", async () => (await t.locator("[data-pages-menu]").count()) === 0, 2_000);
     await t.locator('[data-action="palette.open"]').click();
     await eventually("the palette's button opens the palette (palette.open on the bus)", async () => (await section(page, B, "palette").locator("input[data-palette-input]").count()) === 1, 2_000);
     await page.keyboard.press("Escape");
@@ -103,6 +113,87 @@ export default async (ctx) => {
     assert((await bg("dark")) === "rgb(28, 27, 25)", "dark: the top on --panel's dark");
     const help = page.locator("[data-surface=keys-help]");
     assert((await help.locator("[data-chord]").count()) >= 8, "keys-help lists the board's chords at the nav's foot");
+  });
+
+  // STUDIO-30: every argument-free page in one dropdown, read live from the routes.
+  await test("the_top_lists_every_page_live", async () => {
+    // What the live bundle routes (ui/routes.json, no row over it yet): no `:param`, no `#/rhx/` or `#/sv/`
+    // alias, one entry per component; the board's pages first, then the rest by name.
+    const routes = JSON.parse(fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), "../../ui/routes.json"), "utf8"));
+    const FIRST = ["board", "queue", "ready", "waves", "filters", "search", "new", "bulk"];
+    const nameOf = (p) => p.replace(/^#\//, "").replace(/\/$/, "") || "home";
+    const free = Object.entries(routes).filter(([p]) => !p.includes("/:") && !/^#\/(rhx|sv)\//.test(p));
+    const rest = free.map(([p]) => nameOf(p)).filter((n) => !FIRST.includes(n)).sort();
+    const want = [...FIRST, ...rest];
+    assert(new Set(free.map(([, c]) => c)).size === free.length, `today's argument-free routes are one per component: ${JSON.stringify(free)}`);
+    const hrefOf = Object.fromEntries(free.map(([p]) => [nameOf(p), p]));
+    const listed = (t) => t.locator("[data-page]").evaluateAll((els) => els.map((e) => [e.getAttribute("data-page"), e.getAttribute("href")]));
+
+    const { page } = await board();
+    const origin = await marked(page);
+    const t = top(page);
+    await eventually("app-top drawn", async () => (await t.count()) === 1, 5_000);
+    const toggle = t.locator('[data-action="pages.open"]');
+    await toggle.click();
+    await eventually(`the dropdown lists ${want.join(", ")}`, async () => JSON.stringify((await listed(t)).map(([n]) => n)) === JSON.stringify(want), 5_000);
+    for (const [n, href] of await listed(t)) {
+      assert(href === hrefOf[n], `${n} goes to ${hrefOf[n]}, not ${href}`);
+      assert(!href.includes(":") && !/^#\/(rhx|sv)\//.test(href), `no alias or argument: ${href}`);
+      assert((await t.locator(`[data-page="${n}"] .top-page-href`).textContent()) === href, `${n} shows its address`);
+    }
+    assert((await t.locator("[data-pages-filter]").evaluate((e) => e === document.activeElement)), "opened, the filter has the focus");
+
+    // A click on one goes there.
+    await t.locator('[data-page="queue"]').click();
+    await eventually("a click on queue goes to #/queue", async () => (await hash(page)) === "#/queue", 3_000);
+    await eventually("closed after it", async () => (await t.count()) === 0 || (await top(page).locator("[data-pages-menu]").count()) === 0, 2_000);
+
+    // The keyboard: Enter opens, typing filters, the arrows move, Enter goes; Space opens, Escape closes.
+    await page.evaluate(() => (location.hash = "#/board"));
+    await boardUp(page, B);
+    const tt = top(page);
+    await eventually("the dropdown says the board again", async () => (await tt.locator("[data-pages-here]").textContent()).trim() === "board", 3_000);
+    await tt.locator('[data-action="pages.open"]').focus();
+    await page.keyboard.press("Enter");
+    await eventually("enter opens it", async () => (await tt.locator("[data-pages-menu]").count()) === 1, 2_000);
+    assert((await tt.locator("[data-page][data-active]").getAttribute("data-page")) === "board", "the arrows start on the page you are on");
+    await page.keyboard.press("ArrowDown");
+    assert((await tt.locator("[data-page][data-active]").getAttribute("data-page")) === "queue", "down moves to queue");
+    await page.keyboard.press("ArrowUp");
+    assert((await tt.locator("[data-page][data-active]").getAttribute("data-page")) === "board", "up moves back");
+    await page.keyboard.type("re");
+    await eventually("typing filters", async () => JSON.stringify((await listed(tt)).map(([n]) => n)) === JSON.stringify(want.filter((n) => n.includes("re") || hrefOf[n].includes("re"))), 2_000);
+    await page.keyboard.type("lea");
+    await eventually("…to releases alone", async () => JSON.stringify((await listed(tt)).map(([n]) => n)) === JSON.stringify(["releases"]), 2_000);
+    await page.keyboard.press("Enter");
+    await eventually("enter goes to #/releases", async () => (await hash(page)) === "#/releases", 3_000);
+    const rt = page.locator("[data-surface=app-top]");
+    await eventually("on releases the dropdown says releases", async () => (await rt.count()) === 1 && (await rt.locator("[data-pages-here]").textContent()).trim() === "releases", 5_000);
+    await rt.locator('[data-action="pages.open"]').focus();
+    await page.keyboard.press(" ");
+    await eventually("space opens it", async () => (await rt.locator("[data-pages-menu]").count()) === 1, 2_000);
+    await page.keyboard.press("Escape");
+    await eventually("escape closes it", async () => (await rt.locator("[data-pages-menu]").count()) === 0, 2_000);
+    assert(await rt.locator('[data-action="pages.open"]').evaluate((e) => e === document.activeElement), "the focus is back on the toggle");
+    assert((await hash(page)) === "#/releases", "escape went nowhere");
+    // ctrl+k is unchanged: the palette's button is still there.
+    assert((await rt.locator('[data-action="palette.open"]').count()) === 1, "the palette's button stays");
+
+    // A route the studio sets appears in the open page's dropdown, no reload; cleared, it goes.
+    const set = sy("ui", "routes", "set", "--pattern", "#/kiln-log", "--component", "page-thread");
+    assert(set.some((e) => e.type === "route_set"), `route set: ${JSON.stringify(set)}`);
+    try {
+      await rt.locator('[data-action="pages.open"]').click();
+      const withKiln = [...FIRST, ...[...rest, "kiln-log"].sort()];
+      await eventually("kiln-log appears in its place, without a reload", async () => JSON.stringify((await listed(rt)).map(([n]) => n)) === JSON.stringify(withKiln), 5_000);
+      assert((await rt.locator('[data-page="kiln-log"]').getAttribute("href")) === "#/kiln-log", "it goes to #/kiln-log");
+      await sameDocument(page, origin, "the route arrived on ui.watch");
+    } finally {
+      const cleared = sy("ui", "routes", "clear", "--pattern", "#/kiln-log");
+      assert(cleared.some((e) => e.type === "route_cleared"), `route cleared: ${JSON.stringify(cleared)}`);
+    }
+    await eventually("cleared, kiln-log goes", async () => JSON.stringify((await listed(rt)).map(([n]) => n)) === JSON.stringify(want), 5_000);
+    await sameDocument(page, origin, "the clear arrived on ui.watch");
   });
 
   await test("search_from_the_top_routes", async () => {
