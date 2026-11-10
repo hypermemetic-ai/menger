@@ -259,8 +259,10 @@ pub fn default_app_dist() -> PathBuf {
 }
 
 /// The source when none is named: the checkout's `frontend/dist`
-/// ([`default_app_dist`]). v2: nothing is embedded (build.rs went with the
-/// frontend).
+/// ([`default_app_dist`]). v2: no app's files are embedded here (v1's
+/// build.rs went with the frontend); DIST-19: the UI a binary carries is a
+/// bundle in the ui service's store ([`crate::embedded_ui`]), served as any
+/// pushed version is.
 pub fn preferred_app() -> AppSource {
     AppSource::Dir(default_app_dist())
 }

@@ -21,3 +21,5 @@ __pycache__/
 # V2-7: the UI bundle (plexus-ui build, FRAME-8) and the compiler module the pipeline builds
 # UI-6: and the engine's build (dist/engine)
 /dist
+# DIST-19: the bundle a build carries (scripts/embed-ui) — a build product; embed/README.md is the checkout's
+/embed/ui.tar
