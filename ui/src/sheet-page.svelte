@@ -58,6 +58,8 @@
   import PageUsage from "plexus-ui:page-usage";
   import QuotaTable from "plexus-ui:quota-table";
   import QuotaUsage from "plexus-ui:quota-usage";
+  // V2-68: the whole system's, on #/usage for an admin of *.
+  import QuotaTotal from "plexus-ui:quota-total";
   import PageReady from "plexus-ui:page-ready";
   import PageReleases from "plexus-ui:page-releases";
   import PageSearch from "plexus-ui:page-search";
@@ -274,6 +276,7 @@
     ["the admin pages", [
       ["orgs-list", OrgsList, F, ["hover"], { loading: { sheet: "loading" } }],
       ["quota-usage", QuotaUsage, F, [], { loading: { sheet: "loading" } }],
+      ["quota-total", QuotaTotal, F, ["hover", "focus"], { loading: { sheet: "loading" } }],
       ["quota-table", QuotaTable, F, ["hover", "focus", "disabled"], { loading: { sheet: "loading" } }],
       ["ui-versions", UiVersions, F, ["hover", "focus", "disabled"], { loading: { sheet: "loading" } }, true],
     ]],
