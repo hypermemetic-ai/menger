@@ -107,6 +107,33 @@ impl Held {
     }
 }
 
+/// COMP-16: a principal's reach by its grants alone, as a store reader —
+/// what bounds the frame of a body it wrote. Minted only by
+/// [`Access::grants_reach`]; reads where it holds `tickets.get`
+/// ([`SEES`]), and nowhere is a refusal (a principal that holds nothing).
+pub struct GrantsReach {
+    pub(super) principal: String,
+    pub(super) reach: Reach,
+}
+
+impl std::fmt::Debug for GrantsReach {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GrantsReach").field("principal", &self.principal).finish()
+    }
+}
+
+impl GrantsReach {
+    /// The filter `under` where it holds `tickets.get`: `None` everywhere.
+    pub fn read_filter(&self) -> Result<Option<Filter>, String> {
+        self.reach.filter_for(&GateGrant::new(SEES)).map_err(String::from)
+    }
+
+    /// The principal it is the reach of.
+    pub fn principal(&self) -> &str {
+        &self.principal
+    }
+}
+
 /// One ceiling layer: its entries, each a role or a grant on a scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Layer {

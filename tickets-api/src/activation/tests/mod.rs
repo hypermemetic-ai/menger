@@ -106,7 +106,7 @@ async fn create_defaults_kind_to_build_accepts_gap_and_rejects_unknown_naming_th
         assert!(message.contains(name), "names {name}: {message}");
     }
     assert!(matches!(
-        one(service.get(operator(), "MNG-4".into()).await).await,
+        one(service.get(operator(), "MNG-4".into(), None).await).await,
         TicketsEvent::NotFound { .. }
     ));
 }
@@ -146,11 +146,11 @@ async fn a_doc_over_the_activation_refuses_every_lifecycle_write_in_band() {
         TicketsEvent::Error { message } => assert!(message.contains("'DOCS-1' is a doc"), "{message}"),
         other => panic!("expected Error, got {other:?}"),
     }
-    match one(flat(service.list(operator(), None, Some("Doc".into()), None, None, None, Some(true), None, None, None, None, None).await)).await {
+    match one(flat(service.list(operator(), None, Some("Doc".into()), None, None, None, Some(true), None, None, None, None, None, None).await)).await {
         TicketsEvent::Summary { summary } => assert_eq!((summary.id.as_str(), summary.status), ("DOCS-1", Status::Doc)),
         other => panic!("expected Summary, got {other:?}"),
     }
-    match one(service.get(operator(), "DOCS-1".into()).await).await {
+    match one(service.get(operator(), "DOCS-1".into(), None).await).await {
         TicketsEvent::Ticket { ticket } => assert_eq!(ticket.status, Status::Doc, "nothing moved it"),
         other => panic!("expected Ticket, got {other:?}"),
     }
@@ -161,11 +161,11 @@ async fn get_distinguishes_found_from_missing() {
     let service = service();
     one(service.create(operator(), "MNG".into(), "x".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     assert!(matches!(
-        one(service.get(operator(), "MNG-1".into()).await).await,
+        one(service.get(operator(), "MNG-1".into(), None).await).await,
         TicketsEvent::Ticket { .. }
     ));
     assert!(matches!(
-        one(service.get(operator(), "MNG-99".into()).await).await,
+        one(service.get(operator(), "MNG-99".into(), None).await).await,
         TicketsEvent::NotFound { .. }
     ));
 }
@@ -178,7 +178,7 @@ async fn list_filters_by_status() {
     one(service.set_status(operator(), "MNG-1".into(), "Ready".into(), None, None, None).await).await;
 
     let (ids, page) =
-        ids_and_page(flat(service.list(operator(), None, Some("Ready".into()), None, None, None, None, None, None, None, None, None).await)).await;
+        ids_and_page(flat(service.list(operator(), None, Some("Ready".into()), None, None, None, None, None, None, None, None, None, None).await)).await;
     assert_eq!(ids, vec!["MNG-1"]);
     assert_eq!(page, Some((None, 0)), "one match, nothing beyond it");
 }
@@ -261,12 +261,12 @@ async fn set_status_takes_the_worker_states_and_list_filters_on_them() {
             other => panic!("{spelling}: expected StatusChanged, got {other:?}"),
         }
     }
-    let wire = serde_json::to_value(one(service.get(operator(), "WK-3".into()).await).await).unwrap();
+    let wire = serde_json::to_value(one(service.get(operator(), "WK-3".into(), None).await).await).unwrap();
     assert_eq!(wire["ticket"]["status"], "In Review");
 
-    let (ids, _) = ids_and_page(flat(service.list(operator(), None, Some("coding".into()), None, None, None, None, None, None, None, None, None).await)).await;
+    let (ids, _) = ids_and_page(flat(service.list(operator(), None, Some("coding".into()), None, None, None, None, None, None, None, None, None, None).await)).await;
     assert_eq!(ids, ["WK-2"]);
-    let (ids, _) = ids_and_page(flat(service.list(operator(), None, Some("In Review".into()), None, None, None, None, None, None, None, None, None).await)).await;
+    let (ids, _) = ids_and_page(flat(service.list(operator(), None, Some("In Review".into()), None, None, None, None, None, None, None, None, None, None).await)).await;
     assert_eq!(ids, ["WK-3"]);
 }
 
@@ -436,7 +436,7 @@ async fn create_adds_new_id_to_blockers_unlocks_and_watch_carries_it() {
         other => panic!("expected UnlocksChanged, got {other:?}"),
     }
 
-    match one(service.get(operator(), "DAG-1".into()).await).await {
+    match one(service.get(operator(), "DAG-1".into(), None).await).await {
         TicketsEvent::Ticket { ticket } => assert_eq!(ticket.unlocks, vec!["DAG-2"]),
         other => panic!("expected Ticket, got {other:?}"),
     }
@@ -498,7 +498,7 @@ async fn create_with_parent_updates_children_and_watch_carries_the_parent() {
         serde_json::json!({"type": "children_changed", "id": "FAM-1", "added": "FAM-2", "child_count": 1})
     );
 
-    match one(service.get(operator(), "FAM-1".into()).await).await {
+    match one(service.get(operator(), "FAM-1".into(), None).await).await {
         TicketsEvent::Ticket { ticket } => {
             assert_eq!(ticket.child_count, 1);
             assert_eq!(ticket.parent, None);
@@ -506,10 +506,10 @@ async fn create_with_parent_updates_children_and_watch_carries_the_parent() {
         other => panic!("expected Ticket, got {other:?}"),
     }
     assert_eq!(
-        ticket_ids(flat(service.list(operator(), None, None, Some("FAM-1".into()), None, None, None, None, None, None, None, None).await)).await,
+        ticket_ids(flat(service.list(operator(), None, None, Some("FAM-1".into()), None, None, None, None, None, None, None, None, None).await)).await,
         vec!["FAM-2"]
     );
-    match one(service.get(operator(), "FAM-2".into()).await).await {
+    match one(service.get(operator(), "FAM-2".into(), None).await).await {
         TicketsEvent::Ticket { ticket } => assert_eq!(ticket.parent.as_deref(), Some("FAM-1")),
         other => panic!("expected Ticket, got {other:?}"),
     }
@@ -542,7 +542,7 @@ async fn create_rejects_a_nonexistent_parent_in_band() {
         other => panic!("expected Error, got {other:?}"),
     }
     assert!(matches!(
-        one(service.get(operator(), "ORPH-1".into()).await).await,
+        one(service.get(operator(), "ORPH-1".into(), None).await).await,
         TicketsEvent::NotFound { .. }
     ));
 }
@@ -573,14 +573,14 @@ async fn list_filters_by_parent() {
 
     // MNG-14: "unrelated" (LP-2) named no parent and hangs under the root.
     assert_eq!(
-        ticket_ids(flat(service.list(operator(), None, None, Some("LP-1".into()), None, None, None, None, None, None, None, None).await)).await,
+        ticket_ids(flat(service.list(operator(), None, None, Some("LP-1".into()), None, None, None, None, None, None, None, None, None).await)).await,
         vec!["LP-2", "LP-3", "ZZ-1"]
     );
-    assert!(ticket_ids(flat(service.list(operator(), None, None, Some("LP-2".into()), None, None, None, None, None, None, None, None).await))
+    assert!(ticket_ids(flat(service.list(operator(), None, None, Some("LP-2".into()), None, None, None, None, None, None, None, None, None).await))
         .await
         .is_empty());
     assert_eq!(
-        ticket_ids(flat(service.list(operator(), None, None, None, None, None, None, None, None, None, None, None).await)).await.len(),
+        ticket_ids(flat(service.list(operator(), None, None, None, None, None, None, None, None, None, None, None, None).await)).await.len(),
         4,
         "unfiltered list is unchanged"
     );
@@ -606,7 +606,7 @@ async fn summary_rows_carry_every_field_but_the_body() {
         .await)
     .await;
 
-    let evs: Vec<_> = Box::pin(flat(service.list(operator(), None, None, None, None, None, Some(true), None, None, None, None, None).await))
+    let evs: Vec<_> = Box::pin(flat(service.list(operator(), None, None, None, None, None, Some(true), None, None, None, None, None, None).await))
         .collect()
         .await;
     assert_eq!(evs.len(), 2, "one row, one page: {evs:?}");
@@ -622,7 +622,7 @@ async fn summary_rows_carry_every_field_but_the_body() {
     assert!(summary.get("children").is_none(), "SCALE-4: no list of children: {summary}");
 
     // The full ticket still carries it, unchanged.
-    let evs: Vec<_> = Box::pin(flat(service.list(operator(), None, None, None, None, None, None, None, None, None, None, None).await))
+    let evs: Vec<_> = Box::pin(flat(service.list(operator(), None, None, None, None, None, None, None, None, None, None, None, None).await))
         .collect()
         .await;
     let row = serde_json::to_value(&evs[0]).unwrap();
@@ -638,7 +638,7 @@ async fn an_after_that_names_no_ticket_is_one_in_band_error() {
     one(service.create(operator(), "CUR".into(), "a".into(), None, None, None, None, None, None, None).await).await;
 
     for evs in [
-        Box::pin(flat(service.list(operator(), None, None, None, Some("ZZZ-9".into()), None, None, None, None, None, None, None).await))
+        Box::pin(flat(service.list(operator(), None, None, None, Some("ZZZ-9".into()), None, None, None, None, None, None, None, None).await))
             .collect::<Vec<_>>()
             .await,
         Box::pin(flat(service.work().ready(operator(), None, Some("ZZZ-9".into()), None, None, None, None, None).await))
@@ -713,7 +713,7 @@ async fn dangling_forward_reference_resolves_at_birth() {
         }
         other => panic!("expected Created, got {other:?}"),
     }
-    match one(service.get(operator(), "DAG-2".into()).await).await {
+    match one(service.get(operator(), "DAG-2".into(), None).await).await {
         TicketsEvent::Ticket { ticket } => assert_eq!(ticket.unlocks, vec!["DAG-1"]),
         other => panic!("expected Ticket, got {other:?}"),
     }
@@ -732,7 +732,7 @@ async fn create_rejects_self_reference() {
         other => panic!("expected Error, got {other:?}"),
     }
     assert!(matches!(
-        one(service.get(operator(), "DAG-1".into()).await).await,
+        one(service.get(operator(), "DAG-1".into(), None).await).await,
         TicketsEvent::NotFound { .. }
     ));
 }
@@ -756,7 +756,7 @@ async fn create_rejects_cycle_through_dangling_forward_reference() {
     }
     // Nothing was stored.
     assert!(matches!(
-        one(service.get(operator(), "DAG-2".into()).await).await,
+        one(service.get(operator(), "DAG-2".into(), None).await).await,
         TicketsEvent::NotFound { .. }
     ));
 }
@@ -779,7 +779,7 @@ async fn create_rejects_longer_cycles() {
     .await;
     assert!(matches!(ev, TicketsEvent::Error { .. }), "got {ev:?}");
     assert!(matches!(
-        one(service.get(operator(), "DAG-3".into()).await).await,
+        one(service.get(operator(), "DAG-3".into(), None).await).await,
         TicketsEvent::NotFound { .. }
     ));
 }
@@ -945,7 +945,7 @@ async fn first_ticket_of_a_prefix_must_be_a_scope_in_band() {
         other => panic!("expected Error, got {other:?}"),
     }
     assert!(matches!(
-        one(service.get(operator(), "FRESH-1".into()).await).await,
+        one(service.get(operator(), "FRESH-1".into(), None).await).await,
         TicketsEvent::NotFound { .. }
     ));
 }
@@ -960,7 +960,7 @@ async fn list_pages_by_default_and_never_past_the_most() {
     store.seed_synthetic(SYS, crate::store::SeedSpec { count: 1_200, seed: 7, into_existing: false }).unwrap();
     let service = TicketsActivation::new(store);
     let list = |after: Option<crate::vocab::Cursor>, limit: Option<u32>| {
-        service.list(operator(), None, None, None, after, limit, Some(true), None, None, None, None, None)
+        service.list(operator(), None, None, None, after, limit, Some(true), None, None, None, None, None, None)
     };
     let (ids, page) = ids_and_page(list(None, None).await).await;
     assert_eq!(ids.len(), LIST_PAGE_DEFAULT as usize);
@@ -972,7 +972,7 @@ async fn list_pages_by_default_and_never_past_the_most() {
     assert_eq!(ids.len(), 1_200, "under the most, what is asked");
     assert!(LIST_PAGE_MAX >= 10_000);
     // Full rows page the same way.
-    let (ids, _) = ids_and_page(flat(service.list(operator(), None, None, None, None, None, None, None, None, None, None, None).await)).await;
+    let (ids, _) = ids_and_page(flat(service.list(operator(), None, None, None, None, None, None, None, None, None, None, None, None).await)).await;
     assert_eq!(ids.len(), LIST_PAGE_DEFAULT as usize);
 }
 

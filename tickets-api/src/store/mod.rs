@@ -5047,6 +5047,12 @@ pub use lineage::{Node, TreePage, TreeQuery, UnderMoves, UNDERS_MAX};
 mod seen;
 use seen::Seen;
 pub use seen::Reader;
+/// COMP-16: a body's frame — who last wrote it, what it asks, and the
+/// reader its reads are narrowed to (reader ∩ author ∩ asked).
+mod frames;
+pub use frames::{FrameOf, Framed, ReachAsked, REACH_READ};
+#[cfg(test)]
+mod tests_frames;
 /// ACCESS-12: what an open watch hears — every change classified, cut to
 /// the reach and redacted as a read is; a moved reach's entered and left.
 mod watching;

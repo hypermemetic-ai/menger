@@ -1299,6 +1299,30 @@ pub struct Transition {
     pub cause_ticket: Option<String>,
 }
 
+/// COMP-16: what a frame of a ticket's body may read for one reader — the
+/// reader's reach ∩ the reach of who last wrote the body (by that
+/// principal's grants) ∩ what the body asks in its frontmatter
+/// (`reach-read:`, FILTER-3's language; `all`: as wide as allowed; none:
+/// its own shortcode and those hosted under it). Never wider than the
+/// reader, never wider than the author.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct FrameReach {
+    /// The ticket whose body is framed, as the store keeps it.
+    pub ticket: TicketId,
+    /// Who last wrote its body (a create, an amend, an update, a restored
+    /// revision); `null`: nobody known, and the frame reads the ticket alone.
+    pub author: Option<String>,
+    /// What the body asks, as written — or the default it reads under
+    /// (`under <its shortcode>`).
+    pub asked: String,
+    /// Why the frame reads the ticket alone, when it does; else `null`.
+    pub alone: Option<String>,
+    /// Each shortcode the frame reads a live ticket of, in the store's order.
+    pub shortcodes: Vec<ShortcodeId>,
+    /// How many live tickets it reads in all.
+    pub tickets: u64,
+}
+
 /// ACT-5: what a delete keeps of a ticket — its tombstone. The ticket is
 /// gone (off every read, its number never reused); this says which it was
 /// (`id`, `title`), who deleted it (`by`, the caller's principal; `name` their
@@ -1940,6 +1964,10 @@ pub enum TicketsEvent {
     /// keeps images, before it keeps one for a ticket). A ticket the caller
     /// cannot see is `not_found`, as everywhere.
     May { id: TicketId, role: crate::members::Role, held: bool },
+    /// COMP-16: `frame_reach`'s answer — what a frame of the ticket's body
+    /// may read for the caller: the caller's reach ∩ the reach of who last
+    /// wrote the body ∩ what the body asks (`reach-read:`).
+    FrameReach { reach: FrameReach },
     /// ORG-3: `id` (an address as it was asked — a ticket or a shortcode)
     /// names more than one thing in the reader's reach: `candidates` are
     /// each one's full address, in the store's order. Nothing was read or

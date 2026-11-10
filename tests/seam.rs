@@ -79,7 +79,7 @@ impl ProbeActivation {
                     return;
                 }
             };
-            match tickets.get(r#ref).try_collect::<Vec<_>>().await {
+            match tickets.get(r#ref, None).try_collect::<Vec<_>>().await {
                 Ok(events) => match events.as_slice() {
                     [TicketsEvent::Ticket { ticket }] => yield ProbeEvent::Ticket { id: ticket.id.to_string(), asked_as },
                     [TicketsEvent::NotFound { .. }] => yield ProbeEvent::NotFound { id, asked_as },

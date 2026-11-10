@@ -2759,7 +2759,7 @@ async fn an_unknown_parameter_is_refused_before_the_method_runs() {
     let m = invalid(&client, "tickets.list", json!({"sumary": true})).await;
     assert_eq!(
         m,
-        "Invalid params: unknown field `sumary`; tickets.list takes: after, at, epic, fields, filter, keep, limit, parent, status, summary, tz"
+        "Invalid params: unknown field `sumary`; tickets.list takes: after, at, epic, fields, filter, frame, keep, limit, parent, status, summary, tz"
     );
     let m = invalid(&client, "tickets.list", json!({"summary": true, "limt": 1})).await;
     assert!(m.contains("unknown field `limt`"), "{m}");

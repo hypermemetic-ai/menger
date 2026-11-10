@@ -482,10 +482,10 @@ whole. synapse `-j` prints the `rows` event as one line (SYNAPSE-36).
 | method | flags | what it does |
 |---|---|---|
 | `health` | | version, unix time, ticket count |
-| `get` | `--id` | one ticket by id or path address |
-| `list` | `[--epic] [--status] [--parent] [--filter] [--keep] [--after] [--at] [--limit] [--summary] [--fields] [--tz]` | tickets in store order, paged: `rows`, then `page` |
+| `get` | `--id [--frame]` | one ticket by id or path address; `--frame` reads as that ticket's body's frame (`frame_reach`) |
+| `list` | `[--epic] [--status] [--parent] [--filter] [--keep] [--after] [--at] [--limit] [--summary] [--fields] [--tz] [--frame]` | tickets in store order, paged: `rows`, then `page` |
 | `find` | `--query [--filter] [--after] [--limit] [--fields] [--tz]` | id or title contains the query (the jump) |
-| `search` | `--query [--filter] [--offset] [--limit] [--tz]` | inside titles and bodies, best first, each hit with its passage |
+| `search` | `--query [--filter] [--offset] [--limit] [--tz] [--frame]` | inside titles and bodies, best first, each hit with its passage |
 | `create` | `--epic --title [--kind] [--parent] [--blocked-by] [--severity] [--body] [--org] [--path]` | the next `EPIC-N`; born `Draft` |
 | `amend` | `--id [--title] [--body]` | replace a title and/or body, whole |
 | `update` | `--id [--title] [--body] [--kind] [--status] [--parent] [--severity] [--block] [--unblock] [--hidden] [--message] [--source]` | any part of a ticket in one write, all or none |
@@ -503,6 +503,7 @@ whole. synapse `-j` prints the `rows` event as one line (SYNAPSE-36).
 | `freeze` / `unfreeze` | `--id` | a scope that takes no new children or numbers (admin) |
 | `history` | `--id` | each status and kind transition, then the queue's lines, then `history_end` |
 | `may` | `--id --role` | whether you hold `viewer`, `editor` or `admin` on one ticket, as a write's permit would say: `may { id, role, held }`, or `not_found` for a ticket you cannot see (V2-24: what another service asks through the seam) |
+| `frame_reach` | `--id` | what a frame of the ticket's body may read for you — your reach ∩ who last wrote the body's ∩ its `reach-read:`: `frame_reach { reach: { ticket, author, asked, alone, shortcodes, tickets } }` (COMP-16, "Capabilities, reads, watches and writes") |
 | `inputs list` | `[--ticket] [--epic] [--state] [--filter] [--tz] [--limit] [--after]` | a page of a ticket's questions, or of every ticket's |
 | `inputs ask` | `--ticket --question` | a question filed as a text input of its body |
 | `inputs answer` | `--ticket --input --value [--rationale]` | an answer, checked against what the input declares |
@@ -963,8 +964,8 @@ invalid_params` naming the parameter, before the method runs; what needs the
 store (a ticket that is none, a cycle) stays an in-band `error`. A blank
 optional value is refused, not none. A key no parameter claims is refused
 the same way (MACRO-31): `tickets.list {sumary: true}` is ``Invalid params:
-unknown field `sumary`; tickets.list takes: after, at, epic, filter, keep,
-limit, parent, status, summary, tz`` — every unknown key named, the
+unknown field `sumary`; tickets.list takes: after, at, epic, fields, filter,
+frame, keep, limit, parent, status, summary, tz`` — every unknown key named, the
 parameters sorted, a child's method by its own namespace (`nav.tree`, not
 `tickets.nav.tree`) — and `unknown field` is the words synapse reads to
 re-read a stale cached schema and run the call again.
@@ -991,6 +992,23 @@ that is not the caller's.
   ticket is `not_found`, never listed or counted, and a visible row names
   no hidden ticket (`hidden_blocked_by`, `hidden_unlocks`, `parent_hidden`
   count them). `store/tests_reach.rs` holds it.
+- **A body's frame reads no wider than whoever wrote it** (COMP-16,
+  `store/frames.rs`): a body's script runs with its reader's eyes, so what
+  its frame reads is the reader's reach ∩ the reach of the principal who
+  last wrote the body (its latest revision that created it or changed its
+  body; that principal's grants alone, `Access::grants_reach`) ∩ what the
+  body asks — `reach-read:` in its frontmatter, FILTER-3's language, `all`
+  as wide as allowed, and without it its own shortcode with those hosted
+  under it. A body nobody known wrote (`system`, `anonymous`, a `baseline`),
+  or one whose ask the language does not take, reads the ticket alone; an
+  author who holds nothing reads nothing. `tickets.frame_reach { id }`
+  answers it; `get`, `list` and `search` given `--frame <id>` read through
+  it (a `Framed` reader, sealed, only ever narrower than its caller). It is
+  read afresh each call, so another author's amend moves it.
+  `store/tests_frames.rs` and `tests/wire_frames.rs` hold it. The page's
+  frames (`m-mockup`, plexus-ui's `bus.frame`) do not name `frame` yet: the
+  engine passes a framed page's params as the page wrote them, so the
+  bound waits on the framer being able to fix one.
 - **Watches** (ACCESS-12, `access/following.rs`, `store/watching.rs`) hold
   their caller and are verified again when the grants generation moves, a
   sign-out or the expiry comes; a moved reach says `entered` / `left`, a

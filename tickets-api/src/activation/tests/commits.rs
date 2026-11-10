@@ -28,11 +28,11 @@ async fn link_yields_commits_linked_and_watch_carries_only_what_changed() {
     assert_eq!(wire["added"], serde_json::json!(["0bb28b2"]), "the third alone");
     let three = serde_json::json!(["77df9a0", "plexus-macros@4f7114a", "0bb28b2"]);
     assert_eq!(wire["ticket"]["commits"], three);
-    let got = serde_json::to_value(one(service.get(operator(), "LC-1".into()).await).await).unwrap();
+    let got = serde_json::to_value(one(service.get(operator(), "LC-1".into(), None).await).await).unwrap();
     assert_eq!(got["ticket"]["commits"], three, "get shows them, in link order");
-    let (rows, _) = ids_and_page(flat(service.list(operator(), None, None, None, None, None, Some(true), None, None, None, None, None).await)).await;
+    let (rows, _) = ids_and_page(flat(service.list(operator(), None, None, None, None, None, Some(true), None, None, None, None, None, None).await)).await;
     assert_eq!(rows, ["LC-1"]);
-    let evs: Vec<TicketsEvent> = Box::pin(flat(service.list(operator(), None, None, None, None, None, Some(true), None, None, None, None, None).await)).collect().await;
+    let evs: Vec<TicketsEvent> = Box::pin(flat(service.list(operator(), None, None, None, None, None, Some(true), None, None, None, None, None, None).await)).collect().await;
     assert_eq!(serde_json::to_value(&evs[0]).unwrap()["summary"]["commits"], three, "and the summary row");
 
     for (i, added) in [&["77df9a0"], &["0bb28b2"]].into_iter().enumerate() {
@@ -61,7 +61,7 @@ async fn link_yields_commits_linked_and_watch_carries_only_what_changed() {
         one(service.commits().link(operator(), Some("LC-9".into()), None, commits(&["c8c5678"])).await).await,
         TicketsEvent::NotFound { id } if id == "LC-9"
     ));
-    let got = serde_json::to_value(one(service.get(operator(), "LC-1".into()).await).await).unwrap();
+    let got = serde_json::to_value(one(service.get(operator(), "LC-1".into(), None).await).await).unwrap();
     assert_eq!(got["ticket"]["commits"], three, "the refused call wrote nothing");
 
     let ev = one(service.commits().unlink(operator(), "LC-1".into(), commits(&["plexus-macros@4f7114a", "c8c5678"])).await).await;
