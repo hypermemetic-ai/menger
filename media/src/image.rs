@@ -352,6 +352,10 @@ pub enum MediaEvent {
     /// `usage`'s answer: what a principal has put — the files (each once)
     /// and their bytes.
     Usage { principal: String, files: u64, bytes: u64 },
+    /// V2-69: `usage { everyone }`'s last answer — the files no one is
+    /// charged for (a link's preview, kept as anyone's; a ticket's file kept
+    /// before its uploader was recorded), so a recount can say them.
+    Unattributed { files: u64, bytes: u64 },
     /// `unfurl`'s answer: what a public page is — its title, description,
     /// site and preview image (kept, by its hash), the kind of card it
     /// draws as, and for an allow-listed provider the player's address.

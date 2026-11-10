@@ -235,3 +235,40 @@ async fn an_image_put_for_a_doc_is_the_docs() {
     s.put(on("OPEN-2"), b64(&bytes), None, None).await.unwrap();
     assert_eq!(s.kept(&put.info.hash).await.unwrap().owners, vec![Owner::Doc("7k3mq2xa".into()), on("OPEN-2")]);
 }
+
+/// V2-69: what each principal keeps is what they are charged — a put new to
+/// the putter is `charged` (a duplicate of another's file too), the same
+/// file again (for another ticket, or again) is not; the usage reads agree
+/// with it; a row from before uploaders were recorded is its principal's
+/// when it was put with no ticket, and no one's (unattributed) for a
+/// ticket, as a link's preview is.
+#[tokio::test]
+async fn each_keeper_is_charged_once_and_the_reads_agree() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = open(&dir);
+    let x = png(8, 8, 1);
+    let n = x.len() as u64;
+    let first = s.put(on("A-1"), b64(&x), None, Some("key:aa".into())).await.unwrap();
+    assert!(!first.duplicate && first.charged, "new to everyone: charged");
+    let again = s.put(on("A-2"), b64(&x), None, Some("key:aa".into())).await.unwrap();
+    assert!(again.duplicate && !again.charged, "theirs already, for another ticket: not twice");
+    let other = s.put(Owner::App(Some("key:bb".into())), b64(&x), None, Some("key:bb".into())).await.unwrap();
+    assert!(other.duplicate && other.charged, "a duplicate of another's file: charged to them too");
+    // Another putter of the same file for a ticket that holds it already keeps no row of their own: nothing charged.
+    let same_row = s.put(on("A-1"), b64(&x), None, Some("key:cc".into())).await.unwrap();
+    assert!(same_row.duplicate && !same_row.charged);
+    assert_eq!(s.usage("key:aa").await.unwrap(), (1, n));
+    assert_eq!(s.usage("key:bb").await.unwrap(), (1, n));
+    assert_eq!(s.usage("key:cc").await.unwrap(), (0, 0));
+    // Rows from before: put_by unrecorded.
+    let y = png(9, 9, 2);
+    let z = png(10, 10, 3);
+    s.put(Owner::App(Some("key:dd".into())), b64(&y), None, None).await.unwrap();
+    s.put(on("A-3"), b64(&z), None, None).await.unwrap();
+    let preview = s.put_bytes(Owner::Anyone, png(11, 11, 4), None, None, kinds::PUT_MAX).await.unwrap();
+    assert!(!preview.charged, "a link's preview is no one's");
+    assert_eq!(s.usage("key:dd").await.unwrap(), (1, y.len() as u64), "put with no ticket: its principal's");
+    let all = s.usage_charged().await.unwrap();
+    assert_eq!(all, vec![("key:aa".into(), 1, n), ("key:bb".into(), 1, n), ("key:dd".into(), 1, y.len() as u64)]);
+    assert_eq!(s.unattributed().await.unwrap(), (2, z.len() as u64 + preview.info.bytes), "the ticket's unrecorded file and the preview");
+}

@@ -282,7 +282,11 @@ fn text_of(html: &str) -> Option<String> {
 }
 
 /// The image a card shows, fetched and kept as anyone's (a public page's
-/// preview) — `None` when it cannot be fetched or is not an image.
+/// preview) — `None` when it cannot be fetched or is not an image. V2-69:
+/// charged to no one's storage — the server's cache of a public page, one
+/// per link whoever asks, never a file a person kept; the read is the
+/// asker's (`media.fetch.calls`), and a recount names these bytes as
+/// unattributed.
 async fn keep_image(remote: &Remote, store: &Arc<MediaStore>, src: &str) -> Option<String> {
     let limits = Limits { accept: vec!["image/"], ..Limits::page() };
     let got = remote.get(src, &limits).await.ok()?;
@@ -373,17 +377,25 @@ async fn read(remote: &Remote, store: &Arc<MediaStore>, u: &url::Url) -> MediaEv
 /// `by` — under every rule of [`Remote`]; a page is refused (it is a link:
 /// unfurl it).
 pub async fn fetch(remote: &Remote, store: &Arc<MediaStore>, url: &str, owner: Owner, name: Option<String>, by: String) -> MediaEvent {
-    let limits = Limits { timeout: FETCH_TIMEOUT, max: kinds::PUT_MAX, accept: vec![], refuse: vec!["text/html", "application/xhtml+xml"] };
-    let got = match remote.get(url, &limits).await {
+    let (bytes, name) = match fetch_bytes(remote, url, name).await {
         Ok(g) => g,
-        Err(r) => return r.into(),
+        Err(ev) => return ev,
     };
-    let name = name.or_else(|| got.url.path_segments().and_then(|mut s| s.next_back().map(str::to_string)).filter(|n| !n.is_empty()));
-    match store.put_bytes(owner, got.bytes, name, Some(by), kinds::PUT_MAX).await {
+    match store.put_bytes(owner, bytes, name, Some(by), kinds::PUT_MAX).await {
         Ok(p) => MediaEvent::stored(p.info, p.duplicate),
         Err(crate::store::StoreError::Refused(p)) => p.into(),
         Err(e) => MediaEvent::Error { message: e.to_string() },
     }
+}
+
+/// V2-69: what [`fetch`] reads, before it keeps it — the bytes (at most a
+/// put's) and the name (`name`, else the address's last segment) — so the
+/// media service holds their size of the caller's storage first.
+pub async fn fetch_bytes(remote: &Remote, url: &str, name: Option<String>) -> Result<(Vec<u8>, Option<String>), MediaEvent> {
+    let limits = Limits { timeout: FETCH_TIMEOUT, max: kinds::PUT_MAX, accept: vec![], refuse: vec!["text/html", "application/xhtml+xml"] };
+    let got = remote.get(url, &limits).await.map_err(MediaEvent::from)?;
+    let name = name.or_else(|| got.url.path_segments().and_then(|mut s| s.next_back().map(str::to_string)).filter(|n| !n.is_empty()));
+    Ok((got.bytes, name))
 }
 
 /// How long `media.fetch` waits for a file: 10 s (a file is larger than a page).

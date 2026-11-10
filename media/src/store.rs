@@ -140,12 +140,17 @@ pub struct Kept {
     pub owners: Vec<Owner>,
 }
 
-/// What `put` answers: the file as kept, and whether its bytes were kept
-/// already.
+/// What `put` answers: the file as kept, whether its bytes were kept
+/// already, and (V2-69) whether the putter keeps it now and did not before
+/// — what their allowance is charged for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Put {
     pub info: MediaInfo,
     pub duplicate: bool,
+    /// V2-69: the putter's for the first time — charged its bytes, a
+    /// duplicate of a file someone else kept too. A file they kept already
+    /// (for another ticket, or again) is not charged twice.
+    pub charged: bool,
 }
 
 /// An upload begun or resumed: its id, its size, and the bytes it has.
@@ -382,9 +387,11 @@ impl MediaStore {
                     params![info.hash, info.mime, info.bytes as i64, info.width, info.height, at, info.kind, info.name],
                 )?;
             }
+            let before = keeps(&tx, &info.hash, put_by.as_deref())?;
             let info = own(&tx, info, &owner, at, put_by.as_deref())?;
+            let charged = !before && keeps(&tx, &info.hash, put_by.as_deref())?;
             tx.commit()?;
-            Ok(Put { info, duplicate: had.is_some() })
+            Ok(Put { info, duplicate: had.is_some(), charged })
         })
         .await
     }
@@ -650,12 +657,12 @@ impl MediaStore {
 
     /// EDITOR-10: what `principal` has put — the files (each once, however
     /// many tickets it was put for) and their bytes: what counts against
-    /// their allowance.
+    /// their allowance. V2-69: by [`KEEPER`], as the quota service charges it.
     pub async fn usage(self: &Arc<Self>, principal: &str) -> Result<(u64, u64), StoreError> {
         let p = principal.to_string();
         self.blocking(move |conn| {
             Ok(conn.query_row(
-                "SELECT count(*), coalesce(sum(bytes), 0) FROM media WHERE hash IN (SELECT DISTINCT hash FROM media_owners WHERE put_by = ?1)",
+                &format!("SELECT count(*), coalesce(sum(bytes), 0) FROM media WHERE hash IN (SELECT hash FROM media_owners WHERE {KEEPER} = ?1)"),
                 [&p],
                 |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, i64>(1)? as u64)),
             )?)
@@ -663,19 +670,34 @@ impl MediaStore {
         .await
     }
 
-    /// V2-31: every uploader's charge — each file once, against whoever kept
-    /// it first (the quota service committed its bytes to them; a later
-    /// put of the same bytes is a duplicate, released): (principal, files,
-    /// bytes), by principal.
+    /// V2-31, V2-69: every keeper's charge — each file once per principal
+    /// who keeps it ([`KEEPER`]): a duplicate is charged to each who put
+    /// it, as the quota service commits it (`Put::charged`): (principal,
+    /// files, bytes), by principal.
     pub async fn usage_charged(self: &Arc<Self>) -> Result<Vec<(String, u64, u64)>, StoreError> {
         self.blocking(move |conn| {
-            let mut stmt = conn.prepare(
-                "SELECT o.put_by, count(*), coalesce(sum(m.bytes), 0) FROM media m JOIN media_owners o ON o.hash = m.hash
-                  WHERE o.rowid = (SELECT rowid FROM media_owners WHERE hash = m.hash AND put_by IS NOT NULL AND put_by != '' ORDER BY at, rowid LIMIT 1)
-                  GROUP BY o.put_by ORDER BY o.put_by",
-            )?;
+            let mut stmt = conn.prepare(&format!(
+                "SELECT k, count(*), coalesce(sum(bytes), 0) FROM
+                   (SELECT DISTINCT {KEEPER} AS k, m.hash, m.bytes FROM media m JOIN media_owners o ON o.hash = m.hash)
+                  WHERE k IS NOT NULL GROUP BY k ORDER BY k"
+            ))?;
             let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u64, r.get::<_, i64>(2)? as u64)))?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })
+        .await
+    }
+
+    /// V2-69: what no one is charged for — files with no keeper
+    /// ([`KEEPER`]): a link's preview (kept as anyone's: the server's
+    /// cache of a public page, never a person's), or a file kept for a
+    /// ticket before its uploader was recorded. (files, bytes).
+    pub async fn unattributed(self: &Arc<Self>) -> Result<(u64, u64), StoreError> {
+        self.blocking(move |conn| {
+            Ok(conn.query_row(
+                &format!("SELECT count(*), coalesce(sum(bytes), 0) FROM media WHERE hash NOT IN (SELECT hash FROM media_owners o WHERE {KEEPER} IS NOT NULL)"),
+                [],
+                |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, i64>(1)? as u64)),
+            )?)
         })
         .await
     }
@@ -700,6 +722,18 @@ impl MediaStore {
     pub fn count(&self) -> usize {
         self.lock().query_row("SELECT count(*) FROM media", [], |r| r.get::<_, i64>(0)).unwrap_or(0) as usize
     }
+}
+
+/// V2-69: **whose a kept file is**, per `media_owners` row (aliased `o`, or
+/// bare): whoever put it (`put_by`), else — a row from before the uploader
+/// was recorded — the principal it was kept as (a file put with no ticket),
+/// else no one (a ticket's file from then, or a link's preview: anyone's).
+pub const KEEPER: &str = "coalesce(nullif(put_by, ''), CASE WHEN ticket = '' AND principal NOT IN ('', '*') THEN principal END)";
+
+/// Whether `put_by` keeps `hash` already, by [`KEEPER`].
+fn keeps(tx: &rusqlite::Transaction<'_>, hash: &str, put_by: Option<&str>) -> Result<bool, StoreError> {
+    let Some(p) = put_by.filter(|p| !p.is_empty()) else { return Ok(false) };
+    Ok(tx.query_row(&format!("SELECT 1 FROM media_owners WHERE hash = ?1 AND {KEEPER} = ?2 LIMIT 1"), params![hash, p], |_| Ok(())).optional()?.is_some())
 }
 
 /// The owner's row for a kept file, and the file as kept: a name given now

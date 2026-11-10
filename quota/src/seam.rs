@@ -164,14 +164,23 @@ impl Seam {
 
     /// `method` (a store's usage read: `tickets.revisions.usage`,
     /// `media.usage`, `docs.usage`) asked as the server with `params` (every
-    /// principal): each `usage { principal, count? | files?, bytes? }` it yields.
-    pub async fn counted(&self, method: &str, params: &str) -> Result<HashMap<String, Counted>, String> {
+    /// principal): each `usage { principal, count? | files?, bytes? }` it
+    /// yields — and, V2-69, what it keeps that no one is charged for
+    /// (`unattributed { files, bytes }`), said in words.
+    pub async fn counted(&self, method: &str, params: &str) -> Result<(HashMap<String, Counted>, Option<String>), String> {
         let (service, system) = self.service().ok_or("the quota service is not attached to a running service")?;
         let params: Value = serde_json::from_str(params).map_err(|e| e.to_string())?;
         let items = call(&service, &system, method, params).await?;
-        let mut out = HashMap::new();
+        let (mut out, mut unattributed) = (HashMap::new(), None);
         for v in &items {
             match v["type"].as_str() {
+                Some("unattributed") if v["files"].as_u64().unwrap_or(0) > 0 => {
+                    let (files, bytes) = (v["files"].as_u64().unwrap_or(0), v["bytes"].as_u64().unwrap_or(0));
+                    unattributed = Some(format!(
+                        "{method}: {files} file(s), {}, kept with no one to charge (a link's preview, kept as anyone's; or a ticket's file from before uploaders were recorded)",
+                        crate::meter::amount("media.bytes", bytes)
+                    ));
+                }
                 Some("usage") => {
                     if let Some(p) = v["principal"].as_str() {
                         out.insert(p.to_string(), Counted { count: v["count"].as_u64().or(v["files"].as_u64()), bytes: v["bytes"].as_u64() });
@@ -181,7 +190,7 @@ impl Seam {
                 _ => {}
             }
         }
-        Ok(out)
+        Ok((out, unattributed))
     }
 }
 

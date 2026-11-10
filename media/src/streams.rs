@@ -65,11 +65,21 @@ async fn owner(seam: &Seam, user: &Caller, ticket: Option<&TicketRef>, doc: Opti
     }
 }
 
-/// Commits `id` when `ev` kept something new, else releases it.
-async fn settle(allowance: &dyn Allowance, id: &str, ev: &MediaEvent) {
-    match ev {
-        MediaEvent::Stored { duplicate: false, bytes, .. } => allowance.commit(id, Some(*bytes)).await,
+/// V2-69: commits `id` — the kept file's bytes — when the put made the file
+/// the putter's (`charged`: new to them, though another may keep it too),
+/// else releases it.
+async fn settle(allowance: &dyn Allowance, id: &str, put: Option<&crate::store::Put>) {
+    match put {
+        Some(p) if p.charged => allowance.commit(id, Some(p.info.bytes)).await,
         _ => allowance.release(id).await,
+    }
+}
+
+/// A store's answer to a put as the wire says it.
+fn stored(put: &Result<crate::store::Put, StoreError>) -> MediaEvent {
+    match put {
+        Ok(p) => MediaEvent::stored(p.info.clone(), p.duplicate),
+        Err(e) => said(e.clone(), || MediaEvent::Error { message: "the file vanished".into() }),
     }
 }
 
@@ -89,12 +99,9 @@ pub(crate) async fn put(me: MediaActivation, user: Caller, ticket: Option<Ticket
         Ok(r) => r,
         Err(d) => return d.into(),
     };
-    let ev = match me.store.put(on, data, name.map(FileName::into_string), Some(user.principal().to_string())).await {
-        Ok(crate::store::Put { info, duplicate }) => MediaEvent::stored(info, duplicate),
-        Err(e) => said(e, || MediaEvent::Error { message: "the file vanished".into() }),
-    };
-    settle(allowance.as_ref(), &held.id, &ev).await;
-    ev
+    let put = me.store.put(on, data, name.map(FileName::into_string), Some(user.principal().to_string())).await;
+    settle(allowance.as_ref(), &held.id, put.as_ref().ok()).await;
+    stored(&put)
 }
 
 /// ACCESS-10, over the seam: whether `user` sees a file kept for `owners`
@@ -176,9 +183,13 @@ pub(crate) async fn usage(me: MediaActivation, user: Caller, (principal, everyon
         return vec![MediaEvent::Error { message: "another's usage, or every uploader's, is an admin of *'s".into() }];
     }
     if everyone {
-        return match me.store.usage_charged().await {
-            Ok(rows) => rows.into_iter().map(|(principal, files, bytes)| MediaEvent::Usage { principal, files, bytes }).collect(),
-            Err(e) => vec![MediaEvent::Error { message: e.to_string() }],
+        return match (me.store.usage_charged().await, me.store.unattributed().await) {
+            (Ok(rows), Ok((files, bytes))) => {
+                let mut out: Vec<MediaEvent> = rows.into_iter().map(|(principal, files, bytes)| MediaEvent::Usage { principal, files, bytes }).collect();
+                out.push(MediaEvent::Unattributed { files, bytes });
+                out
+            }
+            (Err(e), _) | (_, Err(e)) => vec![MediaEvent::Error { message: e.to_string() }],
         };
     }
     let whose = principal.unwrap_or_else(|| user.principal().to_string());
@@ -243,11 +254,10 @@ pub(crate) async fn finish(me: MediaActivation, user: Caller, upload: UploadId) 
     let allowance = me.allowance();
     match me.store.finish(upload.as_str(), user.principal()).await {
         Ok(done) => {
-            let ev = MediaEvent::stored(done.put.info, done.put.duplicate);
             if let Some(id) = &done.reservation {
-                settle(allowance.as_ref(), id, &ev).await;
+                settle(allowance.as_ref(), id, Some(&done.put)).await;
             }
-            ev
+            MediaEvent::stored(done.put.info, done.put.duplicate)
         }
         // An incomplete upload keeps its reservation; any other refusal
         // dropped the upload, and so its hold.
@@ -271,7 +281,10 @@ pub(crate) async fn unfurl(me: MediaActivation, user: Caller, url: WebUrl) -> Me
     ev
 }
 
-/// `media.fetch`: one call and the bytes it keeps, of the caller's allowance.
+/// `media.fetch`: one call and the bytes it reads, of the caller's day; the
+/// file it keeps, V2-69, of their storage (`media.bytes`) as a put's is —
+/// the bytes read first, then held at their size, committed when the file
+/// is new to them.
 pub(crate) async fn fetch(me: MediaActivation, user: Caller, url: WebUrl, ticket: Option<TicketRef>, doc: Option<DocId>, name: Option<FileName>) -> MediaEvent {
     let on = match owner(&me.seam, &user, ticket.as_ref(), doc.as_ref()).await {
         Ok(on) => on,
@@ -282,20 +295,38 @@ pub(crate) async fn fetch(me: MediaActivation, user: Caller, url: WebUrl, ticket
         Ok(r) => r,
         Err(d) => return d.into(),
     };
-    let bytes = match allowance.reserve(user.principal(), source::FETCH_BYTES, kinds::PUT_MAX as u64).await {
+    let read = match allowance.reserve(user.principal(), source::FETCH_BYTES, kinds::PUT_MAX as u64).await {
         Ok(r) => r,
         Err(d) => {
             allowance.release(&call.id).await;
             return d.into();
         }
     };
-    let ev = crate::unfurl::fetch(&me.remote, &me.store, url.as_str(), on, name.map(FileName::into_string), user.principal().to_string()).await;
-    match ev {
-        MediaEvent::Refused { .. } | MediaEvent::Error { .. } => allowance.release(&call.id).await,
-        _ => allowance.commit(&call.id, None).await,
+    let got = crate::unfurl::fetch_bytes(&me.remote, url.as_str(), name.map(FileName::into_string)).await;
+    let (bytes, name) = match got {
+        Ok(g) => g,
+        Err(ev) => {
+            allowance.release(&call.id).await;
+            allowance.release(&read.id).await;
+            return ev;
+        }
+    };
+    allowance.commit(&call.id, None).await;
+    let size = bytes.len() as u64;
+    let kept = match allowance.reserve(user.principal(), source::BYTES, size).await {
+        Ok(r) => r,
+        Err(d) => {
+            allowance.release(&read.id).await;
+            return d.into();
+        }
+    };
+    let put = me.store.put_bytes(on, bytes, name, Some(user.principal().to_string()), kinds::PUT_MAX).await;
+    match &put {
+        Ok(_) => allowance.commit(&read.id, Some(size)).await,
+        Err(_) => allowance.release(&read.id).await,
     }
-    settle(allowance.as_ref(), &bytes.id, &ev).await;
-    ev
+    settle(allowance.as_ref(), &kept.id, put.as_ref().ok()).await;
+    stored(&put)
 }
 
 /// EDITOR-10: every hour while the store lives, uploads untouched for a day
