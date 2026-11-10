@@ -72,6 +72,7 @@
   import MMockup from "plexus-ui:m-mockup";
   import MLive from "plexus-ui:m-live";
   import MPage from "plexus-ui:m-page";
+  import MDetails from "plexus-ui:m-details";
   import TagComponents from "plexus-ui:tag-components";
   import TicketPills from "plexus-ui:ticket-pills";
   import ComponentDef from "plexus-ui:component-def";
@@ -219,6 +220,8 @@
       // EDITOR-14, COMPS-3: a body of raw HTML, framed whole — its markdown and its HTML in one frame.
       ["m-page", MPage, (t) => ({ source: "## A raw body\n\n<div class=\"note\" style=\"padding:8px;border:1px solid\">raw HTML, framed</div>\n\nAnd **markdown** around it." }), [], {}],
       // COMPS-4: a tag's table (no markup of its own), and a ```component definition's line under its block.
+      // EDITOR-22: a fold's line (ticket-view places it in a body; here alone): closed, and open as `checked`.
+      ["m-details", MDetails, (t) => ({ summary: `The kiln is **loaded**; \`cone 6\` next.`, status: "running", ticket: t }), ["hover", "focus", "checked"], { checked: { summary: "Fired once, glazed twice.", status: "done", open: true } }],
       ["tag-components", TagComponents, (t) => ({}), [], {}],
       ["ticket-pills", TicketPills, (t) => ({}), [], {}],
       ["component-def", ComponentDef, (t) => ({ name: "x-hello", source: "<p class=\"x-hello\">hello</p>\n" }), [], { html: { name: "x-card", source: "<div>a card</div>\n", html: true } }],
