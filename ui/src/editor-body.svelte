@@ -133,7 +133,7 @@
 </script>
 
 <script>
-  import { getAllContexts, mount, tick, unmount, untrack } from "svelte";
+  import { getAllContexts, mount, setContext, tick, unmount, untrack } from "svelte";
   import { bus, live } from "plexus-ui/host";
   import { ticketHref } from "./ticket-links.svelte";
   import TicketView, { blocks, pieceClass, refDefs } from "./ticket-view.svelte";
@@ -163,6 +163,9 @@
   // COMPS-2: the blocks it mounts draw their pages through the bus (page-frame), so they get its context.
   // EDITOR-20: every block drawn here gives its ticket ids as pills (ticket-pills), the blocks it mounts too.
   providePills();
+  // COMPS-16: the drawn blocks' tags are told what they sit in — this ticket or doc, in the editor (a
+  // tweet-writer here is drawn only: the caret's block is its source, and this editor saves the body).
+  setContext("menger:body-of", () => ({ kind: isDoc ? "doc" : "ticket", id: doc_id, editor: true }));
   const contexts = getAllContexts();
   const PAUSE = 600;
 
@@ -429,7 +432,7 @@
   /** A block away from the caret: ticket-view's drawing of it. A click enters it at the clicked place. */
   class Drawn extends WidgetType {
     constructor(piece, defs, hand) { super(); this.piece = piece; this.text = piece.text; this.defs = defs; this.hand = hand; }
-    eq(o) { return o.text === this.text && o.defs === this.defs && o.hand === this.hand && pieceClass(o.piece) === pieceClass(this.piece) && o.piece.wrap?.open === this.piece.wrap?.open && o.piece.wrap?.close === this.piece.wrap?.close; }
+    eq(o) { return o.text === this.text && o.defs === this.defs && o.hand === this.hand && pieceClass(o.piece) === pieceClass(this.piece) && o.piece.wrap?.open === this.piece.wrap?.open && o.piece.wrap?.close === this.piece.wrap?.close && o.piece.src?.n === this.piece.src?.n; }
     toDOM(v) {
       const d = document.createElement("div");
       d.className = pieceClass(this.piece);

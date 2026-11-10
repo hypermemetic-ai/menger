@@ -40,6 +40,7 @@
      nothing; a framed page does not. -->
 <script module>
   import { PAGE_TAG, WHOLE, fencePage, pageEnd, pageSpec, holdsRaw } from "./m-mockup.svelte";
+  import { openName, closeLine, tagSpans } from "./tag-source.svelte";
 
   export const uses = [];
 
@@ -58,6 +59,13 @@
   /** EDITOR-22: a piece that is one `<m-details>` whole — its open tag, what it holds, its close. */
   const DETAILS = new RegExp(`^(<m-details${ATTRS}>)([^]*)(<\\/m-details>)\\s*$`);
   const blank = (l) => l.trim() === "";
+  /** COMPS-16: the line after the close of the block-form tag opened on line `i` (tag-source), if it closes before `hi`; else -1. */
+  function srcEnd(lines, i, hi) {
+    const name = openName(lines[i]);
+    if (!name) return -1;
+    const z = closeLine(lines, i, name);
+    return z > 0 && z <= hi ? z : -1;
+  }
 
   /** The line after the fence opened at `i` closes (or the end). */
   function fenceEnd(lines, i) {
@@ -98,8 +106,13 @@
       return [{ from, to: text.length, text: text.slice(from), part: false, page: true }];
     }
     scan(lines, at, text, 0, lines.length, null, out);
+    // COMPS-16: a tag's place among the body's tags of its name — tag-source's count, the one a save finds it by.
+    if (out.some((p) => p.src)) {
+      const spans = new Map(tagSpans(text).map((s) => [s.from, s]));
+      for (const p of out) if (p.src) { const s = spans.get(p.from); if (s && s.name === p.src.name) p.src.n = s.n; }
+    }
     // EDITOR-14: raw HTML anywhere (outside code and page blocks): the body is one piece, framed whole.
-    if (raw && out.some((p) => !p.page && !FENCE.test(p.text) && !/^(?: {4}|\t)/.test(p.text) && holdsRaw(p.text))) {
+    if (raw && out.some((p) => !p.page && !p.src && !FENCE.test(p.text) && !/^(?: {4}|\t)/.test(p.text) && holdsRaw(p.text))) {
       const from = out[0].from;
       return [{ from, to: text.length, text: text.slice(from), part: false, page: true, raw: true }];
     }
@@ -137,6 +150,10 @@
       const house = HOUSE_OPEN.exec(lines[i]);
       const closes = house ? houseEnd(lines, i, house[1]) : -1;
       if (FENCE.test(lines[i])) { piece(i, Math.min(fenceEnd(lines, i), hi), fencePage(lines[i].replace(FENCE, "")) ? { page: true } : undefined); i = fenceEnd(lines, i); continue; }
+      // COMPS-16: a tag in block form (its open line and its close line each alone, tag-source) is one piece,
+      // whole, its blank lines too — `src`, so its component is handed its own source (`blocks()` gives its place).
+      const tagEnd = srcEnd(lines, i, hi);
+      if (tagEnd > 0) { piece(i, tagEnd, { src: { name: openName(lines[i]) } }); i = tagEnd; continue; }
       if (house && closes > 0 && closes <= hi) {
         const own = { open: lines[i], close: lines[closes - 1], tag: house[1] };
         // A mark inside a mark: one piece, drawn whole inside its parent — unless it holds a page (a mockup in a
@@ -162,6 +179,7 @@
       end = i;
       while (end < hi && !blank(lines[end])) {
         if (end > i && FENCE.test(lines[end])) { end = Math.min(fenceEnd(lines, end), hi); continue; }
+        if (end > i && srcEnd(lines, end, hi) > 0) break; // COMPS-16: a tag in block form starts its own piece
         end++;
       }
       // A continuation after blank lines: an indented line, or the next item of a list this block began.
@@ -212,9 +230,12 @@
   export function pieceSource(p) {
     // EDITOR-22: a fold's inside is markdown however it was written (its open and close each a line of their own).
     if (p.det) { const m = DETAILS.exec(p.text); if (m) return `${m[1]}\n\n${m[2].trim()}\n\n${m[3]}`; }
-    if (!p.wrap) return p.text;
+    // COMPS-16: a tag in block form holding a blank line is drawn as its open and close lines alone — the
+    // markdown would end its HTML at the blank line and tear the tag; its component is handed its source.
+    const text = p.src && /\n[ \t]*\n/.test(p.text) ? `${p.text.slice(0, p.text.indexOf("\n"))}\n${p.text.slice(p.text.lastIndexOf("\n") + 1)}` : p.text;
+    if (!p.wrap) return text;
     if (p.h === "open" || p.h === "close") return `${p.wrap.open}\n\n${p.wrap.close}`;
-    return `${p.wrap.open}\n\n${p.text}\n\n${p.wrap.close}`;
+    return `${p.wrap.open}\n\n${text}\n\n${p.wrap.close}`;
   }
   /** COMPS-3: the tag a page piece (`page: true`) is drawn as — `m-page` for a body framed whole (`raw`),
    *  `m-live` for `<m-live>` and ```live, else `m-mockup` (`<m-mockup>`, the page fences, a whole page). */
@@ -278,12 +299,22 @@
   // with no card of its own (an unknown `m-*`, a custom tag kept as `m-el`, a known inline mark used as
   // a box) is marked `any`: its words drawn in a neutral box, captioned by its label, name, title or
   // field — the tag's own name when it holds no words at all; inline among words, a caption beside them.
-  function enhance(node, src) {
+  // COMPS-16: the body this draws sits in — `{ kind: ticket | doc, id, editor }`, from the context ticket-body
+  // and editor-body give (none elsewhere: a preview, a revision); handed to a drawn tag with its own source.
+  const bodyOf = getContext("menger:body-of") ?? null;
+  function enhance(node, given) {
     let placed = [];
     let tags = null;
     let pills = null;
+    let key = null;
     const clear = () => { pills?.destroy(); pills = null; tags?.destroy(); tags = null; for (const p of placed) { unmount(p.app); p.at.remove(); } placed = []; };
-    const place = (text) => {
+    // The piece (`{ text, src? }`): drawn again only when its text or its tag's place moves.
+    const place = (q) => {
+      const k = `${q.src?.n ?? ""}\u0000${pieceSource(q)}\u0000${q.text}`;
+      if (k === key) return;
+      key = k;
+      const text = q.text;
+      const src = q.src ? { ...q.src, source: q.text } : null;
       clear();
       const top = !node.parentElement?.matches?.(".h-mid, .h-close"); // a card's caption once, on its top piece
       for (const e of node.querySelectorAll("*")) {
@@ -324,23 +355,34 @@
       // COMPS-4: each ```component fence's save, said under its card; each tag drawn by its component.
       // COMPS-8: the card is closed; its line names the component and opens its source.
       placed.push(...defLines(node, text, (at, d, card) => mount(DefLine, { target: at, props: { name: d.name, source: d.source, html: d.html, v1: d.v1, card } })));
-      tags = drawTags(node);
+      tags = drawTags(node, { src, of: bodyOf?.() ?? null });
       // EDITOR-22: each `<m-details summary>` a line that opens; before the pills, so its sentence's ids are.
       for (const d of foldDetails(node)) placed.push({ at: d.at, app: mount(MDetails, { target: d.at, props: d.props }) });
       // EDITOR-20: last, so a code card, a diagram and a drawn tag are already what they are (none holds a pill).
       pills = drawPills?.(node) ?? null;
     };
-    place(src);
-    return { update: place, destroy: clear };
+    place(given);
+    return { update: place, destroy: () => { key = null; clear(); } };
   }
 
   let { body = "", title = null, status = null, edit = null, titleEdit = null, block = false, piece = null, defs: given = null } = $props();
 
-  const parts = $derived(edit || block ? [] : blocks(body));
+  // COMPS-16: each piece keyed by what it is (its text, its mark's line, which of the same it is), not by its
+  // offset — so a write elsewhere in the body (a writer above saving) leaves a piece and what is drawn in it be.
+  const parts = $derived.by(() => {
+    if (edit || block) return [];
+    const seen = new Map();
+    return blocks(body).map((p) => {
+      const t = `${p.wrap?.open ?? ""}\u0000${p.h ?? ""}\u0000${p.text}`;
+      const c = seen.get(t) ?? 0;
+      seen.set(t, c + 1);
+      return { ...p, k: `${t}\u0000${c}` };
+    });
+  });
   const defs = $derived(block ? given ?? "" : edit ? "" : refDefs(body));
 </script>
 
-{#snippet drawn(p)}{#if p.page}{@const Tag = TAGS[pageTag(p)]}<div class="blk-in"><Tag source={p.text} pieces={p.raw ? rawPieces(p.text) : null}/></div>{:else}<div class="blk-in" use:enhance={p.text}>{@html markdown(mediaLinks(pieceSource(p)) + defs)}</div>{/if}{/snippet}
+{#snippet drawn(p)}{#if p.page}{@const Tag = TAGS[pageTag(p)]}<div class="blk-in"><Tag source={p.text} pieces={p.raw ? rawPieces(p.text) : null}/></div>{:else}<div class="blk-in" use:enhance={p}>{@html markdown(mediaLinks(pieceSource(p)) + defs)}</div>{/if}{/snippet}
 
 <TagTable/>{#if block}{@render drawn(piece ?? { text: body })}{:else}
 <article class="ticket-view" data-surface="ticket-view" data-editing={edit ? "" : undefined}>
@@ -356,7 +398,7 @@
   {:else if !body}
     <p class="empty" data-field="body" data-empty>No body yet.</p>
   {:else}
-    <div class="md" data-field="body" data-ticket-body>{#each parts as p (p.from)}<div class={pieceClass(p)} data-block data-tag={p.wrap?.tag} data-page={p.page ? "" : undefined}>{@render drawn(p)}</div>{/each}</div>
+    <div class="md" data-field="body" data-ticket-body>{#each parts as p (p.k)}<div class={pieceClass(p)} data-block data-tag={p.wrap?.tag} data-page={p.page ? "" : undefined}>{@render drawn(p)}</div>{/each}</div>
   {/if}
 </article>{/if}
 

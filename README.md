@@ -274,6 +274,34 @@ its props, its children its `body`, and the table follows `ui.watch`, so a
 definition edited redraws every ticket using it. A tag nothing names keeps
 its words, "no component named x" on hover. `tests/pages/components.mjs`.
 
+**A tag that saves itself** (COMPS-16). A tag in block form — its open line
+and its close line each alone, outside a fence (`ui/src/tag-source.svelte`,
+real Svelte, svelte/1)
+— is one block of the body, whole, its blank lines too; a native component
+drawn from it is handed its `source` (the tag's text), its `children` as
+structure (`[{ tag, attrs, text }]`; any other native tag gets them from the
+drawn DOM), `n` (its place among the body's tags of its name), and the
+`ticket` or `doc` it sits in (`editor` when in the editor). `tweet-writer`
+is one: its content is a thread,
+
+```html
+<tweet-writer>
+<tweet-post video="media:<64 hex>" name="clip.mp4">words
+
+a second paragraph</tweet-post>
+<tweet-post>more</tweet-post>
+</tweet-writer>
+```
+
+drawn as a post composer (each post's count against 280 by code points, its
+video, up, down, remove, +) and saved by rewriting that one tag: `save` (or
+ctrl/⌘+s inside it) reads the body (`tickets.get`), finds its `n`th
+`tweet-writer`, and only while that is still the source it was drawn from
+replaces it and writes the body (`tickets.amend`), every other byte kept;
+else it refuses, saying so. Words are written escaped (`&`, `<`). In the
+editor, in a document, or with no ticket known it is drawn only, and says
+so. `tests/pages/writer.mjs`.
+
 **v1's definitions** (COMPS-5). A fence with no `html` holding v1's custom
 element — a `<template>`, or a script reading `this.root`, `this.menger` or
 `this.attr` (rhx drops `<template>`; its own `<script>` and `<style>` say
@@ -1626,14 +1654,7 @@ its key strip), `page-new`, `page-search`, `page-ready` and `page-waves`
 (full-height columns: the list scrolls in its own box under its bar), `page-filters`,
 `page-orgs`, `page-releases`, `page-sheet` (V2-25: `page-epics` and `page-me` went); `page-bulk`, `page-blockers`,
 `page-edit`, `page-actions`, `page-facets` and `page-counts` draw one
-component alone for its browser cases; `page-thread` (COMPS-15, `#/thread/:id`) draws
-`tweet-thread` alone — a ticket's body as a thread laid out like a post
-composer, MENGER-52's form (the text before the first `## Post N` kept as
-it is, each `## Post N` a post, a `[name](media:<hash>)` line alone its
-video, any other heading and what follows kept as it is), each post's count
-against 280, saved to the body by `tickets.amend` when asked; as a tag,
-`<tweet-thread id="X"></tweet-thread>`, it draws natively in any body
-(`tests/pages/thread.mjs`). A placed component keeps its
+component alone for its browser cases. A placed component keeps its
 behaviour and its look and loses the page's chrome to the page — the board
 link and the jump button (app-top's), the page's title, the palette's mark;
 `tests/apart.rs` holds it to that.

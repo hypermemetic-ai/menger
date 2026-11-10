@@ -9,6 +9,7 @@
 </script>
 
 <script>
+  import { setContext } from "svelte";
   import { bus, live } from "plexus-ui/host";
   import TicketView from "./ticket-view.svelte";
   // EDITOR-20: the bodies drawn below give their ticket ids as pills (ticket-pills).
@@ -17,6 +18,8 @@
   import { drawMedia } from "./media-draw.svelte";
 
   let { id } = $props();
+  // COMPS-16: what ticket-view's drawn tags sit in — this ticket (a tweet-writer saves itself back into it).
+  setContext("menger:body-of", () => ({ kind: "ticket", id }));
   const ticket = live({ snapshot: "tickets.get", params: () => ({ id }), changes: "tickets.watch", key: "id",
                         on: { amended: "upsert:ticket", status_changed: "upsert:ticket", kind_changed: "upsert:ticket", updated: "upsert:ticket",
                               labels_changed: "upsert:ticket", severity_changed: "upsert:ticket", frozen_changed: "upsert:ticket", hidden_changed: "upsert:ticket",
