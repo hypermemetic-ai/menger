@@ -271,10 +271,9 @@ Every open page hot-swaps on the next push. `scripts/ui-throwaway.mjs` and `test
 do all of this from code.
 
 **5. Ship.** Commit the source (`ui/src`, `routes.json`, `slots.json`; `dist/`
-is never committed), merge to `v2` with `--no-ff`, and deploy to test: the
-runner deploys its branch's tip (`MENGER_RUNNER_BRANCH`; while it is `main`,
-run v2's by hand — `deploy/pipeline build --branch v2 --no-gate`, then
-`image`, then `remote test --image …`). The deploy builds the bundle and
+is never committed), merge to `v2` with `--no-ff`, and deploy to test by
+hand — `deploy/pipeline build --branch v2 --no-gate`, then `image`, then
+`remote test --image …`. The deploy builds the bundle and
 pushes it as the `pipeline` key, the only signer on app-test; every open page
 there hot-swaps to it.
 
@@ -300,7 +299,7 @@ deploy/pipeline suite R                       # the full suite at R's commit, on
                                               # scenario against its golden); marks R passed / failed
 deploy/pipeline remote prod                   # what test runs → app.menger.sh, only once its suite passed; the owner's
 deploy/pipeline local --image menger:R        # RUN-25: the image on 127.0.0.1:4470/4471, a CI throwaway
-deploy/pipeline status                        # what test and prod run, their suites, the runner and its branch
+deploy/pipeline status                        # what test and prod run, and their suites
 deploy/pipeline releases                      # every release: its suite, tested?, where it runs
 ```
 
@@ -331,16 +330,11 @@ deploy/pipeline releases                      # every release: its suite, tested
   2026-10-17; DEPLOY-22): the merge links its commit and leaves the ticket
   In Review; the deploy to test that carries it sets Complete. Work in a
   repository with no environment (`repo@hash`) is Complete at its merge.
-- **Test is automatic; prod is the owner's** (DEPLOY-48). The deploy
-  runner (`deploy/runner.mjs`) watches the tracker: a MENGER ticket entering
-  In Review, or a commit linked to one there, files a test request for the
-  tip of **the runner's branch** — `MENGER_RUNNER_BRANCH` in
-  `~/.config/menger/deploy-runner.env` (default `main`; V2-7) — debounced
-  60 s, one run at a time. The run is build → image → app-test.menger.sh →
-  the suite; a red one is posted on the tracker with a gap blocking the
-  triggering tickets (CI-3). So a builder merges `--no-ff`, links, sets In
-  Review, and runs no deploy; never squash or rebase on merge.
-  `MENGER_RUNNER_AUTO_TEST=0` turns it off.
+- **Test is the builder's, by hand; prod is the owner's.** Nothing deploys
+  on its own (owner, 2026-11-10: the deploy runner is fully down): a builder
+  merges `--no-ff` (never squash or rebase on merge), links, sets In Review,
+  then runs `build --branch v2 --no-gate` → `image` → `remote test`, and the
+  suite after it; a red suite keeps the release from prod.
 - 2026-10-29: test runs v2, release `20261029T114133Z-06aeff5`; prod runs
   v1 and is the tracker.
 
