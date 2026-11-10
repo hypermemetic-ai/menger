@@ -688,3 +688,61 @@ async fn an_agents_key_has_its_own_connection_limit_and_an_admin_none() {
         admins.push(c);
     }
 }
+
+/// V2-70: `quota.history` — a point per source per day, then `end`: today's
+/// is what `usage` says now, the days before nothing; another's, or
+/// everyone's, an admin's of `*` (the system's sum per day); `days` typed
+/// (1 to 730). Each store answers by day (`daily: true`), what the recount
+/// backfills the past from — summed, what it answers whole.
+#[tokio::test]
+async fn history_is_a_point_a_day_yours_and_the_systems_an_admins() {
+    use base64::Engine;
+    let (admin, editor, _) = with_editor(None).await;
+    let me = support::principal_of(&EDITOR);
+    let body = "y".repeat(1000);
+    assert_eq!(one(&editor, "tickets.create", json!({"epic": "Q", "title": "kept", "body": body})).await["type"], "created");
+    let png = png(500);
+    one(&admin, "media.put", json!({"data": base64::engine::general_purpose::STANDARD.encode(&png)})).await;
+    let h = all(&editor, "quota.history", json!({"days": 3})).await;
+    let end = h.last().unwrap();
+    assert_eq!((end["type"].as_str(), end["principal"].as_str(), end["everyone"].as_bool(), end["days"].as_u64()), (Some("end"), Some(me.as_str()), Some(false), Some(3)), "{end}");
+    let points: Vec<&Value> = h.iter().filter(|e| e["type"] == "point").collect();
+    assert_eq!(points.len(), 3 * 9, "every source, every day");
+    let tb: Vec<&Value> = points.iter().copied().filter(|p| p["source"] == "tickets.bytes").collect();
+    let used = source(&one(&editor, "quota.usage", json!({})).await, "tickets.bytes")["used"].as_u64().unwrap();
+    assert_eq!(tb.iter().map(|p| p["used"].as_u64().unwrap()).collect::<Vec<_>>(), vec![0, 0, used], "today's is now; before, nothing");
+    assert_eq!((tb[2]["day"].as_str(), end["to"].as_str()), (end["to"].as_str(), tb[2]["day"].as_str()));
+    assert!(tb[2]["day"].as_str().unwrap().len() == 10 && !tb[2]["estimate"].as_bool().unwrap());
+    // One source alone.
+    let one_src = all(&editor, "quota.history", json!({"days": 2, "source": "tickets.count"})).await;
+    assert_eq!(one_src.iter().filter(|e| e["type"] == "point").map(|e| e["used"].as_u64().unwrap()).collect::<Vec<_>>(), vec![0, 1]);
+    // Another's, or everyone's: an admin's.
+    for asked in [json!({"principal": support::admin()}), json!({"everyone": true})] {
+        let r = one(&editor, "quota.history", asked.clone()).await;
+        assert_eq!(r["type"], "error", "{asked}: {r}");
+    }
+    let sys = all(&admin, "quota.history", json!({"everyone": true, "days": 1, "source": "media.bytes"})).await;
+    assert_eq!(sys[0]["used"].as_u64(), Some(png.len() as u64), "{sys:?}");
+    assert_eq!((sys[1]["everyone"].as_bool(), sys[1]["principal"].clone()), (Some(true), Value::Null));
+    let theirs = all(&admin, "quota.history", json!({"principal": me, "days": 1, "source": "tickets.bytes"})).await;
+    assert_eq!(theirs[0]["used"].as_u64(), Some(used));
+    // days is typed: past 730, refused before the method runs.
+    let bad = all(&editor, "quota.history", json!({"days": 731})).await;
+    assert!(bad.last().unwrap().to_string().contains("730"), "{bad:?}");
+    // The stores by day: summed, what they answer whole.
+    let today = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() / 86_400) as i64;
+    for (method, params) in [("tickets.revisions.usage", json!({})), ("media.usage", json!({"everyone": true})), ("docs.usage", json!({"everyone": true}))] {
+        let whole = all(&admin, method, params.clone()).await;
+        let mut daily_params = params.clone();
+        daily_params["daily"] = json!(true);
+        let by_day = all(&admin, method, daily_params).await;
+        for w in whole.iter().filter(|e| e["type"] == "usage") {
+            let days: Vec<&Value> = by_day.iter().filter(|d| d["type"] == "usage_day" && d["principal"] == w["principal"]).collect();
+            assert!(days.iter().all(|d| d["day"].as_i64() == Some(today)), "{method}: written today: {days:?}");
+            assert_eq!(days.iter().map(|d| d["bytes"].as_u64().unwrap()).sum::<u64>(), w["bytes"].as_u64().unwrap(), "{method}: {w}");
+        }
+    }
+    // The recount backfills nothing written today (only days before the first counted one).
+    let done = all(&admin, "quota.recount", json!({})).await.pop().unwrap();
+    assert_eq!(done["backfilled"].as_u64(), Some(0), "{done}");
+}

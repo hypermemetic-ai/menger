@@ -194,6 +194,31 @@ impl Seam {
     }
 }
 
+impl Seam {
+    /// V2-70: `method` asked by day (`params` with `daily: true`): each
+    /// `usage_day { principal, day, count? | files?, bytes? }` it yields, as
+    /// (principal, day, count, bytes).
+    pub async fn daily(&self, method: &str, params: &str) -> Result<Vec<(String, i64, u64, u64)>, String> {
+        let (service, system) = self.service().ok_or("the quota service is not attached to a running service")?;
+        let mut params: Value = serde_json::from_str(params).map_err(|e| e.to_string())?;
+        params["daily"] = json!(true);
+        let items = call(&service, &system, method, params).await?;
+        let mut out = Vec::new();
+        for v in &items {
+            match v["type"].as_str() {
+                Some("usage_day") => {
+                    if let (Some(p), Some(d)) = (v["principal"].as_str(), v["day"].as_i64()) {
+                        out.push((p.to_string(), d, v["count"].as_u64().or(v["files"].as_u64()).unwrap_or(0), v["bytes"].as_u64().unwrap_or(0)));
+                    }
+                }
+                Some("error") => return Err(v["message"].as_str().unwrap_or("refused").to_string()),
+                _ => {}
+            }
+        }
+        Ok(out)
+    }
+}
+
 /// The quota service as a [`Meter`]: what a writing service (tickets,
 /// media, docs, the shell's `/media/<hash>`) holds once the builder
 /// attaches the running service.

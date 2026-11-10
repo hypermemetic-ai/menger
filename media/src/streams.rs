@@ -175,12 +175,18 @@ pub(crate) async fn info(me: MediaActivation, user: Caller, hash: MediaHash) -> 
 }
 
 /// `media.usage`: what the caller has put.
-pub(crate) async fn usage(me: MediaActivation, user: Caller, (principal, everyone): (Option<String>, bool)) -> Vec<MediaEvent> {
+pub(crate) async fn usage(me: MediaActivation, user: Caller, (principal, everyone, daily): (Option<String>, bool, bool)) -> Vec<MediaEvent> {
     // V2-31: another's, or every uploader's, is an admin's of `*` — asked as
     // a grant no role but admin holds (the quota service's own).
     let mine = principal.as_deref().is_none_or(|p| p == user.principal()) && !everyone;
     if !mine && me.seam.held_everywhere(user.context(), "quota.set") != Some(true) {
         return vec![MediaEvent::Error { message: "another's usage, or every uploader's, is an admin of *'s".into() }];
+    }
+    if everyone && daily {
+        return match me.store.usage_daily().await {
+            Ok(rows) => rows.into_iter().map(|(principal, day, files, bytes)| MediaEvent::UsageDay { principal, day, files, bytes }).collect(),
+            Err(e) => vec![MediaEvent::Error { message: e.to_string() }],
+        };
     }
     if everyone {
         return match (me.store.usage_charged().await, me.store.unattributed().await) {

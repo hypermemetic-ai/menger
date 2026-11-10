@@ -312,6 +312,9 @@ pub enum DocsEvent {
     /// V2-31: `usage { everyone }` — what one principal's changes keep:
     /// the documents they made and the bytes they wrote.
     Usage { principal: String, count: u64, bytes: u64 },
+    /// V2-70: `usage { everyone, daily }` — what one principal's changes
+    /// kept on one UTC day (`day`: days since 1970-01-01).
+    UsageDay { principal: String, day: i64, count: u64, bytes: u64 },
     /// Any other in-band refusal, naming the problem; nothing was written.
     Error { message: String },
 }

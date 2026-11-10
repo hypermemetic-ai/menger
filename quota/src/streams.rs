@@ -6,6 +6,7 @@
 use crate::activation::QuotaActivation;
 use crate::caller::Caller;
 use crate::disk::{self, BoxState};
+use crate::ledger::history::{self, Whose};
 use crate::ledger::{self, Holder, Ledger, LedgerError, Line, Who};
 use crate::sources::{Unit, Window};
 use crate::vocab::{CapText, QuotaEvent, SourceUse};
@@ -286,7 +287,87 @@ pub(crate) fn recount(act: QuotaActivation, user: Option<Caller>, principal: Opt
         if drifted > 0 {
             tracing::warn!("V2-31: recount — {drifted} total(s) drifted from what the stores count, now set to the stores'");
         }
-        yield QuotaEvent::Recounted { principals: seen.len() as u32, drifted, sources: counted_sources, not_counted };
+        let (backfilled, unread) = backfill(&act, principal.as_deref()).await;
+        not_counted.extend(unread);
+        yield QuotaEvent::Recounted { principals: seen.len() as u32, drifted, sources: counted_sources, not_counted, backfilled };
+    }
+}
+
+/// V2-70: the history's past, laid back from each store by day (only the
+/// days before a principal's first counted point of a source; an
+/// estimate): how many points were written, and the stores that could not
+/// be asked, with why.
+async fn backfill(act: &QuotaActivation, only: Option<&str>) -> (u32, Vec<String>) {
+    let (mut written, mut unread) = (0u32, Vec::new());
+    let now = ledger::now();
+    for (method, params, count_src, bytes_src) in COUNTERS {
+        let rows = match act.seam.daily(method, params).await {
+            Ok(r) => r,
+            Err(why) => {
+                unread.push(format!("{method} by day (history not backfilled): {why}"));
+                continue;
+            }
+        };
+        for (src, pick) in [(count_src, 0), (bytes_src, 1)] {
+            let Some(src) = src else { continue };
+            for (p, cumulative) in cumulative(&rows, pick, only) {
+                let s = src.to_string();
+                if let Ok(Ok(n)) = blocking(&act.ledger, move |l| l.backfill(&p, &s, &cumulative, now)).await {
+                    written += n as u32;
+                }
+            }
+        }
+    }
+    (written, unread)
+}
+
+/// Each principal's (day, running total) from its per-day amounts (`pick`
+/// 0: the count, 1: the bytes), days ascending.
+fn cumulative(rows: &[(String, i64, u64, u64)], pick: u8, only: Option<&str>) -> std::collections::BTreeMap<String, Vec<(i64, u64)>> {
+    let mut by: std::collections::BTreeMap<String, std::collections::BTreeMap<i64, u64>> = std::collections::BTreeMap::new();
+    for (p, day, count, bytes) in rows.iter().filter(|r| only.is_none_or(|o| o == r.0)) {
+        *by.entry(p.clone()).or_default().entry(*day).or_default() += if pick == 0 { *count } else { *bytes };
+    }
+    by.into_iter()
+        .map(|(p, days)| {
+            let mut sum = 0u64;
+            (p, days.into_iter().map(|(d, n)| (d, { sum += n; sum })).collect())
+        })
+        .collect()
+}
+
+/// V2-70: `quota.history` — a point per source per day, then `end`; another
+/// principal's, or everyone's (the system's sum), an admin of `*`'s.
+pub(crate) fn history(act: QuotaActivation, user: Caller, (principal, everyone): (Option<String>, bool), source: Option<String>, days: u32) -> impl Stream<Item = QuotaEvent> + Send + 'static {
+    async_stream::stream! {
+        if everyone && principal.is_some() {
+            yield QuotaEvent::Error { message: "name a principal or everyone: true, not both".into() };
+            return;
+        }
+        let other = everyone || principal.as_deref().is_some_and(|p| p != user.principal());
+        if other && !act.seam.admin_everywhere(user.context()) {
+            yield admins_only("another principal's history, or everyone's,");
+            return;
+        }
+        let whose = match everyone {
+            true => Whose::Everyone,
+            false => Whose::One(principal.unwrap_or_else(|| user.principal().to_string())),
+        };
+        let (now, w) = (ledger::now(), whose.clone());
+        match blocking(&act.ledger, move |l| l.history(&w, source.as_deref(), days, now)).await {
+            Ok(Ok(points)) => {
+                let (from, to) = (points.first().map(|p| p.day), points.last().map(|p| p.day));
+                for p in points {
+                    yield QuotaEvent::Point { day: history::date(p.day), source: p.source.to_string(), used: p.used, estimate: p.estimate };
+                }
+                let today = now.div_euclid(history::DAY);
+                let (from, to) = (history::date(from.unwrap_or(today)), history::date(to.unwrap_or(today)));
+                let principal = match whose { Whose::One(p) => Some(p), Whose::Everyone => None };
+                yield QuotaEvent::End { principal, everyone, from, to, days };
+            }
+            Ok(Err(e)) => yield e.into(),
+            Err(message) => yield QuotaEvent::Error { message },
+        }
     }
 }
 

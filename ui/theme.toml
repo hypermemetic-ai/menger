@@ -98,6 +98,14 @@
 "--diff-del-bg" = ['#fbe7e7', '#3a1b1d', 'a removed line']
 "--diff-del-fg" = ['#a3262f', '#f09a9a', "a removed line's text, the −N"]
 
+[colour.chart]   # V2-70: a chart's series, in this fixed order (never cycled; a fourth folds or facets) — the dataviz skill's
+                 # categorical slots 1–3 (blue, orange, aqua), slot 1 light on menger's accent, validated by its
+                 # validate_palette.js against --panel: light #ffffff all checks pass (aqua 2.8:1 — relief: the legend,
+                 # the tooltip and the table view), dark #1c1b19 all pass; adjacent and all-pairs alike
+"--chart-1" = ['#3b5bdb', '#3987e5', "a chart's first series (files kept; fetched)"]
+"--chart-2" = ['#eb6834', '#d95926', "a chart's second series (tickets; served)"]
+"--chart-3" = ['#1baf7a', '#199e70', "a chart's third series (documents)"]
+
 [type]
 "--font-text"     = ['"Geist Mono", ui-monospace, monospace', '"Geist Mono", ui-monospace, monospace', 'the app']
 "--font-display"  = ['"Geist", system-ui, sans-serif', '"Geist", system-ui, sans-serif', "a ticket's title"]

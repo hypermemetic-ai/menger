@@ -21,6 +21,32 @@ pub struct Revisions {
     pub(super) access: Access,
 }
 
+/// `usage` — each author's, or (V2-70, `daily`) each author's by day.
+#[cfg(feature = "server")]
+fn usage_stream(store: Arc<Store>, user: VerifiedUser, principal: Option<String>, daily: bool) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    stream! {
+        if daily {
+            match store.revision_usage_daily(&user).await {
+                Ok(rows) => {
+                    for (p, day, count, bytes) in rows.into_iter().filter(|r| principal.as_ref().is_none_or(|w| *w == r.0)) {
+                        yield TicketsEvent::UsageDay { principal: p, day, count, bytes };
+                    }
+                }
+                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
+            }
+            return;
+        }
+        match store.revision_usage(&user, principal).await {
+            Ok(rows) => {
+                for (principal, count, bytes) in rows {
+                    yield TicketsEvent::Usage { principal, count, bytes };
+                }
+            }
+            Err(e) => yield TicketsEvent::Error { message: e.to_string() },
+        }
+    }
+}
+
 /// `list` — the page, then `revisions_end`.
 #[cfg(feature = "server")]
 fn list_stream(store: Arc<Store>, caller: VerifiedUser, id: String, before: Option<u32>, limit: Option<u32>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
@@ -214,17 +240,9 @@ impl Revisions {
         #[from_auth(self.access.verify)] user: VerifiedUser,
         /// Only this principal, e.g. key:4b1c… (optional: every author).
         principal: Option<crate::vocab::Principal>,
+        /// V2-70: by the day it was written — usage_day { principal, day, count, bytes } per author and day (what quota history is backfilled from).
+        daily: Option<bool>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        let store = self.store.clone();
-        stream! {
-            match store.revision_usage(&user, principal.map(|p| p.to_string())).await {
-                Ok(rows) => {
-                    for (principal, count, bytes) in rows {
-                        yield TicketsEvent::Usage { principal, count, bytes };
-                    }
-                }
-                Err(e) => yield TicketsEvent::Error { message: e.to_string() },
-            }
-        }
+        usage_stream(self.store.clone(), user, principal.map(|p| p.to_string()), daily.unwrap_or(false))
     }
 }

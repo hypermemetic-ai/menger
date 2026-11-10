@@ -205,9 +205,11 @@ impl MediaActivation {
         principal: Option<menger_tickets_api::vocab::Principal>,
         /// true: every keeper, then what no one is charged for (an admin of *'s).
         everyone: Option<bool>,
+        /// V2-70, with everyone: by the day each file was first kept — usage_day { principal, day, files, bytes } (what quota history is backfilled from).
+        daily: Option<bool>,
     ) -> impl Stream<Item = MediaEvent> + Send + 'static {
         use futures::StreamExt;
-        let asked = (principal.map(|p| p.to_string()), everyone.unwrap_or(false));
+        let asked = (principal.map(|p| p.to_string()), everyone.unwrap_or(false), daily.unwrap_or(false));
         futures::stream::once(crate::streams::usage(self.clone(), user, asked)).flat_map(futures::stream::iter)
     }
 

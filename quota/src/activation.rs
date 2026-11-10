@@ -5,15 +5,15 @@
 //!
 //! **Who may.** The seam's four (`reserve`, `commit`, `release`, `credit`)
 //! are in no role: only an admin of `*` holds them — the server's own
-//! caller, which every service asks as. `usage` is everyone's (their own;
-//! an admin of `*` names anyone). `table`, `set` and `recount` are an
-//! admin's of `*`.
+//! caller, which every service asks as. `usage` and (V2-70) `history` are
+//! everyone's (their own; an admin of `*` names anyone, or everyone).
+//! `table`, `set` and `recount` are an admin's of `*`.
 
 use crate::caller::{Caller, Callers, QuotaRequest};
 use crate::disk::DiskUsage;
 use crate::ledger::Ledger;
 use crate::seam::Seam;
-use crate::vocab::{CapText, HoldTicket, OrgRef, PrincipalName, QuotaEvent, SortKey, SourceName, TeamRef};
+use crate::vocab::{CapText, HistoryDays, HoldTicket, OrgRef, PrincipalName, QuotaEvent, SortKey, SourceName, TeamRef};
 use futures::Stream;
 use std::sync::Arc;
 
@@ -49,7 +49,7 @@ impl QuotaActivation {
     request = QuotaRequest,
     typed_params,
     roles(
-        viewer = ["usage"],
+        viewer = ["usage", "history"],
         editor = [viewer],
     )
 )]
@@ -139,6 +139,35 @@ impl QuotaActivation {
         futures::stream::once(crate::streams::usage(self.clone(), user, principal.map(PrincipalName::into_string)))
     }
 
+    /// Your consumption over time: a point per source per UTC day, oldest first, then end; an admin of * names anyone, or everyone (the system's sum per day).
+    ///
+    /// V2-70: one `point { day, source, used, estimate }` per source (or
+    /// only `source`) per day of the last `days` (90 unless said; at most
+    /// 730) to today — a total source's amount at the day's end (today's:
+    /// now), carried over days nothing moved; a day's counter (fetches,
+    /// served) its day's total. `estimate` marks a day before the ledger
+    /// counted it, backfilled by the recount from the stores (media's files
+    /// by when each was kept, documents' changes, tickets' revisions: what
+    /// they keep now, laid back along when it was written). Then `end {
+    /// principal, everyone, from, to, days }`. Anyone signed in, for
+    /// themselves.
+    #[plexus_rpc::macros::method(group = "read", example(note = "mine, the last 30 days", params = r#"{"days": 30}"#), example(note = "the system's stored bytes, a year (admin of *)", params = r#"{"everyone": true, "source": "media.bytes", "days": 365}"#))]
+    pub async fn history(
+        &self,
+        #[from_auth(self.callers.verify)] user: Caller,
+        /// Whose (optional: yours; anyone else's is an admin of *'s).
+        principal: Option<PrincipalName>,
+        /// One source, e.g. media.bytes (optional: every source).
+        source: Option<SourceName>,
+        /// How many days to today, 1 to 730 (optional: 90).
+        days: Option<HistoryDays>,
+        /// true: the system's — every principal's, summed per day (an admin of *'s).
+        everyone: Option<bool>,
+    ) -> impl Stream<Item = QuotaEvent> + Send + 'static {
+        let whose = (principal.map(PrincipalName::into_string), everyone.unwrap_or(false));
+        crate::streams::history(self.clone(), user, whose, source.map(SourceName::into_string), days.map_or(90, HistoryDays::get))
+    }
+
     /// Everyone's usage and caps, the tabulation (admin of *): box, then one usage per principal, sorted, then total.
     ///
     /// First `box { used_percent, warn_percent, full_percent, state }` —
@@ -200,7 +229,9 @@ impl QuotaActivation {
     /// counted }` per one that moved, then `recounted { principals,
     /// drifted, sources, not_counted }` — a store that has no such method
     /// yet is named in `not_counted`, with why. Daily sources are not
-    /// recounted. The server runs one every night.
+    /// recounted. The server runs one every night. V2-70: and backfills the
+    /// history — each store asked by day (`daily: true`), the days before a
+    /// principal's first counted point kept as estimates (`backfilled`: how many).
     #[plexus_rpc::macros::method(group = "admin")]
     pub async fn recount(
         &self,
