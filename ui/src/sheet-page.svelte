@@ -71,6 +71,7 @@
   import MLive from "plexus-ui:m-live";
   import MPage from "plexus-ui:m-page";
   import TagComponents from "plexus-ui:tag-components";
+  import TicketPills from "plexus-ui:ticket-pills";
   import ComponentDef from "plexus-ui:component-def";
   import CodePaint from "plexus-ui:code-paint";
   import CodeRust from "plexus-ui:code-rust";
@@ -214,6 +215,7 @@
       ["m-page", MPage, (t) => ({ source: "## A raw body\n\n<div class=\"note\" style=\"padding:8px;border:1px solid\">raw HTML, framed</div>\n\nAnd **markdown** around it." }), [], {}],
       // COMPS-4: a tag's table (no markup of its own), and a ```component definition's line under its block.
       ["tag-components", TagComponents, (t) => ({}), [], {}],
+      ["ticket-pills", TicketPills, (t) => ({}), [], {}],
       ["component-def", ComponentDef, (t) => ({ name: "x-hello", source: "<p class=\"x-hello\">hello</p>\n" }), [], { html: { name: "x-card", source: "<div>a card</div>\n", html: true } }],
       ["code-paint", CodePaint, (t) => ({ code: "plain text, no language" }), [], {}],
       ["code-rust", CodeRust, (t) => ({ code: "fn main() { let x: u32 = 1; }" }), [], {}],
