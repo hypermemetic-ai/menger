@@ -18,6 +18,9 @@
   // COMPS-5 (the owner, 2026-11-05: "all tickets are the same surface. doc or not. they all need the exact same
   // rendering capabilites"): a body is drawn by ticket-view, here as everywhere.
   import TicketView from "./ticket-view.svelte";
+  // EDITOR-20: the bodies drawn below give their ticket ids as pills (ticket-pills).
+  import PillTable, { providePills } from "./ticket-pills.svelte";
+  providePills();
   import Chip from "./ticket-chip-sv.svelte";
   import Picker from "plexus-ui:ticket-picker";
   import { authorChanged } from "./tag-components.svelte";
@@ -203,7 +206,7 @@
             </div>
             <div class="te-pane">
               <div class="te-pane-h">preview</div>
-              <div class="te-prev" data-field="preview" data-preview><TicketView body={draft.body}/></div>
+              <div class="te-prev" data-field="preview" data-preview><PillTable/><TicketView body={draft.body}/></div>
             </div>
           </div>
           <div class="te-act">

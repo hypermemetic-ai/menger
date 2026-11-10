@@ -33,7 +33,11 @@
      `holdsRaw`, outside fences and page blocks — v1's `is_framed`; the owner: "also
      you know that v1 could just host raw html inside a frame right?") is one piece,
      `raw: true`, the whole body drawn in one frame by m-page (its markdown
-     around the raw HTML, a page block in it a nested sandboxed frame). -->
+     around the raw HTML, a page block in it a nested sandboxed frame).
+     EDITOR-20: every block's drawn text is given its ticket ids as pills, after the markdown and its
+     sanitizer, by the pass ticket-pills provides through a context (`providePills`) — so the ticket page,
+     the editor's drawn blocks, a document, a revision and a preview draw them, and this file still calls
+     nothing; a framed page does not. -->
 <script module>
   import { PAGE_TAG, WHOLE, fencePage, pageEnd, pageSpec, holdsRaw } from "./m-mockup.svelte";
 
@@ -247,6 +251,11 @@
   import TagTable, { drawTags, defLines, houseOwns } from "./tag-components.svelte";
   import DefLine from "./component-def.svelte";
   houseOwns([...CARDS, ...INLINE, ...Object.keys(TAGS)]);
+  // EDITOR-20: each ticket id in the drawn text a pill, made from the text after the sanitizer, never as HTML —
+  // the pass ticket-pills provides (`providePills`) to what a reader of tickets places this in; with none
+  // (this file alone in a bundle, SURFACE-16: no call of menger's) the text is drawn as it is.
+  import { getContext } from "svelte";
+  const drawPills = getContext("menger:ticket-pills") ?? null;
 
   // EDITOR-9: what the markdown drew, finished. Each ```mermaid fence (a bare one, or one inside a
   // house mark) gets the diagram's bound mark before it — its own module, fetched the first time one is
@@ -257,7 +266,8 @@
   function enhance(node, src) {
     let placed = [];
     let tags = null;
-    const clear = () => { tags?.destroy(); tags = null; for (const p of placed) { unmount(p.app); p.at.remove(); } placed = []; };
+    let pills = null;
+    const clear = () => { pills?.destroy(); pills = null; tags?.destroy(); tags = null; for (const p of placed) { unmount(p.app); p.at.remove(); } placed = []; };
     const place = (text) => {
       clear();
       const top = !node.parentElement?.matches?.(".h-mid, .h-close"); // a card's caption once, on its top piece
@@ -300,6 +310,8 @@
       // COMPS-8: the card is closed; its line names the component and opens its source.
       placed.push(...defLines(node, text, (at, d, card) => mount(DefLine, { target: at, props: { name: d.name, source: d.source, html: d.html, v1: d.v1, card } })));
       tags = drawTags(node);
+      // EDITOR-20: last, so a code card, a diagram and a drawn tag are already what they are (none holds a pill).
+      pills = drawPills?.(node) ?? null;
     };
     place(src);
     return { update: place, destroy: clear };
@@ -417,6 +429,13 @@
   .md :global(m-step) { display: block; margin: 2px 0; }
   .md :global(m-step)::before { content: attr(date) " · " attr(status) " · " attr(by) "  "; font-family: var(--font-text); font-size: 11px; color: var(--muted); }
   .md :global(m-ticket)::before { content: attr(ref); font-family: var(--font-text); font-size: 12.5px; color: var(--accent); }
+  /* EDITOR-20: a ticket id as a pill (ticket-pills): the chip's shape, its stage's colour (`--pill-bg`/`--pill-fg`,
+     the status tokens ticket-pills hands it). */
+  .md :global(a.tpill[data-pill]) { display: inline-flex; align-items: baseline; gap: 4px; max-width: 100%; padding: 0 7px; font-family: var(--font-text); font-size: 12px; line-height: 18px; white-space: nowrap; color: var(--pill-fg, var(--chip-fg)); text-decoration: none; background: var(--pill-bg, var(--chip-bg)); border: var(--border) solid var(--chip-line); border-radius: var(--radius-pill); }
+  .md :global(a.tpill[data-pill]:hover), .md :global(a.tpill[data-pill][data-sheet~=hover]) { border-color: var(--line); }
+  .md :global(a.tpill[data-pill]:focus-visible) { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .md :global(a.tpill[data-pill] .tpill-title) { max-width: 36ch; overflow: hidden; text-overflow: ellipsis; font-family: var(--sans); }
+  .md :global(m-ticket[data-pilled])::before { content: none; }
   .md :global(m-badge) { font-family: var(--font-text); font-size: 11px; color: var(--muted); }
   /* A mark with no look of its own (unknown, a custom tag, a known inline one standing alone): its words in
      the flow, captioned (above) by the attribute that reads as words. */

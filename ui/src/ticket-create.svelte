@@ -31,6 +31,9 @@
   // COMPS-5 (the owner, 2026-11-05: "all tickets are the same surface. doc or not. they all need the exact same
   // rendering capabilites"): a body is drawn by ticket-view, here as everywhere.
   import TicketView from "./ticket-view.svelte";
+  // EDITOR-20: the bodies drawn below give their ticket ids as pills (ticket-pills).
+  import PillTable, { providePills } from "./ticket-pills.svelte";
+  providePills();
   import { ticketHref } from "./ticket-links.svelte";
   import Picker from "./ticket-picker.svelte";
   import Chip from "./ticket-chip-sv.svelte";
@@ -126,7 +129,7 @@
   <div class="f wide"><span class="l">body
       <button type="button" class="tab" data-preview-toggle aria-pressed={preview ? "true" : "false"} onclick={() => (preview = !preview)}>{preview ? "write" : "preview"}</button></span>
     {#if preview}
-      <div class="preview" data-preview><TicketView {body}/></div>
+      <div class="preview" data-preview><PillTable/><TicketView {body}/></div>
       {#if body === ""}<p class="empty" data-empty>Nothing written yet.</p>{/if}
     {:else}
       <textarea data-field="body" rows="10" placeholder="markdown" bind:value={body}></textarea>
