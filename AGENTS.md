@@ -167,6 +167,14 @@ plexus-ui-compiler --test golden` in `../plexus-ui`.
 
 ## Adding a component
 
+**Every frontend change to menger is a plexus-ui runtime component** (owner,
+2026-11-10: "I need you to make sure that all frontend changes are plexus-ui
+runtime components when I'm asking about changing menger. if they aren't
+then that should be raised."). Read
+`../menger-skills/menger-modification-conventions/SKILL.md` before changing
+anything a person sees: what counts as one, and how a part that cannot be
+one is raised to the owner before it is built.
+
 From an idea to a component on app-test, top to bottom. The dialect is
 real Svelte 5 with runes (`svelte/1`, FRAME-13; `ui/src/*.svelte`), the
 framework's contract's, plexus-ui's `CONTRACT.md` "svelte/1" (it was UI-4): a

@@ -244,6 +244,7 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("tickets.history", Today::Viewer, None),
     // V2-24: the permit question another service asks through the seam.
     ("tickets.may", Today::Viewer, None),
+    ("tickets.frame_reach", Today::Viewer, None), // COMP-16
     ("tickets.create", Today::Editor, None),
     ("tickets.set_status", Today::Editor, Some("id")),
     ("tickets.set_kind", Today::Editor, Some("id")),
