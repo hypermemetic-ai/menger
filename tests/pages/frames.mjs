@@ -342,6 +342,36 @@ export default async (ctx) => {
     }
   });
 
+  // COMPS-20: every size side by side at one scale, and a mockup alone over the whole screen.
+  await test("a_mockup_side_by_side_and_full_screen", async () => {
+    const { context, page } = await openPage(`#/ticket/${tid}`);
+    try {
+      const S = "[data-surface=ticket-page]";
+      await drawn(page, S, 3);
+      const pf = page.locator(`${S} ${PF}[data-kind=page]`).first();
+      await pf.locator("[data-action=side]").click();
+      await eventually("a pane a size, each drawn", async () => (await pf.locator(`[data-field=side] ${PF}[data-state=drawn]`).count()) === 2, 8_000);
+      const panes = await pf.locator(`[data-field=side] ${PF}`).evaluateAll((els) => els.map((e) => { const b = e.querySelector(".pf-box").getBoundingClientRect(), f = e.querySelector("iframe"); return { dev: e.dataset.device, w: b.width, h: b.height, k: f.getBoundingClientRect().width / f.offsetWidth }; }));
+      const row = await pf.locator("[data-field=side]").evaluate((e) => e.getBoundingClientRect().width);
+      assert(panes[0].dev === "phone" && panes[1].dev === "screen", `a phone beside a screen: ${JSON.stringify(panes)}`);
+      assert(panes[0].w + panes[1].w <= row + 1 && Math.abs(panes[0].k - panes[1].k) < 0.02, `both in the row, at one scale: ${JSON.stringify(panes)} in ${row}`);
+      assert(Math.abs(panes[0].h / panes[0].w - (844 + 24) / (390 + 24)) < 0.03, `the phone keeps its shape: ${JSON.stringify(panes[0])}`);
+      await pf.locator("[data-action=side]").click();
+      await eventually("one frame again", async () => (await pf.locator(`[data-field=side]`).count()) === 0 && (await pf.locator("iframe[data-buffer=shown]").count()) === 1, 8_000);
+      // Full screen: the page alone at the screen's size; Escape returns.
+      await pf.hover();
+      await pf.locator("[data-action=full]").click();
+      const vp = page.viewportSize();
+      await eventually("the page fills the screen", async () => { const b = await pf.locator(".pf-box").boundingBox(); return !!b && b.x === 0 && b.y === 0 && Math.abs(b.width - vp.width) <= 1 && Math.abs(b.height - vp.height) <= 1; }, 8_000);
+      await eventually("and sees the screen's width", async () => (await (await inner(page, S, 0)).evaluate(() => window.innerWidth).catch(() => 0)) === vp.width, 8_000);
+      assert((await pf.getAttribute("data-device")) === null, "no device around it");
+      await pf.locator("[data-action=close-full]").click();
+      await eventually("back in its phone", async () => (await pf.getAttribute("data-device")) === "phone" && (await pf.locator("[data-field=w]").inputValue()) === "390", 8_000);
+    } finally {
+      await context.close();
+    }
+  });
+
   await test("a_whole_page_body_is_one_frame", async () => {
     const { context, page } = await openPage(`#/ticket/${wid}`);
     const S = "[data-surface=ticket-page]";
