@@ -138,6 +138,7 @@
   import { ticketHref } from "./ticket-links.svelte";
   import TicketView, { blocks, pieceClass, refDefs } from "./ticket-view.svelte";
   import Margin, { threadMarks } from "./doc-margin.svelte";
+  import PillTable, { providePills } from "./ticket-pills.svelte";
   import { ingest } from "./media-ingest.svelte";
   import { drawAll } from "./media-draw.svelte";
   import { Annotation, EditorSelection, EditorState, StateEffect, StateField, Transaction } from "@codemirror/state";
@@ -160,6 +161,8 @@
   const isDoc = untrack(() => kind === "doc");
   const b = bus();
   // COMPS-2: the blocks it mounts draw their pages through the bus (page-frame), so they get its context.
+  // EDITOR-20: every block drawn here gives its ticket ids as pills (ticket-pills), the blocks it mounts too.
+  providePills();
   const contexts = getAllContexts();
   const PAUSE = 600;
 
@@ -960,7 +963,7 @@
   });
 </script>
 
-<section class="editor-body" data-surface="editor-body" data-ticket={doc_id} data-kind={isDoc ? "doc" : "ticket"} bind:this={wrap}>
+<PillTable/><section class="editor-body" data-surface="editor-body" data-ticket={doc_id} data-kind={isDoc ? "doc" : "ticket"} bind:this={wrap}>
   {#if isDoc && present.length}
     <p class="here" data-field="present" aria-label="who is here">
       {#each present as p (p.session)}<span class="who" data-present={p.session} data-me={p.session === SESSION ? "" : undefined} data-agent={p.agent ? "" : undefined}><i class="dot" style={`background-color: ${p.colour}`} aria-hidden="true"></i>{p.name}{p.session === SESSION ? " (you)" : ""}</span>{/each}

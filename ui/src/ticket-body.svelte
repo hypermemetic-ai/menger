@@ -11,6 +11,9 @@
 <script>
   import { bus, live } from "plexus-ui/host";
   import TicketView from "./ticket-view.svelte";
+  // EDITOR-20: the bodies drawn below give their ticket ids as pills (ticket-pills).
+  import PillTable, { providePills } from "./ticket-pills.svelte";
+  providePills();
   import { drawMedia } from "./media-draw.svelte";
 
   let { id } = $props();
@@ -26,7 +29,7 @@
 </script>
 
 <section class="ticket-body" data-surface="ticket-body" use:drawMedia={{ bus: b, text: t?.body }}>
-  {#if t}<TicketView body={t.body}/>{/if}
+  <PillTable/>{#if t}<TicketView body={t.body}/>{/if}
 </section>
 
 <style>

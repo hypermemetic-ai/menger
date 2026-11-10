@@ -21,6 +21,9 @@
   // COMPS-5 (the owner, 2026-11-05: "all tickets are the same surface. doc or not. they all need the exact same
   // rendering capabilites"): a body is drawn by ticket-view, here as everywhere.
   import TicketView from "./ticket-view.svelte";
+  // EDITOR-20: the bodies drawn below give their ticket ids as pills (ticket-pills).
+  import PillTable, { providePills } from "./ticket-pills.svelte";
+  providePills();
 
   let { id, sheet = null } = $props();
   const b = bus();
@@ -112,7 +115,7 @@
           {#if was}
             <div class="was" data-revision-open={was.revision.rev}>
               <p class="was-head"><span class="st" data-status={was.ticket.status}>{was.ticket.status}</span> <strong data-field="title">{was.ticket.title}</strong></p>
-              <div data-field="body"><TicketView body={was.ticket.body ?? ""}/></div>
+              <div data-field="body"><PillTable/><TicketView body={was.ticket.body ?? ""}/></div>
             </div>
           {/if}
         {:else if a === z}

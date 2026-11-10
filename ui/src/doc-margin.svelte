@@ -37,6 +37,8 @@
   import { bus, live, markdown } from "plexus-ui/host";
   import * as Y from "yjs";
   import { mediaLinks } from "./ticket-view.svelte";
+  // EDITOR-20: a ticket id in a question or an answer is the same pill a body draws (ticket-pills).
+  import PillTable, { drawPills } from "./ticket-pills.svelte";
 
   let { id, ydoc = null, view = () => null, tick = 0 } = $props();
   // Beside a surface (editor-body hands its view and the doc's CRDT) the cards stand at their ranges;
@@ -132,13 +134,13 @@
   const when = (ms) => new Date(ms).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 </script>
 
-<aside class="doc-margin" data-field="margin" data-beside={placedBeside ? "" : undefined} aria-label="questions on the text" bind:this={wrap}>
+<PillTable/><aside class="doc-margin" data-field="margin" data-beside={placedBeside ? "" : undefined} aria-label="questions on the text" bind:this={wrap}>
   {#each shown as t (t.thread)}
     <article class="card" data-thread={t.thread} data-state={t.resolved ? "resolved" : t.gone ? "detached" : "open"}>
       <p class="quote" title={t.quote}>{#if t.gone}<span class="tag" data-detached>detached</span>{/if}«{t.quote.length > 80 ? t.quote.slice(0, 80) + "…" : t.quote}»</p>
-      <div class="q"><b>{t.by}</b>{#if t.to_whom} → <b data-field="to-whom">{t.to_whom}</b>{/if} <span class="muted">{when(t.at)}</span><div class="md">{@html markdown(mediaLinks(t.question))}</div></div>
+      <div class="q"><b>{t.by}</b>{#if t.to_whom} → <b data-field="to-whom">{t.to_whom}</b>{/if} <span class="muted">{when(t.at)}</span><div class="md" use:drawPills={t.question}>{@html markdown(mediaLinks(t.question))}</div></div>
       {#each t.replies ?? [] as r (r.n)}
-        <div class="r" data-reply={r.n}><b>{r.by}</b> <span class="muted">{when(r.at)}</span><div class="md">{@html markdown(mediaLinks(r.body))}</div></div>
+        <div class="r" data-reply={r.n}><b>{r.by}</b> <span class="muted">{when(r.at)}</span><div class="md" use:drawPills={r.body}>{@html markdown(mediaLinks(r.body))}</div></div>
       {/each}
       {#if t.resolved}
         <p class="muted done">resolved by {t.resolved.by} · <button type="button" class="link" data-action="reopen" onclick={() => resolve(t, true)}>open again</button></p>
@@ -171,7 +173,13 @@
   .r { padding-left: 8px; border-left: 2px solid var(--line); }
   .md :global(p) { margin: 2px 0; }
   .md :global(img) { max-width: 100%; border-radius: var(--radius-sm); }
-  .md :global(a) { color: var(--accent); }
+  .md :global(a:not(.tpill)) { color: var(--accent); }
+  /* EDITOR-20: a ticket id as a pill (ticket-pills): the chip's shape, its stage's colour (`--pill-bg`/`--pill-fg`,
+     the status tokens ticket-pills hands it). */
+  .md :global(a.tpill[data-pill]) { display: inline-flex; align-items: baseline; gap: 4px; max-width: 100%; padding: 0 7px; font-family: var(--font-text); font-size: 12px; line-height: 18px; white-space: nowrap; color: var(--pill-fg, var(--chip-fg)); text-decoration: none; background: var(--pill-bg, var(--chip-bg)); border: var(--border) solid var(--chip-line); border-radius: var(--radius-pill); }
+  .md :global(a.tpill[data-pill]:hover), .md :global(a.tpill[data-pill][data-sheet~=hover]) { border-color: var(--line); }
+  .md :global(a.tpill[data-pill]:focus-visible) { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .md :global(a.tpill[data-pill] .tpill-title) { max-width: 36ch; overflow: hidden; text-overflow: ellipsis; font-family: var(--sans); }
   .muted { color: var(--muted); font-size: 11px; }
   .done { margin: 6px 0 0; }
   .say { box-sizing: border-box; width: 100%; margin-top: 6px; padding: 4px 6px; font: inherit; color: var(--ink); background: var(--bg); border: var(--border) solid var(--line); border-radius: var(--radius-sm); resize: vertical; }
