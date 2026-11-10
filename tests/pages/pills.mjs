@@ -248,6 +248,28 @@ graph TD
     }
   });
 
+  await test("in_the_editor_a_click_on_a_pill_opens_its_ticket", async () => {
+    // EDITOR-23: a drawn block takes a click to put the caret in it — but a pill's click follows its link.
+    const text = `First names ${a}.\n\nSecond has [a link](https://example.invalid/) in it.\n`;
+    const id = make("opens from the editor", text);
+    const { context, page } = await openPage(`#/edit/${id}`);
+    try {
+      const ed = page.locator("[data-surface=editor-body]");
+      await eventually("the pill drawn", async () => (await ed.locator(`.blk a.tpill[data-pill="${a}"]`).count()) === 1, 15_000);
+      // Any other link is as it was: the click enters its block, and nothing is followed.
+      const here = await page.evaluate(() => location.hash);
+      await ed.locator(".blk a[href^='https://example.invalid']").click();
+      await eventually("the link's block is its source", async () => (await ed.locator(".cm-line").evaluateAll((ls) => ls.some((l) => l.innerText.includes("[a link]")))), 5_000);
+      assert((await page.evaluate(() => location.hash)) === here, "a link in a block is not followed");
+      await ed.locator(`.blk a.tpill[data-pill="${a}"]`).click();
+      await eventually(`the pill opens ${a}`, async () => ticketAt(await page.evaluate(() => location.hash), a), 5_000);
+      await sleep(PAUSE + 200);
+      assert(get(id).body === text, "the stored markdown never rewritten");
+    } finally {
+      await context.close();
+    }
+  });
+
   await test("a_margin_question_draws_its_ids_as_pills", async () => {
     const text = "The kiln fires twice a week.\n";
     const docId = sy("docs", "create", "--title", "asked about", "--body", bodyFile("margin", text)).find((e) => e.type === "created")?.doc.id;
