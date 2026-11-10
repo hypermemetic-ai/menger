@@ -458,7 +458,7 @@
     ignoreEvent() { return true; }
     /** A guess at the drawn height before it is measured (a wrapped line of about 90 characters is 22 px),
      *  so blocks CodeMirror has not drawn yet sit close to where they will. */
-    get estimatedHeight() { return this.piece.page ? 420 : 10 + 22 * Math.max(1, Math.ceil(this.text.length / 90)); } // EDITOR-14: a page is a frame, not its source's length
+    get estimatedHeight() { return this.piece.page ? 420 : this.piece.det ? 32 : 10 + 22 * Math.max(1, Math.ceil(this.text.length / 90)); } // EDITOR-14: a page is a frame, not its source's length; EDITOR-22: a fold its line
   }
 
   // ── EDITOR-9: the page stays put ─────────────────────────────────────────

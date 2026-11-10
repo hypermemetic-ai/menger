@@ -49,10 +49,14 @@
   export const mediaLinks = (md) => String(md ?? "").replace(MEDIA, (_, hash) => `](${origin()}/media/${hash.toLowerCase()})`);
 
   const FENCE = /^ {0,3}(`{3,}|~{3,})/;
-  const HOUSE_OPEN = /^<(m-[a-z0-9-]+)(?:\s[^>]*)?>\s*$/;
+  // EDITOR-22: a tag's attributes, a quoted value holding a `>` too (`summary="a -> b"`).
+  const ATTRS = `(?:\\s(?:[^>"']|"[^"]*"|'[^']*')*)?`;
+  const HOUSE_OPEN = new RegExp(`^<(m-[a-z0-9-]+)${ATTRS}>\\s*$`);
   const LIST = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:\s|$)/;
   const REF = /^ {0,3}\[[^\]]+\]:\s*\S/;
-  const ELEMENT_LINE = /^\s*<(m-[a-z0-9-]+)(?:\s[^>]*)?>.*<\/\1>\s*$/;
+  const ELEMENT_LINE = new RegExp(`^\\s*<(m-[a-z0-9-]+)${ATTRS}>.*<\\/\\1>\\s*$`);
+  /** EDITOR-22: a piece that is one `<m-details>` whole — its open tag, what it holds, its close. */
+  const DETAILS = new RegExp(`^(<m-details${ATTRS}>)([^]*)(<\\/m-details>)\\s*$`);
   const blank = (l) => l.trim() === "";
 
   /** The line after the fence opened at `i` closes (or the end). */
@@ -67,7 +71,7 @@
   }
   /** The line after the close of the house mark opened at `i`, or -1 when it never closes. */
   function houseEnd(lines, i, tag) {
-    const open = new RegExp(`^<${tag}(?:\\s[^>]*)?>\\s*$`), close = new RegExp(`^</${tag}>\\s*$`);
+    const open = new RegExp(`^<${tag}${ATTRS}>\\s*$`), close = new RegExp(`^</${tag}>\\s*$`);
     let depth = 0;
     for (let k = i; k < lines.length; k++) {
       if (k > i && FENCE.test(lines[k])) { k = fenceEnd(lines, k) - 1; continue; }
@@ -118,7 +122,10 @@
   function scan(lines, at, text, lo, hi, wrap, out) {
     const piece = (a, z, extra) => {
       while (z > a + 1 && blank(lines[z - 1])) z--;
-      out.push({ from: at[a], to: at[z] - 1, text: text.slice(at[a], at[z] - 1), part: false, ...(wrap ? { h: "mid", wrap } : {}), ...extra });
+      const t = text.slice(at[a], at[z] - 1);
+      // EDITOR-22: a piece that is one `<m-details>` (not one inside another mark's piece) is a fold, `det`.
+      const det = !wrap && DETAILS.test(t) ? { det: true } : {};
+      out.push({ from: at[a], to: at[z] - 1, text: t, part: false, ...(wrap ? { h: "mid", wrap } : {}), ...det, ...extra });
     };
     let i = lo;
     while (i < hi) {
@@ -135,6 +142,10 @@
         // A mark inside a mark: one piece, drawn whole inside its parent — unless it holds a page (a mockup in a
         // decision's option), which is then its own piece, framed.
         if (wrap && !holdsPage(lines, i + 1, closes - 1)) { piece(i, closes); i = closes; continue; }
+        // EDITOR-22: a fold is one piece, whole — its line and what it opens to drawn together, so opening it
+        // is the drawing's own (in the editor, the caret's block shows all of its source) — unless it holds a
+        // page, which is then split as any mark is.
+        if (house[1] === "m-details" && !holdsPage(lines, i + 1, closes - 1)) { piece(i, closes); i = closes; continue; }
         out.push({ from: at[i], to: at[i + 1] - 1, text: lines[i], part: false, h: "open", wrap: own });
         scan(lines, at, text, i + 1, closes - 1, own, out);
         out.push({ from: at[closes - 1], to: at[closes] - 1, text: lines[closes - 1], part: false, h: "close", wrap: own });
@@ -199,6 +210,8 @@
   /** The markdown a piece is drawn from: a house mark's open or close line its empty mark (the card's
    *  top or bottom), a piece inside one wrapped in the mark's own lines (the card's middle). */
   export function pieceSource(p) {
+    // EDITOR-22: a fold's inside is markdown however it was written (its open and close each a line of their own).
+    if (p.det) { const m = DETAILS.exec(p.text); if (m) return `${m[1]}\n\n${m[2].trim()}\n\n${m[3]}`; }
     if (!p.wrap) return p.text;
     if (p.h === "open" || p.h === "close") return `${p.wrap.open}\n\n${p.wrap.close}`;
     return `${p.wrap.open}\n\n${p.text}\n\n${p.wrap.close}`;
@@ -213,7 +226,7 @@
     return blocks(src, false).map((p) => ({ text: p.text, page: !!p.page, md: mediaLinks(pieceSource(p)) + d }));
   }
   /** A piece's box: `blk`, `part` (a list's next item), `h-open | h-mid | h-close` (a card's piece). */
-  export const pieceClass = (p) => ["blk", p.part ? "part" : "", p.h ? `h-${p.h}` : ""].filter(Boolean).join(" ");
+  export const pieceClass = (p) => ["blk", p.part ? "part" : "", p.h ? `h-${p.h}` : "", p.det ? "det" : ""].filter(Boolean).join(" ");
 
   /** The house's marks that draw as cards, and the ones that draw inline; any other mark (and a custom
    *  tag, kept as `m-el`) draws its words in a neutral box, captioned by the attribute that reads as words. */
@@ -240,6 +253,8 @@
   import MMockup from "./m-mockup.svelte";
   import MLive from "./m-live.svelte";
   import MPage from "./m-page.svelte";
+  // EDITOR-22: `<m-details summary>` folded — the line its component, what it holds under it, closed or open.
+  import MDetails, { foldDetails } from "./m-details.svelte";
 
   /** COMPS-3: a tag → the component that draws it, mounted where the body has the tag (props: `source`, the
    *  piece's markdown; `pieces`, m-page's). ticket-view keeps no frame code: a page is these components'.
@@ -310,6 +325,8 @@
       // COMPS-8: the card is closed; its line names the component and opens its source.
       placed.push(...defLines(node, text, (at, d, card) => mount(DefLine, { target: at, props: { name: d.name, source: d.source, html: d.html, v1: d.v1, card } })));
       tags = drawTags(node);
+      // EDITOR-22: each `<m-details summary>` a line that opens; before the pills, so its sentence's ids are.
+      for (const d of foldDetails(node)) placed.push({ at: d.at, app: mount(MDetails, { target: d.at, props: d.props }) });
       // EDITOR-20: last, so a code card, a diagram and a drawn tag are already what they are (none holds a pill).
       pills = drawPills?.(node) ?? null;
     };
@@ -428,6 +445,16 @@
   /* A step: a dated line. */
   .md :global(m-step) { display: block; margin: 2px 0; }
   .md :global(m-step)::before { content: attr(date) " · " attr(status) " · " attr(by) "  "; font-family: var(--font-text); font-size: 11px; color: var(--muted); }
+  /* EDITOR-22: a fold (m-details): one line, what it opens to indented a little under its sentence; several in
+     a row a list, a hairline between and no gap but the line's own. Closed, its inside is `hidden=until-found`
+     (find-in-page reaches it); printed, it is open. */
+  .md :global(m-details[data-folds]) { padding: 3px 0; }
+  .md :global(m-details[data-folds] > .det-body) { padding: 0 0 0 22px; }
+  .md :global(m-details[data-folds] > .det-body:not([hidden])) { padding-top: 2px; padding-bottom: 4px; }
+  .md :global(m-details[data-folds] > .det-body > :first-child) { margin-top: 0; }
+  .md :global(m-details[data-folds] > .det-body > :last-child) { margin-bottom: 0; }
+  .md :global(.blk.det + .blk.det) { padding-top: 0; border-top: var(--border) solid var(--line); }
+  @media print { .md :global(m-details[data-folds] > .det-body[hidden]) { content-visibility: visible; padding-top: 2px; padding-bottom: 4px; } }
   .md :global(m-ticket)::before { content: attr(ref); font-family: var(--font-text); font-size: 12.5px; color: var(--accent); }
   /* EDITOR-20: a ticket id as a pill (ticket-pills): the chip's shape, its stage's colour (`data-stage`, the
      status tokens). */
