@@ -10,15 +10,24 @@ use super::*;
 /// `get` — one ticket by any address, in the caller's reach: `ticket` (ACT-6:
 /// with `moved_from` when an old id named it), a deleted one's tombstone
 /// (ACT-5), or `not_found`.
-pub(super) fn get_stream(store: Arc<Store>, caller: VerifiedUser, id: String) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+/// COMP-16: `frame` names the ticket whose body's frame reads — the read
+/// narrowed to that body's bound ([`reader_for`]).
+pub(super) fn get_stream(store: Arc<Store>, access: Access, caller: VerifiedUser, id: String, frame: Option<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
+        let reader = match reader_for(&store, &access, &caller, frame.as_deref()).await {
+            Ok(r) => r,
+            Err(ev) => {
+                yield ev;
+                return;
+            }
+        };
         // ORG-4: a short form read in the caller's organizations.
         let named = named_in(&store, &caller, id.clone());
         // ACCESS-10: a ticket out of reach is not found, as one not there.
-        match store.get(&caller, &named).await {
+        match store.get(&reader, &named).await {
             Ok(ticket) => yield TicketsEvent::Ticket { ticket },
             // ACT-5: a deleted ticket answers its tombstone.
-            Err(StoreError::NotFound(_)) => yield store.tombstone(&caller, &id).map_or(TicketsEvent::NotFound { id: Asked::stored(id.as_str()) }, |t| TicketsEvent::Deleted { ids: vec![t.id.clone()], tombstones: vec![t] }),
+            Err(StoreError::NotFound(_)) => yield store.tombstone(&reader, &id).map_or(TicketsEvent::NotFound { id: Asked::stored(id.as_str()) }, |t| TicketsEvent::Deleted { ids: vec![t.id.clone()], tombstones: vec![t] }),
             Err(e) => yield veiled(&store, &caller, e),
         }
     }
@@ -120,17 +129,27 @@ pub(super) struct ListAsk {
     pub(super) tz: Option<Zone>,
     /// PERF-15: the summary row's fields to keep (summary rows implied).
     pub(super) fields: Option<Vec<SummaryField>>,
+    /// COMP-16: the ticket whose body's frame reads ([`reader_for`]).
+    pub(super) frame: Option<TicketRef>,
 }
 
 /// `list` — a page of the caller's tickets: by epic, status and parent, or
 /// (FILTER-4) from the cells under a filter or at a position.
-pub(super) fn list_stream(store: Arc<Store>, caller: VerifiedUser, ask: ListAsk) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-    let ListAsk { epic, status, parent, after, limit, summary, filter, at, keep, tz, fields } = ask;
+pub(super) fn list_stream(store: Arc<Store>, access: Access, caller: VerifiedUser, ask: ListAsk) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+    let ListAsk { epic, status, parent, after, limit, summary, filter, at, keep, tz, fields, frame } = ask;
     // PERF-15: `fields` thins the summary rows, so it asks for them.
     let summary = Some(summary.unwrap_or(false) || fields.is_some());
     let (epic, parent) = (epic.map(String::from), parent.map(String::from));
     let limit = Some(crate::limits::page(limit, crate::limits::LIST_PAGE_DEFAULT, crate::limits::LIST_PAGE_MAX));
     stream! {
+        // COMP-16: the caller, or the caller narrowed to a frame's bound.
+        let reader = match reader_for(&store, &access, &caller, frame.as_deref()).await {
+            Ok(r) => r,
+            Err(ev) => {
+                yield ev;
+                return;
+            }
+        };
         // ACCESS-10: the caller's own filter; the store answers it within
         // the caller's reach.
         let filter = match asked(filter.as_deref()) {
@@ -163,11 +182,11 @@ pub(super) fn list_stream(store: Arc<Store>, caller: VerifiedUser, ask: ListAsk)
             let keep = filter.is_some().then(|| keep.map(String::from)).flatten();
             let q = Filtered { lens, epic, status, parent, keep };
             if summary.unwrap_or(false) {
-                for ev in page_events(&store, store.filtered_page(&caller, &q, after.as_deref(), at, limit), fields.as_deref()) {
+                for ev in page_events(&store, store.filtered_page(&reader, &q, after.as_deref(), at, limit), fields.as_deref()) {
                     yield ev;
                 }
             } else {
-                let walk = store.walk(&caller, Select::Filtered(q), after.as_deref(), limit).at(at);
+                let walk = store.walk(&reader, Select::Filtered(q), after.as_deref(), limit).at(at);
                 let mut events = Box::pin(walk_events(store, walk));
                 while let Some(ev) = events.next().await {
                     yield ev;
@@ -176,7 +195,7 @@ pub(super) fn list_stream(store: Arc<Store>, caller: VerifiedUser, ask: ListAsk)
             return;
         }
         if summary.unwrap_or(false) {
-            let page = store.page(&caller, PageQuery {
+            let page = store.page(&reader, PageQuery {
                 epic: epic.as_deref(),
                 status,
                 parent: parent.as_deref(),
@@ -187,7 +206,7 @@ pub(super) fn list_stream(store: Arc<Store>, caller: VerifiedUser, ask: ListAsk)
                 yield ev;
             }
         } else {
-            let walk = store.walk(&caller, Select::List { epic, status, parent }, after.as_deref(), limit);
+            let walk = store.walk(&reader, Select::List { epic, status, parent }, after.as_deref(), limit);
             let mut events = Box::pin(walk_events(store, walk));
             while let Some(ev) = events.next().await {
                 yield ev;
@@ -293,14 +312,24 @@ pub(super) fn find_stream(
 /// then `searched`.
 pub(super) fn search_stream(
     store: Arc<Store>,
+    access: Access,
     caller: VerifiedUser,
     query: Query,
     filter: Option<FilterText>,
     limit: Option<u32>,
     offset: Option<u32>,
     tz: Option<Zone>,
+    frame: Option<TicketRef>,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
+        // COMP-16: the caller, or the caller narrowed to a frame's bound.
+        let reader = match reader_for(&store, &access, &caller, frame.as_deref()).await {
+            Ok(r) => r,
+            Err(ev) => {
+                yield ev;
+                return;
+            }
+        };
         // IDENTITY-21: only what this caller can see — its filter ANDed
         // with the shortcodes it holds a role on, as `find`'s is.
         let filter = match asked(filter.as_deref()) {
@@ -318,7 +347,7 @@ pub(super) fn search_stream(
             }
         };
         let limit = Some(limit.unwrap_or(SEARCH_LIMIT).min(SEARCH_MAX));
-        match store.search(&caller, &query, lens, limit, offset).await {
+        match store.search(&reader, &query, lens, limit, offset).await {
             Ok(SearchPage { hits, matched, next, words }) => {
                 // PERF-15: the page's hits one `rows` event.
                 for ev in rows_events(hits.into_iter().map(|hit| Row::Hit { summary: hit.summary, title: hit.title, snippet: hit.snippet, corrected: hit.corrected }).collect()) {

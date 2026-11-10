@@ -55,10 +55,16 @@ mod sealed {
     impl Sealed for super::System {}
     impl Sealed for crate::access::VerifiedUser {}
     impl Sealed for crate::access::ReadingAs<'_> {}
+    // COMP-16: a reader narrowed to a body's frame — only ever narrower.
+    impl Sealed for super::super::Framed {}
+    // COMP-16: another principal's reach by its grants (a body's author).
+    impl Sealed for crate::access::GrantsReach {}
 }
 
 /// What a store read is asked by: a verified user, a user reading through
-/// one of its grants, or the [`System`]. Sealed — these three alone.
+/// one of its grants, the [`System`] — or, COMP-16, a reader narrowed to a
+/// body's frame ([`super::Framed`]) and a body's author's grants
+/// ([`crate::access::GrantsReach`]). Sealed — these alone.
 pub trait Reader: sealed::Sealed + Sync {
     /// The filter `under` what it may read: `None` for everything (the
     /// system, login off, a grant on `*`); a refusal when it reaches
@@ -96,6 +102,16 @@ impl Reader for ReadingAs<'_> {
 
     fn principal_of(&self) -> Option<String> {
         Some(self.user().principal_text())
+    }
+}
+
+impl Reader for crate::access::GrantsReach {
+    fn reach(&self) -> Result<Option<Filter>, StoreError> {
+        self.read_filter().map_err(StoreError::Filter)
+    }
+
+    fn principal_of(&self) -> Option<String> {
+        Some(self.principal().to_string())
     }
 }
 

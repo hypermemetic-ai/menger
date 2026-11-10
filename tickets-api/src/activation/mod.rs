@@ -154,6 +154,11 @@ use queue::*;
 mod reads;
 #[cfg(feature = "server")]
 use reads::*;
+// COMP-16: a body's frame — `frame_reach`, and the reader `frame` names.
+#[cfg(feature = "server")]
+mod frames;
+#[cfg(feature = "server")]
+use frames::*;
 #[cfg(feature = "server")]
 mod orgs;
 #[cfg(feature = "server")]
@@ -226,7 +231,7 @@ pub use revisions::RevisionsClient;
     roles(
         viewer = [
             "health", "get", "list", "find", "search", "watch", "history",
-            "queued", "await_reply", "may"
+            "queued", "await_reply", "may", "frame_reach"
         ],
         editor = [
             viewer, "create", "set_status", "set_kind", "set_parent", "amend", "label", "update", "update_many",
@@ -333,8 +338,11 @@ impl TicketsActivation {
         #[from_auth(self.access.verify)] user: VerifiedUser,
         /// Ticket id, e.g. MNG-2 — or a path address, e.g. PLEXUS/_MENGER/board.
         id: TicketRef,
+        /// Read as the frame of this ticket's body reads, e.g. DESIGN-26: only what frame_reach answers for it, a ticket outside not found (optional; COMP-16).
+        frame: Option<TicketRef>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        dressing(self.store.clone(), crate::store::reading_as(user.principal_text(), get_stream(self.store.clone(), user, id.into_string())))
+        let (access, frame) = (self.access.clone(), frame.map(TicketRef::into_string));
+        dressing(self.store.clone(), crate::store::reading_as(user.principal_text(), get_stream(self.store.clone(), access, user, id.into_string(), frame)))
     }
 
     /// Whether you hold a role on one ticket — viewer | editor | admin — as the gate and the kept tree say now; yields may { id, role, held }, or not_found for a ticket you cannot see.
@@ -432,8 +440,11 @@ impl TicketsActivation {
         tz: Option<Zone>,
         /// Only these summary-row fields, e.g. id,title,kind,status — each row then carries them and its id (optional; implies summary).
         fields: Option<Vec<SummaryField>>,
+        /// Read as the frame of this ticket's body reads, e.g. DESIGN-26: only what frame_reach answers for it (optional; COMP-16).
+        frame: Option<TicketRef>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        dressing(self.store.clone(), crate::store::reading_as(user.principal_text(), list_stream(self.store.clone(), user, ListAsk { epic, status, parent, after, limit, summary, filter, at, keep, tz, fields })))
+        let ask = ListAsk { epic, status, parent, after, limit, summary, filter, at, keep, tz, fields, frame };
+        dressing(self.store.clone(), crate::store::reading_as(user.principal_text(), list_stream(self.store.clone(), self.access.clone(), user, ask)))
     }
 
     /// Set a ticket's status (not a doc's: a doc has no lifecycle); Canceled cancels its open descendants in the same write, and leaving Canceled may restore them (restore_children).
@@ -1051,8 +1062,38 @@ impl TicketsActivation {
         offset: Option<u32>,
         /// The time zone a history filter's days are read in: an IANA name, UTC, or an offset (optional; default UTC).
         tz: Option<Zone>,
+        /// Read as the frame of this ticket's body reads, e.g. DESIGN-26: only what frame_reach answers for it (optional; COMP-16).
+        frame: Option<TicketRef>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-        dressing(self.store.clone(), search_stream(self.store.clone(), user, query, filter, limit, offset, tz))
+        dressing(self.store.clone(), search_stream(self.store.clone(), self.access.clone(), user, query, filter, limit, offset, tz, frame))
+    }
+
+    /// What a frame of a ticket's body may read for you: your reach ∩ the reach of who last wrote the body ∩ what the body asks (reach-read:); yields frame_reach { reach }.
+    ///
+    /// COMP-16: a body's frame runs code its author wrote with its reader's
+    /// eyes, so it reads no more than both could: the caller's reach, ANDed
+    /// with the reach of the principal who last wrote the body (a create, an
+    /// amend, an update, a restored revision — by that principal's grants),
+    /// ANDed with what the body's frontmatter asks — `reach-read:` in
+    /// FILTER-3's language, `all` for as wide as allowed, and without it the
+    /// body's own shortcode with those hosted under it. A body nobody known
+    /// wrote, or one whose ask the language does not take, reads the ticket
+    /// alone (`alone` says why); an author who holds nothing reads nothing.
+    /// Yields `frame_reach { reach: { ticket, author, asked, alone,
+    /// shortcodes, tickets } }`, read afresh each call (an amend by another
+    /// author moves it), or `not_found` for a ticket you cannot see. `get`,
+    /// `list` and `search` given `frame` read under exactly this bound.
+    #[plexus_macros::method(group = "read", example(note = "what DESIGN-26's frame may read", params = r#"{"id": "DESIGN-26"}"#))]
+    pub async fn frame_reach(
+        &self,
+        #[from_auth(self.access.verify)] user: VerifiedUser,
+        /// Ticket id whose body is framed, e.g. DESIGN-26.
+        id: TicketRef,
+    ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+        let access = self.access.clone();
+        answered!(store = self.store.clone(), user, Some(id.to_string()) => {
+            frame_reach_of(&store, &access, &user, &id).await
+        })
     }
 
     /// What the nav and the menus ask — `tickets.nav.<method>`: groups, extents, tree, counts, facets, member (ACCESS-16).

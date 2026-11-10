@@ -305,7 +305,7 @@ async fn the_wire_assertions_through_the_generated_client() {
     // -- list replays current state, paged (MNG-9) ---------------------------
     let listed = rows(
         client
-            .list(Some(p("WIRE")), None, None, None, None, None, None, None, None, None, None).try_collect::<Vec<_>>()
+            .list(Some(p("WIRE")), None, None, None, None, None, None, None, None, None, None, None).try_collect::<Vec<_>>()
             .await
             .expect("list"),
     );
@@ -414,13 +414,13 @@ async fn the_wire_assertions_through_the_generated_client() {
     );
     assert_eq!(third.parent.as_deref(), Some("PA-1"), "defaulted to the root");
 
-    match one(client.get(p("PA-1")).try_collect::<Vec<_>>().await.expect("get PA-1")) {
+    match one(client.get(p("PA-1"), None).try_collect::<Vec<_>>().await.expect("get PA-1")) {
         TicketsEvent::Ticket { ticket } => assert_eq!(ticket.child_count, 2),
         other => panic!("expected `ticket`, got {other:?}"),
     }
     let children = ids(rows(
         client
-            .list(None, None, Some(p("PA-1")), None, None, None, None, None, None, None, None).try_collect::<Vec<_>>()
+            .list(None, None, Some(p("PA-1")), None, None, None, None, None, None, None, None, None).try_collect::<Vec<_>>()
             .await
             .expect("list by parent"),
     ));
@@ -439,7 +439,7 @@ async fn the_wire_assertions_through_the_generated_client() {
         }
         other => panic!("expected `parent_changed`, got {other:?}"),
     }
-    match one(client.get(p("PA-2")).try_collect::<Vec<_>>().await.expect("get PA-2")) {
+    match one(client.get(p("PA-2"), None).try_collect::<Vec<_>>().await.expect("get PA-2")) {
         TicketsEvent::Ticket { ticket } => assert_eq!(ticket.child_count, 1),
         other => panic!("expected `ticket`, got {other:?}"),
     }
@@ -696,7 +696,7 @@ async fn placements_and_paths_decode_typed_through_the_generated_client() {
     assert_eq!((y.placement, x.placement, doc.placement), (Some(Placement::Wave { n: 1 }), Some(Placement::Wave { n: 2 }), None));
     assert_eq!(doc.path.as_deref(), Some("_MENGER/board"));
 
-    match one(client.get(p("pt/_MENGER/board")).try_collect::<Vec<_>>().await.expect("get")) {
+    match one(client.get(p("pt/_MENGER/board"), None).try_collect::<Vec<_>>().await.expect("get")) {
         TicketsEvent::Ticket { ticket } => assert_eq!(ticket.id, "PT-4"),
         other => panic!("expected the ticket, got {other:?}"),
     }
@@ -716,7 +716,7 @@ async fn placements_and_paths_decode_typed_through_the_generated_client() {
         ]
     );
     let rows: Vec<_> = client
-        .list(Some(p("PT")), None, None, None, None, Some(true), None, None, None, None, None).try_collect::<Vec<_>>()
+        .list(Some(p("PT")), None, None, None, None, Some(true), None, None, None, None, None, None).try_collect::<Vec<_>>()
         .await
         .map(flat)
         .expect("list")
@@ -764,7 +764,7 @@ async fn reshortcode_moves_three_and_every_old_id_still_reaches_its_ticket() {
         other => panic!("expected reshortcoded, got {other:?}"),
     }
     for (old, new) in [("RS-2", "TO-2"), ("RS-3", "TO-3"), ("rs-4", "TO-4")] {
-        match one(client.get(p(old)).try_collect::<Vec<_>>().await.expect("get")) {
+        match one(client.get(p(old), None).try_collect::<Vec<_>>().await.expect("get")) {
             TicketsEvent::Ticket { ticket } => {
                 assert_eq!(ticket.id, new, "{old}");
                 assert_eq!(ticket.moved_from, [old.to_ascii_uppercase()], "{old}");
@@ -774,12 +774,12 @@ async fn reshortcode_moves_three_and_every_old_id_still_reaches_its_ticket() {
         }
     }
     // The chip's ref, as the body still writes it, reaches the moved ticket.
-    let body = match one(client.get(p(&citing.id)).try_collect::<Vec<_>>().await.expect("get")) {
+    let body = match one(client.get(p(&citing.id), None).try_collect::<Vec<_>>().await.expect("get")) {
         TicketsEvent::Ticket { ticket } => ticket.body,
         other => panic!("{other:?}"),
     };
     let cited = body.split("ref=\"").nth(1).and_then(|r| r.split('"').next()).expect("a ref").to_string();
-    match one(client.get(p(&cited)).try_collect::<Vec<_>>().await.expect("get")) {
+    match one(client.get(p(&cited), None).try_collect::<Vec<_>>().await.expect("get")) {
         TicketsEvent::Ticket { ticket } => assert_eq!(ticket.id, "TO-3"),
         other => panic!("{other:?}"),
     }

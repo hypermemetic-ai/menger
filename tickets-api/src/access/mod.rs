@@ -65,7 +65,7 @@ pub use following::{Closed, Followed, Following};
 pub mod request;
 pub use request::MengerRequest;
 pub use crate::store::System;
-pub use reach::{Held, Reach, ReachKey};
+pub use reach::{GrantsReach, Held, Reach, ReachKey};
 pub use user::{Admin, AdminOf, Chatter, Deployer, DeployerOf, Editor, EditorOf, Forward, Hidden, On, Permit, ReadingAs, Refusal, RoleMark, VerifiedUser, Viewer};
 
 /// The gate's reach for one call (plexus-core's): the grant a method was
@@ -533,6 +533,15 @@ impl Access {
     pub fn reads_ticket(&self, principal: &str, key: &str, store: &Store) -> bool {
         let Some(chain) = store.gate_chain(key) else { return false };
         Reach::of_grants(&self.book, &self.gate, principal).covers::<Viewer>(key, &chain)
+    }
+
+    /// COMP-16: `principal`'s reach by its grants alone (direct, its
+    /// teams', the operator's; no session, so no ceiling) — a body's author,
+    /// as a [`crate::store::Reader`] reading where it holds `tickets.get`
+    /// ([`SEES`]): what bounds the frame of a body it wrote. Never a
+    /// caller's own reach.
+    pub fn grants_reach(&self, principal: &str) -> GrantsReach {
+        GrantsReach { principal: principal.to_string(), reach: Reach::of_grants(&self.book, &self.gate, principal) }
     }
 
     /// CHAT-14: whether `principal` holds a grant in the organization `org`
