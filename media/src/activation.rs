@@ -186,20 +186,24 @@ impl MediaActivation {
         futures::stream::once(crate::streams::info(self.clone(), user, hash))
     }
 
-    /// What you have put: yields usage { principal, files, bytes } — each file once, however many tickets it is for; an admin of * names anyone, or every uploader.
+    /// What you have put: yields usage { principal, files, bytes } — each file once, however many tickets it is for; an admin of * names anyone, or every keeper (then unattributed { files, bytes }).
     ///
     /// The storage that counts against your allowance: every file you put
     /// or uploaded, by its bytes. Viewer. V2-31: an admin of `*` names
     /// anyone (`principal`), or asks `everyone: true` — one `usage` per
-    /// uploader, each file counted once against whoever kept it first, as
-    /// the quota service charged it (what `quota.recount` reads).
+    /// keeper, then `unattributed { files, bytes }`. V2-69: each file
+    /// counted once against each principal who put or fetched it (a
+    /// duplicate of another's file is charged to both), as the quota
+    /// service charged it (what `quota.recount` reads); unattributed is
+    /// what no one keeps — a link's preview, or a ticket's file from
+    /// before uploaders were recorded.
     #[plexus_rpc::macros::method(group = "read", example(note = "my storage", params = r#"{}"#), example(note = "every uploader (admin of *)", params = r#"{"everyone": true}"#))]
     pub async fn usage(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
         /// Whose (optional: yours; anyone else's is an admin of *'s).
         principal: Option<menger_tickets_api::vocab::Principal>,
-        /// true: every uploader, each file against its first (an admin of *'s).
+        /// true: every keeper, then what no one is charged for (an admin of *'s).
         everyone: Option<bool>,
     ) -> impl Stream<Item = MediaEvent> + Send + 'static {
         use futures::StreamExt;

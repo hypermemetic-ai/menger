@@ -35,18 +35,27 @@ async fn start(disk: Option<Arc<FakeDisk>>) -> u16 {
 
 /// [`start`], the call layer held to `limits`.
 async fn start_with(disk: Option<Arc<FakeDisk>>, limits: menger::calls::CallLimits) -> u16 {
+    start_full(disk, limits, Vec::new()).await
+}
+
+/// [`start_with`], and V2-69: links read from `allow` (a test's own server) although not public.
+async fn start_full(disk: Option<Arc<FakeDisk>>, limits: menger::calls::CallLimits, allow: Vec<std::net::SocketAddr>) -> u16 {
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("tempdir");
     let db_path = dir.path().join("tickets.db");
     let port = support::free_port().await;
     let login = support::Login::new();
     let service = match disk {
-        None => support::service(&db_path, &login).await,
-        Some(disk) => {
+        None if allow.is_empty() => support::service(&db_path, &login).await,
+        disk => {
             let access = login.access.clone();
             let backend = Arc::new(menger::auth_backend::MengerAuth::new(access.clone(), Vec::new(), None, "menger"));
             let ui = menger::UiSetup::beside(&db_path).unwrap();
-            let media = menger::MediaSetup::beside(&db_path).unwrap();
-            let quota = menger::QuotaSetup::beside(&db_path).unwrap().guarding(disk as Arc<dyn DiskUsage>);
+            let media = menger::MediaSetup::beside(&db_path).unwrap().fetch_allow(allow);
+            let quota = menger::QuotaSetup::beside(&db_path).unwrap();
+            let quota = match disk {
+                Some(disk) => quota.guarding(disk as Arc<dyn DiskUsage>),
+                None => quota,
+            };
             menger::build_rpc_services(&db_path, None, Default::default(), Vec::new(), access, backend, None, menger::store::BODY_MAX_DEFAULT, ui, media, menger::DocsSetup::beside(&db_path).unwrap(), quota, Vec::new(), |store, access| {
                 menger::TicketsActivation::with_access(store, access)
             })
@@ -411,7 +420,7 @@ async fn writes_past_the_rate_are_answered_too_many_writes_and_not_run() {
 }
 
 /// The media service's allowance is the quota service (EDITOR-10's call
-/// site): a put counts its bytes against the uploader, a duplicate nothing,
+/// site): a put counts its bytes against the uploader, the same file again nothing,
 /// a put past the cap is refused with the numbers and nothing kept; the
 /// recount reads media's own count (`media.usage { everyone }`).
 #[tokio::test]
@@ -438,13 +447,104 @@ async fn an_upload_is_counted_against_the_uploader_and_refused_past_the_cap() {
     assert_eq!(one(&editor, "media.usage", json!({})).await["bytes"], 600);
     // Every uploader's charge is an admin's to read; the recount reads it.
     assert_eq!(one(&editor, "media.usage", json!({"everyone": true})).await["type"], "error");
-    assert_eq!(all(&admin, "media.usage", json!({"everyone": true})).await, vec![json!({"type": "usage", "principal": me, "files": 1, "bytes": 600})]);
+    assert_eq!(
+        all(&admin, "media.usage", json!({"everyone": true})).await,
+        vec![json!({"type": "usage", "principal": me, "files": 1, "bytes": 600}), json!({"type": "unattributed", "files": 0, "bytes": 0})]
+    );
     one(&admin, "quota.credit", json!({"principal": me, "source": "media.bytes", "amount": 600})).await;
     let r = all(&admin, "quota.recount", json!({"principal": me})).await;
     assert!(r.contains(&json!({"type": "drift", "principal": me, "source": "media.bytes", "was": 0, "counted": 600})), "{r:?}");
     let done = r.last().unwrap();
     assert!(done["sources"].as_array().unwrap().contains(&json!("media.bytes")), "{done}");
     assert!(done["not_counted"].as_array().unwrap().iter().all(|n| !n.as_str().unwrap().starts_with("media.")), "{done}");
+}
+
+/// A file served at `http://<addr>/<anything>` — `body` as `mime` — for a
+/// fetch or an unfurl to read.
+async fn serve_file(mime: &'static str, body: Vec<u8>) -> std::net::SocketAddr {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let at = l.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut c, _)) = l.accept().await {
+            let body = body.clone();
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                let _ = c.read(&mut buf).await;
+                let head = format!("HTTP/1.1 200 OK\r\ncontent-type: {mime}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n", body.len());
+                let _ = c.write_all(head.as_bytes()).await;
+                let _ = c.write_all(&body).await;
+            });
+        }
+    });
+    at
+}
+
+/// A PNG's first bytes, and `pad` more — what the media service sniffs as an image.
+fn png(pad: usize) -> Vec<u8> {
+    let mut b = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13];
+    b.extend_from_slice(b"IHDR");
+    b.extend_from_slice(&1u32.to_be_bytes());
+    b.extend_from_slice(&1u32.to_be_bytes());
+    b.extend_from_slice(&[8, 6, 0, 0, 0]);
+    b.extend(std::iter::repeat_n(7u8, pad));
+    b
+}
+
+/// V2-69: the owner's paths, as an admin of `*` (exempt: counted, never
+/// capped) — a put; a fetch (what the editor's paste of a page's images and
+/// a drag from another tab call), which kept a file and charged no one's
+/// storage before; a duplicate of a file another kept, which charged the
+/// second keeper nothing — each now charged to whoever keeps it, so
+/// `quota.usage`, `media.usage` and the recount agree (no drift); a link's
+/// preview is no one's, and the recount says so.
+#[tokio::test]
+async fn every_file_kept_is_charged_to_whoever_keeps_it() {
+    use base64::Engine;
+    let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let image = png(1000);
+    let at = serve_file("image/png", image.clone()).await;
+    let preview = serve_file("image/png", png(2000)).await;
+    let port = start_full(None, Default::default(), vec![at, preview]).await;
+    let admin = support::connect(port).await;
+    assert_eq!(one(&admin, "tickets.create", json!({"epic": "Q", "title": "q", "kind": "scope"})).await["type"], "created");
+    grant(&admin, &EDITOR, "editor", "Q").await;
+    let editor = connect_key(&EDITOR, port).await;
+    let used = |u: &Value| source(u, "media.bytes")["used"].as_u64().unwrap();
+    let mine = || async { used(&one(&admin, "quota.usage", json!({})).await) };
+    let put = one(&admin, "media.put", json!({"data": b64(&png(600)), "ticket": "Q-1"})).await;
+    assert_eq!(put["type"], "stored", "{put}");
+    let mut want = put["bytes"].as_u64().unwrap();
+    assert_eq!(mine().await, want, "a put");
+    let fetched = one(&admin, "media.fetch", json!({"url": format!("http://{at}/a.png"), "ticket": "Q-1"})).await;
+    assert_eq!((fetched["type"].as_str(), fetched["bytes"].as_u64()), (Some("stored"), Some(image.len() as u64)), "{fetched}");
+    want += image.len() as u64;
+    assert_eq!(mine().await, want, "a fetch: its file is the fetcher's storage");
+    let day = one(&admin, "quota.usage", json!({})).await;
+    assert_eq!((source(&day, "media.fetch.calls")["used"].as_u64(), source(&day, "media.fetch.bytes")["used"].as_u64()), (Some(1), Some(image.len() as u64)));
+    // The same file again: not twice.
+    one(&admin, "media.fetch", json!({"url": format!("http://{at}/a.png")})).await;
+    assert_eq!(mine().await, want, "kept already: not charged twice");
+    // A file the editor kept first, put by the owner too: charged to both.
+    let x = png(800);
+    let theirs = one(&editor, "media.put", json!({"data": b64(&x)})).await;
+    let n = theirs["bytes"].as_u64().unwrap();
+    let dup = one(&admin, "media.put", json!({"data": b64(&x)})).await;
+    assert_eq!(dup["duplicate"], true, "{dup}");
+    want += n;
+    assert_eq!(mine().await, want, "a duplicate: the owner keeps it too");
+    assert_eq!(used(&one(&editor, "quota.usage", json!({})).await), n);
+    // The media service's own reads say the same, and the recount moves nothing.
+    assert_eq!(one(&admin, "media.usage", json!({})).await["bytes"].as_u64(), Some(want));
+    let r = all(&admin, "quota.recount", json!({})).await;
+    assert!(!r.iter().any(|e| e["type"] == "drift" && e["source"] == "media.bytes"), "no drift: {r:?}");
+    // A link's preview: kept as anyone's, charged to no one, and said.
+    let card = one(&admin, "media.unfurl", json!({"url": format!("http://{preview}/b.png")})).await;
+    assert!(card["image"].is_string(), "{card}");
+    assert_eq!(mine().await, want, "a preview is no one's storage");
+    let done = all(&admin, "quota.recount", json!({})).await.pop().unwrap();
+    let said = done["not_counted"].as_array().unwrap().iter().filter_map(Value::as_str).find(|n| n.starts_with("media.usage")).map(str::to_string);
+    assert!(said.as_deref().is_some_and(|s| s.contains("1 file(s)") && s.contains("no one to charge")), "{done}");
 }
 
 /// The docs service's meter is the quota service (V2-29's call site): a

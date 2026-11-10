@@ -571,7 +571,7 @@ whole. synapse `-j` prints the `rows` event as one line (SYNAPSE-36).
 | `finish` | `--upload` | the upload hashed and kept: `stored { … }`, or `refused { reason: incomplete }` |
 | `get` | `--hash` | a file's bytes up to 7 MiB: `media { …, data }` (data base64); larger, `refused { reason: too_large }` — read it at `/media/<hash>` |
 | `info` | `--hash` | what a file is, without its bytes: `info { hash, mime, kind, name, bytes, width, height }` |
-| `usage` | `[--principal] [--everyone true]` | what you have put, each file once: `usage { principal, files, bytes }`; V2-31: an admin of `*` names anyone, or every uploader, each file against its first (what `quota.recount` reads) |
+| `usage` | `[--principal] [--everyone true]` | what you have put, each file once: `usage { principal, files, bytes }`; V2-31: an admin of `*` names anyone, or every keeper — V2-69: each file against each principal who put or fetched it, then `unattributed { files, bytes }`, what no one is charged for (what `quota.recount` reads) |
 | `unfurl` | `--url` | a public link read into a card: `unfurled { url, kind, title, description, site, image, provider, embed }` |
 | `fetch` | `--url [--ticket] [--doc] [--name]` | a remote image or file kept as yours (never hot-linked): `stored { … }` |
 
@@ -749,7 +749,7 @@ name is refused, so a new input registers one):
 
 | source | unit | window | counted when |
 |---|---|---|---|
-| `media.bytes` | bytes | total | a file is put or uploaded (`media.put`, `media.begin`): against its first uploader; a duplicate counts nothing |
+| `media.bytes` | bytes | total | a file is put, uploaded or fetched (`media.put`, `media.begin`, `media.fetch`): against each principal who keeps it, once — V2-69: a duplicate of a file someone else kept is charged to you too (your allowance is what you keep, whoever kept it first; the disk keeps it once), the same file again for another ticket is not. Not charged: a link's preview (`media.unfurl`, kept as anyone's — the server's cache of a public page, one per link), and a ticket's file from before uploaders were recorded; `quota.recount` names both in `not_counted` |
 | `media.fetch.bytes` | bytes | day | the server reads a file for you (`media.fetch`) |
 | `media.fetch.calls` | calls | day | the server reads a link for you (`media.unfurl`, `media.fetch`) |
 | `media.egress.bytes` | bytes | day | `/media/<hash>` serves bytes to you |

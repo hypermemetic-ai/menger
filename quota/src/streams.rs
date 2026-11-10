@@ -248,7 +248,10 @@ pub(crate) fn recount(act: QuotaActivation, user: Option<Caller>, principal: Opt
         let (mut seen, mut drifted) = (std::collections::BTreeSet::new(), 0u32);
         for (method, params, count_src, bytes_src) in COUNTERS {
             let counted = match act.seam.counted(method, params).await {
-                Ok(c) => c,
+                Ok((c, unattributed)) => {
+                    not_counted.extend(unattributed);
+                    c
+                }
                 Err(why) => {
                     not_counted.push(format!("{method}: {why}"));
                     continue;

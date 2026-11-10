@@ -12,7 +12,9 @@
 //! - before a link is read — `unfurl`, `fetch` — `media.fetch.calls` (one)
 //!   and, once the bytes are in hand, `media.fetch.bytes`;
 //! - then `commit` once the bytes are kept, or `release` when they are not
-//!   (a refusal, a duplicate, an upload abandoned and swept).
+//!   (a refusal, a file the putter keeps already, an upload abandoned and
+//!   swept). V2-69: a duplicate of another's file is charged to the putter
+//!   too — what counts is what each principal keeps.
 //!
 //! Until V2-31 lands the service runs on [`Unlimited`], which allows
 //! everything; wiring the real one is [`crate::MediaActivation::with_allowance`].

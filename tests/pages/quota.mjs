@@ -21,7 +21,7 @@ import { makeKey, sessionCookies, writeSession } from "../../scripts/throwaway-l
 import { sentCalls, synapse } from "../../scripts/ui-throwaway.mjs";
 
 export default async (ctx) => {
-  const { test, assert, eventually, openPage, sy, server, session } = ctx;
+  const { test, assert, eventually, openPage, sy, server, session, fake } = ctx;
   const work = path.dirname(session);
   const text = async (loc) => String(await loc.first().textContent({ timeout: 2000 })).trim();
   const shots = process.env.QUOTA_SHOTS || null;
@@ -60,6 +60,14 @@ export default async (ctx) => {
     await page.setViewportSize({ width: 1440, height: 900 });
   }
 
+  // V2-68: the amount as the pages say it (bytes in powers of 1000).
+  const words = (n) => {
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let v = Number(n), u = 0;
+    while (v >= 1000 && u < units.length - 1) { v /= 1000; u += 1; }
+    return u === 0 ? `${n} B` : `${(Math.round(v * 10) / 10).toString()} ${units[u]}`;
+  };
+
   await test("usage_page_a_bar_per_source", async () => {
     const { page, context } = await openAs(s.token, "#/usage");
     const root = page.locator("[data-surface=quota-usage]");
@@ -92,6 +100,49 @@ export default async (ctx) => {
       const root = page.locator("[data-surface=quota-usage]");
       await eventually("the exempt mark", async () => (await root.locator("[data-exempt]").count()) === 1);
       assert((await text(root.locator('[data-id="media.bytes"] [data-field=cap]'))) === "unlimited", "never capped");
+    } finally {
+      await context.close();
+    }
+  });
+
+  // V2-69: the owner's paths in the editor — a file pasted (media.put) and a
+  // page's image pasted (media.fetch, which kept a file and charged no one's
+  // storage before) — each charged to the owner, an admin of * (exempt:
+  // counted, never capped): quota.usage and media.usage agree, and #/usage says it.
+  await test("the_owners_pasted_media_is_counted", async () => {
+    const mediaUsed = () => sy("quota", "usage").find((e) => e.type === "usage").sources.find((x) => x.source === "media.bytes").used;
+    const kept = () => sy("media", "usage").find((e) => e.type === "usage").bytes;
+    const before = mediaUsed();
+    const made = sy("tickets", "create", "--epic", "QUOTA", "--title", "the owner's media");
+    const id = made.find((e) => e.type === "created").ticket.id;
+    const { page, context } = await openPage(`#/edit/${id}`);
+    try {
+      const content = page.locator("[data-surface=editor-body] .cm-content");
+      await eventually("the editor", async () => (await content.count()) === 1, 10_000);
+      // A PNG of its own bytes (a random tail), so no earlier test kept it.
+      const tail = Array.from({ length: 4000 }, () => Math.floor(Math.random() * 256));
+      await page.evaluate(({ tail }) => {
+        const head = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAEUlEQVR42mP8z8DwnwEJMAIAKQgD/2zM2wkAAAAASUVORK5CYII="), (c) => c.charCodeAt(0));
+        const dt = new DataTransfer();
+        dt.items.add(new File([head, new Uint8Array(tail)], "owner.png", { type: "image/png" }));
+        document.querySelector("[data-surface=editor-body] .cm-content").dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+      }, { tail });
+      const body = () => sy("tickets", "get", "--id", id).find((e) => e.type === "ticket").ticket.body;
+      await eventually("the pasted file in the body", async () => /media:[0-9a-f]{64}/.test(body()), 8_000);
+      const afterPut = mediaUsed();
+      assert(afterPut >= before + 4000, `a put: ${before} → ${afterPut}`);
+      // A page's image, pasted as HTML: fetched and kept by the server.
+      await page.evaluate((src) => {
+        const dt = new DataTransfer();
+        dt.setData("text/html", `<p>a <b>picture</b></p><p><img src="${src}" alt="the owner's picture"></p>`);
+        document.querySelector("[data-surface=editor-body] .cm-content").dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+      }, `${fake.origin}/picture.png`);
+      await eventually("the fetched picture in the body", async () => (body().match(/media:[0-9a-f]{64}/g) ?? []).length === 2, 8_000);
+      const after = mediaUsed();
+      assert(after === kept(), `quota.usage's media.bytes (${after}) is media.usage's (${kept()})`);
+      await page.goto(`${server.origin}/app/#/usage`);
+      const row = page.locator('[data-surface=quota-usage] [data-id="media.bytes"]');
+      await eventually("#/usage says what the owner keeps", async () => (await row.count()) === 1 && (await text(row.locator("[data-field=used]"))) === words(after), 5_000);
     } finally {
       await context.close();
     }
@@ -131,14 +182,6 @@ export default async (ctx) => {
       await context.close();
     }
   });
-
-  // V2-68: the amount as the pages say it (bytes in powers of 1000).
-  const words = (n) => {
-    const units = ["B", "KB", "MB", "GB", "TB"];
-    let v = Number(n), u = 0;
-    while (v >= 1000 && u < units.length - 1) { v /= 1000; u += 1; }
-    return u === 0 ? `${n} B` : `${(Math.round(v * 10) / 10).toString()} ${units[u]}`;
-  };
 
   await test("usage_page_shows_an_admin_the_whole_system", async () => {
     const { page, context } = await openPage("#/usage");
