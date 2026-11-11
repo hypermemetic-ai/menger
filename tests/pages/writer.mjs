@@ -88,7 +88,7 @@ export default async (ctx) => {
         throw new Error(`${e.message}\nthe body drawn: ${what.slice(0, 2000)}\nconsole: ${seen.console.slice(-10).join("\n")}`);
       });
       assert((await page.locator("[data-surface=tag-component][data-name=tweet-writer]").getAttribute("data-mode")) === "native", "native");
-      assert((await tw.getAttribute("data-ticket")) === id && (await tw.getAttribute("data-n")) === "0" && (await tw.getAttribute("data-where")) === "ticket", "told its ticket and its place");
+      assert((await tw.getAttribute("data-ticket")) === id && (await tw.getAttribute("data-n")) === "0" && (await tw.getAttribute("data-where")) === "editor", "told its ticket and its place, in the page's editor (EDITOR-24)");
       const state = tw.locator("[data-field=state]");
       const post = (n) => tw.locator(`[data-post="${n}"]`);
       const words = (n) => post(n).locator("[data-field=text]").inputValue();
@@ -195,8 +195,8 @@ export default async (ctx) => {
     }
   });
 
-  // In the editor the block under the caret is the tag's source; away from it the writer is drawn, drawn only
-  // (the editor saves the body; ctrl/⌘+s there is the editor's).
+  // In the editor the block under the caret is the tag's source; away from it the writer is drawn and — EDITOR-24 —
+  // used as on the ticket's page: it saves through the editor (`body.tag`), which writes the body.
   await test("in_the_editor_the_tag_is_source_at_the_caret_and_drawn_away_from_it", async () => {
     const id = child("a writer in the editor", BODY);
     const { context, page } = await openPage(`#/edit/${id}`);
@@ -206,13 +206,24 @@ export default async (ctx) => {
       const tw = page.locator(`${SEL} [data-surface=tweet-writer]`);
       await eventually("the writer drawn in its block", async () => (await tw.count()) === 1 && (await tw.locator("[data-post]").count()) === 2, 20_000);
       assert((await tw.getAttribute("data-where")) === "editor", "told it is in the editor");
-      assert((await tw.locator("[data-field=note]").count()) === 1, "it says it is drawn only");
-      assert(await tw.locator("[data-post='1'] [data-field=text]").evaluate((t) => t.readOnly), "its boxes are read-only");
-      assert((await tw.locator("[data-action=save], [data-action=add]").count()) === 0, "no save, no +");
-      // A click in its box stays there: the block is not entered.
-      await tw.locator("[data-post='2'] [data-field=text]").click();
+      assert((await tw.locator("[data-field=note]").count()) === 0, "nothing says drawn only");
+      assert(!(await tw.locator("[data-post='1'] [data-field=text]").evaluate((t) => t.readOnly)), "its boxes are written in");
+      assert((await tw.locator("[data-action=save]").count()) === 1 && (await tw.locator("[data-action=add]").count()) === 2, "save, and a + a post");
+      // A click in its box stays there: the block is not entered. Typed, a pause saves it through the editor,
+      // the writer never drawn again and the focus kept.
+      await tw.evaluate((e) => { e.dataset.same = "yes"; });
+      const box = tw.locator("[data-post='2'] [data-field=text]");
+      await box.click();
       await sleep(400);
       assert((await tw.count()) === 1, "still drawn after a click in it");
+      await page.keyboard.press("Control+End");
+      await page.keyboard.type(" Typed.");
+      await eventually("saved through the editor", async () => get(id).body === BODY.replace("after a blank line.", "after a blank line. Typed."), 8_000)
+        .catch(() => { throw new Error(`the body: ${JSON.stringify(get(id).body)}`); });
+      await eventually("the writer says saved", async () => (await tw.locator("[data-field=state]").getAttribute("data-state")) === "saved");
+      await sleep(600);
+      assert((await tw.getAttribute("data-same")) === "yes", "the writer was never drawn again");
+      assert(await box.evaluate((e) => document.activeElement === e), "the focus never left the box");
       // The caret in the tag: its source, editable text.
       const at = BEFORE.length + WRITER.indexOf("The first paragraph.") + "The first".length;
       await page.evaluate(({ s, at }) => { const v = document.querySelector(s).editorView; v.focus(); v.dispatch({ selection: { anchor: at } }); }, { s: SEL, at });
@@ -220,7 +231,7 @@ export default async (ctx) => {
         && (await page.locator(`${SEL} .cm-line`).evaluateAll((ls) => ls.some((l) => l.textContent.includes('<tweet-post video="media:')))), 5_000);
       await page.keyboard.type(" (edited)");
       await eventually("the editor saved it", async () => (await page.locator("[data-field=write-state]").getAttribute("data-state")) === "saved"
-        && get(id).body === BODY.replace("The first paragraph.", "The first (edited) paragraph."), 10_000)
+        && get(id).body === BODY.replace("after a blank line.", "after a blank line. Typed.").replace("The first paragraph.", "The first (edited) paragraph."), 10_000)
         .catch(() => { throw new Error(`the body: ${JSON.stringify(get(id).body)}`); });
       // The caret out of it: drawn again, the edit in it.
       await page.evaluate(({ s }) => { const v = document.querySelector(s).editorView; v.dispatch({ selection: { anchor: 0 } }); }, { s: SEL });
@@ -263,7 +274,8 @@ export default async (ctx) => {
     }
   });
 
-  await test("in_a_document_it_draws_and_says_it_cannot_save", async () => {
+  // EDITOR-24: a document is written on the same editor, so the writer saves there too — into the doc's text.
+  await test("in_a_document_it_saves_into_the_document", async () => {
     const docId = sy("docs", "create", "--title", "a writer in a document", "--body", `@${bodyFile(BODY)}`).find((e) => e.type === "created")?.doc.id;
     assert(docId, "the doc made");
     const { context, page } = await openPage(`#/doc/${docId}`);
@@ -271,10 +283,29 @@ export default async (ctx) => {
       const tw = page.locator("[data-surface=tweet-writer]");
       await eventually("drawn in the document", async () => (await tw.count()) === 1 && (await tw.locator("[data-post]").count()) === 2, 20_000);
       assert((await tw.getAttribute("data-where")) === "doc", "told it is in a document");
-      assert(/cannot save/.test(await tw.locator("[data-field=note]").textContent()), "it says it cannot save there");
-      assert((await tw.locator("[data-action=save]").count()) === 0, "no save");
+      assert((await tw.locator("[data-field=note]").count()) === 0 && (await tw.locator("[data-action=save]").count()) === 1, "it saves here");
+      await tw.evaluate((e) => { e.dataset.same = "yes"; });
+      const box = tw.locator("[data-post='2'] [data-field=text]");
+      await box.click();
+      await page.keyboard.press("Control+End");
+      await page.keyboard.type(" In the doc.");
+      const text = () => page.evaluate(() => document.querySelector("[data-surface=editor-body] [data-field=body]").editorView.state.doc.toString());
+      await eventually("the doc's text holds it", async () => (await text()) === BODY.replace("after a blank line.", "after a blank line. In the doc."), 8_000)
+        .catch(async () => { throw new Error(`the doc: ${JSON.stringify(await text())}`); });
+      await eventually("the writer says saved", async () => (await tw.locator("[data-field=state]").getAttribute("data-state")) === "saved");
+      await eventually("sent to the docs service", async () => (await sentCalls(page)).some((c) => c.method === "docs.update"), 5_000);
+      assert((await tw.getAttribute("data-same")) === "yes" && (await box.evaluate((e) => document.activeElement === e)), "never drawn again, the focus kept");
+      assert(!(await sentCalls(page)).some((c) => c.method === "tickets.amend"), "no ticket written");
     } finally {
       await context.close();
+    }
+    // Opened again: the words are the document's.
+    const again = await openPage(`#/doc/${docId}`);
+    try {
+      const tw = again.page.locator("[data-surface=tweet-writer]");
+      await eventually("kept", async () => (await tw.count()) === 1 && (await tw.locator("[data-post='2'] [data-field=text]").inputValue()).endsWith("after a blank line. In the doc."), 20_000);
+    } finally {
+      await again.context.close();
     }
   });
 };

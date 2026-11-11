@@ -19,8 +19,11 @@
      when that is still the source it was drawn from — replaces that tag alone and writes the body back
      (`tickets.amend`), every other byte kept; when it is gone or someone changed it, it refuses and says
      so, overwriting nothing. Words are written escaped (`&` and `<`), so a word never closes the tag.
-     Drawn only: in the editor (the block under the caret is the tag's source, and the editor saves the
-     body), in a document (the docs service's: no save here), or with no ticket known.
+     EDITOR-24: in the editor — a ticket's page, `…/edit`, a document — the body is the editor's to save, so
+     the writer hands it the tag (`body.tag` on the bus: the tag's name, place, the source it was drawn from
+     and the new one) and the editor replaces that tag alone in its text and saves the body its own way (a
+     ticket's amend, a document's CRDT), answering `body.tag.done`; changed or gone, it refuses the same way.
+     Drawn only: with no ticket or document known, or its place in the body unknown.
      Marks: `[data-surface=tweet-writer]` (`data-ticket`, `data-n`, `data-where=ticket|editor|doc|none|loose`),
      `[data-post=<n>]` (1-based; `[data-over]` past 280), `[data-field=text|count|video|over|state|note]`,
      `[data-action=add|remove|up|down|save]`, `[data-state=saved|dirty|saving|refused|changed|readonly]`. -->
@@ -72,10 +75,11 @@
   let { source = "", children = null, ticket = "", doc = "", n = "", editor = "" } = $props();
   const b = bus();
 
-  const where = $derived(doc ? "doc" : editor ? "editor" : !ticket ? "none" : n !== "" && n != null && source ? "ticket" : "loose");
+  const placed = $derived(n !== "" && n != null && !!source);
+  const where = $derived(doc ? (editor && placed ? "doc" : "none") : !ticket ? "none" : !placed ? "loose" : editor ? "editor" : "ticket");
+  // What it can save into: the body it reads and writes itself (a ticket's read-only drawing), or the editor's.
+  const saves = $derived(where === "ticket" || where === "editor" || where === "doc");
   const notes = {
-    editor: "drawn only in the editor: the tag's source is where the caret is, and the editor saves the body — save the thread from the ticket's page",
-    doc: "drawn only: a writer in a document cannot save here",
     none: "drawn only: no ticket known here, so it cannot save",
     loose: "drawn only: its place in the body is not known — write its open and close tags each on a line of their own to save it",
   };
@@ -107,16 +111,37 @@
   });
 
   const text = $derived(serializeWriter(posts, open));
-  const phase = $derived(where !== "ticket" ? "readonly" : saving ? "saving" : refused ? refused.kind : text !== baseline ? "dirty" : "saved");
+  const phase = $derived(!saves ? "readonly" : saving ? "saving" : refused ? refused.kind : text !== baseline ? "dirty" : "saved");
   const said = { saved: "saved", dirty: "saving soon…", saving: "saving…" };
-  const locked = $derived(where !== "ticket"); // drawn only: nothing typed here could be kept
+  const locked = $derived(!saves); // drawn only: nothing typed here could be kept
+
+  /** EDITOR-24: the save through the editor that drew this — it replaces the tag in its text and saves the body. */
+  let asked = 0;
+  function throughEditor(next) {
+    const token = `tw-${Math.random().toString(36).slice(2)}-${++asked}`;
+    return new Promise((resolve) => {
+      let off = null;
+      const end = (r) => { clearTimeout(late); off?.(); resolve(r); };
+      const late = setTimeout(() => end({ ok: false, message: "the editor did not answer: nothing saved" }), 15000);
+      off = b.on("body.tag.done", (d) => { if (d?.token === token) end(d); });
+      b.emit("body.tag", { kind: doc ? "doc" : "ticket", id: doc || ticket, name: TAG, n: Number(n), was: drawnFrom, next, token });
+    });
+  }
 
   async function save() {
-    if (where !== "ticket" || saving) return;
+    if (!saves || saving) return;
     const next = text;
     if (next === baseline) return;
     saving = true;
     refused = null;
+    if (where !== "ticket") {
+      try {
+        const r = await throughEditor(next);
+        if (r.ok) { drawnFrom = next; baseline = next; }
+        else refused = { kind: /changed|no longer/.test(r.message ?? "") ? "changed" : "refused", message: r.message || "refused" };
+      } finally { saving = false; }
+      return;
+    }
     // COMPS-23: one save at a time on the page — each reads the body and writes it whole, so two writers in
     // one body saving at once would write over each other.
     const turn = Symbol.for("menger.tweet-writer.turn");
@@ -146,7 +171,7 @@
   // refusal stops it until the thread is drawn again (or save is pressed): nothing is retried over another's edit.
   const PAUSE = 700;
   $effect(() => {
-    if (where !== "ticket" || saving || refused || text === baseline) return;
+    if (!saves || saving || refused || text === baseline) return;
     const h = setTimeout(save, PAUSE);
     return () => clearTimeout(h);
   });
@@ -200,9 +225,9 @@
   <header class="tw-head">
     <span class="tw-label">thread · {posts.length} {posts.length === 1 ? "post" : "posts"}</span>
     <span class="tw-state" data-field="state" data-state={phase}>{phase === "readonly" ? "" : refused ? refused.message : said[phase]}</span>
-    {#if where === "ticket"}<button type="button" class="btn primary" data-action="save" disabled={saving || phase === "saved"} onclick={save}>save <kbd>ctrl</kbd><kbd>s</kbd></button>{/if}
+    {#if saves}<button type="button" class="btn primary" data-action="save" disabled={saving || phase === "saved"} onclick={save}>save <kbd>ctrl</kbd><kbd>s</kbd></button>{/if}
   </header>
-  {#if where !== "ticket"}<p class="tw-note" data-field="note">{notes[where]}</p>{/if}
+  {#if !saves}<p class="tw-note" data-field="note">{notes[where]}</p>{/if}
 
   <ol class="tw-posts">
     {#each posts as p, i (p.key)}

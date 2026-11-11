@@ -390,7 +390,7 @@ export default async (ctx) => {
       await eventually("the body, through the view", async () => (await text(b)).includes("fires at cone 6"));
       assert(trimmed(await b.locator("strong").textContent({ timeout: 1000 })) === "glaze", "the body as markdown");
       assert((await tp.locator("[data-surface=ticket-body] [data-field=title], [data-surface=ticket-body] [data-field=status]").count()) === 0, "the page's title and status stay ticket-head's");
-      assert((await tp.locator("[data-surface=ticket-body] [data-slot]").count()) === 0, "the view is no section of ticket-body's");
+      assert((await tp.locator("[data-surface=ticket-body] [data-slot]:not([data-slot=editor-body])").count()) === 0 && (await tp.locator("[data-surface=ticket-body] [data-surface=editor-body][data-kind=ticket]").count()) === 1, "the body is the editor's (EDITOR-24), the view no section of its own");
       assert(!seen.requests.some((u) => /\/components\/ticket-view\.js$/.test(new URL(u).pathname)), "the view's code came inside ticket-body's module");
       sy("tickets", "amend", "--id", t.id, "--body", body("Now *bisque* first.\n"));
       await eventually("an amend redraws the body in place", async () => (await text(b)).includes("bisque"), 5_000);

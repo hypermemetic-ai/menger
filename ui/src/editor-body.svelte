@@ -44,7 +44,14 @@
      question on that range (`docs.ask`, to anyone or to an agent); the
      margin beside the text (doc-margin, a sibling) holds each thread at its
      range's height, the range underlined in the caret's block, and follows
-     the text as it changes (`marginTick`). -->
+     the text as it changes (`marginTick`).
+     EDITOR-24: the ticket's page places this too (page-ticket, `head={false}`: the page's head has the
+     title, so none is drawn here) — one component wherever a body is written, so what it gains a
+     ticket's page, `…/edit` and a document gain together. A tag that keeps its own state (tweet-writer)
+     saves through it: it says `body.tag { kind, id, name, n, was, next, token }` on the bus; the editor
+     of that body replaces its `n`th tag of that name alone — only while it is still `was` — and saves
+     the body its own way (a ticket's amend, a doc's CRDT), answering `body.tag.done { token, ok,
+     message }`. The block is not drawn again (`Drawn.updateDOM`: the tag wrote this text, COMPS-23). -->
 <script module>
   export const uses = ["tickets.get", "tickets.watch", "tickets.amend", "tickets.revisions.list", "tickets.inputs.ask", "tickets.queue", "tickets.inputs.close",
                        "docs.get", "docs.watch", "docs.state", "docs.update", "docs.rename", "docs.present", "docs.here", "docs.history", "docs.replay", "docs.ask"];
@@ -151,8 +158,11 @@
   import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate, removeAwarenessStates } from "y-protocols/awareness";
   import { langOf } from "./code-card.svelte";
   import { authorChanged } from "./tag-components.svelte";
+  import { tagSpans, wroteOwn, isOwn } from "./tag-source.svelte";
 
-  let { id, sheet = null, kind = "ticket" } = $props();
+  let { id, sheet = null, kind = "ticket", head = true } = $props();
+  // EDITOR-24: on a page whose head has the title (page-ticket), the body alone.
+  const bare = $derived(head === false || head === "false");
   // The document this instance edits: fixed at mount (editor-screen keys the editor by it), so a
   // write still in hand when the screen moves to another document lands on its own ticket.
   const doc_id = untrack(() => id);
@@ -435,6 +445,7 @@
     eq(o) { return o.text === this.text && o.defs === this.defs && o.hand === this.hand && pieceClass(o.piece) === pieceClass(this.piece) && o.piece.wrap?.open === this.piece.wrap?.open && o.piece.wrap?.close === this.piece.wrap?.close && o.piece.src?.n === this.piece.src?.n; }
     toDOM(v) {
       const d = document.createElement("div");
+      d.widget = this; // the widget this element draws now (updateDOM moves it)
       d.className = pieceClass(this.piece);
       d.setAttribute("data-block", "");
       if (this.piece.wrap) d.setAttribute("data-tag", this.piece.wrap.tag);
@@ -451,13 +462,21 @@
         const a = ev.target?.closest?.("a[href]");
         if (a && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); window.open(a.href, "_blank", "noopener"); return; }
         if (a?.classList.contains("tpill")) return; // EDITOR-23: a ticket pill is followed (the click below), the caret stays out
-        if (this.hand) { accept(); }
+        if (d.widget.hand) { accept(); }
         ev.preventDefault();
-        enter(v, d, this.text, ev);
+        enter(v, d, d.widget.text, ev);
       });
       // A link in a block is not followed (the click enters the block) — but a ticket pill, plainly clicked, is (EDITOR-23).
       d.addEventListener("click", (ev) => { const a = ev.target?.closest?.("a[href]"); if (a && !(a.classList.contains("tpill") && !ev.metaKey && !ev.ctrlKey)) ev.preventDefault(); });
       return d;
+    }
+    /** EDITOR-24: a tag's own save (`body.tag`) wrote this text — what is drawn made it, and stays as it
+     *  is, the focus and the caret in it too (COMPS-23's rule, here). Anything else is drawn again. */
+    updateDOM(dom) {
+      const was = dom.widget;
+      if (!was || !this.piece.src || !isOwn(this.text) || this.hand !== was.hand || this.defs !== was.defs || pieceClass(this.piece) !== pieceClass(was.piece) || this.piece.src.n !== was.piece.src?.n) return false;
+      dom.widget = this;
+      return true;
     }
     destroy(dom) { if (dom.view) { unmount(dom.view); dom.view = null; } }
     ignoreEvent() { return true; }
@@ -868,6 +887,20 @@
     ev.currentTarget.value = "";
   }
 
+  // ── EDITOR-24: a tag's own state, saved through this editor ──────────────
+  b.on("body.tag", async (d) => {
+    if (!d || d.kind !== (isDoc ? "doc" : "ticket") || String(d.id) !== String(doc_id) || !view) return;
+    const done = (ok, message = "") => b.emit("body.tag.done", { token: d.token, ok, message });
+    const s = tagSpans(doc()).filter((x) => x.name === d.name)[Number(d.n)];
+    if (!s) return done(false, `the body no longer holds this <${d.name}>: nothing saved`);
+    if (s.text !== d.was) return done(false, "this was changed since it was drawn (someone else's edit): nothing saved");
+    wroteOwn(d.next);
+    view.dispatch({ changes: { from: s.from, to: s.to, insert: d.next }, scrollIntoView: false });
+    if (isDoc) return done(true); // the CRDT has it
+    await flush();
+    if (state.kind === "refused") done(false, state.text); else done(true);
+  });
+
   function init(tk) {
     acked = isDoc ? null : tk.body;
     view = new EditorView({
@@ -988,7 +1021,7 @@
   {:else if !t}
     <p class="empty" data-empty data-not-found>No {isDoc ? "document" : "ticket"} {doc_id} here{(isDoc ? meta.message : ticket.message) ? ` — ${isDoc ? meta.message : ticket.message}` : ""}.</p>
   {:else}
-    <TicketView status={t.status} edit={bodyMount} titleEdit={titleMount}/>
+    {#if bare}<TicketView edit={bodyMount}/>{:else}<TicketView status={t.status} edit={bodyMount} titleEdit={titleMount}/>{/if}
   {/if}
   {#if isDoc && t && synced}<Margin id={doc_id} {ydoc} view={() => view} tick={marginTick}/>{/if}
   {#if asking}
