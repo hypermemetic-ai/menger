@@ -103,7 +103,7 @@ export default async (ctx) => {
       assert(await page.locator("[data-ticket-body]").evaluate((b) => b.textContent.includes("And words after it")), "the words after it drawn");
       assert((await page.locator("[data-surface=tweet-writer]").count()) === 1, "one writer: the fenced tag is code");
 
-      // Typed, a post added after post 2 and moved up to be the second; nothing written until saved.
+      // Typed, a post added after post 2 and moved up to be the second (COMPS-23: a pause saves by itself).
       const first = post(1).locator("[data-field=text]");
       await first.click();
       await first.press("Control+End");
@@ -115,7 +115,6 @@ export default async (ctx) => {
       await page.keyboard.type("The third, added.");
       await post(3).locator("[data-action=up]").click();
       await eventually("moved up", async () => (await words(2)) === "The third, added.");
-      assert(get(id).body === BODY, "nothing is written while typing");
       // Every box shows all its words (the two paragraphs too, after the move): none is cut off.
       await eventually("no box cut off", async () => (await tw.locator("[data-field=text]").evaluateAll((ts) => ts.every((t) => t.scrollHeight <= t.clientHeight + 1))), 3_000);
       if (process.env.PAGES_SHOTS) await page.screenshot({ path: path.join(process.env.PAGES_SHOTS, "tweet-writer.png"), fullPage: true });
@@ -167,16 +166,9 @@ export default async (ctx) => {
       const box = (w) => tw.nth(w).locator("[data-post='1'] [data-field=text]");
       await box(0).fill("first writer, edited");
       await box(1).fill("second writer, edited");
-      await tw.nth(0).locator("[data-action=save]").click();
-      const one = `top\n\n<tweet-writer>\n<tweet-post>first writer, edited</tweet-post>\n</tweet-writer>\n\nmiddle\n\n${B}\n\nend\n`;
-      await eventually("the first saved alone", async () => get(id).body === one, 8_000).catch(() => { throw new Error(`the body: ${JSON.stringify(get(id).body)}`); });
-      // The second kept what was typed in it through the first's save, and saves its own.
-      await sleep(800);
-      assert((await box(1).inputValue()) === "second writer, edited", "the second's words kept through the first's save");
-      assert((await tw.nth(1).locator("[data-field=state]").getAttribute("data-state")) === "dirty", "and still unsaved");
-      await tw.nth(1).locator("[data-action=save]").click();
+      // COMPS-23: each saves by itself, one at a time; neither writes over the other.
       const both = `top\n\n<tweet-writer>\n<tweet-post>first writer, edited</tweet-post>\n</tweet-writer>\n\nmiddle\n\n<tweet-writer>\n<tweet-post>second writer, edited</tweet-post>\n</tweet-writer>\n\nend\n`;
-      await eventually("the second saved too", async () => get(id).body === both, 8_000).catch(() => { throw new Error(`the body: ${JSON.stringify(get(id).body)}`); });
+      await eventually("both saved, apart", async () => get(id).body === both, 8_000).catch(() => { throw new Error(`the body: ${JSON.stringify(get(id).body)}`); });
     } finally {
       await context.close();
     }
@@ -234,6 +226,38 @@ export default async (ctx) => {
       await page.evaluate(({ s }) => { const v = document.querySelector(s).editorView; v.dispatch({ selection: { anchor: 0 } }); }, { s: SEL });
       await eventually("drawn again with the edit", async () => (await tw.count()) === 1
         && (await tw.locator("[data-post='2'] [data-field=text]").inputValue()).startsWith("The first (edited) paragraph."), 8_000);
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("it_saves_by_itself_and_is_not_drawn_again", async () => {
+    // COMPS-23: a pause writes the thread; the writer's own save redraws nothing under the caret.
+    const id = child("saves by itself", BODY);
+    const { context, page } = await openPage(`#/ticket/${id}`);
+    try {
+      const w = page.locator("[data-surface=tweet-writer]");
+      await eventually("the writer", async () => (await w.locator("[data-post]").count()) === 2, 15_000);
+      await w.evaluate((e) => { e.dataset.same = "yes"; });
+      const box = w.locator("[data-post='2'] textarea");
+      await box.click();
+      await page.keyboard.press("Control+End");
+      await page.keyboard.type(" One.");
+      await eventually("the first pause saved", async () => get(id).body.includes("after a blank line. One."), 6_000);
+      await sleep(600); // the body's redraw has come and gone
+      await page.keyboard.type(" Two.");
+      await eventually("the second pause saved", async () => get(id).body.includes("after a blank line. One. Two."), 6_000);
+      await sleep(600);
+      assert((await w.getAttribute("data-same")) === "yes", "the writer was never drawn again");
+      assert(await box.evaluate((e) => document.activeElement === e), "the focus never left the box");
+      assert((await w.locator("[data-field=state]").getAttribute("data-state")) === "saved", "it says saved");
+      const body = get(id).body;
+      assert(body.startsWith(BEFORE) && body.endsWith(AFTER), "the body outside the tag byte for byte");
+      const amends = (await sentCalls(page)).filter((x) => x.method === "tickets.amend").length;
+      assert(amends === 2, `one write a pause, none by a click: ${amends}`);
+      // + and a move save too, with no click on save.
+      await w.locator("[data-post='2'] [data-action=up]").click();
+      await eventually("the move saved", async () => /<tweet-writer>\n<tweet-post>The first paragraph\./.test(get(id).body), 6_000);
     } finally {
       await context.close();
     }

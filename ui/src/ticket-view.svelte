@@ -40,7 +40,7 @@
      nothing; a framed page does not. -->
 <script module>
   import { PAGE_TAG, WHOLE, fencePage, pageEnd, pageSpec, holdsRaw } from "./m-mockup.svelte";
-  import { openName, closeLine, tagSpans } from "./tag-source.svelte";
+  import { openName, closeLine, tagSpans, isOwn } from "./tag-source.svelte";
 
   export const uses = [];
 
@@ -232,7 +232,9 @@
     if (p.det) { const m = DETAILS.exec(p.text); if (m) return `${m[1]}\n\n${m[2].trim()}\n\n${m[3]}`; }
     // COMPS-16: a tag in block form holding a blank line is drawn as its open and close lines alone — the
     // markdown would end its HTML at the blank line and tear the tag; its component is handed its source.
-    const text = p.src && /\n[ \t]*\n/.test(p.text) ? `${p.text.slice(0, p.text.indexOf("\n"))}\n${p.text.slice(p.text.lastIndexOf("\n") + 1)}` : p.text;
+    // COMPS-23: always so, whether or not it holds one — what is drawn for it never moves with its content,
+    // so the tag's own save redraws nothing.
+    const text = p.src && p.text.includes("\n") ? `${p.text.slice(0, p.text.indexOf("\n"))}\n${p.text.slice(p.text.lastIndexOf("\n") + 1)}` : p.text;
     if (!p.wrap) return text;
     if (p.h === "open" || p.h === "close") return `${p.wrap.open}\n\n${p.wrap.close}`;
     return `${p.wrap.open}\n\n${text}\n\n${p.wrap.close}`;
@@ -312,6 +314,8 @@
     const place = (q) => {
       const k = `${q.src?.n ?? ""}\u0000${pieceSource(q)}\u0000${q.text}`;
       if (k === key) return;
+      // COMPS-23: the tag's own save — what is drawn wrote this text, and stays as it is.
+      if (key !== null && q.src && isOwn(q.text)) { key = k; return; }
       key = k;
       const text = q.text;
       const src = q.src ? { ...q.src, source: q.text } : null;
@@ -373,7 +377,8 @@
     if (edit || block) return [];
     const seen = new Map();
     return blocks(body).map((p) => {
-      const t = `${p.wrap?.open ?? ""}\u0000${p.h ?? ""}\u0000${p.text}`;
+      // COMPS-23: a block-form tag is kept by its name and place, so its own save moves no block.
+      const t = p.src ? `tag\u0000${p.src.name}\u0000${p.src.n ?? ""}` : `${p.wrap?.open ?? ""}\u0000${p.h ?? ""}\u0000${p.text}`;
       const c = seen.get(t) ?? 0;
       seen.set(t, c + 1);
       return { ...p, k: `${t}\u0000${c}` };

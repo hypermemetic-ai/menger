@@ -9,6 +9,14 @@
 <script module>
   export const uses = [];
 
+  /** COMPS-23: the text a drawn tag just wrote of itself (its own save) — what draws the body skips drawing
+   *  that tag again for it, so the component stays as it is (its caret, its focus). The newest few are kept. */
+  // Kept on the page, not in this module: a sibling is bundled into each component that imports it, so the
+  // writer's copy of this file and ticket-view's are two modules.
+  const own = (globalThis[Symbol.for("menger.tag-source.own")] ??= []);
+  export function wroteOwn(text) { own.push(String(text)); if (own.length > 32) own.shift(); }
+  export const isOwn = (text) => own.includes(String(text));
+
   const FENCE = /^ {0,3}(`{3,}|~{3,})/;
   const ATTRS = `(?:\\s(?:[^>"']|"[^"]*"|'[^']*')*)?`;
   const NAME = "[a-z][a-z0-9]*(?:-[a-z0-9]+)+";
