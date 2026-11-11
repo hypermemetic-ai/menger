@@ -28,14 +28,32 @@ fn admin_somewhere(store: &Store, user: &VerifiedUser) -> Result<AdminOf, Member
     scopes.iter().find_map(|s| user.admin_of(s, store).ok()).ok_or_else(|| error("a team is made and changed by an admin: you hold admin nowhere"))
 }
 
+/// KEEL-56: admin somewhere inside `org`, as a proof — `*`, the
+/// organization, one of its shortcodes, or a ticket in it — minted within the
+/// caller's ceiling: what changing one of its teams that holds nothing takes.
+fn admin_inside(store: &Store, user: &VerifiedUser, org: &OrgId) -> Result<AdminOf, MembersEvent> {
+    let inside = |s: &Scope| match (s, s.org(), s.ticket()) {
+        (Scope::Everywhere, ..) => true,
+        (_, Some(o), _) => o == org,
+        (_, None, Some(key)) => store.org_of(&key.to_string()).as_ref() == Some(org),
+        _ => false,
+    };
+    let scopes: Vec<Scope> = user.reach().grants().iter().filter(|(s, r)| *r == Role::Admin && inside(s)).map(|(s, _)| s.clone()).collect();
+    scopes.iter().find_map(|s| user.admin_of(s, store).ok()).ok_or_else(|| error(format!("a team of {org} that holds nothing is changed by an admin in {org}: you hold admin nowhere there")))
+}
+
 /// ACCESS-22 (owner, 2026-10-09): admin on every scope `team` holds, minted
 /// against the tree as it stands — or, for a team that holds nothing, admin
-/// somewhere. The first scope missing is named.
+/// somewhere (KEEL-56: inside the team's own organization; to a caller
+/// outside it there is no such team, as `show` says). The first scope
+/// missing is named.
 fn on_team(store: &Store, user: &VerifiedUser, team: &TeamName) -> Result<OnTeam, MembersEvent> {
     signer(user)?;
-    let scopes = store.team_scopes(team).ok_or_else(|| error(format!("no team {team}")))?;
+    let no_team = || error(format!("no team {team}"));
+    let scopes = store.team_scopes(team).ok_or_else(no_team)?;
     if scopes.is_empty() {
-        return Ok(OnTeam::new(vec![admin_somewhere(store, user)?]));
+        let org = store.team_org(team).filter(|o| in_reach(user, o)).ok_or_else(no_team)?;
+        return Ok(OnTeam::new(vec![admin_inside(store, user, &org)?]));
     }
     let admins = scopes
         .iter()

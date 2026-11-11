@@ -6,7 +6,8 @@
 //! author's allowance through the seam — refused typed over it, with
 //! nothing written; the effective cap own, else a team's, else the
 //! default; the table of everyone, sorted, an admin's; the seam's four
-//! methods the server's alone; parallel reserves near the cap passing what
+//! methods the server's alone (KEEL-56: refused by each method to anyone short
+//! of an admin of everything); parallel reserves near the cap passing what
 //! fits; the recount through the stores' own methods; the box guard over a
 //! fake disk.
 
@@ -339,6 +340,69 @@ async fn the_seams_methods_are_the_servers_alone_and_parallel_reserves_pass_what
     // An unknown source is refused.
     let bad = one(&admin, "quota.reserve", json!({"principal": me, "source": "lasers", "amount": 1})).await;
     assert!(bad.to_string().contains("lasers"), "{bad}");
+}
+
+/// KEEL-56: an admin of one shortcode.
+const SCOPED: [u8; 32] = [0xa1; 32];
+/// KEEL-56: an organization's admin.
+const ORG_ADMIN: [u8; 32] = [0xa2; 32];
+/// KEEL-56: an admin of everything, signing in with a session capped to one shortcode.
+const CAPPED: [u8; 32] = [0xa3; 32];
+
+/// A client carrying a minted session's token.
+async fn connect_session(token: &str, port: u16) -> WsClient {
+    let mut h = HeaderMap::new();
+    h.insert("authorization", HeaderValue::from_str(&format!("Bearer {token}")).unwrap());
+    WsClientBuilder::default().set_headers(h).build(format!("ws://127.0.0.1:{port}")).await.expect("a session's socket")
+}
+
+/// KEEL-56: the seam's four move anyone's allowance — a hold against it, a
+/// count, a hold let go, usage given back — so each is refused, by the
+/// method itself, to everyone short of an admin of everything: an editor, an
+/// admin of one shortcode, an organization's admin, and a session capped to
+/// one shortcode. Nothing moves; an editor's own write is still counted
+/// through the seam, which asks as the server.
+#[tokio::test]
+async fn the_seams_four_are_refused_to_all_but_an_admin_of_everything() {
+    let (admin, editor, port) = with_editor(None).await;
+    grant(&admin, &SCOPED, "admin", "Q").await;
+    let org = one(&admin, "orgs.create", json!({"name": "acme", "admin": support::principal_of(&ORG_ADMIN)})).await;
+    assert!(org.get("error_kind").is_none() && org["type"] != "error", "{org}");
+    grant(&admin, &CAPPED, "admin", "*").await;
+    let token = support::mint_session_with(&CAPPED, port, json!({"ceiling": ["admin@Q"]})).await;
+    let callers = [
+        ("an editor", editor),
+        ("an admin of Q", connect_key(&SCOPED, port).await),
+        ("an organization's admin", connect_key(&ORG_ADMIN, port).await),
+        ("a session capped to Q", connect_session(&token, port).await),
+    ];
+    let me = support::principal_of(&EDITOR);
+    let hold = one(&admin, "quota.reserve", json!({"principal": me, "source": "media.bytes", "amount": 10})).await;
+    let ticket = hold["ticket"].as_str().unwrap_or_else(|| panic!("{hold}")).to_string();
+    let before = one(&admin, "quota.usage", json!({"principal": me})).await;
+    for (who, c) in &callers {
+        for (m, params) in [
+            ("quota.reserve", json!({"principal": me, "source": "media.bytes", "amount": 1})),
+            ("quota.commit", json!({"ticket": ticket})),
+            ("quota.release", json!({"ticket": ticket})),
+            ("quota.credit", json!({"principal": me, "source": "tickets.count", "amount": 1})),
+        ] {
+            let refused = one(c, m, params).await;
+            assert_eq!(refused["type"], "error", "{who}, {m}: {refused}");
+            if *who != "an editor" {
+                // Admitted by the gate (admin somewhere); the method refuses.
+                assert!(refused["message"].as_str().is_some_and(|s| s.ends_with("is an admin of *'s")), "{who}, {m}: {refused}");
+            }
+        }
+    }
+    assert_eq!(one(&admin, "quota.usage", json!({"principal": me})).await, before, "nothing moved");
+    assert_eq!(one(&admin, "quota.commit", json!({"ticket": ticket})).await["type"], "committed", "the hold is the admin's to count");
+    // The seam still counts an editor's own write: it asks as the server.
+    let editor = connect_key(&EDITOR, port).await;
+    let was = source(&one(&editor, "quota.usage", json!({})).await, "tickets.count")["used"].as_u64().unwrap();
+    assert_eq!(one(&editor, "tickets.create", json!({"epic": "Q", "title": "counted", "kind": "build", "parent": "Q-1"})).await["type"], "created");
+    let now = source(&one(&editor, "quota.usage", json!({})).await, "tickets.count")["used"].as_u64().unwrap();
+    assert_eq!(now, was + 1, "an editor's ticket is counted through the seam");
 }
 
 #[tokio::test]
