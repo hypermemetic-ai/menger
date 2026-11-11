@@ -81,6 +81,17 @@ A build that finds no bundle — a checkout, the tests, `deploy/pipeline`'s
 releases, whose bundle the deploy pushes — carries nothing and serves the
 placeholder until a push. To carry one:
 
+**A built binary, for `cargo binstall menger`** (DIST-22). `scripts/package`
+makes the archive binstall downloads — one stripped binary carrying the UI
+(the `dist` profile: 85 MB, 31 MB packed), named and laid out as
+`Cargo.toml`'s `[package.metadata.binstall]` says: `menger-<target>-v<version>.tar.gz`,
+an asset of the GitHub release tagged `v<version>`. `--container
+rust:1-bullseye` builds it against an old glibc so it runs on older
+systems than this one; `--check` runs the packed binary on a fresh HOME and
+wants the app at `/app/`; `--binstall` has cargo-binstall install it from
+loopback by the manifest's own URL. It never tags, releases or publishes:
+`deploy/release/README.md` has those steps, the owner's, in order.
+
 ```sh
 scripts/embed-ui                 # build the bundle from ui/ into embed/ui.tar (never committed)
 scripts/embed-ui path/to/ui.tar  # or take one already built, e.g. a release's dist/ui.tar

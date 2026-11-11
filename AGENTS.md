@@ -53,6 +53,15 @@ crate ships it (run `scripts/embed-ui` before `cargo publish -p menger
 checkout, the tests and the pipeline's releases carry none, so their
 `/app/` is the placeholder until a push. `embed/ui.tar` is never committed.
 
+**The archive `cargo binstall menger` downloads** (DIST-22) is
+`scripts/package --container rust:1-bullseye --check --binstall`: one
+stripped binary carrying the UI, `dist/release/menger-<target>-v<version>.tar.gz`,
+named as `[package.metadata.binstall]` says (`scripts/tests/package` holds
+the names). It builds and packs and nothing else. **Publishing to
+crates.io, a `v<version>` tag, a GitHub release and its assets are the
+owner's, each on its own word** — `deploy/release/README.md` has the order;
+never run one because the archive is ready.
+
 Bare `cargo run` takes prod's ports (4455–4456, or the next free ones) and
 the default data directory, `~/.local/share/menger` — prod's directory on
 this machine; it writes `local.key`, `local.json` and `once/` beside prod's

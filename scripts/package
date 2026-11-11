@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+# DIST-22: the archive `cargo binstall menger` downloads — one stripped
+# binary that carries the UI (DIST-19), named and laid out as Cargo.toml's
+# [package.metadata.binstall] says. It builds and packs; it never tags,
+# pushes, releases or publishes — those are the owner's, each on its word
+# (deploy/release/README.md has the order).
+#
+#   scripts/package                  build for this machine's target; the UI's
+#                                    bundle built from ui/ (scripts/embed-ui)
+#   scripts/package --ui TAR         carry a bundle already built — a
+#                                    release's dist/ui.tar
+#   scripts/package --target T       another target rustup has (and a linker for)
+#   scripts/package --allow-dirty    pack a tree with uncommitted changes (a rehearsal)
+#   scripts/package --check          then run the packed binary on a scratch HOME:
+#                                    --version, a start on free ports, the
+#                                    sign-in link, and /app/ serving the UI
+#                                    the binary carries, not the placeholder
+#   scripts/package --binstall       then have cargo-binstall install it from
+#                                    this directory served on loopback, by the
+#                                    manifest's own URL template, into a
+#                                    scratch directory: the names, proven
+#   scripts/package --container IMAGE
+#                                    build inside IMAGE (docker; a Rust toolchain
+#                                    on an older glibc, e.g. rust:1-bullseye), so
+#                                    the binary runs on systems older than this
+#                                    one — a build on this machine needs its glibc
+#   scripts/package --bin FILE       pack a menger already built (another machine's,
+#                                    a workflow's); nothing is built here
+#   scripts/package --name           print the archive's name and exit
+#   -o DIR                           where the archive goes (default dist/release)
+#
+# The archive: DIR/menger-<target>-v<version>.tar.gz holding
+# menger-<target>-v<version>/{menger,LICENSE,README.md}, and its .sha256.
+set -euo pipefail
+root=$(cd "$(dirname "$0")/.." && pwd)
+say() { echo "package: $*"; }
+die() { echo "package: $*" >&2; exit 1; }
+
+target= ui= built= image= out=$root/dist/release dirty=0 check=0 binstall=0 name_only=0
+while (($#)); do
+  case $1 in
+    -h|--help) sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --target) target=${2:?--target needs a target}; shift ;;
+    --ui) ui=${2:?--ui needs a bundle}; shift ;;
+    --bin) built=${2:?--bin needs a binary}; shift ;;
+    --container) image=${2:?--container needs an image}; shift ;;
+    -o) out=${2:?-o needs a directory}; shift ;;
+    --allow-dirty) dirty=1 ;;
+    --check) check=1 ;;
+    --binstall) binstall=1 ;;
+    --name) name_only=1 ;;
+    *) die "unknown option $1 (--help)" ;;
+  esac
+  shift
+done
+
+cd "$root"
+version=$(cargo pkgid -p menger | sed 's/.*[#@]//')
+[[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]] || die "no version for menger (cargo pkgid said: $version)"
+[[ -n $target ]] || target=$(rustc -vV | sed -n 's/^host: //p')
+stem=menger-$target-v$version
+archive=$out/$stem.tar.gz
+if ((name_only)); then echo "$stem.tar.gz"; exit 0; fi
+
+if [[ -n $(git status --porcelain) ]]; then
+  ((dirty)) || die "the tree has uncommitted changes: commit them, or --allow-dirty for a rehearsal"
+  say "the tree is dirty: a rehearsal, not a release"
+fi
+if [[ -n $built ]]; then
+  [[ -x $built ]] || die "$built is no program"
+  bin=$(readlink -f "$built")
+  say "packing $bin as menger $version for $target; nothing built"
+else
+  # CI-2: a build this size is refused on a full disk, up front.
+  "$root/scripts/disk-check.sh" >/dev/null || die "the disk is low (scripts/disk-check.sh): make room first"
+
+  # The bundle goes in by name for this one build (build.rs: MENGER_UI_BUNDLE),
+  # so the checkout's embed/ is as it was and a later dev build carries nothing.
+  if [[ -z $ui ]]; then
+    had=0; [[ -e $root/embed/ui.tar ]] && had=1
+    "$root/scripts/embed-ui"   # builds dist/ui.tar, and puts a copy in embed/
+    ui=$root/dist/ui.tar
+    ((had)) || "$root/scripts/embed-ui" --clear >/dev/null
+  fi
+  [[ -f $ui ]] || die "$ui is no file"
+  ui=$(readlink -f "$ui")
+  say "the UI: $ui ($(sha256sum "$ui" | cut -c1-12), $(du -h "$ui" | cut -f1))"
+
+  tdir=$(cargo metadata --no-deps --format-version 1 | sed 's/.*"target_directory":"\([^"]*\)".*/\1/')
+  if [[ -n $image ]]; then
+    # The image's toolchain and C library, this tree (read-only), this machine's
+    # crate downloads; its objects in a directory of their own beside the target.
+    # SELinux: a bind mount is unreadable in a container without label=disable.
+    tdir=$tdir/container; mkdir -p "$tdir" "$HOME/.cargo/registry"
+    say "building menger $version for $target in $image (profile dist)"
+    docker run --rm --security-opt label=disable --user "$(id -u):$(id -g)" \
+      -e HOME=/tmp -e CARGO_TARGET_DIR=/target -e MENGER_UI_BUNDLE=/ui.tar \
+      -v "$root:/src:ro" -v "$tdir:/target" -v "$HOME/.cargo/registry:/usr/local/cargo/registry" -v "$ui:/ui.tar:ro" \
+      -w /src "$image" cargo build --locked --profile dist -p menger --bin menger --target "$target" \
+      || die "the build in $image failed"
+  else
+    say "building menger $version for $target (profile dist)"
+    MENGER_UI_BUNDLE=$ui cargo build --locked --profile dist -p menger --bin menger --target "$target"
+  fi
+  bin=$tdir/$target/dist/menger
+  [[ -x $bin ]] || die "the build left no $bin"
+fi
+
+stage=$(mktemp -d "${TMPDIR:-/tmp}/menger-package.XXXXXX")
+served=
+cleanup() {
+  [[ -n $served ]] && kill "$served" 2>/dev/null
+  [[ -n ${server:-} ]] && kill "$server" 2>/dev/null
+  [[ -d $stage ]] && rm -rf "$stage"
+  return 0
+}
+trap cleanup EXIT
+mkdir -p "$stage/$stem" "$out"
+cp "$bin" "$stage/$stem/menger"
+cp "$root/LICENSE" "$root/README.md" "$stage/$stem/"
+# The same bytes from the same tree: no owner, no time but the commit's.
+when=$(git log -1 --format=%cI 2>/dev/null || date -u +%FT%TZ)
+tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="$when" -C "$stage" -cf - "$stem" | gzip -n9 >"$archive.tmp"
+mv "$archive.tmp" "$archive"
+(cd "$out" && sha256sum "$stem.tar.gz" >"$stem.tar.gz.sha256")
+# What the binary asks of the system it lands on.
+needs=$(objdump -T "$bin" 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1 || true)
+[[ -z $needs ]] || say "it needs ${needs/_/ } or newer (this machine: $(ldd --version 2>/dev/null | sed -n '1s/.* //p'))"
+say "$archive — $(du -h "$archive" | cut -f1) packed, the binary $(du -h "$bin" | cut -f1); sha256 $(cut -c1-12 "$archive.sha256")"
+
+free_port() { python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])'; }
+
+if ((check)); then
+  # The packed binary, on a HOME that has never seen menger.
+  home=$stage/home; mkdir -p "$home" "$stage/unpacked"
+  tar -xzf "$archive" -C "$stage/unpacked"
+  m=$stage/unpacked/$stem/menger
+  said=$("$m" --version); [[ $said == "menger $version" ]] || die "check: --version said '$said', wanted 'menger $version'"
+  ws=$(free_port) shell=$(free_port)
+  env -i HOME="$home" PATH="$PATH" PLEXUS_NO_REGISTRY=1 "$m" --port "$ws" --shell-port "$shell" >"$stage/banner" 2>"$stage/err" </dev/null &
+  server=$!
+  for _ in $(seq 100); do grep -q 'stop:' "$stage/banner" 2>/dev/null && break; kill -0 "$server" 2>/dev/null || break; sleep 0.2; done
+  grep -q 'stop:' "$stage/banner" || die "check: no banner — $(cat "$stage/err")"
+  link=$(sed -n 's/^ *open: *\(http[^ ]*\).*/\1/p' "$stage/banner")
+  [[ $link == http://127.0.0.1:$shell/login?once=* ]] || die "check: no sign-in link in: $(cat "$stage/banner")"
+  jar=$stage/jar
+  code=$(curl -s -o /dev/null -w '%{http_code}' -c "$jar" "$link")
+  [[ $code == 303 ]] || die "check: the sign-in link answered $code, wanted 303"
+  page=$(curl -s -b "$jar" "http://127.0.0.1:$shell/app/")
+  [[ $page != *"No frontend yet"* ]] || die "check: /app/ is the placeholder — the binary carries no UI"
+  [[ $page == *"<script"* ]] || die "check: /app/ is not the app's page: ${page:0:200}"
+  kill "$server"; wait "$server" 2>/dev/null || true; server=
+  say "check: menger $version starts on a fresh HOME, signs in by its link, and serves the UI it carries at /app/"
+fi
+
+if ((binstall)); then
+  command -v cargo-binstall >/dev/null || die "binstall: cargo-binstall is not installed"
+  # The release as GitHub would serve it — <repo>/releases/download/v<version>/<archive> —
+  # from loopback. binstall downloads over https alone, so the scratch server has a
+  # certificate from a scratch authority binstall is told to trust for this one run.
+  port=$(free_port); site=$stage/site/releases/download/v$version; mkdir -p "$site" "$stage/installed" "$stage/tls"
+  cp "$archive" "$site/"
+  ( cd "$stage/tls"
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 -subj "/CN=menger package rehearsal" \
+      -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign -keyout ca.key -out ca.pem
+    openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj "/CN=127.0.0.1" -keyout leaf.key -out leaf.csr
+    printf 'subjectAltName=IP:127.0.0.1\nbasicConstraints=CA:FALSE\nkeyUsage=digitalSignature\nextendedKeyUsage=serverAuth\n' >leaf.ext
+    openssl x509 -req -in leaf.csr -CA ca.pem -CAkey ca.key -CAcreateserial -days 1 -extfile leaf.ext -out leaf.pem
+  ) >/dev/null 2>&1 || die "binstall: openssl made no certificate for the scratch server"
+  python3 - "$stage/site" "$port" "$stage/tls/leaf.pem" "$stage/tls/leaf.key" >/dev/null 2>&1 <<'PY' &
+import functools, http.server, ssl, sys
+site, port, cert, key = sys.argv[1:5]
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+ctx.load_cert_chain(cert, key)
+srv = http.server.ThreadingHTTPServer(("127.0.0.1", int(port)), functools.partial(http.server.SimpleHTTPRequestHandler, directory=site))
+srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+srv.serve_forever()
+PY
+  served=$!
+  for _ in $(seq 50); do curl -s -o /dev/null --cacert "$stage/tls/ca.pem" "https://127.0.0.1:$port/" && break; sleep 0.1; done
+  tmpl=$(sed -n 's/^pkg-url *= *"\(.*\)"$/\1/p' "$root/Cargo.toml")
+  [[ $tmpl == *"{ repo }"* ]] || die "binstall: Cargo.toml's pkg-url names no { repo }: $tmpl"
+  # --manifest-path: the version and the layout are this tree's, nothing is asked of crates.io.
+  cargo binstall menger --manifest-path "$root" --no-confirm --no-discover-github-token --disable-telemetry \
+    --strategies crate-meta-data --install-path "$stage/installed" --no-track --root-certificates "$stage/tls/ca.pem" \
+    --pkg-url "${tmpl//\{ repo \}/https://127.0.0.1:$port}" || die "binstall: cargo-binstall did not install from the archive"
+  said=$("$stage/installed/menger" --version); [[ $said == "menger $version" ]] || die "binstall: installed '$said'"
+  kill "$served" 2>/dev/null; served=
+  say "binstall: cargo-binstall found $stem.tar.gz by the manifest's URL and installed menger $version from it"
+fi

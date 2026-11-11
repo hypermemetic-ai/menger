@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2015  # `check && ok || bad` is the house assertion (deploy/tests)
+# DIST-22: scripts/package — the archive is named and laid out as Cargo.toml's
+# [package.metadata.binstall] tells cargo-binstall to ask for it, its checksum
+# holds, and the same tree packs to the same bytes. A stand-in binary is packed
+# (--bin): nothing is built, served or installed here — `scripts/package
+# --check --binstall` does that with a real build. `cargo test` runs it
+# (tests/scripts.rs).
+set -uo pipefail
+SELF=$(readlink -f "$0"); ROOT=$(dirname "$(dirname "$(dirname "$SELF")")")
+PKG=$ROOT/scripts/package
+PARENT=/tmp/claude-$(id -u)/dist22; mkdir -p "$PARENT"
+T=$(mktemp -d "$PARENT/t.XXXXXX")
+pass=0 fail=0
+ok()  { pass=$((pass + 1)); }
+bad() { fail=$((fail + 1)); printf 'FAIL %s\n' "$*" >&2; }
+is()  { [[ $2 == "$3" ]] && ok || bad "$1: got '$2', wanted '$3'"; }
+has() { [[ $2 == *"$3"* ]] && ok || bad "$1: wanted '$3' in: $2"; }
+
+version=$(cd "$ROOT" && cargo pkgid -p menger | sed 's/.*[#@]//')
+target=$(rustc -vV | sed -n 's/^host: //p')
+meta() { sed -n "/^\[package.metadata.binstall\]/,/^\[/s/^$1 *= *\"\(.*\)\"$/\1/p" "$ROOT/Cargo.toml"; }
+# binstall's template, rendered as binstall renders it for this crate and target.
+render() { local t=$1
+  t=${t//\{ name \}/menger}; t=${t//\{ bin \}/menger}; t=${t//\{ target \}/$2}; t=${t//\{ version \}/$version}
+  t=${t//\{ archive-suffix \}/.tar.gz}; t=${t//\{ binary-ext \}/}; printf '%s' "$t"; }
+
+is "pkg-fmt" "$(meta pkg-fmt)" tgz
+url=$(render "$(meta pkg-url)" "$target")
+has "the url is the repository's release for the version's tag" "$url" "{ repo }/releases/download/v$version/"
+is "the name --name prints is the one the url asks for" "$("$PKG" --name)" "${url##*/}"
+is "another target's" "$("$PKG" --target aarch64-apple-darwin --name)" "$(v=$(render "$(meta pkg-url)" aarch64-apple-darwin); echo "${v##*/}")"
+
+# A stand-in for the binary: what is packed is the file given, whatever it is.
+printf '#!/bin/sh\necho "menger %s"\n' "$version" >"$T/menger"; chmod +x "$T/menger"
+out=$("$PKG" --allow-dirty --bin "$T/menger" -o "$T/a" 2>&1); code=$?
+is "packs" "$code" 0
+archive=$T/a/${url##*/}
+[[ -f $archive ]] && ok || bad "no archive at $archive — $out"
+list=$(tar -tzf "$archive" 2>/dev/null | LC_ALL=C sort | tr '\n' ' ')
+stem=menger-$target-v$version
+is "holds the binary, the licence and the readme, under one directory" "$list" "$stem/ $stem/LICENSE $stem/README.md $stem/menger "
+has "the binary is where bin-dir says" "$list" "$(render "$(meta bin-dir)" "$target") "
+mkdir -p "$T/x" && tar -xzf "$archive" -C "$T/x"
+is "the binary runs from the archive" "$("$T/x/$stem/menger" 2>&1)" "menger $version"
+(cd "$T/a" && sha256sum -c --status "${url##*/}.sha256") && ok || bad "the .sha256 does not hold for the archive"
+
+"$PKG" --allow-dirty --bin "$T/menger" -o "$T/b" >/dev/null 2>&1
+is "the same tree packs to the same bytes" "$(sha256sum <"$T/b/${url##*/}")" "$(sha256sum <"$archive")"
+
+out=$("$PKG" --publish 2>&1); is "an option it does not have is refused" "$?" 1
+has "…by name" "$out" "unknown option --publish"
+out=$("$PKG" --allow-dirty --bin "$T/none" -o "$T/c" 2>&1); is "a binary that is not there is refused" "$?" 1
+# It never reaches outward: no command in it that tags, pushes, releases or publishes.
+for word in 'git tag' 'git push' 'gh release' 'cargo publish'; do
+  grep -v '^#' "$PKG" | grep -q "$word" && bad "scripts/package runs '$word'" || ok
+done
+
+printf 'package: %d passed, %d failed\n' "$pass" "$fail"
+CLEANUP_GATE_LOG=/dev/null "$ROOT/scripts/cleanup-gate.sh" --yes --path "$T" >/dev/null \
+  || printf 'package: the test root %s was not removed\n' "$T" >&2
+[[ $fail == 0 ]]
