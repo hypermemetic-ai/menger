@@ -342,6 +342,24 @@ export default async (ctx) => {
     }
   });
 
+  // COMPS-24: reload — the frame is thrown away and the same page drawn again from its first moment, at the size it had.
+  await test("a_mockup_reloads", async () => {
+    const { context, page } = await openPage(`#/ticket/${tid}`);
+    try {
+      const S = "[data-surface=ticket-page]";
+      await drawn(page, S, 3);
+      const pf = page.locator(`${S} ${PF}[data-kind=page]`).first();
+      await (await inner(page, S, 0)).evaluate(() => { window.__before = true; });
+      await pf.hover();
+      await pf.locator("[data-field=window] [data-action=reload]").click();
+      await eventually("a new page, drawn", async () => (await pf.getAttribute("data-state")) === "drawn" && (await (await inner(page, S, 0)).evaluate(() => window.__before === undefined && document.readyState === "complete").catch(() => false)), 8_000);
+      assert((await pf.locator("iframe[data-buffer=shown]").count()) === 1, "one frame, not two");
+      assert((await pf.locator("[data-field=w]").inputValue()) === "390" && (await pf.locator("[data-field=h]").inputValue()) === "844", "at the size it had");
+    } finally {
+      await context.close();
+    }
+  });
+
   // COMPS-20: every size side by side at one scale, and a mockup alone over the whole screen.
   await test("a_mockup_side_by_side_and_full_screen", async () => {
     const { context, page } = await openPage(`#/ticket/${tid}`);
