@@ -4,7 +4,7 @@ use menger::login::{LoginButton, Provider};
 use menger::wiring::{LoginOptions, Wiring};
 use menger_tickets_api::access::Access;
 use menger::first_run::{self, Mode};
-use menger::{build_rpc_services, local, shell, MengerAccess};
+use menger::{build_rpc_services, local, shell, start, MengerAccess};
 use plexus_rpc::transport::{ConnectionQuotas, TransportServer};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -25,8 +25,8 @@ const MAX_MESSAGE_BYTES: usize = 32 << 20;
 #[command(about = "menger — a plan is a program whose leaves are prose. The tickets service.")]
 #[command(long_about = None)]
 #[command(disable_help_flag = true)]
-#[command(after_help = "Start it with `menger`: it prints a one-time sign-in link (`menger --open` opens it for you).\n`menger login` prints another. `menger --help-all` for every option.")]
-#[command(after_long_help = "Start it with `menger`: it prints a one-time sign-in link (`menger --open` opens it for you).\n`menger login` prints another.")]
+#[command(after_help = "Start it with `menger start`: it prints a one-time sign-in link (`--open` opens it for you)\nand the line that adds menger to your agent. `menger login` prints another link.\n`menger --help-all` for every option.")]
+#[command(after_long_help = "Start it with `menger start`: it prints a one-time sign-in link (`--open` opens it for you)\nand the line that adds menger to your agent. `menger login` prints another link.")]
 struct Args {
     #[command(subcommand)]
     command: Option<Command>,
@@ -41,24 +41,24 @@ struct Args {
 
     // DIST-14: print the URL always; open it only when asked.
     /// Open menger in your browser once it is running
-    #[arg(long, help_heading = RUN)]
+    #[arg(global = true, long, help_heading = RUN)]
     open: bool,
 
     // DIST-14: a port not given that is taken falls back to the next free
     // one, said; one given is bound or startup fails (prod names both).
     /// The WebSocket's port (default 4455, or the next free one)
-    #[arg(short, long, value_name = "PORT", help_heading = RUN)]
+    #[arg(global = true, short, long, value_name = "PORT", help_heading = RUN)]
     port: Option<u16>,
 
     /// The web app's port (default 4456, or the next free one)
-    #[arg(long, value_name = "PORT", help_heading = RUN, hide_short_help = true)]
+    #[arg(global = true, long, value_name = "PORT", help_heading = RUN, hide_short_help = true)]
     shell_port: Option<u16>,
 
     // TRANSPORT-15 (V2-43): MCP through the mounted bridge
     // (plexus-transport-mcp) on the shell's origin (`<shell>/mcp`), behind the
     // same login — an agent's session or key proof is the Bearer.
     /// Serve no MCP endpoint (`/mcp` on the app's origin; none with --no-shell)
-    #[arg(long, env = "MENGER_NO_MCP", action = clap::ArgAction::SetTrue, value_parser = clap::builder::FalseyValueParser::new(), help_heading = RUN, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_NO_MCP", action = clap::ArgAction::SetTrue, value_parser = clap::builder::FalseyValueParser::new(), help_heading = RUN, hide_short_help = true)]
     no_mcp: bool,
 
     /// An OAuth 2.1 authorization server that mints tokens for <public-url>/mcp
@@ -67,7 +67,7 @@ struct Args {
     /// resource: a request without a token is answered 401 naming its RFC 9728
     /// metadata, so an MCP client signs in there. Without one, a request with
     /// no token is the anonymous caller (the auth door).
-    #[arg(long = "mcp-authorization-server", env = "MENGER_MCP_AUTHORIZATION_SERVERS", value_name = "URL", value_delimiter = ';', help_heading = SIGN_IN, hide_short_help = true)]
+    #[arg(global = true, long = "mcp-authorization-server", env = "MENGER_MCP_AUTHORIZATION_SERVERS", value_name = "URL", value_delimiter = ';', help_heading = SIGN_IN, hide_short_help = true)]
     mcp_authorization_server: Vec<String>,
 
     // DIST-14: the data directory — the database (unless --db-path), the
@@ -77,59 +77,59 @@ struct Args {
     data_dir: Option<PathBuf>,
 
     /// The database file (default <data-dir>/local.db; a new file starts empty)
-    #[arg(long, env = "MENGER_DB_PATH", value_name = "PATH", help_heading = RUN)]
+    #[arg(global = true, long, env = "MENGER_DB_PATH", value_name = "PATH", help_heading = RUN)]
     db_path: Option<PathBuf>,
 
     // UI-3: the ui service's own file, and who may sign a push.
     /// The ui service's file (default: ui.db beside the database file)
-    #[arg(long, env = "MENGER_UI_DB_PATH", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_UI_DB_PATH", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
     ui_db_path: Option<PathBuf>,
 
     // V2-24: the media service's own file.
     /// The media service's file — the images bodies show (default: media.db beside the database file)
-    #[arg(long, env = "MENGER_MEDIA_DB_PATH", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_MEDIA_DB_PATH", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
     media_db_path: Option<PathBuf>,
 
     // EDITOR-10: where the media service's bytes live — one trait
     // (`menger_media::BlobStore`), chosen here.
     /// Where kept files' bytes live: disk (default), or s3 once it is built
-    #[arg(long, env = "MENGER_MEDIA_STORE", value_name = "STORE", default_value = "disk", help_heading = RUN, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_MEDIA_STORE", value_name = "STORE", default_value = "disk", help_heading = RUN, hide_short_help = true)]
     media_store: String,
 
     /// The disk store's root — another disk or a network mount is fine (default: media/blobs beside the media file)
-    #[arg(long, env = "MENGER_MEDIA_BLOB_DIR", value_name = "DIR", help_heading = RUN, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_MEDIA_BLOB_DIR", value_name = "DIR", help_heading = RUN, hide_short_help = true)]
     media_blob_dir: Option<PathBuf>,
 
     /// The most one upload may be, in bytes (default: no cap but the uploader's allowance)
-    #[arg(long, env = "MENGER_MEDIA_MAX_BYTES", value_name = "BYTES", help_heading = RUN, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_MEDIA_MAX_BYTES", value_name = "BYTES", help_heading = RUN, hide_short_help = true)]
     media_max_bytes: Option<u64>,
 
     /// For tests alone: an ip:port the server may read links from although it is not public (repeatable)
-    #[arg(long = "media-fetch-allow", value_name = "IP:PORT", hide = true)]
+    #[arg(global = true, long = "media-fetch-allow", value_name = "IP:PORT", hide = true)]
     media_fetch_allow: Vec<std::net::SocketAddr>,
 
     // V2-29: the docs service's own file.
     /// The docs service's file — the documents (default: docs.db beside the database file)
-    #[arg(long, env = "MENGER_DOCS_DB_PATH", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_DOCS_DB_PATH", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
     docs_db_path: Option<PathBuf>,
 
     // V2-31: the quota service's own file, and the plan a new one starts from.
     /// The quota service's file — every principal's usage and allowances (default: quota.db beside the database file)
-    #[arg(long, env = "MENGER_QUOTA_DB_PATH", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_QUOTA_DB_PATH", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
     quota_db_path: Option<PathBuf>,
 
     /// The plan a new quota file starts from — its default caps, uploads at once, the box lines (JSON; default: the built-in free tier, free-1k)
     ///
     /// Read only into a fresh file; after that the file's own rows are the
     /// truth and `quota.set` moves them.
-    #[arg(long, env = "MENGER_QUOTA_PLAN", value_name = "FILE", help_heading = RUN, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_QUOTA_PLAN", value_name = "FILE", help_heading = RUN, hide_short_help = true)]
     quota_plan: Option<PathBuf>,
 
     /// A public key (64 hex digits, Ed25519) a `ui.push` may be signed by
     ///
     /// Repeatable; in the env var, separated by `;`. With none, every push is
     /// refused (`no_signer`).
-    #[arg(long = "ui-signer", env = "MENGER_UI_SIGNERS", value_name = "HEX", value_delimiter = ';', help_heading = RUN, hide_short_help = true)]
+    #[arg(global = true, long = "ui-signer", env = "MENGER_UI_SIGNERS", value_name = "HEX", value_delimiter = ';', help_heading = RUN, hide_short_help = true)]
     ui_signer: Vec<String>,
 
     // UI-7: the compiler module a push recompiles every source in.
@@ -138,7 +138,7 @@ struct Args {
     /// Run in wasmtime with nothing linked, under fuel and a memory limit;
     /// a module that imports anything is refused at start. Without it, a
     /// push stores the bundle's trees as given and says `compiled: false`.
-    #[arg(long = "ui-compiler", env = "MENGER_UI_COMPILER", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
+    #[arg(global = true, long = "ui-compiler", env = "MENGER_UI_COMPILER", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
     ui_compiler: Option<PathBuf>,
 
     // SV-6: rhx is switched off; this turns it back on.
@@ -146,7 +146,7 @@ struct Args {
     ///
     /// menger's UI is real Svelte (svelte/1, SV-4); the rhx compiler and the
     /// engine's interpreter are kept for a service that opts in.
-    #[arg(long = "ui-allow-rhx", env = "MENGER_UI_ALLOW_RHX", action = clap::ArgAction::SetTrue, value_parser = clap::builder::FalseyValueParser::new(), help_heading = RUN, hide_short_help = true)]
+    #[arg(global = true, long = "ui-allow-rhx", env = "MENGER_UI_ALLOW_RHX", action = clap::ArgAction::SetTrue, value_parser = clap::builder::FalseyValueParser::new(), help_heading = RUN, hide_short_help = true)]
     ui_allow_rhx: bool,
 
     // STUDIO-3: the key the ui service signs an editor's authored version with.
@@ -155,7 +155,7 @@ struct Args {
     /// Made at first start (64 hex digits, 0600) when the file is missing.
     /// Never a --ui-signer: it signs only what the service compiled itself.
     /// Without it, every `ui.author` is refused (`no_signer`).
-    #[arg(long = "ui-author-key", env = "MENGER_UI_AUTHOR_KEY", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
+    #[arg(global = true, long = "ui-author-key", env = "MENGER_UI_AUTHOR_KEY", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
     ui_author_key: Option<PathBuf>,
 
     // UI-15: one component store for test and prod — the live pointer this
@@ -167,7 +167,7 @@ struct Args {
     /// are one component store: a push on test leaves prod's page as it was,
     /// and `ui promote --to prod --from test` moves prod's pointer onto the
     /// version test has live, with no second push (UI-15).
-    #[arg(long = "ui-channel", env = "MENGER_UI_CHANNEL", value_name = "NAME", help_heading = RUN, hide_short_help = true)]
+    #[arg(global = true, long = "ui-channel", env = "MENGER_UI_CHANNEL", value_name = "NAME", help_heading = RUN, hide_short_help = true)]
     ui_channel: Option<String>,
 
     // RUN-8: names stay ACCESS-25's: a specific address adds its own literal
@@ -178,7 +178,7 @@ struct Args {
     /// `0.0.0.0` / `::` for every address this machine has, or one of them
     /// (IPv6 with or without brackets). Beyond it, people need a way to sign in
     /// (--auth-provider) and an https --public-url.
-    #[arg(long, env = "MENGER_BIND", default_value = "127.0.0.1", value_name = "ADDR", value_parser = menger::bind::parse_bind, help_heading = RUN, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_BIND", default_value = "127.0.0.1", value_name = "ADDR", value_parser = menger::bind::parse_bind, help_heading = RUN, hide_short_help = true)]
     bind: std::net::IpAddr,
 
     // ACCESS-24: the REST bridge cannot carry an identity, and menger has no
@@ -186,6 +186,7 @@ struct Args {
     // `MENGER_NO_REST`) is accepted and changes nothing, so a launcher or an
     // env file that says it still starts.
     #[arg(
+        global = true,
         long,
         env = "MENGER_NO_REST",
         action = clap::ArgAction::SetTrue,
@@ -197,21 +198,21 @@ struct Args {
     // DIST-3: without it, the checkout's frontend/dist.
     /// Directory holding the web app's build (frontend/dist). A missing build
     /// shows a "frontend not built" page.
-    #[arg(long, env = "MENGER_APP_DIST", value_name = "DIR", help_heading = RUN, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_APP_DIST", value_name = "DIR", help_heading = RUN, hide_short_help = true)]
     app_dist: Option<PathBuf>,
 
     // MFE-23: the deploy env files set `MENGER_ENV`.
     /// The environment's name (`prod`, `test`, …). `test` titles the browser
     /// tab `menger.test`.
-    #[arg(long, env = "MENGER_ENV", value_name = "NAME", help_heading = RUN, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_ENV", value_name = "NAME", help_heading = RUN, hide_short_help = true)]
     env: Option<String>,
 
     // ACCESS-24: stdio carries no credential — refused with the reason.
-    #[arg(long, hide = true)]
+    #[arg(global = true, long, hide = true)]
     stdio: bool,
 
     /// Serve no web app, only the WebSocket
-    #[arg(long, help_heading = RUN, hide_short_help = true)]
+    #[arg(global = true, long, help_heading = RUN, hide_short_help = true)]
     no_shell: bool,
 
     // POLYGLOT-5 (V2-44): activations in other processes, mounted under a
@@ -232,14 +233,14 @@ struct Args {
     /// `nostr=<ws-url>[,…]`, or `key` (agents' Ed25519 keys, e.g. synapse's).
     /// With none, on this machine only, menger makes a local admin and prints
     /// a one-time sign-in link. In the env var, separated by `;`.
-    #[arg(long = "auth-provider", env = "MENGER_AUTH_PROVIDERS", value_name = "SPEC", value_delimiter = ';', help_heading = SIGN_IN)]
+    #[arg(global = true, long = "auth-provider", env = "MENGER_AUTH_PROVIDERS", value_name = "SPEC", value_delimiter = ';', help_heading = SIGN_IN)]
     auth_provider: Vec<Provider>,
 
     // IDENTITY-21.
     /// A principal who is admin everywhere (repeatable; `key:<hex>`,
     /// `idp:<uuid>`, `oidc:<provider>/<sub>`, `nostr:<hex>`) — how the first
     /// admin exists. In the env var, separated by `;`.
-    #[arg(long = "admin", env = "MENGER_ADMINS", value_name = "PRINCIPAL", value_delimiter = ';', help_heading = SIGN_IN, hide_short_help = true)]
+    #[arg(global = true, long = "admin", env = "MENGER_ADMINS", value_name = "PRINCIPAL", value_delimiter = ';', help_heading = SIGN_IN, hide_short_help = true)]
     admin: Vec<String>,
 
     // IDENTITY-19. ACCESS-30: beyond loopback it is required and https.
@@ -248,32 +249,32 @@ struct Args {
     /// Default http://127.0.0.1:<shell-port>. Reached beyond this machine it must be
     /// https, behind a proxy that terminates TLS; the provider's redirect URI
     /// is `<this>/login/callback`.
-    #[arg(long, env = "MENGER_PUBLIC_URL", value_name = "URL", help_heading = SIGN_IN)]
+    #[arg(global = true, long, env = "MENGER_PUBLIC_URL", value_name = "URL", help_heading = SIGN_IN)]
     public_url: Option<String>,
 
     // IDENTITY-19.
     /// A button on the sign-in page (repeatable), `<Label>=<provider>[:<connection>]`,
     /// e.g. `Google=workos:GoogleOAuth`, `Apple=auth0:apple`. In the env var,
     /// separated by `;`.
-    #[arg(long = "login-button", env = "MENGER_LOGIN_BUTTONS", value_name = "SPEC", value_delimiter = ';', help_heading = SIGN_IN, hide_short_help = true)]
+    #[arg(global = true, long = "login-button", env = "MENGER_LOGIN_BUTTONS", value_name = "SPEC", value_delimiter = ';', help_heading = SIGN_IN, hide_short_help = true)]
     login_button: Vec<LoginButton>,
 
     // IDENTITY-30.
     /// An email field on the sign-in page, `<provider>[:<connection>]`, e.g.
     /// `workos:authkit`: the address goes to that provider. The password form
     /// then shows only at `/login?password`.
-    #[arg(long, env = "MENGER_LOGIN_EMAIL", value_name = "SPEC", value_parser = parse_email, help_heading = SIGN_IN, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_LOGIN_EMAIL", value_name = "SPEC", value_parser = parse_email, help_heading = SIGN_IN, hide_short_help = true)]
     login_email: Option<LoginButton>,
 
     // IDENTITY-19 / IDENTITY-30.
     /// The provider the sign-in page's password form goes to (default: the
     /// first OIDC provider that takes passwords; `none`: no form).
-    #[arg(long, env = "MENGER_LOGIN_PASSWORD", value_name = "PROVIDER", help_heading = SIGN_IN, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_LOGIN_PASSWORD", value_name = "PROVIDER", help_heading = SIGN_IN, hide_short_help = true)]
     login_password: Option<String>,
 
     // IDENTITY-19.
     /// A "Forgot password?" link on the sign-in page.
-    #[arg(long, env = "MENGER_LOGIN_FORGOT", value_name = "URL", help_heading = SIGN_IN, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_LOGIN_FORGOT", value_name = "URL", help_heading = SIGN_IN, hide_short_help = true)]
     login_forgot: Option<String>,
 
     // AUTH-22. `memory` and `plexus-idp` only with `--env test`.
@@ -281,20 +282,20 @@ struct Args {
     /// `workos:<client_…>[,social=google+github+apple][,sso=off][,key=@<file>]`
     /// (the API key from MENGER_WORKOS_API_KEY or the file, never the flag),
     /// `plexus-idp:<issuer>,<audience>` or `memory` (both for testing only).
-    #[arg(long, env = "MENGER_IDENTITY", value_name = "SPEC", help_heading = SIGN_IN, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_IDENTITY", value_name = "SPEC", help_heading = SIGN_IN, hide_short_help = true)]
     identity: Option<plexus_login::backends::IdentitySpec>,
 
     // IDENTITY-45.
     /// A file holding the WorkOS API key (one line, 0600), or the key in
     /// MENGER_WORKOS_API_KEY (never a flag's value): a `workos=` provider's
     /// social buttons then complete on menger's own page.
-    #[arg(long, env = "MENGER_WORKOS_API_KEY_FILE", value_name = "FILE", help_heading = SIGN_IN, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_WORKOS_API_KEY_FILE", value_name = "FILE", help_heading = SIGN_IN, hide_short_help = true)]
     workos_api_key_file: Option<std::path::PathBuf>,
 
     // IDENTITY-29.
     /// Another origin whose pages may open the WebSocket (repeatable); the
     /// app's own always may.
-    #[arg(long = "allowed-origin", env = "MENGER_ALLOWED_ORIGINS", value_name = "ORIGIN", value_delimiter = ';', help_heading = SIGN_IN, hide_short_help = true)]
+    #[arg(global = true, long = "allowed-origin", env = "MENGER_ALLOWED_ORIGINS", value_name = "ORIGIN", value_delimiter = ';', help_heading = SIGN_IN, hide_short_help = true)]
     allowed_origin: Vec<String>,
 
     // APP-110.
@@ -302,7 +303,7 @@ struct Args {
     /// test environment, the tracker's — `https://app.menger.sh` — so a
     /// ticket body can draw the live app. Default none: nothing frames it.
     /// In the env var, separated by `;`.
-    #[arg(long = "frame-ancestor", env = "MENGER_FRAME_ANCESTORS", value_name = "ORIGIN", value_delimiter = ';', help_heading = SIGN_IN, hide_short_help = true)]
+    #[arg(global = true, long = "frame-ancestor", env = "MENGER_FRAME_ANCESTORS", value_name = "ORIGIN", value_delimiter = ';', help_heading = SIGN_IN, hide_short_help = true)]
     frame_ancestor: Vec<String>,
 
     // APP-110.
@@ -310,14 +311,14 @@ struct Args {
     /// frames (`live` blocks), e.g. `https://app-test.menger.sh`. Default
     /// none: a `live` block says no test app is configured. The test server
     /// must name this one's origin with --frame-ancestor.
-    #[arg(long = "live-origin", env = "MENGER_LIVE_ORIGIN", value_name = "ORIGIN", help_heading = SIGN_IN, hide_short_help = true)]
+    #[arg(global = true, long = "live-origin", env = "MENGER_LIVE_ORIGIN", value_name = "ORIGIN", help_heading = SIGN_IN, hide_short_help = true)]
     live_origin: Option<String>,
 
     // ACCESS-25: DNS rebinding.
     /// Another `Host` menger answers to (repeatable; `host:port`, or `host`).
     /// `127.0.0.1`, `localhost` and --public-url's host always are; any other
     /// is refused. In the env var, separated by `;`.
-    #[arg(long = "allowed-host", env = "MENGER_ALLOWED_HOSTS", value_name = "HOST", value_delimiter = ';', help_heading = SIGN_IN, hide_short_help = true)]
+    #[arg(global = true, long = "allowed-host", env = "MENGER_ALLOWED_HOSTS", value_name = "HOST", value_delimiter = ';', help_heading = SIGN_IN, hide_short_help = true)]
     allowed_host: Vec<String>,
 
     // AUTH-22 / TRANSPORT-7. AUTH-24 #2: with --identity and a --public-url
@@ -325,68 +326,69 @@ struct Args {
     /// The proxy in front (CIDR or address, repeatable) whose X-Forwarded-For
     /// is believed for the client's IP, or `none`. In the env var, separated
     /// by `;`.
-    #[arg(long = "trusted-proxy", env = "MENGER_TRUSTED_PROXIES", value_name = "CIDR|none", value_delimiter = ';', help_heading = SIGN_IN, hide_short_help = true)]
+    #[arg(global = true, long = "trusted-proxy", env = "MENGER_TRUSTED_PROXIES", value_name = "CIDR|none", value_delimiter = ';', help_heading = SIGN_IN, hide_short_help = true)]
     trusted_proxy: Vec<String>,
 
     // AUTH-22.
     /// Another origin a sign-in may send the browser back to (repeatable).
-    #[arg(long = "return-origin", env = "MENGER_RETURN_ORIGINS", value_name = "ORIGIN", value_delimiter = ';', help_heading = SIGN_IN, hide_short_help = true)]
+    #[arg(global = true, long = "return-origin", env = "MENGER_RETURN_ORIGINS", value_name = "ORIGIN", value_delimiter = ';', help_heading = SIGN_IN, hide_short_help = true)]
     return_origin: Vec<String>,
 
     // IDENTITY-19.
     /// How long a sign-in lasts.
-    #[arg(long, env = "MENGER_SESSION_HOURS", default_value = "12", value_name = "HOURS", help_heading = SIGN_IN, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_SESSION_HOURS", default_value = "12", value_name = "HOURS", help_heading = SIGN_IN, hide_short_help = true)]
     session_hours: i64,
 
     // ACCESS-29.
     /// A browser's sign-in ends after this long unused (0: only when it
     /// expires).
-    #[arg(long, env = "MENGER_SESSION_IDLE_MINUTES", default_value_t = menger::sessions::IDLE_SECS_DEFAULT / 60, value_name = "MINUTES", help_heading = SIGN_IN, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_SESSION_IDLE_MINUTES", default_value_t = menger::sessions::IDLE_SECS_DEFAULT / 60, value_name = "MINUTES", help_heading = SIGN_IN, hide_short_help = true)]
     session_idle_minutes: i64,
 
     // IDENTITY-35 / IDENTITY-38: the dev sign-in, only with `--env test`.
     /// Testing only (with `--env test`): the sign-in page can send anyone's
     /// sign-in to this provider (plexus-idp's name), as any user.
-    #[arg(long, env = "MENGER_DEV_LOGIN", value_name = "PROVIDER", requires_all = ["dev_password", "dev_idp_ws"], help_heading = MAINTENANCE, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_DEV_LOGIN", value_name = "PROVIDER", requires_all = ["dev_password", "dev_idp_ws"], help_heading = MAINTENANCE, hide_short_help = true)]
     dev_login: Option<String>,
 
     /// Testing only: the password every dev user has at plexus-idp.
-    #[arg(long, env = "MENGER_DEV_PASSWORD", value_name = "PASSWORD", hide_env_values = true, help_heading = MAINTENANCE, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_DEV_PASSWORD", value_name = "PASSWORD", hide_env_values = true, help_heading = MAINTENANCE, hide_short_help = true)]
     dev_password: Option<String>,
 
     /// Testing only: plexus-idp's socket, e.g. `ws://127.0.0.1:4480`.
-    #[arg(long, env = "MENGER_DEV_IDP_WS", value_name = "URL", help_heading = MAINTENANCE, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_DEV_IDP_WS", value_name = "URL", help_heading = MAINTENANCE, hide_short_help = true)]
     dev_idp_ws: Option<String>,
 
     /// Testing only: a seeded dev user (repeatable), `name=role@SCOPE[,…]`,
     /// e.g. `viewer=viewer@*`. In the env var, separated by `;`.
-    #[arg(long = "dev-user", env = "MENGER_DEV_USERS", value_name = "SPEC", value_delimiter = ';', help_heading = MAINTENANCE, hide_short_help = true)]
+    #[arg(global = true, long = "dev-user", env = "MENGER_DEV_USERS", value_name = "SPEC", value_delimiter = ';', help_heading = MAINTENANCE, hide_short_help = true)]
     dev_user: Vec<menger::dev_login::DevUser>,
 
     // SCALE-28 (+ SCALE-32, FILTER-4, FILTER-13): read-only — changes nothing,
     // migrates nothing, serves nothing.
     /// Check the database's derived state against a scan of its tickets and
     /// exit: 0 consistent, 1 a difference, 2 unreadable. Changes nothing.
-    #[arg(long, help_heading = MAINTENANCE, hide_short_help = true)]
+    #[arg(global = true, long, help_heading = MAINTENANCE, hide_short_help = true)]
     verify_derived: bool,
 
     // PERF-2.
     /// Seed N synthetic tickets before serving (into an empty database unless
     /// --seed-into-existing).
-    #[arg(long, env = "MENGER_SEED_SYNTHETIC", value_name = "N", help_heading = MAINTENANCE, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_SEED_SYNTHETIC", value_name = "N", help_heading = MAINTENANCE, hide_short_help = true)]
     seed_synthetic: Option<usize>,
 
     /// The seed of --seed-synthetic: the same value, the same tickets.
-    #[arg(long, env = "MENGER_SEED_VALUE", default_value = "1", value_name = "U64", help_heading = MAINTENANCE, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_SEED_VALUE", default_value = "1", value_name = "U64", help_heading = MAINTENANCE, hide_short_help = true)]
     seed_value: u64,
 
     // FILTER-13: flat is PERF-2's; nested FILTER-3 §6.5's tree.
     /// Where --seed-synthetic hangs its tickets: `flat` or `nested`.
-    #[arg(long, env = "MENGER_SEED_SHAPE", default_value = "flat", value_name = "SHAPE", help_heading = MAINTENANCE, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_SEED_SHAPE", default_value = "flat", value_name = "SHAPE", help_heading = MAINTENANCE, hide_short_help = true)]
     seed_shape: SeedShape,
 
     /// Let --seed-synthetic add to a database that already holds tickets.
     #[arg(
+        global = true,
         long,
         env = "MENGER_SEED_INTO_EXISTING",
         action = clap::ArgAction::SetTrue,
@@ -399,61 +401,73 @@ struct Args {
     // MENGER-15: bodies are not cached (SCALE-14); above ~9 MB the
     // WebSocket's own 10 MB request limit refuses first.
     /// The longest ticket body stored, in bytes (default 8 MiB).
-    #[arg(long, env = "MENGER_MAX_BODY_BYTES", value_name = "BYTES", default_value_t = menger_tickets_api::store::BODY_MAX_DEFAULT, help_heading = LIMITS, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_MAX_BODY_BYTES", value_name = "BYTES", default_value_t = menger_tickets_api::store::BODY_MAX_DEFAULT, help_heading = LIMITS, hide_short_help = true)]
     max_body_bytes: usize,
 
     // ACCESS-29.
     /// Calls one connection may have open at once.
-    #[arg(long, env = "MENGER_MAX_CALLS_PER_CONNECTION", default_value_t = menger::calls::CALLS_PER_CONNECTION, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_MAX_CALLS_PER_CONNECTION", default_value_t = menger::calls::CALLS_PER_CONNECTION, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
     max_calls_per_connection: usize,
 
     /// V2-54: the largest message one socket takes, in bytes (default 32 MiB). A UI bundle is pushed in one
     /// message, base64; plexus-transport's own default, 10 MiB, dropped a 7.9 MB bundle with no answer.
-    #[arg(long, env = "MENGER_MAX_MESSAGE_BYTES", default_value_t = MAX_MESSAGE_BYTES, value_name = "BYTES", help_heading = LIMITS, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_MAX_MESSAGE_BYTES", default_value_t = MAX_MESSAGE_BYTES, value_name = "BYTES", help_heading = LIMITS, hide_short_help = true)]
     max_message_bytes: usize,
 
     /// Close a connection with no call open for this long (0: never).
-    #[arg(long, env = "MENGER_IDLE_TIMEOUT_SECS", default_value_t = menger::calls::IDLE_SECS, value_name = "SECS", help_heading = LIMITS, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_IDLE_TIMEOUT_SECS", default_value_t = menger::calls::IDLE_SECS, value_name = "SECS", help_heading = LIMITS, hide_short_help = true)]
     idle_timeout_secs: u64,
 
     // V2-31: the owner's free tier — about 20 writes a second sustained.
     /// Writes one principal may make a second, sustained; twice that at once (0: no limit)
-    #[arg(long, env = "MENGER_MAX_WRITES_PER_SECOND", default_value_t = menger::calls::WRITES_PER_SECOND, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_MAX_WRITES_PER_SECOND", default_value_t = menger::calls::WRITES_PER_SECOND, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
     max_writes_per_second: u32,
 
     // ACCESS-29 (AUTH-12's quotas).
     /// Connections open in all.
-    #[arg(long, env = "MENGER_MAX_CONNECTIONS", default_value_t = ConnectionQuotas::default().max_connections, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_MAX_CONNECTIONS", default_value_t = ConnectionQuotas::default().max_connections, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
     max_connections: u32,
 
     /// Connections from one IP address (behind a proxy, the client's when it
     /// is a --trusted-proxy).
-    #[arg(long, env = "MENGER_MAX_CONNECTIONS_PER_IP", default_value_t = ConnectionQuotas::default().max_per_ip, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_MAX_CONNECTIONS_PER_IP", default_value_t = ConnectionQuotas::default().max_per_ip, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
     max_connections_per_ip: u32,
 
     /// Connections one signed-in person holds (an agent's key: --max-connections-per-agent; an admin of *: no limit)
     // V2-31: 4, the owner's free tier — enforced by menger's call layer
     // (src/calls.rs), which splits it by principal; the transport's own
     // per-principal quota is handed no limit.
-    #[arg(long, env = "MENGER_MAX_CONNECTIONS_PER_PRINCIPAL", default_value_t = menger::calls::CONNECTIONS_PER_PRINCIPAL, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_MAX_CONNECTIONS_PER_PRINCIPAL", default_value_t = menger::calls::CONNECTIONS_PER_PRINCIPAL, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
     max_connections_per_principal: u32,
 
     // V2-31: agents' keys share sessions (several agents as `builder`).
     /// Connections one agent's key (a key: principal) holds
-    #[arg(long, env = "MENGER_MAX_CONNECTIONS_PER_AGENT", default_value_t = menger::calls::CONNECTIONS_PER_AGENT, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_MAX_CONNECTIONS_PER_AGENT", default_value_t = menger::calls::CONNECTIONS_PER_AGENT, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
     max_connections_per_agent: u32,
 
     /// Connections that prove no one, in all (held below --max-connections).
-    #[arg(long, env = "MENGER_MAX_ANONYMOUS_CONNECTIONS", default_value_t = ConnectionQuotas::default().max_anonymous, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_MAX_ANONYMOUS_CONNECTIONS", default_value_t = ConnectionQuotas::default().max_anonymous, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
     max_anonymous_connections: u32,
 
     /// Anonymous connections from one IP address.
-    #[arg(long, env = "MENGER_MAX_ANONYMOUS_CONNECTIONS_PER_IP", default_value_t = ConnectionQuotas::default().max_anonymous_per_ip, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
+    #[arg(global = true, long, env = "MENGER_MAX_ANONYMOUS_CONNECTIONS_PER_IP", default_value_t = ConnectionQuotas::default().max_anonymous_per_ip, value_name = "N", help_heading = LIMITS, hide_short_help = true)]
     max_anonymous_connections_per_ip: u32,
 }
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    // DIST-21: the server, as bare `menger` runs it — every flag is global,
+    // so it is taken before or after the word.
+    /// Run menger on this machine (the same as `menger` alone)
+    Start,
+    // DIST-21: plexus-transport-mcp's bridge on stdio, its upstream the local
+    // menger's WebSocket as the local admin (src/start.rs).
+    /// Serve menger's tools to an agent over stdin and stdout (MCP), signed in with this machine's local key
+    Mcp {
+        /// Print the command that adds menger to Claude Code, and exit
+        #[arg(long)]
+        print: bool,
+    },
     // DIST-14: against the server running on --data-dir (its `local.json`).
     /// Print a new one-time sign-in link for the menger running here
     Login {
@@ -478,6 +492,22 @@ async fn main() -> anyhow::Result<()> {
 
 async fn run(args: Args) -> anyhow::Result<()> {
     let data_dir = args.data_dir.clone().unwrap_or_else(first_run::default_data_dir);
+    // DIST-21: the command that adds this menger to an agent — the bridge,
+    // called as this binary is found, on this data directory.
+    let mcp_argv = {
+        let menger = std::env::current_exe().map(|exe| start::called_as(&exe, std::env::var_os("PATH").as_deref())).unwrap_or_else(|_| "menger".into());
+        start::mcp_argv(&menger, start::named_data_dir(&data_dir).as_deref())
+    };
+    // DIST-21: `menger mcp` — MCP on stdio; stdout is the protocol's alone.
+    if let Some(Command::Mcp { print }) = args.command {
+        if print {
+            println!("{}", start::shell_line(&mcp_argv));
+            return Ok(());
+        }
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "error".into());
+        tracing_subscriber::fmt().with_env_filter(filter).with_writer(std::io::stderr).init();
+        return start::serve_mcp(&data_dir).await;
+    }
     // DIST-14: `menger login` — a fresh link for the server running here.
     if let Some(Command::Login { agent }) = args.command {
         // DIST-17: `--agent` prints the line an agent signs in with.
@@ -874,10 +904,31 @@ async fn run(args: Args) -> anyhow::Result<()> {
     };
     if !args.no_shell {
         // DIST-17: a local start hands its key to synapse and says how to sign in.
-        let agents = if once.is_some() { first_run::agent_lines(&handed, &data_dir, ws_port) } else { vec![] };
+        let mut agents = if once.is_some() { first_run::agent_lines(&handed, &data_dir, ws_port) } else { vec![] };
+        // DIST-21: and how an agent adds its MCP — where the bridge can sign
+        // in (a local start) and has something to reach.
+        let bridged = once.is_some() && !args.no_mcp;
+        if bridged {
+            agents.push(start::mcp_line(&mcp_argv));
+        }
         print!("{}", first_run::banner(env!("CARGO_PKG_VERSION"), &url, once.is_some(), &agents, &db_path, &moved));
         if args.open && !plexus_login::browser::open(&url) {
             println!("  (no browser to open here: open the link above yourself)");
+        }
+        // DIST-21: on a terminal, a small prompt — never read otherwise (a
+        // unit's or a test's stdin is not ours to wait on).
+        use std::io::IsTerminal as _;
+        if let (Some(once), true) = (once.clone(), std::io::stdin().is_terminal() && std::io::stdout().is_terminal()) {
+            println!("\n{}", if bridged { start::KEYS_LINE } else { start::KEYS_LINE_OPEN });
+            std::thread::spawn(move || {
+                let open = || match once.mint().map(|t| first_run::link(shell_port, &t)) {
+                    Ok(link) if plexus_login::browser::open(&link) => "  opened in your browser".to_string(),
+                    Ok(link) => format!("  no browser to open here: {link}"),
+                    Err(e) => format!("  can't make a sign-in link: {e}"),
+                };
+                let add = || if bridged { start::add(&mcp_argv, std::env::var_os("PATH").as_deref()) } else { "  this start serves no MCP".to_string() };
+                start::prompt(std::io::stdin().lock(), std::io::stdout(), open, add);
+            });
         }
     }
     serving.await?
