@@ -874,6 +874,39 @@ async fn access_22_an_admin_of_identity_only_cannot_change_a_team_holding_ought(
     assert_eq!(call(&ada, "members.teams.remove", teamed("bobs", ALICE)).await[0]["existed"], true);
 }
 
+/// KEEL-56: a team that holds nothing is its organization's. An admin of
+/// another organization is told there is no such team — to see it, join it,
+/// rename it or delete it — and nothing changes; an admin of the team's own
+/// organization still joins it, renames it and deletes it.
+#[tokio::test]
+async fn keel_56_an_admin_of_another_organization_cannot_touch_this_ones_empty_team() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    let made = call(&ada, "orgs.create", json!({ "name": "acme", "admin": format!("idp:{BOB}") })).await;
+    assert_eq!(made[0]["type"], "created", "{made:?}");
+    assert_eq!(call(&ada, "members.grant", grant(ALICE, "hypermemetic:", "admin")).await[0]["type"], "grant");
+    let team = call(&ada, "members.teams.create", json!({ "name": "home", "org": "hypermemetic" })).await;
+    assert_eq!(team[0]["type"], "team", "{team:?}");
+
+    let bob = as_(&w, BOB, "bob").await;
+    for (m, params) in [
+        ("members.teams.show", json!({ "team": "home" })),
+        ("members.teams.add", teamed("home", BOB)),
+        ("members.teams.rename", json!({ "team": "home", "to": "bobs-now" })),
+        ("members.teams.delete", json!({ "team": "home" })),
+    ] {
+        let no = call(&bob, m, params).await;
+        assert_eq!((no[0]["type"].as_str(), no[0]["message"].as_str()), (Some("error"), Some("no team home")), "{m}: {no:?}");
+    }
+    let still = call(&ada, "members.teams.show", json!({ "team": "home" })).await;
+    assert_eq!((still[0]["team"]["name"].as_str(), still.iter().filter(|e| e["type"] == "team_member").count()), (Some("home"), 0), "nothing changed: {still:?}");
+
+    let alice = as_(&w, ALICE, "alice").await;
+    assert_eq!(call(&alice, "members.teams.add", teamed("home", ALICE)).await[0]["type"], "team_member");
+    assert_eq!(call(&alice, "members.teams.rename", json!({ "team": "home", "to": "hearth" })).await[0]["type"], "team");
+    assert_eq!(call(&alice, "members.teams.delete", json!({ "team": "hearth" })).await[0]["type"], "team_deleted");
+}
+
 /// ACCESS-22's acceptance: removing someone from a team stops their open
 /// watch's events for the team's scopes, at once (ACCESS-12).
 #[tokio::test]
