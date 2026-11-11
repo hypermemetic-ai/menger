@@ -25,7 +25,7 @@
      `[data-post=<n>]` (1-based; `[data-over]` past 280), `[data-field=text|count|video|over|state|note]`,
      `[data-action=add|remove|up|down|save]`, `[data-state=saved|dirty|saving|refused|changed|readonly]`. -->
 <script module>
-  import { tagSpans, childrenOf, escText, escAttr, openName } from "./tag-source.svelte";
+  import { tagSpans, childrenOf, escText, escAttr, openName, wroteOwn } from "./tag-source.svelte";
   export const uses = ["tickets.get", "tickets.amend"];
 
   export const LIMIT = 280;
@@ -108,7 +108,7 @@
 
   const text = $derived(serializeWriter(posts, open));
   const phase = $derived(where !== "ticket" ? "readonly" : saving ? "saving" : refused ? refused.kind : text !== baseline ? "dirty" : "saved");
-  const said = { saved: "saved", dirty: "unsaved changes", saving: "saving…" };
+  const said = { saved: "saved", dirty: "saving soon…", saving: "saving…" };
   const locked = $derived(where !== "ticket"); // drawn only: nothing typed here could be kept
 
   async function save() {
@@ -117,12 +117,20 @@
     if (next === baseline) return;
     saving = true;
     refused = null;
+    // COMPS-23: one save at a time on the page — each reads the body and writes it whole, so two writers in
+    // one body saving at once would write over each other.
+    const turn = Symbol.for("menger.tweet-writer.turn");
+    const before = globalThis[turn] ?? Promise.resolve();
+    let done;
+    globalThis[turn] = new Promise((r) => (done = r));
+    await before;
     try {
       const r = await b.call("tickets.get", { id: ticket });
       const t = r?.ok ? r.events?.find((e) => e?.type === "ticket")?.ticket : null;
       if (!t) { refused = { kind: "refused", message: r?.message ?? `no ticket ${ticket}` }; return; }
       const out = replaceWriter(t.body ?? "", Number(n), drawnFrom, next);
       if (out.refused) { refused = { kind: "changed", message: out.message }; return; }
+      wroteOwn(next); // COMPS-23: its own save — the body's redraw leaves this writer as it is
       const w = await b.call("tickets.amend", { id: t.id, body: out.body });
       if (w?.ok && !w.events?.some((e) => e?.type === "error")) { drawnFrom = next; baseline = next; }
       else refused = { kind: "refused", message: w?.message ?? w?.events?.find((e) => e?.message)?.message ?? "refused" };
@@ -130,8 +138,19 @@
       refused = { kind: "refused", message: e?.message ?? String(e) };
     } finally {
       saving = false;
+      done();
     }
   }
+
+  // COMPS-23: it saves by itself — a pause after the last change (PAUSE), and when the focus leaves it. A
+  // refusal stops it until the thread is drawn again (or save is pressed): nothing is retried over another's edit.
+  const PAUSE = 700;
+  $effect(() => {
+    if (where !== "ticket" || saving || refused || text === baseline) return;
+    const h = setTimeout(save, PAUSE);
+    return () => clearTimeout(h);
+  });
+  const left = (ev) => { if (!root?.contains(ev.relatedTarget)) save(); };
 
   // ctrl/⌘+s is the engine's chord (app-top holds it page-wide); this writer's save when the focus is inside it.
   const saveKey = () => { if (root && root.contains(document.activeElement)) save(); };
@@ -177,7 +196,7 @@
   const level = (k) => (k > LIMIT ? "over" : k >= NEAR ? "near" : "ok");
 </script>
 
-<div class="tweet-writer" data-surface="tweet-writer" data-ticket={ticket || undefined} data-n={n} data-where={where} role="group" aria-label="the thread" bind:this={root}>
+<div class="tweet-writer" data-surface="tweet-writer" data-ticket={ticket || undefined} data-n={n} data-where={where} role="group" aria-label="the thread" bind:this={root} onfocusout={left}>
   <header class="tw-head">
     <span class="tw-label">thread · {posts.length} {posts.length === 1 ? "post" : "posts"}</span>
     <span class="tw-state" data-field="state" data-state={phase}>{phase === "readonly" ? "" : refused ? refused.message : said[phase]}</span>

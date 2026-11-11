@@ -198,6 +198,8 @@
    *  body's tags of its name, ticket-view's `blocks()`) and `of` (`{ kind: ticket | doc, id, editor }`: the
    *  body it sits in, from the context ticket-body and editor-body give). A native tag is handed them as
    *  props — `source`, `n`, `ticket` or `doc`, `editor` — and its `children` as structure, always. */
+  /** COMPS-23: a block-form tag's words from its source (its open and close lines are all the page draws of it). */
+  const wordsOf = (source) => String(source ?? "").split("\n").slice(1, -1).join("\n").replace(/<[^>]*>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&");
   export function drawTags(node, ctx = null) {
     const found = [];
     let srcTaken = false;
@@ -207,7 +209,7 @@
       if (e.parentElement?.closest("m-el, [data-tag-name]") && found.some((f) => f.e.contains(e))) continue; // a tag inside a drawn tag is its body
       const own = !srcTaken && ctx?.src?.name === tag ? ctx.src : null;
       if (own) srcTaken = true;
-      found.push({ e, tag, inner: e.textContent ?? "", kids: own ? childrenOf(own.source) : kidsOf(e), src: own, drawn: null });
+      found.push({ e, tag, inner: own ? wordsOf(own.source) : e.textContent ?? "", kids: own ? childrenOf(own.source) : kidsOf(e), src: own, drawn: null });
     }
     if (!found.length) return { destroy() {} };
     for (const f of found) f.e.setAttribute("data-tag-name", f.tag);
