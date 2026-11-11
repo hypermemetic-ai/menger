@@ -126,13 +126,8 @@ pub fn local_admin(dir: &Path) -> anyhow::Result<String> {
     use std::os::unix::fs::OpenOptionsExt;
     ensure_dir(dir)?;
     let file = dir.join(KEY_FILE);
-    let b64 = base64::engine::general_purpose::STANDARD;
     let seed: [u8; 32] = if file.exists() {
-        let text = std::fs::read_to_string(&file).map_err(|e| anyhow::anyhow!("can't read {}: {e}", file.display()))?;
-        b64.decode(text.trim())
-            .ok()
-            .and_then(|s| s.try_into().ok())
-            .ok_or_else(|| anyhow::anyhow!("{} is not a key (32 bytes, base64); move it aside and start again for a new one", file.display()))?
+        local_seed(dir)?
     } else {
         let seed: [u8; 32] = rand::random();
         let mut f = std::fs::OpenOptions::new()
@@ -141,12 +136,25 @@ pub fn local_admin(dir: &Path) -> anyhow::Result<String> {
             .mode(0o600)
             .open(&file)
             .map_err(|e| anyhow::anyhow!("can't write {}: {e}", file.display()))?;
-        f.write_all(b64.encode(seed).as_bytes())?;
+        f.write_all(base64::engine::general_purpose::STANDARD.encode(seed).as_bytes())?;
         f.write_all(b"\n")?;
         seed
     };
     let public = ed25519_dalek::SigningKey::from_bytes(&seed).verifying_key().to_bytes();
     Ok(plexus_rpc::auth_core::adapters::key_principal(&public).to_string())
+}
+
+/// The local admin key's seed, read from `dir/local.key` — never made here.
+/// DIST-21: what `menger mcp` signs its key proofs with.
+pub fn local_seed(dir: &Path) -> anyhow::Result<[u8; 32]> {
+    use base64::Engine as _;
+    let file = dir.join(KEY_FILE);
+    let text = std::fs::read_to_string(&file).map_err(|e| anyhow::anyhow!("can't read {}: {e}", file.display()))?;
+    base64::engine::general_purpose::STANDARD
+        .decode(text.trim())
+        .ok()
+        .and_then(|s| s.try_into().ok())
+        .ok_or_else(|| anyhow::anyhow!("{} is not a key (32 bytes, base64); move it aside and start again for a new one", file.display()))
 }
 
 fn now() -> i64 {
@@ -373,8 +381,9 @@ pub fn login_agent(data_dir: &Path) -> Result<String, String> {
 }
 
 /// What a start prints, in this order: that it runs, where to open it
-/// (`once`: a one-time link), the agents' lines (local starts), the data,
-/// how to stop it — and a port that moved, said.
+/// (`once`: a one-time link), the agents' lines (local starts: synapse's,
+/// then DIST-21's `mcp:` line), the data, how to stop it — and a port that
+/// moved, said.
 pub fn banner(version: &str, url: &str, once: bool, agents: &[String], db: &Path, moved: &[String]) -> String {
     let note = if once { "   (one-time; `menger login` for another)" } else { "" };
     let mut out = format!("menger {version} — running\n  open:  {url}{note}\n");
@@ -496,6 +505,28 @@ mod tests {
         let lines: Vec<&str> = b.lines().collect();
         assert_eq!(lines[2].trim_start(), "agents: synapse -P 4455 _login menger --key menger-local --as menger-local");
         assert!(lines[3].contains("data:"));
+    }
+
+    #[test]
+    fn the_banner_puts_the_mcp_line_between_the_agents_line_and_the_data() {
+        let mut agents = agent_lines(&Handed::Linked, Path::new("/d"), 4455);
+        agents.push(crate::start::mcp_line(&crate::start::mcp_argv("menger", None)));
+        let b = banner("0.7.2", "http://127.0.0.1:4456/login?once=x", true, &agents, Path::new("/data/local.db"), &[]);
+        let lines: Vec<&str> = b.lines().collect();
+        assert!(lines[2].trim_start().starts_with("agents: synapse"));
+        assert_eq!(lines[3], "  mcp:   claude mcp add --scope user menger -- menger mcp");
+        assert!(lines[4].contains("data:") && lines[5].contains("stop:"));
+    }
+
+    #[test]
+    fn the_seed_is_read_back_and_never_made_by_a_read() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(local_seed(dir.path()).is_err(), "no key: an error, not a new key");
+        assert!(!dir.path().join(KEY_FILE).exists());
+        let admin = local_admin(dir.path()).unwrap();
+        let seed = local_seed(dir.path()).unwrap();
+        let public = ed25519_dalek::SigningKey::from_bytes(&seed).verifying_key().to_bytes();
+        assert_eq!(plexus_rpc::auth_core::adapters::key_principal(&public).to_string(), admin);
     }
 
     #[test]

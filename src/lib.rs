@@ -76,6 +76,10 @@ pub mod local;
 /// DIST-14: `menger` with no flags — the local admin and its one-time links.
 pub mod first_run;
 
+/// DIST-21: `menger start` — the line that adds menger to an agent, `menger
+/// mcp` (the bridge it runs, signed in with the local key) and the prompt.
+pub mod start;
+
 /// DIST-19: the UI bundle the binary carries, made live at start where
 /// nobody else chose one.
 pub mod embedded_ui;

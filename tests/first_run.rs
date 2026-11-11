@@ -139,8 +139,11 @@ async fn a_first_run_prints_a_link_that_signs_in_once_and_menger_login_prints_an
     assert!(open.contains("`menger login` for another"), "{open}");
     // DIST-17: under open, how an agent signs in.
     assert_eq!(lines[2].trim_start(), format!("agents: synapse -P {ws} _login menger --key menger-local --as menger-local"));
-    assert_eq!(lines[3].trim_start(), "data:  ~/.local/share/menger/local.db");
-    assert_eq!(lines[4].trim_start(), "stop:  Ctrl-C");
+    // DIST-21: then how an agent adds its MCP — this binary by its path (it
+    // is not on PATH here), the default data directory not named.
+    assert_eq!(lines[3].trim_start(), format!("mcp:   claude mcp add --scope user menger -- {} mcp", this_binary()));
+    assert_eq!(lines[4].trim_start(), "data:  ~/.local/share/menger/local.db");
+    assert_eq!(lines[5].trim_start(), "stop:  Ctrl-C");
     let link = open.split_whitespace().nth(1).unwrap().to_string();
 
     // Its own data directory, the key 0600, never prod's tickets.db.
@@ -242,6 +245,149 @@ async fn a_local_start_hands_its_key_to_synapse_and_never_overwrites() {
     let (_server, lines) = start(other.path(), free_port(), free_port(), &["--auth-provider", "key", "--admin", &format!("key:{}", "ab".repeat(32))]);
     assert!(!lines.iter().any(|l| l.contains("agents:")), "{lines:?}");
     assert!(!other.path().join(".plexus").exists());
+}
+
+/// The binary under test as the banner names it: its canonical path.
+fn this_binary() -> String {
+    std::fs::canonicalize(env!("CARGO_BIN_EXE_menger")).unwrap().display().to_string()
+}
+
+/// An MCP client on a child's stdin and stdout: one JSON-RPC message a line.
+struct Bridge {
+    child: Child,
+    to: std::process::ChildStdin,
+    from: std::sync::mpsc::Receiver<String>,
+    next: u64,
+}
+
+impl Drop for Bridge {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+impl Bridge {
+    fn spawn(mut cmd: Command) -> Bridge {
+        let mut child = cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit()).spawn().expect("spawn menger mcp");
+        let (to, out) = (child.stdin.take().unwrap(), child.stdout.take().unwrap());
+        let (tx, from) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for line in BufReader::new(out).lines().map_while(Result::ok) {
+                let _ = tx.send(line);
+            }
+        });
+        Bridge { child, to, from, next: 0 }
+    }
+
+    fn send(&mut self, message: Value) {
+        use std::io::Write;
+        writeln!(self.to, "{message}").unwrap();
+        self.to.flush().unwrap();
+    }
+
+    /// A request, and its answer's `result` — every line on stdout being a
+    /// JSON-RPC message (nothing else is ever written there).
+    fn request(&mut self, method: &str, params: Value) -> Value {
+        self.next += 1;
+        let id = self.next;
+        self.send(serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }));
+        loop {
+            let line = self.from.recv_timeout(Duration::from_secs(30)).unwrap_or_else(|e| panic!("{method}: no answer ({e})"));
+            let message: Value = serde_json::from_str(&line).unwrap_or_else(|e| panic!("stdout holds only the protocol, not {line:?}: {e}"));
+            if message["id"] == id {
+                assert!(message.get("error").is_none(), "{method}: {message}");
+                return message["result"].clone();
+            }
+        }
+    }
+}
+
+/// DIST-21: `menger start` is the server; its banner says how to add
+/// menger to an agent; and the command it names, `menger mcp`, is an MCP
+/// server on stdio that reaches the service as the local admin with no
+/// sign-in — and goes on reaching it after the server restarts on another
+/// port.
+#[tokio::test(flavor = "multi_thread")]
+async fn menger_start_names_the_bridge_and_the_bridge_reaches_the_service_signed_in() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let home = dir.path();
+    let (ws, shell) = (free_port(), free_port());
+    // Flags after the word, as a person types them.
+    let mut child = menger(home).args(["start", "--port", &ws.to_string(), "--shell-port", &shell.to_string()]).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    let server = Server(child);
+    let mut lines = Vec::new();
+    loop {
+        let mut l = String::new();
+        assert!(out.read_line(&mut l).unwrap() > 0, "the banner ended early: {lines:?}");
+        let done = l.trim_start().starts_with("stop:");
+        lines.push(l.trim_end().to_string());
+        if done {
+            break;
+        }
+    }
+    let line = format!("claude mcp add --scope user menger -- {} mcp", this_binary());
+    assert_eq!(lines[3].trim_start(), format!("mcp:   {line}"), "{lines:?}");
+    assert!(lines[1].contains(&format!("http://127.0.0.1:{shell}/login?once=")), "the flags after `start` are taken: {lines:?}");
+    // No terminal: no prompt, and `menger mcp --print` says the line alone.
+    assert!(!lines.iter().any(|l| l.contains("keys:")), "{lines:?}");
+    let printed = menger(home).args(["mcp", "--print"]).output().unwrap();
+    assert_eq!(String::from_utf8(printed.stdout).unwrap().trim(), line);
+
+    // The command the line names, driven as an agent drives it.
+    let mut cmd = menger(home);
+    cmd.arg("mcp");
+    let mut mcp = Bridge::spawn(cmd);
+    let hello = mcp.request("initialize", serde_json::json!({ "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "first_run", "version": "0" } }));
+    assert_eq!(hello["serverInfo"]["name"], "menger", "{hello}");
+    mcp.send(serde_json::json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
+    let tools = mcp.request("tools/list", serde_json::json!({}));
+    let names: Vec<&str> = tools["tools"].as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).collect();
+    // The admin's view, not the door's: writes, and what only an admin holds.
+    for expected in ["tickets.create", "tickets.get", "members.grant"] {
+        assert!(names.contains(&expected), "{expected} among {names:?}");
+    }
+    let created = mcp.request("tools/call", serde_json::json!({ "name": "tickets.create", "arguments": { "epic": "KILN", "title": "over the bridge", "kind": "scope" } }));
+    assert_ne!(created["isError"], true, "{created}");
+    assert_eq!(created["structuredContent"]["items"][0]["ticket"]["id"], "KILN-1", "{created}");
+
+    // The server restarts on other ports: the same bridge reads where it is
+    // now and signs in again, with nothing from the agent.
+    drop(server);
+    let (ws2, shell2) = (free_port(), free_port());
+    let (_server, _) = start(home, ws2, shell2, &[]);
+    let got = mcp.request("tools/call", serde_json::json!({ "name": "tickets.get", "arguments": { "id": "KILN-1" } }));
+    assert_ne!(got["isError"], true, "{got}");
+    assert!(got.to_string().contains("over the bridge"), "{got}");
+}
+
+/// DIST-21: the line is for a start the bridge can reach — none beside a
+/// provider (the key is not that server's), none with `--no-mcp`.
+#[tokio::test]
+async fn the_mcp_line_is_a_local_start_s_alone() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let (_server, lines) = start(dir.path(), free_port(), free_port(), &["--no-mcp"]);
+    assert!(!lines.iter().any(|l| l.contains("mcp:")), "{lines:?}");
+    let other = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let (_server, lines) = start(other.path(), free_port(), free_port(), &["--auth-provider", "key", "--admin", &format!("key:{}", "ab".repeat(32))]);
+    assert!(!lines.iter().any(|l| l.contains("mcp:")), "{lines:?}");
+    // And the bridge finds no local menger there (a provider's server says
+    // nothing in the data directory), rather than serving the door.
+    let out = menger(other.path()).arg("mcp").output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("isn't running"), "{out:?}");
+    assert!(out.stdout.is_empty(), "stdout is the protocol's alone");
+}
+
+#[tokio::test]
+async fn menger_mcp_with_nothing_running_says_how_to_start_it() {
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let out = menger(dir.path()).arg("mcp").output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("isn't running") && err.contains("`menger start`"), "{err}");
+    assert!(out.stdout.is_empty(), "stdout is the protocol's alone");
 }
 
 #[tokio::test]

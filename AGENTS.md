@@ -33,6 +33,16 @@ as `--admin` (above), on its own ports and database. The tests run the same
 way: `tests/support` starts every server under `key` with a fixture key as
 `--admin`; `tests/first_run.rs` runs the no-flags start on a temp HOME.
 
+**`menger start` is that start by name, and its banner says how an agent
+adds menger** (DIST-21, `src/start.rs`): `mcp:   claude mcp add --scope user
+menger -- menger mcp`. `menger mcp` is MCP on stdio — the bridge `/mcp` is —
+over the local menger's WebSocket as the local admin, a fresh key proof per
+connection signed with `local.key`; nothing is opened and no token is
+printed. On a terminal a `keys:` line follows the banner (`o` opens the
+app, `a` runs the line); stdin is never read anywhere else. Whether `/mcp`
+itself answers with no credential on loopback is the owner's open decision,
+DIST-23 — until it is taken, never build it.
+
 **A binary may carry the UI** (DIST-19): `build.rs` includes `embed/ui.tar`
 when `scripts/embed-ui` has put it there (or the file `MENGER_UI_BUNDLE`
 names), and at start `src/embedded_ui.rs` makes that bundle live where
