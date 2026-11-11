@@ -50,7 +50,7 @@
 // Exit 0 when every test passed, 1 when one failed, 2 when setup failed.
 import fs from "node:fs";
 import path from "node:path";
-import { makeKey, readToken, sessionCookies, writeSession } from "../scripts/throwaway-login.mjs";
+import { makeKey, mintSession, readToken, sessionCookies, writeSession } from "../scripts/throwaway-login.mjs";
 import { INIT, TARGET, Throwaway, build, bundle, compilerModule, playwright, push, sentCalls, sleep, synapse, workDir } from "../scripts/ui-throwaway.mjs";
 
 const args = process.argv.slice(2);
@@ -888,6 +888,37 @@ async function main() {
           return u.pathname === "/app/" && u.hash === `${B.ticketRoute}${t.id}`;
         }, 5_000);
         await eventually("the ticket is drawn", async () => trimmed(await page.locator(`${B.page} [data-ticket-title]`).textContent({ timeout: 1000 })) === t.title.trim(), 5_000);
+      });
+
+      // STUDIO-32: a page whose session ends under it — signed out by the
+      // shell's /logout in the same browser — goes to /login with `next` at
+      // its next call, and comes back there once signed in.
+      await onBoard(B, "a_signed_out_page_goes_to_sign_in_and_comes_back", async () => {
+        const t = summaries("--limit", "3")[1];
+        const ws = `ws://127.0.0.1:${server.ws}`;
+        const own = await mintSession(ws, adminKey, "owner"); // its own session: the run's is never ended
+        const { page, context, seen } = await openPage(B.route, { as: own.token });
+        await boardUp(page, B);
+        const out = await page.evaluate(() => fetch("/logout", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "", redirect: "manual" }).then((r) => r.type));
+        assert(out === "opaqueredirect", `/logout answered ${out}`);
+        await page.evaluate((r) => (location.hash = r), `${B.ticketRoute}${t.id}`);
+        await eventually("signed out: on the sign-in", async () => new URL(page.url()).pathname === "/login", 10_000);
+        const next = new URL(page.url()).searchParams.get("next");
+        assert(next === `/app/${B.ticketRoute}${t.id}`, `next is the page's path and hash: ${page.url()}`);
+        // (the /logout's own 303 to a bare /login is no send of the page's)
+        const sent = seen.requests.filter((u) => new URL(u).pathname === "/login" && new URL(u).searchParams.has("next"));
+        assert(sent.length === 1, `sent to the sign-in once, not ${sent.length}×: ${sent.join(" ")}`);
+        const again = await mintSession(ws, adminKey, "owner");
+        await context.addCookies(sessionCookies(server.origin, again.token));
+        await page.reload();
+        await eventually(`signed in: back on ${B.ticketRoute}${t.id}`, async () => {
+          const u = new URL(page.url());
+          return u.pathname === "/app/" && ticketAt(u.hash, t.id);
+        }, 5_000);
+        await eventually("the ticket is drawn", async () => trimmed(await page.locator(`${B.page} [data-ticket-title]`).textContent({ timeout: 1000 })) === t.title.trim(), 5_000);
+        await sleep(1000);
+        assert(new URL(page.url()).pathname === "/app/", `stays once signed in: ${page.url()}`);
+        assert(!seen.console.some((l) => l.includes("signed out:")), `nothing said once signed in: ${seen.console.filter((l) => l.includes("signed out")).join(" | ")}`);
       });
 
       await onBoard(B, "a_section_of_the_board_is_swapped_by_right_click", async () => {

@@ -10,6 +10,10 @@
 <meta name="menger-ui-version" content="{{UI_VERSION}}">
 <!-- EDITOR-14, APP-110: the test app's origin a body's live view frames (`--live-origin`), empty when none. -->
 <meta name="menger-live-origin" content="{{LIVE_ORIGIN}}">
+<!-- STUDIO-32: the sign-in a page whose session has ended goes to, with
+     `next` (its path and hash) to come back to — plexus-login's /login,
+     which lands there once signed in. -->
+<meta name="plexus-login" content="/login">
 <!-- FRAME-16: what the boot needs, asked with the HTML; host.js's start
      makes the socket and reads the manifest and the components while the
      wasm downloads and instantiates, then hands them over. -->
