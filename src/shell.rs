@@ -335,7 +335,10 @@ async fn router(cfg: ShellConfig, at: std::net::SocketAddr) -> Router {
             .session(move |headers| login.as_ref().and_then(|l| l.session(headers)))
             .stamps(stamps)
             .csp(csp)
-            .placeholder(PLACEHOLDER);
+            .placeholder(PLACEHOLDER)
+            // STUDIO-32: every page the routes serve (/app/, /studio/) names
+            // the sign-in a signed-out page goes to (none without login).
+            .login(if cfg.login.is_some() { "/login" } else { "" });
         // STUDIO-2: /studio/ beside /app/, inside the same session check.
         let routes = match cfg.studio.clone() {
             Some(s) => {
