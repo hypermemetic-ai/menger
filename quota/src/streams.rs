@@ -61,7 +61,17 @@ fn box_now(act: &QuotaActivation) -> (Option<f64>, BoxState) {
     (used, state)
 }
 
-pub(crate) async fn reserve(act: QuotaActivation, principal: String, source: String, amount: u64) -> QuotaEvent {
+/// KEEL-56: the seam's four — `reserve`, `commit`, `release`, `credit` —
+/// move anyone's allowance, so they are an admin of `*`'s (the server's own
+/// caller, which every service's seam asks as), whatever the gate admitted.
+fn the_seams(act: &QuotaActivation, user: &Caller, what: &str) -> Option<QuotaEvent> {
+    (!act.seam.admin_everywhere(user.context())).then(|| admins_only(what))
+}
+
+pub(crate) async fn reserve(act: QuotaActivation, user: Caller, principal: String, source: String, amount: u64) -> QuotaEvent {
+    if let Some(refused) = the_seams(&act, &user, "a reservation against an allowance") {
+        return refused;
+    }
     let who = who(&act, &principal).await;
     let (used, _) = box_now(&act);
     let now = ledger::now();
@@ -72,27 +82,36 @@ pub(crate) async fn reserve(act: QuotaActivation, principal: String, source: Str
     }
 }
 
-pub(crate) async fn commit(ledger: Arc<Ledger>, ticket: String, amount: Option<u64>) -> QuotaEvent {
+pub(crate) async fn commit(act: QuotaActivation, user: Caller, ticket: String, amount: Option<u64>) -> QuotaEvent {
+    if let Some(refused) = the_seams(&act, &user, "counting a reservation") {
+        return refused;
+    }
     let t = ticket.clone();
-    match blocking(&ledger, move |l| l.commit(&t, amount)).await {
+    match blocking(&act.ledger, move |l| l.commit(&t, amount)).await {
         Ok(Ok(c)) => QuotaEvent::Committed { ticket, principal: c.principal, source: c.source, amount: c.amount, used: c.used },
         Ok(Err(e)) => QuotaEvent::Error { message: e.to_string() },
         Err(message) => QuotaEvent::Error { message },
     }
 }
 
-pub(crate) async fn release(ledger: Arc<Ledger>, ticket: String) -> QuotaEvent {
+pub(crate) async fn release(act: QuotaActivation, user: Caller, ticket: String) -> QuotaEvent {
+    if let Some(refused) = the_seams(&act, &user, "letting a reservation go") {
+        return refused;
+    }
     let t = ticket.clone();
-    match blocking(&ledger, move |l| l.release(&t)).await {
+    match blocking(&act.ledger, move |l| l.release(&t)).await {
         Ok(Ok((principal, source, amount))) => QuotaEvent::Released { ticket, principal, source, amount },
         Ok(Err(e)) => QuotaEvent::Error { message: e.to_string() },
         Err(message) => QuotaEvent::Error { message },
     }
 }
 
-pub(crate) async fn credit(ledger: Arc<Ledger>, principal: String, source: String, amount: u64) -> QuotaEvent {
+pub(crate) async fn credit(act: QuotaActivation, user: Caller, principal: String, source: String, amount: u64) -> QuotaEvent {
+    if let Some(refused) = the_seams(&act, &user, "giving usage back") {
+        return refused;
+    }
     let (p, s) = (principal.clone(), source.clone());
-    match blocking(&ledger, move |l| l.credit(&p, &s, amount, ledger::now())).await {
+    match blocking(&act.ledger, move |l| l.credit(&p, &s, amount, ledger::now())).await {
         Ok(Ok(used)) => QuotaEvent::Credited { principal, source, used },
         Ok(Err(e)) => QuotaEvent::Error { message: e.to_string() },
         Err(message) => QuotaEvent::Error { message },
