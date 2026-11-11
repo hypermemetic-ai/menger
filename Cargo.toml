@@ -54,6 +54,15 @@ include = [
     "/LICENSE",
 ]
 
+# DIST-22: where `cargo binstall menger` finds a built binary — the archive
+# scripts/package writes, an asset of the GitHub release tagged v<version>.
+# These are binstall's own defaults, written out so the names are held by a
+# test (scripts/tests/package) rather than by a guess.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }-v{ version }{ archive-suffix }"
+bin-dir = "{ name }-{ target }-v{ version }/{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
 [lib]
 name = "menger"
 path = "src/lib.rs"
@@ -258,6 +267,16 @@ inherits = "release"
 lto = "fat"
 codegen-units = 1
 debug = "line-tables-only"
+
+# DIST-22: the build people download (scripts/package). Release, thin LTO,
+# and nothing but the program in the file: no symbols, no line tables — the
+# perf build's 260 MB is mostly those. Never a release the pipeline deploys.
+[profile.dist]
+inherits = "release"
+lto = "thin"
+codegen-units = 16
+debug = false
+strip = true
 
 # CI-9 (owner, 2026-11-05: "sub 5 minutes into test … ideally sub 30 seconds"): test's quick
 # build, `deploy/pipeline build --fast`. Release's optimisation without the perf profile's fat LTO

@@ -1,0 +1,44 @@
+# DIST-22: NOT ACTIVE — this file is not in .github/workflows/. It has never
+# run. Copying it there is the owner's decision (deploy/release/README.md).
+#
+# On a pushed tag v<version>: build menger for each target on a runner of that
+# kind, pack it with scripts/package, and attach the archives to the tag's
+# release — the assets `cargo binstall menger` asks for.
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  ui:
+    # The bundle once, for every target: scripts/embed-ui (Node 22, wasm32).
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: rustup target add wasm32-unknown-unknown
+      - run: scripts/embed-ui
+      - uses: actions/upload-artifact@v4
+        with: { name: ui, path: embed/ui.tar }
+  build:
+    needs: ui
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # An old glibc on purpose: the binary runs on everything newer.
+          - { target: x86_64-unknown-linux-gnu, runs-on: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-gnu, runs-on: ubuntu-22.04-arm }
+          - { target: aarch64-apple-darwin, runs-on: macos-14 }
+          - { target: x86_64-apple-darwin, runs-on: macos-13 }
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: ui, path: ui-bundle }
+      - run: rustup target add ${{ matrix.target }}
+      - run: scripts/package --target ${{ matrix.target }} --ui ui-bundle/ui.tar --check
+      - run: gh release upload "$GITHUB_REF_NAME" dist/release/menger-*.tar.gz* --clobber
+        env: { GH_TOKEN: "${{ github.token }}" }
