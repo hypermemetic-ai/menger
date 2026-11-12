@@ -80,8 +80,9 @@ deploy/pipeline build [REV] [--branch B] [--no-gate] [--fast]
                                                        # CI-9: --fast, test's quick build (never a prod candidate)
 deploy/pipeline image [RELEASE]                        # RUN-10: the release as an image (IMAGE_STORE=ghcr pushes it to GHCR)
 deploy/pipeline remote test --image IMG                # app-test.menger.sh through infra, the bundle pushed, then the smoke
-deploy/pipeline suite RELEASE                          # DEPLOY-52: the full suite at the release's commit, plexus-bench's counts
-                                                       # and bench beside it (PERF-6, PERF.115-29); marks the release
+deploy/pipeline suite RELEASE                          # DEPLOY-52: the full suite at the release's commit; marks the release
+deploy/pipeline perf RELEASE                           # perf, apart from the suite: plexus-bench's counts and bench against their
+                                                       # goldens; marks the release's PERF; nothing reads it to decide a deploy
 deploy/pipeline suite --status RELEASE                 # suite: passed | failed | running | none
 deploy/pipeline remote prod                            # what test runs → app.menger.sh, only once its suite passed
 deploy/pipeline smoke test|prod                        # the smoke against app-test / app.menger.sh, on its own
@@ -227,8 +228,13 @@ the owner's.
    workspace reads — an example's `path`, another member's manifest; the
    suite does: `20261029T173657Z-454cd56`'s went red before a test ran on an
    example path V2-9 had removed (V2-12; `tickets-api/tests/leftovers.rs`
-   now holds every manifest `path` to a file in the tree). **Beside it,
-   plexus-bench** (PERF-6, PERF.115-29; V2-44 brought both to v2). First its
+   now holds every manifest `path` to a file in the tree). **Perf is apart**
+   (the owner, 2026-11-12: "we want a perf but not in the standard tests.
+   they should be run separately"): `deploy/pipeline perf RELEASE` runs
+   plexus-bench and marks the release's `PERF`; the suite runs none of it, its
+   `SUITE` line names no bench, and `remote prod` never reads `PERF`. What
+   follows is what `perf` does, where it says the suite read perf.
+   **plexus-bench** (PERF-6, PERF.115-29; V2-44 brought both to v2). First its
    `../plexus-bench/scripts/ci-check.sh`: every scenario's instructions and allocations
    against `goldens/ci`, under callgrind in the `plexus-bench-ci` image. They
    read no clock, so a count past its line is not noise, and it marks the
