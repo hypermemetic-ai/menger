@@ -256,7 +256,7 @@
       // requirements chosen) one capability of two requirements, one with no scenario.
       ["spec-outline", SpecOutline, (t) => ({ source: "<spec-outline>\n# The kiln\n\n## Requirements\n\n### firing\n\n#### Requirement: A firing can be paused\n\nThe kiln SHALL hold its temperature.\n\n##### Scenario: paused at the hold\n- **WHEN** a firing is paused\n- **THEN** it holds\n\n#### Requirement: A firing is logged\n\n## Design\n\n### Open Questions\n\n1. **Gas or electric.** Which first?\n\n## Tasks\n\n- [x] 1. Wire the kiln\n- [ ] 2. Fire it\n</spec-outline>" }), ["hover", "focus", "selected"], {}, false, { selected: ["[role=tab][aria-selected=false]"] }],
       // A task list drawn as tasks: one done of two, the boxes shown only (nothing is told of a tick here).
-      ["spec-tasks", SpecTasks, (t) => ({ text: "- [x] 1. Wire the kiln\n- [ ] 2. Fire it" }), ["hover", "focus", "checked", "disabled"], {}, false, { checked: ["[role=checkbox][aria-checked=false]"] }],
+      ["spec-tasks", SpecTasks, (t) => ({ text: "- [x] 1. Wire the kiln\n- [ ] 2. Fire it" }), ["hover", "focus", "checked", "disabled"], {}, false, { hover: [".tasks-box"], focus: [".tasks-box"], checked: ["[role=checkbox][aria-checked=false]"] }],
       ["tag-source", TagSource, (t) => ({}), [], {}],
       // V2-30: a doc's margin, alone — its threads as a list (a ticket's id: none).
       ["doc-margin", DocMargin, ID, [], {}],
