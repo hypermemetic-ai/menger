@@ -89,6 +89,32 @@ export default async (ctx) => {
     } finally { await context.close(); }
   });
 
+  // A link by uid followed from a ticket's page gives the page another ticket: the page, its nav and its top
+  // are the ones that were there (nothing flashes), and the head says the new ticket.
+  await test("a_ticket_followed_from_a_ticket_keeps_the_page", async () => {
+    const a = made("the kiln, stayed on"), z = made("the kiln, gone to");
+    const hashOf = async (id) => {
+      const o = await openPage(`${ROUTE}${id}`);
+      try {
+        await eventually(`${id}'s address is its uid's`, async () => /#\/(?:sv\/)?t\//.test(o.page.url()), 10_000);
+        return o.page.url().slice(o.page.url().indexOf("#"));
+      } finally { await o.context.close(); }
+    };
+    const ha = await hashOf(a.id), hz = await hashOf(z.id);
+    const { context, page } = await openPage(ha);
+    try {
+      const head = page.locator("[data-surface=ticket-head] [data-field=title]");
+      await eventually("the first is drawn, its nav too", async () => /stayed on/.test(await text(head)) && (await page.locator("[data-surface=ticket-nav] [data-nav-mode]").count()) > 0, 20_000);
+      await page.evaluate(() => { const q = (s) => document.querySelector(s); window.__kept = { page: q(".page-ticket"), nav: q("[data-surface=ticket-nav] [data-nav-mode]"), top: q(".page-ticket > [data-slot=top] > *") }; });
+      for (const [hash, want] of [[hz, /gone to/], [ha, /stayed on/]]) {
+        await page.evaluate((h) => { location.hash = h.slice(1); }, hash);
+        await eventually(`the head says ${want}`, async () => want.test(await text(head)), 10_000);
+        const kept = await page.evaluate(() => Object.entries(window.__kept).filter(([, n]) => !n || !document.contains(n)).map(([k]) => k));
+        assert(kept.length === 0, `made again: ${kept.join(", ")}`);
+      }
+    } finally { await context.close(); }
+  });
+
   await test("the_page_draws_every_field", async () => {
     const parent = made("the kiln's parent");
     const blocker = made("the kiln's blocker");

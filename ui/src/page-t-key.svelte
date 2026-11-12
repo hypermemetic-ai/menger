@@ -18,13 +18,18 @@
   const named = live({ snapshot: "tickets.get", params: () => ({ id: key }), key: "id" });
   const ambiguous = $derived(named.rows.some((r) => Array.isArray(r.choices) || Array.isArray(r.candidates)));
   const shown = $derived(ambiguous && address != null ? address : key);
+  // The page is given the ticket, never made again for another: while a new key is read the one on screen
+  // stays, then the page takes the new id as a prop (its nav, its top and what is open in them stay).
+  let last = $state(null);
+  $effect(() => { if (named.status !== "pending") last = shown; });
+  const now = $derived(named.status === "pending" ? last : shown);
 </script>
 
 <div class="page-t-key" data-surface="ticket-by-key" data-key={key}>
-  {#if named.status === "pending"}
+  {#if now == null}
     <div class="wait" data-loading aria-busy="true"></div>
   {:else}
-    {#key shown}<PageTicket id={shown}/>{/key}
+    <PageTicket id={now}/>
   {/if}
 </div>
 
