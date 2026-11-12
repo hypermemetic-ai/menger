@@ -16,7 +16,7 @@
      drawn where it stands and answered in place: a choice's options (a click answers), a multi's boxes and
      a text's box with `save`, a why, what was answered and by whom, `clear` (`tickets.inputs.answer`,
      `tickets.inputs.clear`; live by `tickets.watch`'s `input_changed`). Until its row is read, or with no
-     ticket, it is drawn as the body draws the mark. An open question is a line under the counts.
+     ticket, it is drawn as the body draws the mark. The count of open questions goes to the first of them; one written as a plain list item, with no card, is a line under the counts.
      **What builds it**: the ticket's children are read live (`tickets.list { parent }`). A requirement whose
      statement says `**Built by:** LPROTO-1, …` shows each as a link with its status on its line, and the
      children are listed under the counts, one that no requirement names marked `tied to no requirement`.
@@ -239,6 +239,9 @@
   const row = $derived(read_?.rows.find((r) => r.body != null));
   const o = $derived(outline(holds ? text : row?.body));
   const spec = $derived(holds ? read(text) : null);
+  // A question with a card of its own where it stands is not said again under the counts; one written as a
+  // plain list item has no card, and is.
+  const plain = $derived(holds ? o.questions : []);
   const any = $derived(holds || o.requirements > 0 || o.tasks.total > 0 || o.questions.length > 0);
 
   // The questions the spec asks as inputs of its ticket's body, answered in place.
@@ -379,7 +382,10 @@
     <span data-stat="scenarios"><b>{o.scenarios}</b> {o.scenarios === 1 ? "scenario" : "scenarios"}</span>
     {#if o.tasks.total}<span data-stat="tasks"><b>{o.tasks.done}/{o.tasks.total}</b> tasks
       <span class="spec-bar" aria-hidden="true"><span style:width={`${(100 * o.tasks.done) / o.tasks.total}%`}></span></span></span>{/if}
-    {#if open_.length}<span data-stat="questions" class="spec-open"><b>{open_.length}</b> open {open_.length === 1 ? "question" : "questions"}</span>{/if}
+    {#if open_.length}
+      {#if holds}<button type="button" data-stat="questions" class="spec-open" title="Go to the first open question" onclick={ask}><b>{open_.length}</b> open {open_.length === 1 ? "question" : "questions"}</button>
+      {:else}<span data-stat="questions" class="spec-open"><b>{open_.length}</b> open {open_.length === 1 ? "question" : "questions"}</span>{/if}
+    {/if}
     {#if holds && editor === "true"}<span class="spec-edit" data-edit role="button" tabindex="0" title="Show this spec's markdown, to edit it">edit source</span>{/if}
   </p>
 {/snippet}
@@ -441,7 +447,7 @@
         </div>
       {/if}
       {#if i.kind !== "text"}<input class="spec-q-why" name="why" autocomplete="off" placeholder="why (optional)" bind:value={whys[i.id]}/>{/if}
-      {#if i.recommendation && i.state === "open"}<p class="spec-q-rec" data-field="recommendation">Recommended: {i.recommendation}</p>{/if}
+      {#if i.recommendation && i.state === "open"}<div class="spec-q-rec" data-field="recommendation"><span>Recommended:</span> {@html markdown(i.recommendation)}</div>{/if}
     {/if}
     {#if i.answer}
       <p class="spec-q-said" data-field="answer"><b>{said(i.answer.value)}</b>{#if i.answer.rationale} — {i.answer.rationale}{/if}{#if i.answer.name} <span class="spec-q-who">· {i.answer.name}</span>{/if}
@@ -462,9 +468,9 @@
 <section class="spec" data-surface="spec-outline" data-holds aria-label={spec.title || "Spec"} bind:this={root} onmousedown={hold} onkeydown={typed} tabindex="-1">
   {#if spec.title}<h2 class="spec-title">{spec.title}</h2>{/if}
   {@render stats()}
-  {#if open_.length}
+  {#if plain.length}
   <ul class="spec-questions">
-    {#each open_ as q, i (i)}<li><button type="button" data-question onclick={ask}>{q}</button></li>{/each}
+    {#each plain as q, i (i)}<li><button type="button" data-question onclick={ask}>{q}</button></li>{/each}
   </ul>
   {/if}
   {#if children.length}
@@ -598,6 +604,7 @@
   .spec-stats { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 18px; color: var(--muted); }
   .spec-stats b { color: var(--ink); font-weight: var(--weight-strong); font-variant-numeric: tabular-nums; }
   .spec-stats .spec-open b, .spec-stats .spec-open { color: var(--st-pending-fg); }
+  .spec-stats button.spec-open:hover, .spec-stats button.spec-open:global([data-sheet~=hover]) { text-decoration: underline; }
   .spec-bar { display: inline-block; vertical-align: middle; width: 56px; height: 4px; margin-left: 4px; background: var(--line); border-radius: var(--radius-pill); overflow: hidden; }
   .spec-bar span { display: block; height: 100%; background: var(--live); }
   .spec-edit { margin-left: auto; color: var(--muted); cursor: pointer; text-decoration: underline; }
@@ -656,6 +663,7 @@
   .spec-q textarea, .spec-q-why { font: inherit; color: var(--ink); background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius-sm); padding: 4px 8px; min-width: 0; }
   .spec-q textarea:focus, .spec-q-why:focus, .spec-q textarea:global([data-sheet~=focus]), .spec-q-why:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
   .spec-q-rec, .spec-q-who { color: var(--muted); }
+  .spec-q-rec :global(p) { display: inline; margin: 0; }
   .spec-q-said b { font-weight: var(--weight-strong); }
   .spec .spec-q-clear { margin-left: 8px; color: var(--muted); text-decoration: underline; }
   .spec .spec-q-clear:hover, .spec .spec-q-clear:global([data-sheet~=hover]) { color: var(--ink); }
