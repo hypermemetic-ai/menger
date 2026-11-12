@@ -290,9 +290,7 @@
     const token = `spec-${Math.random().toString(36).slice(2)}-${++asks}`;
     return new Promise((resolve) => {
       let off = null;
-      const end = (r) => { clearTimeout(late); off?.(); resolve(r); };
-      const late = setTimeout(() => end({ ok: false, message: "the editor did not answer: nothing saved" }), 15000);
-      off = b.on("body.tag.done", (d) => { if (d?.token === token) end(d); });
+      off = b.on("body.tag.done", (d) => { if (d?.token === token) { off?.(); resolve(d); } });
       b.emit("body.tag", { kind: "ticket", id: ticket, name: "spec-outline", n: Number(n), was: drawnFrom, next, token });
     });
   }
