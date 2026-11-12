@@ -30,7 +30,7 @@
      (ui/retired-rhx/).
      The nav beside the ticket (the owner, 2026-11-12: "I want to see the nav next to the ticket … it should be
      collapsable"): a column left of the ticket holding the page's `nav` section (nav-tree-sv by
-     ui/slots.json), under the top as the page scrolls. Its button hides it and shows it; hidden, the section
+     ui/slots.json), under the top as the page scrolls, the window's height below it. Its button hides it and shows it; hidden, the section
      is not placed, so it reads nothing. Which it is is kept in this browser (`menger.ticket.nav`), shown
      unless it was hidden. On a narrow window it is not drawn. Marks: `[data-surface=ticket-nav]`
      (`data-nav=open|closed`), `[data-nav-hide]` (`[aria-expanded]`). -->
@@ -99,7 +99,7 @@
 <section class="page page-ticket">
   <div data-slot="top" data-here="ticket" bind:clientHeight={topH}></div>
   <div class="tp-frame">
-  <aside class="tp-nav" data-surface="ticket-nav" data-nav={nav ? "open" : "closed"} style:top={`${topH}px`} style:max-height={`calc(100dvh - ${topH}px)`}>
+  <aside class="tp-nav" data-surface="ticket-nav" data-nav={nav ? "open" : "closed"} style:top={`${topH}px`} style:height={nav ? `calc(100dvh - ${topH}px)` : null}>
     <button type="button" class="tp-nav-toggle" data-nav-hide aria-expanded={nav} aria-label={nav ? "Hide the nav" : "Show the nav"} title={nav ? "Hide the nav" : "Show the nav"} onclick={toggleNav}>{nav ? "‹ hide" : "›"}</button>
     {#if nav}<div class="tp-nav-slot" data-slot="nav"></div>{/if}
   </aside>
@@ -151,7 +151,7 @@
   .page-ticket > [data-slot=top] { position: sticky; top: 0; z-index: 4; }
   .tp-frame { display: flex; align-items: flex-start; }
   .tp-frame > .ticket-page { flex: 1; min-width: 0; }
-  .tp-nav { position: sticky; flex: none; width: 300px; overflow: auto; background: var(--panel); border-right: var(--border) solid var(--line); }
+  .tp-nav { position: sticky; flex: none; width: 300px; box-sizing: border-box; overflow: auto; background: var(--panel); border-right: var(--border) solid var(--line); }
   .tp-nav[data-nav=closed] { width: auto; background: transparent; border-right: 0; }
   .tp-nav-toggle { display: block; margin: 6px 6px 2px auto; padding: 1px 8px; font: inherit; font-size: 11px; color: var(--muted); background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius-pill); cursor: pointer; }
   .tp-nav[data-nav=closed] .tp-nav-toggle { margin: 8px 0 0 8px; }

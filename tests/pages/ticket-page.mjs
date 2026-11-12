@@ -57,6 +57,8 @@ export default async (ctx) => {
       assert((await nav.getAttribute("data-nav")) === "open", "the nav starts open");
       const left = await nav.evaluate((e) => e.getBoundingClientRect().right), ticketLeft = await page.locator("[data-surface=ticket-page]").evaluate((e) => e.getBoundingClientRect().left);
       assert(left <= ticketLeft + 1, `the nav (${left}) is left of the ticket (${ticketLeft})`);
+      const fills = await nav.evaluate((e) => { const r = e.getBoundingClientRect(); return Math.abs(r.bottom - innerHeight) <= 1 && r.top >= 0; });
+      assert(fills, "the nav runs to the bottom of the window");
       await nav.locator("[data-nav-hide]").click();
       await eventually("hidden, the nav is not placed", async () => (await nav.getAttribute("data-nav")) === "closed" && (await nav.locator("[data-slot=nav]").count()) === 0, 5_000);
       await page.reload();
