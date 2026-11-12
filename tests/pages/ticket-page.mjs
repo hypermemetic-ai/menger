@@ -68,6 +68,27 @@ export default async (ctx) => {
     } finally { await context.close(); }
   });
 
+  // The column right of the body collapses the same way: hidden, its parts are not placed and the body takes
+  // the width; hidden still when the page is opened again.
+  await test("the_side_column_collapses", async () => {
+    const t = made("the kiln's side");
+    const { page, tp, context } = await open(t.id);
+    try {
+      const grid = page.locator("[data-surface=ticket-page] .tp");
+      await eventually("the side is drawn", async () => (await tp.locator("[data-mark=ticket-actions]").count()) === 1, 10_000);
+      assert((await grid.getAttribute("data-side")) === "open", "the side starts open");
+      const width = () => tp.locator("[data-surface=ticket-body]").evaluate((e) => e.getBoundingClientRect().width);
+      const before = await width();
+      await page.locator("[data-side-hide]").click();
+      await eventually("hidden, its parts are not placed", async () => (await grid.getAttribute("data-side")) === "closed" && (await tp.locator("[data-mark=ticket-actions], [data-surface=ticket-history], [data-surface=ticket-revisions]").count()) === 0, 5_000);
+      assert((await width()) > before + 200, "the body takes the width");
+      await page.reload();
+      await eventually("it is hidden still", async () => (await page.locator("[data-surface=ticket-page] .tp").getAttribute("data-side").catch(() => null)) === "closed", 20_000);
+      await page.locator("[data-side-hide]").click();
+      await eventually("shown again", async () => (await page.locator("[data-surface=ticket-page] [data-mark=ticket-actions]").count()) === 1, 10_000);
+    } finally { await context.close(); }
+  });
+
   await test("the_page_draws_every_field", async () => {
     const parent = made("the kiln's parent");
     const blocker = made("the kiln's blocker");

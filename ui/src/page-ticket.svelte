@@ -33,7 +33,12 @@
      ui/slots.json), under the top as the page scrolls, the window's height below it. Its button hides it and shows it; hidden, the section
      is not placed, so it reads nothing. Which it is is kept in this browser (`menger.ticket.nav`), shown
      unless it was hidden. On a narrow window it is not drawn. Marks: `[data-surface=ticket-nav]`
-     (`data-nav=open|closed`), `[data-nav-hide]` (`[aria-expanded]`). -->
+     (`data-nav=open|closed`), `[data-nav-hide]` (`[aria-expanded]`).
+     The column right of the body collapses the same way (the owner: "the information section should also be
+     collapsed"): the actions, the commits, the history and the revisions. `hide ›` above it takes the column
+     away and gives the body the width; hidden, its parts are not placed, so they read nothing. Kept in this
+     browser (`menger.ticket.side`), shown unless it was hidden. Marks: `.tp[data-side=open|closed]`,
+     `[data-side-hide]` (`[aria-expanded]`). -->
 <script module>
   export const uses = ["tickets.get", "tickets.watch", "tickets.revisions.list"];
 </script>
@@ -77,6 +82,13 @@
     try { localStorage.setItem(NAV, nav ? "open" : "closed"); } catch { /* a private window */ }
   }
   let topH = $state(0);
+  // The column right of the body: shown unless this browser hid it.
+  const SIDE = "menger.ticket.side";
+  let side = $state((() => { try { return localStorage.getItem(SIDE) !== "closed"; } catch { return true; } })());
+  function toggleSide() {
+    side = !side;
+    try { localStorage.setItem(SIDE, side ? "open" : "closed"); } catch { /* a private window */ }
+  }
 
   // EDITOR-4: the ticket page is "the ticket last opened" for the editor at #/ (editor-screen reads it).
   $effect(() => { try { if (id) localStorage.setItem("menger.editor.last", id); } catch { /* a private window */ } });
@@ -125,7 +137,8 @@
         <p class="tp empty" data-empty data-not-found>{"No ticket " + id + " here" + (ticket.message == null ? "" : " — " + ticket.message) + "."}</p>
       {/if}
     {:else}
-      <div class="tp">
+      <p class="tp-tools"><button type="button" class="tp-nav-toggle" data-side-hide aria-expanded={side} title={side ? "Hide the actions, commits and history" : "Show the actions, commits and history"} onclick={toggleSide}>{side ? "hide ›" : "‹ details"}</button></p>
+      <div class="tp" data-side={side ? "open" : "closed"}>
         <div class="cell head"><TicketHead {id}/></div>
         <div class="cell main">
           <div class="body" data-surface="ticket-body">{#key id}<EditorBody {id} kind="ticket" head={false}/>{/key}</div>
@@ -133,12 +146,14 @@
           <div class={knocked === 0 ? "hole" : knocked % 2 === 1 ? "hole heard" : "hole heard-again"} data-mark="ticket-edit" data-id={id}><TicketEdit {id}/></div>
           <TicketRelations {id}/>
         </div>
+        {#if side}
         <aside class="cell side">
           <div class="hole" data-mark="ticket-actions" data-id={id}><TicketActions {id}/></div>
           <TicketCommits {id}/>
           <TicketHistory {id}/>
         </aside>
         <div class="cell revs"><TicketRevisions {id}/></div>
+        {/if}
       </div>
     {/if}
   </article>
@@ -162,6 +177,9 @@
   .sep { display: inline-block; width: 8px; }
   kbd { display: inline-block; min-width: 16px; padding: 0 4px; font-family: var(--font-text); font-size: 10px; line-height: 15px; text-align: center; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-bottom-width: 2px; border-radius: var(--radius-sm); }
   .tp { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 0 36px; align-items: start; max-width: 1340px; margin: 0 auto; padding: 16px 28px 48px; }
+  .tp[data-side=closed] { grid-template-columns: minmax(0, 1fr); }
+  .tp-tools { display: flex; justify-content: flex-end; margin: 0; padding: 4px max(28px, calc((100% - 1284px) / 2)) 0; }
+  .tp-tools .tp-nav-toggle { margin: 0; }
   .head { grid-column: 1 / -1; grid-row: 1; }
   .main { grid-column: 1; grid-row: 3 / span 2; min-width: 0; }
   .side { grid-column: 2; grid-row: 3; min-width: 0; }
