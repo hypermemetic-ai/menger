@@ -333,9 +333,10 @@ deploy/pipeline image R                       # RUN-10: the release as an image 
 deploy/pipeline remote test --image ghcr.io/hypermemetic-ai/menger:R
                                               # app-test.menger.sh through infra, the bundle pushed through
                                               # ui.push as the pipeline key, then the smoke
-deploy/pipeline suite R                       # the full suite at R's commit, on this machine, then plexus-bench's
-                                              # counts and bench (PERF-6, PERF.115-29: ../plexus-bench, every
-                                              # scenario against its golden); marks R passed / failed
+deploy/pipeline suite R                       # the full suite at R's commit, on this machine; marks R passed / failed
+deploy/pipeline perf R                        # perf, apart from the suite (owner, 2026-11-12): plexus-bench's counts
+                                              # and bench, every scenario against its golden; marks R's PERF,
+                                              # which nothing reads to decide a deploy
 deploy/pipeline remote prod                   # what test runs → app.menger.sh, only once its suite passed; the owner's
 deploy/pipeline local --image menger:R        # RUN-25: the image on 127.0.0.1:4470/4471, a CI throwaway
 deploy/pipeline status                        # what test and prod run, and their suites
@@ -760,8 +761,14 @@ question.
 - A ticket's outputs are tickets (owner, 2026-09-06): a report, a spike's
   result or a finding is filed as a CHILD ticket of the ticket that made it,
   not as a file in the repository.
+- **Tickets follow OpenSpec. That is the whole ticketing policy** (owner,
+  2026-11-12: "We ticket following openspec now. that is our full ticketting
+  policy"). A ticket body is plain markdown in OpenSpec's shape: Why, What
+  Changes, Impact; each requirement a SHALL with WHEN / THEN scenarios;
+  Design where it is needed; Tasks. The `ticketing` skill is removed; no
+  other skill's advice on how a ticket is written applies.
 - Planning is in the tracker, per menger-skills (`../menger-skills`:
-  `ticketing`, `planning`, `asking`, `building`, `reaching`; `ought` is
+  `planning`, `asking`, `building`, `reaching`; `ought` is
   retired). Tickets are born `Draft` (TICKETS-13) and stay `Draft` or
   `Pending` until the owner promotes them to `Ready`; implementation does
   not begin on a `Draft` or `Pending` ticket. The lifecycle is `Draft →

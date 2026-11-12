@@ -24,6 +24,10 @@
 #                                           checkout (../menger-suite); marks the release
 #                                           `suite running`, then `passed` or `failed` (its SUITE)
 #   deploy/pipeline suite --status RELEASE  `suite: passed|failed|running|none` — what remote prod reads
+#   deploy/pipeline perf RELEASE            perf, apart from the suite (the owner, 2026-11-12): plexus-bench's
+#                                           counts and bench against their goldens, the release's own
+#                                           bin/menger measured; marks the release's PERF `passed` or
+#                                           `failed`. The suite runs none of it and remote prod never reads it
 #   deploy/pipeline image [RELEASE]         RUN-10: a release (default: the newest) as an image —
 #                                           IMAGE_STORE=local (default): menger:<release> in this
 #                                           machine's Docker; ghcr: ghcr.io/hypermemetic-ai/menger:<release>
@@ -1297,7 +1301,7 @@ cmd_smoke() {
 
 # ── the suite, after the deploy (DEPLOY-52) ─────────────────────────────────
 # `suite RELEASE`: cargo test --workspace and the frontend's tests at the
-# release's commit, then plexus-bench's two checks (PERF-6, PERF.115-29, run_bench) — its own tree, in ../menger-suite (MENGER_SUITE_CHECKOUT),
+# release's commit — its own tree, in ../menger-suite (MENGER_SUITE_CHECKOUT),
 # never against a deployment — one suite at a time (a lock). The release's
 # SUITE says `running`, then `passed` or `failed` with the counts and the log;
 # a line in deployments.log (`suite test RELEASE passed|failed`, no deployment).
@@ -1394,10 +1398,40 @@ cmd_suite() {
   git -C "$REPO" cat-file -e "$sha^{commit}" 2>/dev/null || die "$rel's commit $short is not in $REPO"
   checkout "$SUITE_CHECKOUT" "$sha"
   run_gate "$SUITE_CHECKOUT" "$short"
-  run_bench "$rel" "$short"
-  mark_release "$rel" SUITE "passed $(date -u +%FT%TZ) — workspace $GATE_WS${GATE_FE:+; frontend $GATE_FE}; bench $GATE_BENCH"
+  mark_release "$rel" SUITE "passed $(date -u +%FT%TZ) — workspace $GATE_WS${GATE_FE:+; frontend $GATE_FE}"
   record suite test "$rel" "passed"
-  say "suite $rel: passed — workspace $GATE_WS${GATE_FE:+; frontend $GATE_FE}; bench $GATE_BENCH"
+  say "suite $rel: passed — workspace $GATE_WS${GATE_FE:+; frontend $GATE_FE} (perf is apart: deploy/pipeline perf $rel)"
+}
+
+# `perf RELEASE` — plexus-bench's counts and bench (run_bench), apart from the suite (the owner,
+# 2026-11-12: "we want a perf but not in the standard tests. they should be run separately").
+# The release's PERF says `running`, then `passed` or `failed` with the verdict and the log; a
+# line in deployments.log (`perf test RELEASE passed|failed`). It shares the suite's lock, so a
+# measurement never runs beside a suite. Nothing reads PERF to decide a deploy.
+perf_red() { # LABEL LOGFILE — gate_red's hook
+  mark_release "$SUITE_REL" PERF "failed $(date -u +%FT%TZ) — $1 red; log $2"
+  record perf test "$SUITE_REL" "failed $1"
+}
+cmd_perf() {
+  [[ -n ${1:-} ]] || die "usage: deploy/pipeline perf RELEASE"
+  need cargo
+  local rel sha short lock
+  rel=$(resolve_release "$1")
+  sha=$(sed -n 's/^commit: *//p' "$RELEASES/$rel/RELEASE" | head -n 1)
+  [[ -n $sha ]] || die "$rel names no commit"
+  short=${sha:0:7} LOG_SHA=${sha:0:7}
+  mkdir -p "$HOME_DIR"
+  exec {lock}>>"$HOME_DIR/.suite.lock"
+  flock -n "$lock" || { say "perf: a suite or another perf is running — waiting for it"; flock "$lock"; }
+  SUITE_LOCK_FD=$lock
+  step "perf $rel — $(sed -n 's/^subject: *//p' "$RELEASES/$rel/RELEASE" | cut -c1-70)"
+  mark_release "$rel" PERF "running $(date -u +%FT%TZ) — deploy/pipeline perf (pid $$)"
+  SUITE_REL=$rel GATE_ON_RED=perf_red
+  trap 'rc=$?; grep -q "^running" "$RELEASES/$SUITE_REL/PERF" 2>/dev/null && mark_release "$SUITE_REL" PERF "failed $(date -u +%FT%TZ) — perf did not finish (exit $rc)"; (exit $rc); on_exit' EXIT
+  run_bench "$rel" "$short"
+  mark_release "$rel" PERF "passed $(date -u +%FT%TZ) — bench $GATE_BENCH"
+  record perf test "$rel" "passed"
+  say "perf $rel: passed — bench $GATE_BENCH"
 }
 
 # `remote-secret test|prod` (IDENTITY-45) — the WorkOS environment's API key
@@ -1738,6 +1772,7 @@ case $cmd in
     exit 2 ;;
   build)    cmd_build "$@" ;;
   suite)    cmd_suite "$@" ;;
+  perf)     cmd_perf "$@" ;;
   smoke)    cmd_smoke "$@" ;;
   status)   cmd_status ;;
   releases) cmd_releases ;;
