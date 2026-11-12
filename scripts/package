@@ -61,13 +61,16 @@ done
 # DIST-25: one trap for everything this run makes, set before any of it exists.
 home=$root wt= stage= served= server=
 cleanup() {
+  set +e   # the trap ends the run with the status it was entered with
   [[ -n $served ]] && kill "$served" 2>/dev/null
   [[ -n $server ]] && kill "$server" 2>/dev/null
   [[ -n $stage && -d $stage ]] && rm -rf "$stage"
   if [[ -n $wt ]]; then
-    git -C "$home" worktree remove --force "$wt" >/dev/null 2>&1
-    [[ -d ${wt%/tree} ]] && rm -rf "${wt%/tree}"
-    git -C "$home" worktree prune
+    # Never the run's verdict: a removal git refuses (another run's lock) is
+    # finished by hand, and the exit is the build's own.
+    git -C "$home" worktree remove --force "$wt" >/dev/null 2>&1 || true
+    if [[ -d ${wt%/tree} ]]; then rm -rf "${wt%/tree}" || true; fi
+    git -C "$home" worktree prune >/dev/null 2>&1 || true
   fi
   return 0
 }
