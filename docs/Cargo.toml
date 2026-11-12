@@ -8,7 +8,7 @@
 # (`acme:`), asked of the running service — never of the tickets file.
 [package]
 name = "menger-docs"
-version = "0.7.1"
+version = "0.8.0"
 edition = "2021"
 license = "MIT"
 description = "menger's docs service — documents on their own API and file, every write a revision, the organization's roles held by the gate"
@@ -17,7 +17,7 @@ repository = "https://github.com/hypermemetic-ai/menger"
 [dependencies]
 # The organizations a caller is in (`OrgsClient::list`, over the seam) and
 # the role a `may` asks (`Role`).
-menger-tickets-api = { path = "../tickets-api", version = "0.7.1" }
+menger-tickets-api = { path = "../tickets-api", version = "0.8.0" }
 # The 0.8 line, by published version (PLEXUS-16), as the server takes it,
 # through the umbrella (PLEXUS-44): plexus-core, plexus-macros, plexus-client,
 # plexus-auth-core and every crate the activation macro's expansion names.

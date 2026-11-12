@@ -28,7 +28,7 @@ alone, the same thing — keeps its data in `~/.local/share/menger`
 prints where to open it and how an agent reaches it:
 
 ```
-menger 0.7.1 — running
+menger 0.8.0 — running
   open:  http://127.0.0.1:4456/login?once=…   (one-time; `menger login` for another)
   agents: synapse -P 4455 _login menger --key menger-local --as menger-local
   mcp:   claude mcp add --scope user menger -- menger mcp
