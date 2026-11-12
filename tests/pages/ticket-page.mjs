@@ -343,7 +343,8 @@ export default async (ctx) => {
       assert(calls.filter((c) => c.method === "tickets.get" && c.params.id === t.id).length === 1, `one get of ${t.id}: ${JSON.stringify(by)}`);
       // STUDIO-12: the page carries the app's top (app-top, its count live on `watch { membership }`), apart from the six (V2-20: ticket-questions the sixth).
       const own = calls.filter((c) => c.method === "tickets.watch" && c.params?.membership !== true).length;
-      assert(own <= 6, `at most six watches of the ticket's (${own}): ${JSON.stringify(by)}`);
+      // The nav beside the ticket (owner, 2026-11-12) keeps its groups on one watch more, as it does on the board: seven with it shown.
+      assert(own <= 7, `at most six watches of the ticket's and the nav's one (${own}): ${JSON.stringify(by)}`);
       for (const [mark, where] of [["ticket-edit", tp], ["ticket-actions", tp], ["work-blockers", tp.locator("[data-surface=ticket-relations]")]]) {
         const m = where.locator(`[data-mark=${mark}]`);
         assert((await m.count()) === 1, `${mark}'s mark is placed`);
