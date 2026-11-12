@@ -61,6 +61,12 @@ the names). It builds and packs and nothing else. **Publishing to
 crates.io, a `v<version>` tag, a GitHub release and its assets are the
 owner's, each on its own word** — `deploy/release/README.md` has the order;
 never run one because the archive is ready.
+**A release's archive comes from hyperforge's `menger-release` pipeline**
+(DIST-25; `.hyperforge/pipelines.toml`), never a GitHub workflow (owner,
+2026-11-12): `ci menger-release start` builds the tag `v<version>` from a
+throwaway worktree (`scripts/package --at`), and `trigger --run N --stage
+attach` — the owner's word — uploads it. It builds this machine's target
+alone.
 
 Bare `cargo run` takes prod's ports (4455–4456, or the next free ones) and
 the default data directory, `~/.local/share/menger` — prod's directory on

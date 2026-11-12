@@ -56,6 +56,19 @@ for word in 'git tag' 'git push' 'gh release' 'cargo publish'; do
   grep -v '^#' "$PKG" | grep -q "$word" && bad "scripts/package runs '$word'" || ok
 done
 
+# DIST-25: --at REF packs REF's tree from a worktree that is gone afterwards, and
+# under hyperforge's ci the next stage is told the archive, its sum and the tag.
+before=$(git -C "$ROOT" worktree list | wc -l)
+out=$(HF_OUTPUTS=$T/outputs "$PKG" --at HEAD --bin "$T/menger" -o "$T/d" 2>&1); is "packs at a ref" "$?" 0
+has "says which commit" "$out" "HEAD is $(git -C "$ROOT" rev-parse --short=8 HEAD)"
+is "the worktree is gone" "$(git -C "$ROOT" worktree list | wc -l)" "$before"
+has "outputs: the archive" "$(<"$T/outputs")" "archive=$T/d/${url##*/}"
+has "outputs: its sum" "$(<"$T/outputs")" "sha256=$(sha256sum <"$T/d/${url##*/}" | cut -d' ' -f1)"
+has "outputs: the tag" "$(<"$T/outputs")" "tag=v$version"
+out=$("$PKG" --at no-such-ref --bin "$T/menger" -o "$T/e" 2>&1); is "a ref that is not there is refused" "$?" 1
+has "…by name" "$out" "no such ref here: no-such-ref"
+[[ ! -e $T/e ]] && ok || bad "a refused ref still wrote $T/e"
+
 printf 'package: %d passed, %d failed\n' "$pass" "$fail"
 CLEANUP_GATE_LOG=/dev/null "$ROOT/scripts/cleanup-gate.sh" --yes --path "$T" >/dev/null \
   || printf 'package: the test root %s was not removed\n' "$T" >&2

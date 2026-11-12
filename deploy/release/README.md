@@ -61,16 +61,42 @@ scripts/package --container rust:1-bullseye --check --binstall
 5. **Check it from nothing**: on a machine (or container) with only
    cargo-binstall, `cargo binstall menger && menger start`.
 
+## From hyperforge: the `menger-release` pipeline
+
+DIST-25. There is no GitHub workflow (owner, 2026-11-12: "the workflow just
+runs too much. I say we run it locally as a hyperforge hook"). The archive is
+built on this machine by a pipeline in `.hyperforge/pipelines.toml`, and
+nothing starts it but `start`:
+
+```sh
+HF="synapse -P 44104 lforge-v5 hyperforge"
+$HF ci add --path ~/dev/controlflow/hypermemetic/menger   # after the file changes
+$HF ci menger-release start                               # `package` → run N
+$HF ci menger-release log --run N --stage package
+$HF ci menger-release trigger --run N --stage attach      # the owner's word: the upload
+```
+
+- **`package`** (`deploy/release/stage package`) builds the tag `v<version>`
+  — the version the checkout's `Cargo.toml` says — with `scripts/package --at
+  v<version> --container rust:1-bullseye --check`: from a throwaway worktree
+  of the tag, so the archive is the tag's tree and never the checkout's tip
+  or its stray files. Its outputs are `archive`, `sha256` and `tag`.
+- **`attach`** (`deploy/release/stage attach`) is the only step that leaves
+  the machine: hyperforge's `build release_asset` puts the archive and its
+  `.sha256` on the tag's release. It refuses a tag GitHub does not have and
+  an asset already there.
+
+So the owner's steps 3 and 4 above become: push the tag, `start`, read the
+log, `trigger … attach`.
+
 ## Other targets
 
-`x86_64-unknown-linux-gnu` is built here. `aarch64-unknown-linux-gnu`,
-`aarch64-apple-darwin` and `x86_64-apple-darwin` need a machine of that
-kind or a cross toolchain, which this one has neither of.
-`github-release.yml` beside this file is a workflow that builds each on a
-runner of its own when a `v*` tag is pushed and attaches the archives to
-the release. **It has never run** and is not in `.github/workflows/`:
-putting it there is the owner's decision (the repository has no workflows
-today), and menger has not been built on macOS.
+A run makes the archive for the target of the machine it runs on: dream
+gives `x86_64-unknown-linux-gnu`. `aarch64-apple-darwin` (and the other
+Mac and ARM targets) need the same on a machine of that kind — hyperforge
+there, or by hand: `deploy/release/stage package` (no container off Linux:
+that is Linux's glibc), then `gh release upload v<version>
+dist/release/menger-*`. menger has not been built on macOS.
 
 `x86_64-unknown-linux-musl` (one static binary for every Linux; binstall
 tries it second) needs a musl C toolchain for SQLite and ring, which is

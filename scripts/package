@@ -10,6 +10,9 @@
 #   scripts/package --ui TAR         carry a bundle already built — a
 #                                    release's dist/ui.tar
 #   scripts/package --target T       another target rustup has (and a linker for)
+#   scripts/package --at REF        build REF's tree (a tag: v0.8.0), from a throwaway
+#                                    worktree — never this checkout's tip or its
+#                                    stray files; the archive still lands here
 #   scripts/package --allow-dirty    pack a tree with uncommitted changes (a rehearsal)
 #   scripts/package --check          then run the packed binary on a scratch HOME:
 #                                    --version, a start on free ports, the
@@ -36,12 +39,13 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 say() { echo "package: $*"; }
 die() { echo "package: $*" >&2; exit 1; }
 
-target= ui= built= image= out=$root/dist/release dirty=0 check=0 binstall=0 name_only=0
+target= ui= built= image= at= out=$root/dist/release dirty=0 check=0 binstall=0 name_only=0
 while (($#)); do
   case $1 in
-    -h|--help) sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --target) target=${2:?--target needs a target}; shift ;;
     --ui) ui=${2:?--ui needs a bundle}; shift ;;
+    --at) at=${2:?--at needs a ref}; shift ;;
     --bin) built=${2:?--bin needs a binary}; shift ;;
     --container) image=${2:?--container needs an image}; shift ;;
     -o) out=${2:?-o needs a directory}; shift ;;
@@ -53,6 +57,30 @@ while (($#)); do
   esac
   shift
 done
+
+# DIST-25: one trap for everything this run makes, set before any of it exists.
+home=$root wt= stage= served= server=
+cleanup() {
+  [[ -n $served ]] && kill "$served" 2>/dev/null
+  [[ -n $server ]] && kill "$server" 2>/dev/null
+  [[ -n $stage && -d $stage ]] && rm -rf "$stage"
+  if [[ -n $wt ]]; then
+    git -C "$home" worktree remove --force "$wt" >/dev/null 2>&1
+    [[ -d ${wt%/tree} ]] && rm -rf "${wt%/tree}"
+    git -C "$home" worktree prune
+  fi
+  return 0
+}
+trap cleanup EXIT
+if [[ -n $at ]]; then
+  commit=$(git -C "$home" rev-parse --verify --quiet "$at^{commit}") || die "no such ref here: $at"
+  wt=$(mktemp -d "${TMPDIR:-/tmp}/menger-package-at.XXXXXX")/tree
+  git -C "$home" worktree add --quiet --detach "$wt" "$commit" || die "no worktree for $at"
+  # Its objects beside this checkout's, kept between runs (the worktree is not).
+  export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$home/target}/at
+  root=$wt
+  say "$at is ${commit:0:8}: building its tree, not this checkout's"
+fi
 
 cd "$root"
 version=$(cargo pkgid -p menger | sed 's/.*[#@]//')
@@ -107,14 +135,6 @@ else
 fi
 
 stage=$(mktemp -d "${TMPDIR:-/tmp}/menger-package.XXXXXX")
-served=
-cleanup() {
-  [[ -n $served ]] && kill "$served" 2>/dev/null
-  [[ -n ${server:-} ]] && kill "$server" 2>/dev/null
-  [[ -d $stage ]] && rm -rf "$stage"
-  return 0
-}
-trap cleanup EXIT
 mkdir -p "$stage/$stem" "$out"
 cp "$bin" "$stage/$stem/menger"
 cp "$root/LICENSE" "$root/README.md" "$stage/$stem/"
@@ -127,6 +147,11 @@ mv "$archive.tmp" "$archive"
 needs=$(objdump -T "$bin" 2>/dev/null | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1 || true)
 [[ -z $needs ]] || say "it needs ${needs/_/ } or newer (this machine: $(ldd --version 2>/dev/null | sed -n '1s/.* //p'))"
 say "$archive — $(du -h "$archive" | cut -f1) packed, the binary $(du -h "$bin" | cut -f1); sha256 $(cut -c1-12 "$archive.sha256")"
+
+# DIST-25: under hyperforge's ci, what the next stage is handed.
+if [[ -n ${HF_OUTPUTS:-} ]]; then
+  printf 'archive=%s\nsha256=%s\ntag=v%s\n' "$archive" "$(cut -d' ' -f1 "$archive.sha256")" "$version" >>"$HF_OUTPUTS"
+fi
 
 free_port() { python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])'; }
 
