@@ -27,7 +27,13 @@
      ticket-head's), keyed by the ticket — a click in it puts the caret there
      and it saves as it is typed; this page is "the ticket last opened" for
      the editor at `#/` (`menger.editor.last`). SV-4: real Svelte (svelte/1), page-ticket.rhx's port
-     (ui/retired-rhx/). -->
+     (ui/retired-rhx/).
+     The nav beside the ticket (the owner, 2026-11-12: "I want to see the nav next to the ticket … it should be
+     collapsable"): a column left of the ticket holding the page's `nav` section (nav-tree-sv by
+     ui/slots.json), under the top as the page scrolls. Its button hides it and shows it; hidden, the section
+     is not placed, so it reads nothing. Which it is is kept in this browser (`menger.ticket.nav`), shown
+     unless it was hidden. On a narrow window it is not drawn. Marks: `[data-surface=ticket-nav]`
+     (`data-nav=open|closed`), `[data-nav-hide]` (`[aria-expanded]`). -->
 <script module>
   export const uses = ["tickets.get", "tickets.watch", "tickets.revisions.list"];
 </script>
@@ -63,6 +69,15 @@
     "g b": { to: () => b.navigate("#/board"), label: "go to the board" },
   });
 
+  // The nav beside the ticket: shown unless this browser hid it.
+  const NAV = "menger.ticket.nav";
+  let nav = $state((() => { try { return localStorage.getItem(NAV) !== "closed"; } catch { return true; } })());
+  function toggleNav() {
+    nav = !nav;
+    try { localStorage.setItem(NAV, nav ? "open" : "closed"); } catch { /* a private window */ }
+  }
+  let topH = $state(0);
+
   // EDITOR-4: the ticket page is "the ticket last opened" for the editor at #/ (editor-screen reads it).
   $effect(() => { try { if (id) localStorage.setItem("menger.editor.last", id); } catch { /* a private window */ } });
 
@@ -82,7 +97,12 @@
 </script>
 
 <section class="page page-ticket">
-  <div data-slot="top" data-here="ticket"></div>
+  <div data-slot="top" data-here="ticket" bind:clientHeight={topH}></div>
+  <div class="tp-frame">
+  <aside class="tp-nav" data-surface="ticket-nav" data-nav={nav ? "open" : "closed"} style:top={`${topH}px`} style:max-height={`calc(100dvh - ${topH}px)`}>
+    <button type="button" class="tp-nav-toggle" data-nav-hide aria-expanded={nav} aria-label={nav ? "Hide the nav" : "Show the nav"} title={nav ? "Hide the nav" : "Show the nav"} onclick={toggleNav}>{nav ? "‹ hide" : "›"}</button>
+    {#if nav}<div class="tp-nav-slot" data-slot="nav"></div>{/if}
+  </aside>
   <article class="ticket-page" data-surface="ticket-page" data-ticket={id} data-edit-asked={knocked}>
     <nav class="crumbs" aria-hidden="true"><span class="keys" data-keys><kbd>e</kbd> edit<i class="sep"></i><kbd>esc</kbd> board<i class="sep"></i><kbd>[</kbd><kbd>]</kbd> siblings<i class="sep"></i><kbd>?</kbd> keys</span></nav>
     {#if deleted}
@@ -122,12 +142,21 @@
       </div>
     {/if}
   </article>
+  </div>
   <div data-slot="palette"></div>
 </section>
 
 <style>
   .page-ticket { min-height: 100vh; min-height: 100dvh; color: var(--ink); background: var(--bg); font-family: var(--font-text); font-size: var(--text-size); }
   .page-ticket > [data-slot=top] { position: sticky; top: 0; z-index: 4; }
+  .tp-frame { display: flex; align-items: flex-start; }
+  .tp-frame > .ticket-page { flex: 1; min-width: 0; }
+  .tp-nav { position: sticky; flex: none; width: 300px; overflow: auto; background: var(--panel); border-right: var(--border) solid var(--line); }
+  .tp-nav[data-nav=closed] { width: auto; background: transparent; border-right: 0; }
+  .tp-nav-toggle { display: block; margin: 6px 6px 2px auto; padding: 1px 8px; font: inherit; font-size: 11px; color: var(--muted); background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius-pill); cursor: pointer; }
+  .tp-nav[data-nav=closed] .tp-nav-toggle { margin: 8px 0 0 8px; }
+  .tp-nav-toggle:hover, .tp-nav-toggle:global([data-sheet~=hover]) { color: var(--ink); background: var(--hover); }
+  .tp-nav-toggle:focus-visible, .tp-nav-toggle:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 2px; }
   .crumbs { display: flex; align-items: center; padding: 8px max(28px, calc((100% - 1284px) / 2)) 0; font-size: 11px; color: var(--muted); }
   .keys { display: flex; gap: 5px; align-items: center; margin-left: auto; }
   .sep { display: inline-block; width: 8px; }
@@ -161,6 +190,7 @@
   @media (max-width: 960px) {
     .tp { grid-template-columns: minmax(0, 1fr); padding: 12px 16px 40px; }
     .crumbs { display: none; }
+    .tp-nav { display: none; }
     .head, .main, .side, .revs, .revs:has(:global([data-open="true"])) { grid-column: 1; grid-row: auto; }
   }
   @media (prefers-reduced-motion: reduce) {

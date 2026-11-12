@@ -46,6 +46,26 @@ export default async (ctx) => {
     return { ...o, tp };
   }
 
+  // The nav beside the ticket: the page's `nav` section in a column left of it, hidden and shown by its
+  // button, and hidden still after the page is opened again (this browser keeps it).
+  await test("the_nav_sits_beside_the_ticket_and_collapses", async () => {
+    const g = root();
+    const { context, page } = await openPage(`${ROUTE}${g.root}`);
+    try {
+      const nav = page.locator("[data-surface=ticket-nav]");
+      await eventually("the nav is drawn beside the ticket", async () => (await nav.locator("[data-nav-mode]").count()) > 0, 20_000);
+      assert((await nav.getAttribute("data-nav")) === "open", "the nav starts open");
+      const left = await nav.evaluate((e) => e.getBoundingClientRect().right), ticketLeft = await page.locator("[data-surface=ticket-page]").evaluate((e) => e.getBoundingClientRect().left);
+      assert(left <= ticketLeft + 1, `the nav (${left}) is left of the ticket (${ticketLeft})`);
+      await nav.locator("[data-nav-hide]").click();
+      await eventually("hidden, the nav is not placed", async () => (await nav.getAttribute("data-nav")) === "closed" && (await nav.locator("[data-slot=nav]").count()) === 0, 5_000);
+      await page.reload();
+      await eventually("it is hidden still", async () => (await page.locator("[data-surface=ticket-nav]").getAttribute("data-nav").catch(() => null)) === "closed", 20_000);
+      await page.locator("[data-surface=ticket-nav] [data-nav-hide]").click();
+      await eventually("shown again, it is drawn", async () => (await page.locator("[data-surface=ticket-nav] [data-nav-mode]").count()) > 0, 20_000);
+    } finally { await context.close(); }
+  });
+
   await test("the_page_draws_every_field", async () => {
     const parent = made("the kiln's parent");
     const blocker = made("the kiln's blocker");
