@@ -52,3 +52,38 @@ trigger = "manual"
 run = 'PATH="$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH" deploy/pipeline remote prod'
 outputs = ["url"]
 timeout_minutes = 30
+
+# DIST-25: the archive `cargo binstall menger` downloads, built on this machine
+# and attached on its own trigger — no GitHub workflow (owner, 2026-11-12: "the
+# workflow just runs too much. I say we run it locally as a hyperforge hook").
+# Nothing starts it but `start`:
+#
+#   synapse -P 44104 lforge-v5 hyperforge ci menger-release start                           # package → run N
+#   synapse -P 44104 lforge-v5 hyperforge ci menger-release log --run N --stage package
+#   synapse -P 44104 lforge-v5 hyperforge ci menger-release trigger --run N --stage attach   # the owner's word
+#
+# `package` builds the tag v<version> — the version this checkout's Cargo.toml
+# says — from a throwaway worktree of that tag (scripts/package --at), in a
+# container on an old glibc, and runs the packed binary on a fresh HOME. It
+# makes the archive for this machine's target alone: another target is the same
+# pipeline on a machine of that kind (a Mac: without --container).
+# `attach` is the only step that leaves the machine: hyperforge's
+# build release_asset, which refuses a tag the forge does not have and an asset
+# already there. Both stages are deploy/release/stage, runnable from a shell.
+
+[[pipeline]]
+name = "menger-release"
+
+[[pipeline.stage]]
+name = "package"
+trigger = "auto"
+run = 'deploy/release/stage package'
+outputs = ["archive", "sha256", "tag"]
+timeout_minutes = 45
+
+[[pipeline.stage]]
+name = "attach"
+needs = ["package"]
+trigger = "manual"
+run = 'deploy/release/stage attach'
+timeout_minutes = 15
