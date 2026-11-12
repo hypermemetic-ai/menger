@@ -130,6 +130,8 @@ ${tasks}
   // ── holding the spec ─────────────────────────────────────────────────────
   const HELD = `An overview, outside the spec.
 
+${filler}
+
 <spec-outline>
 # The kiln
 
@@ -241,6 +243,27 @@ Every firing SHALL be logged.
           await eventually("its markdown is shown", async () => { seen = `${await page.locator(H).count()} drawn; ${(await page.locator("[data-field=body-source]").innerText()).slice(0, 400)}`; return /^0 drawn/.test(seen) && /Requirement: A firing is logged/.test(await page.locator("[data-field=body-source]").innerText()); }, 8_000);
         } catch (e) { throw new Error(`${e.message}: ${JSON.stringify(seen)}`); }
       }
+    } finally { await context.close(); }
+  });
+
+  await test("spec_outline_a_click_in_it_leaves_the_page_where_it_was", async () => {
+    const { context, page } = await openHeld();
+    try {
+      const top = () => page.locator(H).evaluate((e) => Math.round(e.getBoundingClientRect().top));
+      const settle = async (what, sel) => {
+        // Its top a little down the window, clear of the page's own bar, so the click itself scrolls nothing.
+        await page.locator(H).evaluate((e) => { e.scrollIntoView({ block: "start" }); (document.scrollingElement ?? document.documentElement).scrollTop -= 160; });
+        await page.waitForTimeout(200);
+        const before = await top();
+        await page.locator(sel).first().click();
+        await page.waitForTimeout(500);
+        const after = await top();
+        ok(Math.abs(after - before) <= 2, `${what}: the spec moved from ${before} to ${after}`);
+      };
+      await settle("a tab", `${H} [data-section=Requirements]`);
+      await settle("a requirement", `${H} [data-req]`);
+      await settle("its words", `${H} [data-req-body] .spec-md`);
+      await settle("the title", `${H} .spec-title`);
     } finally { await context.close(); }
   });
 };
