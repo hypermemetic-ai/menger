@@ -881,7 +881,7 @@ has "nextest: red names the failing test" "$err" "FAILED menger::wire a_one"
 has "nextest: red names the test that timed out" "$err" "FAILED menger::scripts b_two"
 has "nextest: the release marked failed" "$(<"$D/releases/$SR/SUITE")" "failed "
 
-# ── PERF-6: plexus-bench beside the suite; a red bench marks the release failed ──
+# ── perf is apart from the suite (the owner, 2026-11-12): `perf RELEASE` runs plexus-bench, the suite none of it ──
 # A stand-in plexus-bench beside the scratch repository: its scripts/gate.sh keeps
 # what it was run with, and is red when STUB_BENCH_RED=1. Its scripts/ci-check.sh below.
 mkdir -p "$SCRATCH/ci6/plexus-bench/scripts"
@@ -895,59 +895,63 @@ printf '#!/usr/bin/env bash\necho "$*|${CARGO_TARGET_DIR:-}" >>"%s"\nif [[ ${STU
 chmod +x "$SCRATCH/ci6/plexus-bench/scripts/ci-check.sh"
 : >"$SCRATCH/ci6/bench-args"
 ci6 suite "$SR"
-same "bench: a green bench, the suite exits 0" "$code" 0
-has "bench: plexus-bench's gate ran beside the suite" "$(<"$SCRATCH/ci6/bench-args")" "-bench|"
+same "perf apart: the suite exits 0" "$code" 0
+same "perf apart: the suite ran no bench" "$(<"$SCRATCH/ci6/bench-args")" ""
+same "perf apart: the SUITE line names no bench" "$(grep -c bench "$D/releases/$SR/SUITE")" 0
+ci6 perf "$SR"
+same "bench: a green bench, perf exits 0" "$code" 0
+has "bench: plexus-bench's gate ran from perf" "$(<"$SCRATCH/ci6/bench-args")" "-bench|"
 has "bench: schema.* measure the release's own menger" "$(<"$SCRATCH/ci6/bench-args")" "|$D/releases/$SR/bin/menger|"
-has "bench: its verdict on the SUITE line" "$(<"$D/releases/$SR/SUITE")" "; bench every golden holds (21 held, 0 red, 2 skipped)"
-same "bench: green, the suite's line" "$(tail -n 1 "$D/deployments.log" | cut -f2,3,5)" $'suite\ttest\tpassed'
-STUB_BENCH_RED=1 ci6 suite "$SR"
-same "bench: red, the suite exits 1" "$code" 1
-has "bench: red marks the release failed" "$(<"$D/releases/$SR/SUITE")" "failed "
-has "bench: …and names the bench" "$(<"$D/releases/$SR/SUITE")" "bench red; log "
-same "bench: red, the suite's line" "$(tail -n 1 "$D/deployments.log" | cut -f2,3,5)" $'suite\ttest\tfailed bench'
+has "bench: its verdict on the PERF line" "$(<"$D/releases/$SR/PERF")" "bench every golden holds (21 held, 0 red, 2 skipped)"
+same "bench: green, perf's line" "$(tail -n 1 "$D/deployments.log" | cut -f2,3,5)" $'perf\ttest\tpassed'
+STUB_BENCH_RED=1 ci6 perf "$SR"
+same "bench: red, perf exits 1" "$code" 1
+has "bench: red marks the release's PERF failed" "$(<"$D/releases/$SR/PERF")" "failed "
+has "bench: …and names the bench" "$(<"$D/releases/$SR/PERF")" "bench red; log "
+same "bench: red, perf's line" "$(tail -n 1 "$D/deployments.log" | cut -f2,3,5)" $'perf\ttest\tfailed bench'
 has "bench: red names the scenario" "$err" "RED  call.one_item"
-ci6 suite --status "$SR"; same "bench: red, suite --status" "$(<"$SCRATCH/out")" "suite: failed"
-MENGER_BENCH_DIR=none ci6 suite "$SR"
-same "bench: MENGER_BENCH_DIR=none, the suite exits 0" "$code" 0
-has "bench: none, said on the SUITE line" "$(<"$D/releases/$SR/SUITE")" "bench not run (MENGER_BENCH_DIR=none)"
+ci6 suite --status "$SR"; same "perf: red, the suite's verdict is its own" "$(<"$SCRATCH/out")" "suite: passed"
+MENGER_BENCH_DIR=none ci6 perf "$SR"
+same "bench: MENGER_BENCH_DIR=none, perf exits 0" "$code" 0
+has "bench: none, said on the PERF line" "$(<"$D/releases/$SR/PERF")" "bench not run (MENGER_BENCH_DIR=none)"
 
 # ── PERF.115-29: plexus-bench's count check beside its gate ──────────────
 : >"$SCRATCH/ci6/counts-args"; : >"$SCRATCH/ci6/bench-args"
-ci6 suite "$SR"
-same "counts: green, the suite exits 0" "$code" 0
+ci6 perf "$SR"
+same "counts: green, perf exits 0" "$code" 0
 has "counts: ci-check ran beside the gate" "$(<"$SCRATCH/ci6/counts-args")" "-counts"
 has "counts: in the gate's cargo target" "$(<"$SCRATCH/ci6/counts-args")" "|$HOME/.cache/cargo-target/plexus-bench"
 has "counts: the gate ran too" "$(<"$SCRATCH/ci6/bench-args")" "-bench"
-has "counts: the verdict on the SUITE line" "$(<"$D/releases/$SR/SUITE")" "; counts every golden holds (21 held, 0 red, 0 skipped)"
-has "counts: the bench's verdict stays there" "$(<"$D/releases/$SR/SUITE")" "; bench every golden holds (21 held, 0 red, 2 skipped)"
-has "counts: said at the end of the suite" "$(<"$SCRATCH/out")$err" "counts every golden holds"
+has "counts: the verdict on the PERF line" "$(<"$D/releases/$SR/PERF")" "; counts every golden holds (21 held, 0 red, 0 skipped)"
+has "counts: the bench's verdict stays there" "$(<"$D/releases/$SR/PERF")" "bench every golden holds (21 held, 0 red, 2 skipped)"
+has "counts: said at the end of perf" "$(<"$SCRATCH/out")$err" "counts every golden holds"
 has "counts: green, releases says passed" "$("$CR/deploy/pipeline" releases 2>/dev/null)" "$SR  passed"
 : >"$SCRATCH/ci6/bench-args"
-STUB_COUNTS_RED=1 ci6 suite "$SR"
-same "counts: red, the suite exits 1" "$code" 1
-has "counts: red marks the release failed" "$(<"$D/releases/$SR/SUITE")" "failed "
-has "counts: …and names the counts" "$(<"$D/releases/$SR/SUITE")" "counts red; log "
-same "counts: red, the suite's line" "$(tail -n 1 "$D/deployments.log" | cut -f2,3,5)" $'suite\ttest\tfailed counts'
+STUB_COUNTS_RED=1 ci6 perf "$SR"
+same "counts: red, perf exits 1" "$code" 1
+has "counts: red marks the release's PERF failed" "$(<"$D/releases/$SR/PERF")" "failed "
+has "counts: …and names the counts" "$(<"$D/releases/$SR/PERF")" "counts red; log "
+same "counts: red, perf's line" "$(tail -n 1 "$D/deployments.log" | cut -f2,3,5)" $'perf\ttest\tfailed counts'
 has "counts: red names the scenario" "$err" "RED  call.one_item"
-ci6 suite --status "$SR"; same "counts: red, suite --status" "$(<"$SCRATCH/out")" "suite: failed"
-has "counts: red, releases says failed" "$("$CR/deploy/pipeline" releases 2>/dev/null)" "$SR  failed"
+ci6 suite --status "$SR"; same "perf: red, the suite's verdict is its own" "$(<"$SCRATCH/out")" "suite: passed"
+has "counts: red, releases still says what the suite said" "$("$CR/deploy/pipeline" releases 2>/dev/null)" "$SR  passed"
 same "counts: a count that is red is not waited on: no wall-clock bench after it" "$(<"$SCRATCH/ci6/bench-args")" ""
-STUB_COUNTS_BROKEN=1 ci6 suite "$SR"
-same "counts: a check that could not run, the suite exits 1" "$code" 1
-has "counts: …it is no pass" "$(<"$D/releases/$SR/SUITE")" "counts red; log "
-STUB_COUNTS_SILENT=1 ci6 suite "$SR"
-same "counts: exit 0 and no verdict, the suite exits 1" "$code" 1
-has "counts: …no count read, no pass" "$(<"$D/releases/$SR/SUITE")" "counts red; log "
+STUB_COUNTS_BROKEN=1 ci6 perf "$SR"
+same "counts: a check that could not run, perf exits 1" "$code" 1
+has "counts: …it is no pass" "$(<"$D/releases/$SR/PERF")" "counts red; log "
+STUB_COUNTS_SILENT=1 ci6 perf "$SR"
+same "counts: exit 0 and no verdict, perf exits 1" "$code" 1
+has "counts: …no count read, no pass" "$(<"$D/releases/$SR/PERF")" "counts red; log "
 : >"$SCRATCH/ci6/counts-args"
 mv "$SCRATCH/ci6/plexus-bench/scripts/ci-check.sh" "$SCRATCH/ci6/ci-check.kept"
-ci6 suite "$SR"
-same "counts: a plexus-bench with no ci-check, the suite exits 1" "$code" 1
-has "counts: …nor with no ci-check" "$(<"$D/releases/$SR/SUITE")" "counts red; log "
+ci6 perf "$SR"
+same "counts: a plexus-bench with no ci-check, perf exits 1" "$code" 1
+has "counts: …nor with no ci-check" "$(<"$D/releases/$SR/PERF")" "counts red; log "
 mv "$SCRATCH/ci6/ci-check.kept" "$SCRATCH/ci6/plexus-bench/scripts/ci-check.sh"
-MENGER_BENCH_DIR=none ci6 suite "$SR"
-same "counts: MENGER_BENCH_DIR=none, the suite exits 0" "$code" 0
+MENGER_BENCH_DIR=none ci6 perf "$SR"
+same "counts: MENGER_BENCH_DIR=none, perf exits 0" "$code" 0
 same "counts: none, not run" "$(<"$SCRATCH/ci6/counts-args")" ""
-has "counts: none, the line says bench not run" "$(<"$D/releases/$SR/SUITE")" "bench not run (MENGER_BENCH_DIR=none)"
+has "counts: none, the line says bench not run" "$(<"$D/releases/$SR/PERF")" "bench not run (MENGER_BENCH_DIR=none)"
 
 
 # ════ V2-7: the pipeline for v2 — its testing surface ═══════════════════════
@@ -1459,12 +1463,12 @@ same "$T1: --fast: the release says fast, never a prod candidate" "$(field profi
 [[ -x $D5/releases/$FR/bin/menger ]] && ok || bad "$T1: --fast: the release carries bin/menger"
 bb build --branch fast --no-gate
 same "$T1: no --fast on a tree with [profile.fast]: the perf profile" "$(grep -o 'cargo build --profile .*' "$STUB_CARGO_LOG")" "cargo build --profile perf -p menger"
-# the suite of a fast release runs no bench: the goldens are the perf build's
+# perf of a fast release runs no bench: the goldens are the perf build's
 mkdir -p "$B/plexus-bench/scripts" && printf '#!/usr/bin/env bash\necho ran >>"%s"\nexit 0\n' "$B/bench-ran" >"$B/plexus-bench/scripts/gate.sh" && chmod +x "$B/plexus-bench/scripts/gate.sh"
-MENGER_BENCH_DIR=$B/plexus-bench bb suite "$FR"
-same "$T1: suite of a fast release exits 0" "$code" 0
-has "$T1: suite of a fast release: no bench, said" "$(cat "$D5/releases/$FR/SUITE" 2>/dev/null)" "bench not run (a fast release, CI-9: the goldens are the perf build's)"
-[[ ! -e $B/bench-ran ]] && ok || bad "$T1: suite of a fast release ran the bench"
+MENGER_BENCH_DIR=$B/plexus-bench bb perf "$FR"
+same "$T1: perf of a fast release exits 0" "$code" 0
+has "$T1: perf of a fast release: no bench, said" "$(cat "$D5/releases/$FR/PERF" 2>/dev/null)" "bench not run (a fast release, CI-9: the goldens are the perf build's)"
+[[ ! -e $B/bench-ran ]] && ok || bad "$T1: perf of a fast release ran the bench"
 
 # ── V2-47 a_tree_by_published_version_builds_the_framework_from_its_tag ─────
 # A tree whose Cargo.lock takes plexus-ui-service from crates.io (and carries scripts/plexus-ui-src)

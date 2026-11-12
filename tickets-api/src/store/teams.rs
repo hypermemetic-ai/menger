@@ -172,6 +172,12 @@ impl Store {
         Some((card(&cache, name, r), members, cache.members.of(&Grantee::Team(name.clone()).to_string())))
     }
 
+    /// KEEL-56: the organization `team` is in; `None` when there is no such team.
+    pub fn team_org(&self, team: &TeamName) -> Option<OrgId> {
+        let cache = self.tickets.read().expect("store lock poisoned");
+        cache.members.records.get(team).map(|r| card(&cache, team, r).org)
+    }
+
     /// ACCESS-22: the scopes `team` holds a grant on now — what a change to
     /// it needs admin on ([`OnTeam`]); `None` when there is no such team.
     pub fn team_scopes(&self, team: &TeamName) -> Option<Vec<Scope>> {

@@ -165,3 +165,11 @@ fn ui8_work_dirs_are_said_to_go_at_the_hourly_sweep() {
     }
     assert!(!harness.contains("the gate has no shape"), "scripts/ui-throwaway.mjs still says the gate has no shape for a work directory under another $TMPDIR");
 }
+
+/// DIST-22: `scripts/package` — the archive's name and layout are what
+/// Cargo.toml's `[package.metadata.binstall]` tells cargo-binstall to ask
+/// for; a stand-in binary is packed, nothing is built.
+#[test]
+fn package_script() {
+    passes("package", "bash", &["scripts/tests/package"], &[" 0 failed"], Duration::from_secs(120));
+}

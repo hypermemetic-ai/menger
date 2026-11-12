@@ -2211,7 +2211,7 @@ dependencies = [
 
 [[package]]
 name = "menger"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2258,7 +2258,7 @@ dependencies = [
 
 [[package]]
 name = "menger-docs"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2280,7 +2280,7 @@ dependencies = [
 
 [[package]]
 name = "menger-media"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2304,7 +2304,7 @@ dependencies = [
 
 [[package]]
 name = "menger-quota"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2324,7 +2324,7 @@ dependencies = [
 
 [[package]]
 name = "menger-tickets-api"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2623,9 +2623,9 @@ dependencies = [
 
 [[package]]
 name = "plexus-core"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc00a703fefe0cbc13f50ac7700898d7113784ac8eb53cf2d1537d3d4b511603"
+checksum = "63166c98acac95e6f51c2f7382825569075af54965bfc5a6f21e9d2b2be73eea"
 dependencies = [
  "anyhow",
  "async-stream",

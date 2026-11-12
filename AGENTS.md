@@ -33,6 +33,16 @@ as `--admin` (above), on its own ports and database. The tests run the same
 way: `tests/support` starts every server under `key` with a fixture key as
 `--admin`; `tests/first_run.rs` runs the no-flags start on a temp HOME.
 
+**`menger start` is that start by name, and its banner says how an agent
+adds menger** (DIST-21, `src/start.rs`): `mcp:   claude mcp add --scope user
+menger -- menger mcp`. `menger mcp` is MCP on stdio — the bridge `/mcp` is —
+over the local menger's WebSocket as the local admin, a fresh key proof per
+connection signed with `local.key`; nothing is opened and no token is
+printed. On a terminal a `keys:` line follows the banner (`o` opens the
+app, `a` runs the line); stdin is never read anywhere else. Whether `/mcp`
+itself answers with no credential on loopback is the owner's open decision,
+DIST-23 — until it is taken, never build it.
+
 **A binary may carry the UI** (DIST-19): `build.rs` includes `embed/ui.tar`
 when `scripts/embed-ui` has put it there (or the file `MENGER_UI_BUNDLE`
 names), and at start `src/embedded_ui.rs` makes that bundle live where
@@ -42,6 +52,21 @@ crate ships it (run `scripts/embed-ui` before `cargo publish -p menger
 --allow-dirty` — the bundle is ignored by git, which cargo calls dirty); a
 checkout, the tests and the pipeline's releases carry none, so their
 `/app/` is the placeholder until a push. `embed/ui.tar` is never committed.
+
+**The archive `cargo binstall menger` downloads** (DIST-22) is
+`scripts/package --container rust:1-bullseye --check --binstall`: one
+stripped binary carrying the UI, `dist/release/menger-<target>-v<version>.tar.gz`,
+named as `[package.metadata.binstall]` says (`scripts/tests/package` holds
+the names). It builds and packs and nothing else. **Publishing to
+crates.io, a `v<version>` tag, a GitHub release and its assets are the
+owner's, each on its own word** — `deploy/release/README.md` has the order;
+never run one because the archive is ready.
+**A release's archive comes from hyperforge's `menger-release` pipeline**
+(DIST-25; `.hyperforge/pipelines.toml`), never a GitHub workflow (owner,
+2026-11-12): `ci menger-release start` builds the tag `v<version>` from a
+throwaway worktree (`scripts/package --at`), and `trigger --run N --stage
+attach` — the owner's word — uploads it. It builds this machine's target
+alone.
 
 Bare `cargo run` takes prod's ports (4455–4456, or the next free ones) and
 the default data directory, `~/.local/share/menger` — prod's directory on
@@ -314,9 +339,10 @@ deploy/pipeline image R                       # RUN-10: the release as an image 
 deploy/pipeline remote test --image ghcr.io/hypermemetic-ai/menger:R
                                               # app-test.menger.sh through infra, the bundle pushed through
                                               # ui.push as the pipeline key, then the smoke
-deploy/pipeline suite R                       # the full suite at R's commit, on this machine, then plexus-bench's
-                                              # counts and bench (PERF-6, PERF.115-29: ../plexus-bench, every
-                                              # scenario against its golden); marks R passed / failed
+deploy/pipeline suite R                       # the full suite at R's commit, on this machine; marks R passed / failed
+deploy/pipeline perf R                        # perf, apart from the suite (owner, 2026-11-12): plexus-bench's counts
+                                              # and bench, every scenario against its golden; marks R's PERF,
+                                              # which nothing reads to decide a deploy
 deploy/pipeline remote prod                   # what test runs → app.menger.sh, only once its suite passed; the owner's
 deploy/pipeline local --image menger:R        # RUN-25: the image on 127.0.0.1:4470/4471, a CI throwaway
 deploy/pipeline status                        # what test and prod run, and their suites
@@ -741,8 +767,14 @@ question.
 - A ticket's outputs are tickets (owner, 2026-09-06): a report, a spike's
   result or a finding is filed as a CHILD ticket of the ticket that made it,
   not as a file in the repository.
+- **Tickets follow OpenSpec. That is the whole ticketing policy** (owner,
+  2026-11-12: "We ticket following openspec now. that is our full ticketting
+  policy"). A ticket body is plain markdown in OpenSpec's shape: Why, What
+  Changes, Impact; each requirement a SHALL with WHEN / THEN scenarios;
+  Design where it is needed; Tasks. The `ticketing` skill is removed; no
+  other skill's advice on how a ticket is written applies.
 - Planning is in the tracker, per menger-skills (`../menger-skills`:
-  `ticketing`, `planning`, `asking`, `building`, `reaching`; `ought` is
+  `planning`, `asking`, `building`, `reaching`; `ought` is
   retired). Tickets are born `Draft` (TICKETS-13) and stay `Draft` or
   `Pending` until the owner promotes them to `Ready`; implementation does
   not begin on a `Draft` or `Pending` ticket. The lifecycle is `Draft →

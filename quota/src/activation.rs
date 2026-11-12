@@ -4,8 +4,9 @@
 //! test).
 //!
 //! **Who may.** The seam's four (`reserve`, `commit`, `release`, `credit`)
-//! are in no role: only an admin of `*` holds them — the server's own
-//! caller, which every service asks as. `usage` and (V2-70) `history` are
+//! are in no role, and (KEEL-56) each refuses in its body a caller who does
+//! not hold it on `*`: only an admin of `*` — the server's own caller, which
+//! every service asks as. `usage` and (V2-70) `history` are
 //! everyone's (their own; an admin of `*` names anyone, or everyone).
 //! `table`, `set` and `recount` are an admin's of `*`.
 
@@ -68,7 +69,7 @@ impl QuotaActivation {
     #[plexus_rpc::macros::method(group = "write", example(note = "an upload of 5 MB", params = r#"{"principal": "key:4b1c", "source": "media.bytes", "amount": 5000000}"#))]
     pub async fn reserve(
         &self,
-        #[from_auth(self.callers.verify)] _user: Caller,
+        #[from_auth(self.callers.verify)] user: Caller,
         /// Whose allowance: the principal the write is for.
         principal: PrincipalName,
         /// The source, e.g. media.bytes.
@@ -76,40 +77,38 @@ impl QuotaActivation {
         /// How much, in the source's unit.
         amount: u64,
     ) -> impl Stream<Item = QuotaEvent> + Send + 'static {
-        futures::stream::once(crate::streams::reserve(self.clone(), principal.into_string(), source.into_string(), amount))
+        futures::stream::once(crate::streams::reserve(self.clone(), user, principal.into_string(), source.into_string(), amount))
     }
 
     /// Count a reservation: what was actually written (at most what was reserved; none: all of it); yields committed { ticket, source, amount, used }.
     #[plexus_rpc::macros::method(group = "write")]
     pub async fn commit(
         &self,
-        #[from_auth(self.callers.verify)] _user: Caller,
+        #[from_auth(self.callers.verify)] user: Caller,
         /// The reservation, as reserve answered it.
         ticket: HoldTicket,
         /// The actual amount, at most what was reserved (optional: all of it).
         amount: Option<u64>,
     ) -> impl Stream<Item = QuotaEvent> + Send + 'static {
-        let ledger = self.ledger.clone();
-        futures::stream::once(crate::streams::commit(ledger, ticket.into_string(), amount))
+        futures::stream::once(crate::streams::commit(self.clone(), user, ticket.into_string(), amount))
     }
 
     /// Let a reservation go: the write did not land, nothing counts; yields released.
     #[plexus_rpc::macros::method(group = "write")]
     pub async fn release(
         &self,
-        #[from_auth(self.callers.verify)] _user: Caller,
+        #[from_auth(self.callers.verify)] user: Caller,
         /// The reservation, as reserve answered it.
         ticket: HoldTicket,
     ) -> impl Stream<Item = QuotaEvent> + Send + 'static {
-        let ledger = self.ledger.clone();
-        futures::stream::once(crate::streams::release(ledger, ticket.into_string()))
+        futures::stream::once(crate::streams::release(self.clone(), user, ticket.into_string()))
     }
 
     /// Give an amount back to a principal (a deletion); yields credited { principal, source, used }.
     #[plexus_rpc::macros::method(group = "write")]
     pub async fn credit(
         &self,
-        #[from_auth(self.callers.verify)] _user: Caller,
+        #[from_auth(self.callers.verify)] user: Caller,
         /// Whose.
         principal: PrincipalName,
         /// The source, e.g. media.bytes.
@@ -117,8 +116,7 @@ impl QuotaActivation {
         /// How much comes back.
         amount: u64,
     ) -> impl Stream<Item = QuotaEvent> + Send + 'static {
-        let ledger = self.ledger.clone();
-        futures::stream::once(crate::streams::credit(ledger, principal.into_string(), source.into_string(), amount))
+        futures::stream::once(crate::streams::credit(self.clone(), user, principal.into_string(), source.into_string(), amount))
     }
 
     /// Your usage per source — used, in flight, the cap and where it came from; an admin of * names anyone (principal).

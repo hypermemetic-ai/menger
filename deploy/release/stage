@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# DIST-25: the menger-release pipeline's stages (.hyperforge/pipelines.toml),
+# each runnable from a shell the same way.
+#
+#   deploy/release/stage package   build the tag v<version> — the version this
+#                                  checkout's Cargo.toml says — from a throwaway
+#                                  worktree of the tag, on an old glibc where
+#                                  docker is (Linux), and run the packed binary
+#   deploy/release/stage attach    put $ARCHIVE and its .sha256 on $TAG's release,
+#                                  through hyperforge — the one step that leaves
+#                                  the machine
+set -euo pipefail
+root=$(cd "$(dirname "$0")/../.." && pwd)
+export PATH="$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH" LANG=C.UTF-8
+cd "$root"
+case ${1:-} in
+  package)
+    tag=v$(cargo pkgid -p menger | sed 's/.*[#@]//')
+    more=(); [[ $(uname -s) == Linux ]] && command -v docker >/dev/null && more=(--container rust:1-bullseye)
+    exec scripts/package --at "$tag" "${more[@]}" --check ;;
+  attach)
+    : "${TAG:?attach needs TAG, an output of the package stage}" "${ARCHIVE:?attach needs ARCHIVE}"
+    # synapse exits 0 on an in-band error: the answer is read.
+    out=$(synapse -P 44104 lforge-v5 hyperforge build release_asset --path "$root" --tag "$TAG" \
+      --files "$ARCHIVE,$ARCHIVE.sha256" --create-release true --execute true 2>&1) || { echo "$out"; exit 1; }
+    echo "$out"
+    [[ $out != *"type: error"* ]] ;;
+  *) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

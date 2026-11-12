@@ -303,8 +303,13 @@
   // COMPS-2: the frame, the engine's — made once its stage is drawn, handed every new page after.
   let stage = $state(null);
   let f = null, asked = 0;
+  // COMPS-24 (the owner: "I need a button in the component which lets me reload"): `turn` counts the reloads —
+  // the frame is thrown away and the same page drawn in a new one, from its first moment, at the size it had.
+  let turn = $state(0);
+  function reload() { f?.destroy(); f = null; phase = "loading"; turn += 1; }
   $effect(() => {
     if (!framed || !stage) return;
+    void turn;
     const html = html0, body = spec.kind === "body", width = sized ? W : undefined, height = fixed ?? undefined, start = startHeight(W, !!size), title = label || (body ? "the body" : "a page");
     untrack(() => {
       const n = ++asked;
@@ -356,7 +361,7 @@
         <div class="pf-dev" data-device={device ?? undefined} style:width={sized ? `${Wv + 2 * edge}px` : "100%"} style:padding={edge ? `${edge}px` : null} style:transform={scale < 1 ? `scale(${scale})` : null}>
           <div class="pf-frames" bind:this={stage} style:width={sized ? `${Wv}px` : "100%"} style:height={`${Hv}px`}></div>
         </div>
-        {#if full}<button type="button" class="pf-close" data-action="close-full" onclick={closeFull}>close</button>{/if}
+        {#if full}<button type="button" class="pf-close pf-again" data-action="reload" onclick={reload}>reload</button><button type="button" class="pf-close" data-action="close-full" onclick={closeFull}>close</button>{/if}
         {#if framed && !full}<button type="button" class="pf-grip" data-action="resize" aria-label="Resize the viewport (arrow keys move it by 20)" onpointerdown={grab} onkeydown={nudge}></button>{/if}
       </div>
       {#if framed}
@@ -365,6 +370,7 @@
           <label>h <input type="number" data-field="h" min="120" max={LIMIT} step="10" value={Hv} onchange={(e) => setSize(W, e.currentTarget.value)}/></label>
           {#if scale < 1}<span data-field="scale">{Math.round(scale * 100)}%</span>{/if}
           {#if own}<button type="button" data-action="reset-size" onclick={() => (own = null)}>reset</button>{/if}
+          <button type="button" data-action="reload" onclick={reload}>reload</button>
           <button type="button" data-action="full" onclick={openFull}>full screen</button>
         </div>
       {/if}
@@ -400,6 +406,7 @@
   .pf-box.full { position: fixed; inset: 0; z-index: 2147483000; max-width: none; border: 0; border-radius: 0; background: var(--bg); }
   .pf-close { position: fixed; top: 10px; right: 10px; z-index: 2147483001; padding: 2px 10px; font-family: var(--font-text); font-size: 12px; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-md); cursor: pointer; opacity: .35; }
   .pf-close:hover, .pf-close:focus-visible { opacity: 1; }
+  .pf-again { right: 72px; }
   .pf-win { display: flex; gap: 10px; align-items: center; height: 26px; font-family: var(--font-text); font-size: 11px; color: var(--muted); opacity: 0; }
   .pf-win label { display: inline-flex; gap: 4px; align-items: center; }
   .pf-win input { width: 7ch; padding: 1px 4px; font: inherit; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-sm); }

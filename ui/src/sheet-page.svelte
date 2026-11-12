@@ -101,6 +101,7 @@
   import TicketCreate from "plexus-ui:ticket-create";
   import TicketEdit from "plexus-ui:ticket-edit";
   import TweetWriter from "plexus-ui:tweet-writer";
+  import SpecOutline from "plexus-ui:spec-outline";
   import TagSource from "plexus-ui:tag-source";
   import EditorBody from "plexus-ui:editor-body";
   import DocMargin from "plexus-ui:doc-margin";
@@ -250,6 +251,9 @@
       // COMPS-16: a thread as its own tag's content — two posts, one of two paragraphs and one over 280 — as the
       // sheet's ticket's first writer (a save there refuses: that body holds none); drawn only, with no ticket.
       ["tweet-writer", TweetWriter, (t) => ({ ticket: t, n: "0", source: `<tweet-writer>\n<tweet-post>The first post's words.\n\nA second paragraph.</tweet-post>\n<tweet-post>${"x".repeat(285)}</tweet-post>\n</tweet-writer>` }), ["hover", "focus"], { empty: { source: "<tweet-writer>\n</tweet-writer>" } }],
+      // A body outlined as an OpenSpec change: its counts, sections, one group of two requirements (one with no
+      // scenario), a question and two tasks, from words of its own.
+      ["spec-outline", SpecOutline, (t) => ({ body: "## Why\n\n## Requirements\n\n### firing\n\n#### Requirement: A firing can be paused\n\n##### Scenario: paused at the hold\n\n#### Requirement: A firing is logged\n\n## Design\n\n### Open Questions\n\n1. **Gas or electric.** Which first?\n\n## Tasks\n\n- [x] 1. Wire the kiln\n- [ ] 2. Fire it\n" }), ["hover", "focus"], {}],
       ["tag-source", TagSource, (t) => ({}), [], {}],
       // V2-30: a doc's margin, alone — its threads as a list (a ticket's id: none).
       ["doc-margin", DocMargin, ID, [], {}],

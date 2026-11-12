@@ -19,20 +19,45 @@ v1 is tag `v0.0.1`; what v2 cut — the chats, comments, deployments, themes, no
 
 ```sh
 cargo install menger
-menger --open
+menger start
 ```
 
-That is the whole first run (DIST-14). With no flags menger keeps its data
-in `~/.local/share/menger` (`local.db`; `--data-dir`, `--db-path`), listens
-on this machine only, and prints where to open it:
+That is the whole first run (DIST-14, DIST-21). `menger start` — or `menger`
+alone, the same thing — keeps its data in `~/.local/share/menger`
+(`local.db`; `--data-dir`, `--db-path`), listens on this machine only, and
+prints where to open it and how an agent reaches it:
 
 ```
-menger 0.6.2 — running
+menger 0.8.0 — running
   open:  http://127.0.0.1:4456/login?once=…   (one-time; `menger login` for another)
   agents: synapse -P 4455 _login menger --key menger-local --as menger-local
+  mcp:   claude mcp add --scope user menger -- menger mcp
   data:  ~/.local/share/menger/local.db
   stop:  Ctrl-C
+
+  keys:  o + Enter opens the app · a + Enter adds menger to Claude Code
 ```
+
+**The `mcp:` line is the whole of an agent's setup** (DIST-21). It adds
+`menger mcp` to Claude Code as an MCP server it runs itself; any client
+that runs a command takes the same `menger mcp`. **`menger mcp`** is MCP on
+stdin and stdout — the bridge `/mcp` is, over the local menger's WebSocket
+— signed in as the local admin with a fresh key proof per connection, made
+from `local.key` in the data directory. Nobody signs in and nothing is
+opened: no token is printed or pasted, and a process that cannot read that
+0600 file still reaches the auth door alone. It reads `local.json` at every
+connect, so a restart or a moved port needs nothing from the agent; with no
+local menger running on the data directory it says so and exits 1.
+`menger mcp --print` prints the line alone. The line names this binary by
+its path when `menger` on `PATH` is not it, and `--data-dir` when that is
+not the default; a start with a login provider, `--no-mcp` or `--no-shell`
+prints none (`src/start.rs`).
+
+**The `keys:` line** is printed only when stdin and stdout are a terminal:
+`o` then Enter opens the app with a fresh one-time link (printed where
+there is no browser), `a` then Enter runs the `mcp:` line when `claude` is
+on `PATH` and says it where it is not. Anywhere else — a unit, a pipe —
+stdin is never read.
 
 `--open` opens that link in the browser too. `menger --help` is the short
 list; `menger --help-all` is every option, grouped; `menger --version`.
@@ -55,6 +80,17 @@ reaches it. `ui.push` is unchanged: it wants a `--ui-signer`'s signature.
 A build that finds no bundle — a checkout, the tests, `deploy/pipeline`'s
 releases, whose bundle the deploy pushes — carries nothing and serves the
 placeholder until a push. To carry one:
+
+**A built binary, for `cargo binstall menger`** (DIST-22). `scripts/package`
+makes the archive binstall downloads — one stripped binary carrying the UI
+(the `dist` profile: 85 MB, 31 MB packed), named and laid out as
+`Cargo.toml`'s `[package.metadata.binstall]` says: `menger-<target>-v<version>.tar.gz`,
+an asset of the GitHub release tagged `v<version>`. `--container
+rust:1-bullseye` builds it against an old glibc so it runs on older
+systems than this one; `--check` runs the packed binary on a fresh HOME and
+wants the app at `/app/`; `--binstall` has cargo-binstall install it from
+loopback by the manifest's own URL. It never tags, releases or publishes:
+`deploy/release/README.md` has those steps, the owner's, in order.
 
 ```sh
 scripts/embed-ui                 # build the bundle from ui/ into embed/ui.tar (never committed)
@@ -355,7 +391,9 @@ nothing. `tests/backfill.rs`. The theme carries v1's `--text-scale`,
 `--mono` and `--err-fg`, which v1's components paint with.
 
 `menger login [--agent]` prints a one-time link (or the agent's `_login`
-line) for the server running on `--data-dir`.
+line) for the server running on `--data-dir`. `menger start` is the server
+itself (DIST-21: every flag is taken before or after the word), and
+`menger mcp [--print]` the bridge an agent runs ("Run").
 
 ### Synthetic seeding (PERF-2)
 
