@@ -15,6 +15,7 @@
   },
   "page-ticket": {
     "top": "app-top",
+    "nav": "nav-tree-sv",
     "palette": "jump-palette-sv"
   },
   "page-named": {
