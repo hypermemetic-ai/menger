@@ -145,7 +145,7 @@ Because pots crack when a firing cannot wait.
 
 #### Requirement: A firing can be paused
 
-The kiln SHALL hold its temperature when a firing is paused.
+The kiln SHALL hold its temperature when a firing is paused. **Built by:** BUILTBY
 
 \`\`\`rust
 fn pause(&self) -> Box<dyn Kiln> { todo!() }
@@ -180,6 +180,10 @@ Every firing SHALL be logged.
 </spec-outline>
 `;
   const held = createdId(sy("tickets", "create", "--epic", EPIC, "--kind", "build", "--parent", root, "--title", "the kiln's spec, held", "--body", bodyFile("h", HELD)), "held");
+  // Two tickets under it: one a requirement names as what builds it, one no requirement names.
+  const kidA = createdId(sy("tickets", "create", "--epic", EPIC, "--kind", "build", "--parent", held, "--title", "the pause switch"), "kid a");
+  const kidB = createdId(sy("tickets", "create", "--epic", EPIC, "--kind", "build", "--parent", held, "--title", "a shelf nobody asked for"), "kid b");
+  sy("tickets", "amend", "--id", held, "--body", bodyFile("h2", HELD.replace("BUILTBY", kidA)));
   const H = "[data-surface=spec-outline][data-holds]";
   const openHeld = async () => {
     const opened = await openPage(`#/ticket/${held}`);
@@ -264,6 +268,51 @@ Every firing SHALL be logged.
       await settle("a requirement", `${H} [data-req]`);
       await settle("its words", `${H} [data-req-body] .spec-md`);
       await settle("the title", `${H} .spec-title`);
+    } finally { await context.close(); }
+  });
+
+  await test("spec_outline_names_what_builds_it", async () => {
+    const { context, page } = await openHeld();
+    try {
+      await eventually("its children are listed", async () => (await page.locator(`${H} [data-kids] [data-kid]`).count()) === 2, 10_000);
+      same(await page.locator(`${H} [data-kids] [data-kid]`).evaluateAll((els) => els.map((e) => [e.dataset.kid, e.dataset.untied != null])), [[kidA, false], [kidB, true]]);
+      assert.match(await page.locator(`${H} [data-kid="${kidB}"]`).innerText(), /tied to no requirement/);
+      await page.locator(`${H} [data-section=Requirements]`).click();
+      const chip = page.locator(`${H} .spec-req-line`, { has: page.locator('[data-req="A firing can be paused"]') }).locator("[data-built]");
+      same(await chip.evaluateAll((els) => els.map((e) => [e.dataset.built, e.dataset.status])), [[kidA, "Draft"]]);
+      assert.match(await chip.getAttribute("href"), new RegExp(kidA));
+      // The statement is drawn without the line that names them.
+      await page.locator(`${H} [data-req="A firing can be paused"]`).click();
+      ok(!/Built by/.test(await page.locator(`${H} [data-req-body] [data-unit=requirement]`).innerText()), "the statement repeats what builds it");
+    } finally { await context.close(); }
+  });
+
+  await test("spec_outline_a_part_is_edited_where_it_is_and_a_task_is_ticked", async () => {
+    const { context, page } = await openHeld();
+    const bodyNow = () => sy("tickets", "get", "--id", held).find((e) => e.ticket)?.ticket?.body ?? "";
+    try {
+      await page.locator(`${H} [data-section=Requirements]`).click();
+      await page.locator(`${H} [data-req="A firing can be paused"]`).click();
+      await page.locator(`${H} [data-unit=requirement] [data-edit-unit]`).click();
+      const box = page.locator(`${H} [data-editing] textarea`);
+      const had = await box.inputValue();
+      assert.match(had, /^#### Requirement: A firing can be paused\n/);
+      await box.fill(had.replace("SHALL hold its temperature", "SHALL keep its heat"));
+      await page.locator(`${H} [data-editing] [data-save]`).click();
+      await eventually("the part is drawn again, changed", async () => (await page.locator(`${H} [data-editing]`).count()) === 0 && /SHALL keep its heat/.test(await page.locator(`${H} [data-req-body]`).innerText()), 15_000);
+      await eventually("the body holds it, and the rest as it was", async () => { const b = bodyNow(); return /SHALL keep its heat/.test(b) && /Every firing SHALL be logged\./.test(b) && /^An overview, outside the spec\./.test(b) && b.includes("</spec-outline>"); }, 15_000);
+      // Escape leaves a part as it was.
+      await page.locator(`${H} [data-unit=scenario] [data-edit-unit]`).first().click();
+      await page.locator(`${H} [data-editing] textarea`).fill("##### Scenario: gone\n- **WHEN** never\n- **THEN** nothing");
+      await page.locator(`${H} [data-editing] textarea`).press("Escape");
+      same(await page.locator(`${H} [data-scenario]`).evaluateAll((els) => els.map((e) => e.dataset.scenario)), ["paused at the hold"]);
+      // A task is ticked in place, by its own component.
+      await page.locator(`${H} [data-section=Tasks]`).click();
+      const tasks = page.locator(`${H} [data-surface=spec-tasks]`);
+      same(await tasks.locator("[data-task]").evaluateAll((els) => els.map((e) => e.getAttribute("aria-checked"))), ["true", "false"]);
+      await tasks.locator("[data-task][aria-checked=false]").click();
+      await eventually("both are done", async () => (await page.locator(`${H} [data-stat=tasks] b`).innerText()) === "2/2", 15_000);
+      await eventually("the body holds the tick", async () => /- \[x\] 2\. Fire it/.test(bodyNow()), 15_000);
     } finally { await context.close(); }
   });
 };
