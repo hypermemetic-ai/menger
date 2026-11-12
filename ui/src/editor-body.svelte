@@ -44,7 +44,14 @@
      question on that range (`docs.ask`, to anyone or to an agent); the
      margin beside the text (doc-margin, a sibling) holds each thread at its
      range's height, the range underlined in the caret's block, and follows
-     the text as it changes (`marginTick`). -->
+     the text as it changes (`marginTick`).
+     EDITOR-24: the ticket's page places this too (page-ticket, `head={false}`: the page's head has the
+     title, so none is drawn here) — one component wherever a body is written, so what it gains a
+     ticket's page, `…/edit` and a document gain together. A tag that keeps its own state (tweet-writer)
+     saves through it: it says `body.tag { kind, id, name, n, was, next, token }` on the bus; the editor
+     of that body replaces its `n`th tag of that name alone — only while it is still `was` — and saves
+     the body its own way (a ticket's amend, a doc's CRDT), answering `body.tag.done { token, ok,
+     message }`. The block is not drawn again (`Drawn.updateDOM`: the tag wrote this text, COMPS-23). -->
 <script module>
   export const uses = ["tickets.get", "tickets.watch", "tickets.amend", "tickets.revisions.list", "tickets.inputs.ask", "tickets.queue", "tickets.inputs.close",
                        "docs.get", "docs.watch", "docs.state", "docs.update", "docs.rename", "docs.present", "docs.here", "docs.history", "docs.replay", "docs.ask"];
@@ -136,7 +143,7 @@
   import { getAllContexts, mount, setContext, tick, unmount, untrack } from "svelte";
   import { bus, live } from "plexus-ui/host";
   import { ticketHref } from "./ticket-links.svelte";
-  import TicketView, { blocks, pieceClass, refDefs } from "./ticket-view.svelte";
+  import TicketView, { blocks, pageTag, pieceClass, refDefs } from "./ticket-view.svelte";
   import Margin, { threadMarks } from "./doc-margin.svelte";
   import PillTable, { providePills } from "./ticket-pills.svelte";
   import { ingest } from "./media-ingest.svelte";
@@ -151,8 +158,11 @@
   import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate, removeAwarenessStates } from "y-protocols/awareness";
   import { langOf } from "./code-card.svelte";
   import { authorChanged } from "./tag-components.svelte";
+  import { tagSpans, wroteOwn, isOwn } from "./tag-source.svelte";
 
-  let { id, sheet = null, kind = "ticket" } = $props();
+  let { id, sheet = null, kind = "ticket", head = true } = $props();
+  // EDITOR-24: on a page whose head has the title (page-ticket), the body alone.
+  const bare = $derived(head === false || head === "false");
   // The document this instance edits: fixed at mount (editor-screen keys the editor by it), so a
   // write still in hand when the screen moves to another document lands on its own ticket.
   const doc_id = untrack(() => id);
@@ -435,12 +445,16 @@
     eq(o) { return o.text === this.text && o.defs === this.defs && o.hand === this.hand && pieceClass(o.piece) === pieceClass(this.piece) && o.piece.wrap?.open === this.piece.wrap?.open && o.piece.wrap?.close === this.piece.wrap?.close && o.piece.src?.n === this.piece.src?.n; }
     toDOM(v) {
       const d = document.createElement("div");
+      d.widget = this; // the widget this element draws now (updateDOM moves it)
       d.className = pieceClass(this.piece);
       d.setAttribute("data-block", "");
       if (this.piece.wrap) d.setAttribute("data-tag", this.piece.wrap.tag);
       if (this.hand) { d.classList.add("eb-hand"); d.setAttribute("data-hand", this.hand); }
       // ticket-view itself, drawing this piece alone: the drawing #/ticket/:id makes of it.
-      d.view = mount(TicketView, { target: d, props: { body: this.text, piece: this.piece, defs: this.defs, block: true }, context: contexts });
+      // EDITOR-24: the props are kept (`shown`), so a framed piece is handed its new text where it is (updateDOM).
+      let shown = $state.raw({ body: this.text, piece: this.piece, defs: this.defs });
+      d.redraw = (w) => { shown = { body: w.text, piece: w.piece, defs: w.defs }; };
+      d.view = mount(TicketView, { target: d, props: { get body() { return shown.body; }, get piece() { return shown.piece; }, get defs() { return shown.defs; }, block: true }, context: contexts });
       // EDITOR-10: a lone file or URL drawn as its kind — a player, a viewer, a card.
       drawAll(d, b);
       d.addEventListener("mousedown", (ev) => {
@@ -451,13 +465,28 @@
         const a = ev.target?.closest?.("a[href]");
         if (a && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); window.open(a.href, "_blank", "noopener"); return; }
         if (a?.classList.contains("tpill")) return; // EDITOR-23: a ticket pill is followed (the click below), the caret stays out
-        if (this.hand) { accept(); }
+        if (d.widget.hand) { accept(); }
         ev.preventDefault();
-        enter(v, d, this.text, ev);
+        enter(v, d, d.widget.text, ev);
       });
       // A link in a block is not followed (the click enters the block) — but a ticket pill, plainly clicked, is (EDITOR-23).
       d.addEventListener("click", (ev) => { const a = ev.target?.closest?.("a[href]"); if (a && !(a.classList.contains("tpill") && !ev.metaKey && !ev.ctrlKey)) ev.preventDefault(); });
       return d;
+    }
+    /** EDITOR-24: a tag's own save (`body.tag`) wrote this text — what is drawn made it, and stays as it
+     *  is, the focus and the caret in it too (COMPS-23's rule, here). Anything else is drawn again. */
+    updateDOM(dom) {
+      const was = dom.widget;
+      // A frame (a mockup, a live page, a body framed whole) whose text changed from outside keeps its
+      // component, which loads the new page behind the one on screen, as the read page does: never no frame.
+      if (was && dom.redraw && this.piece.page && was.piece.page && pageTag(this.piece) === pageTag(was.piece) && this.hand === was.hand && pieceClass(this.piece) === pieceClass(was.piece)) {
+        dom.widget = this;
+        dom.redraw(this);
+        return true;
+      }
+      if (!was || !this.piece.src || !isOwn(this.text) || this.hand !== was.hand || this.defs !== was.defs || pieceClass(this.piece) !== pieceClass(was.piece) || this.piece.src.n !== was.piece.src?.n) return false;
+      dom.widget = this;
+      return true;
     }
     destroy(dom) { if (dom.view) { unmount(dom.view); dom.view = null; } }
     ignoreEvent() { return true; }
@@ -868,6 +897,35 @@
     ev.currentTarget.value = "";
   }
 
+  // ── EDITOR-24: a tag's own state, saved through this editor ──────────────
+  b.on("body.tag", async (d) => {
+    if (!d || d.kind !== (isDoc ? "doc" : "ticket") || String(d.id) !== String(doc_id) || !view) return;
+    const done = (ok, message = "") => b.emit("body.tag.done", { token: d.token, ok, message });
+    const s = tagSpans(doc()).filter((x) => x.name === d.name)[Number(d.n)];
+    if (!s) return done(false, `the body no longer holds this <${d.name}>: nothing saved`);
+    if (s.text !== d.was) return done(false, "this was changed since it was drawn (someone else's edit): nothing saved");
+    wroteOwn(d.next);
+    view.dispatch({ changes: { from: s.from, to: s.to, insert: d.next }, scrollIntoView: false });
+    if (isDoc) return done(true); // the CRDT has it
+    await flush();
+    if (state.kind === "refused") done(false, state.text); else done(true);
+  });
+
+  /** EDITOR-24 (the owner, 2026-11-11: "pin the flag at run time and a test"): the editor draws the whole
+   *  document, as the read page does — find-in-page reaches every block and a frame scrolled away keeps its
+   *  state. CodeMirror draws its window and 1,000 px around it and has no setting for more; what it does
+   *  have is `viewState.printing`, its own switch for "no viewport limiting" while the browser prints, which
+   *  it sets and clears itself. Held true here. The field is CodeMirror's own, not its interface: when an
+   *  upgrade moves it, nothing is pinned, the surface says `data-draws="window"` and
+   *  tests/pages/editor.mjs's the_editor_draws_the_whole_document goes red. */
+  function drawWhole(v) {
+    const vs = v.viewState;
+    if (!vs || typeof vs.printing !== "boolean") { host.dataset.draws = "window"; console.error("editor-body: CodeMirror's viewState.printing is gone — the editor draws its window only (EDITOR-24)"); return; }
+    Object.defineProperty(vs, "printing", { get: () => true, set() {}, configurable: true });
+    host.dataset.draws = "whole";
+    v.requestMeasure();
+  }
+
   function init(tk) {
     acked = isDoc ? null : tk.body;
     view = new EditorView({
@@ -909,6 +967,7 @@
       }),
     });
     host.editorView = view; // the page tests read the document and the caret through it
+    drawWhole(view);
     if (isDoc) moved();
   }
   /** Whether the surface can be drawn: the document read — and, for a doc, its CRDT synced. */
@@ -988,7 +1047,7 @@
   {:else if !t}
     <p class="empty" data-empty data-not-found>No {isDoc ? "document" : "ticket"} {doc_id} here{(isDoc ? meta.message : ticket.message) ? ` — ${isDoc ? meta.message : ticket.message}` : ""}.</p>
   {:else}
-    <TicketView status={t.status} edit={bodyMount} titleEdit={titleMount}/>
+    {#if bare}<TicketView edit={bodyMount}/>{:else}<TicketView status={t.status} edit={bodyMount} titleEdit={titleMount}/>{/if}
   {/if}
   {#if isDoc && t && synced}<Margin id={doc_id} {ydoc} view={() => view} tick={marginTick}/>{/if}
   {#if asking}

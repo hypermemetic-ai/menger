@@ -22,7 +22,11 @@
      with its parent, each a link by uid); one ticket is its page, its
      address put in the uid form (ticket-head); none, "No ticket"; a deleted
      one, as above. SURFACE-10: `sheet`, the sheet's held state, "loading"
-     its skeleton. SV-4: real Svelte (svelte/1), page-ticket.rhx's port
+     its skeleton. EDITOR-24: the body is the editor (editor-body, the
+     component a document's page writes on, `head={false}`: the title is
+     ticket-head's), keyed by the ticket — a click in it puts the caret there
+     and it saves as it is typed; this page is "the ticket last opened" for
+     the editor at `#/` (`menger.editor.last`). SV-4: real Svelte (svelte/1), page-ticket.rhx's port
      (ui/retired-rhx/). -->
 <script module>
   export const uses = ["tickets.get", "tickets.watch", "tickets.revisions.list"];
@@ -31,7 +35,7 @@
 <script>
   import { bus, live } from "plexus-ui/host";
   import TicketHead from "plexus-ui:ticket-head";
-  import TicketBody from "plexus-ui:ticket-body";
+  import EditorBody from "plexus-ui:editor-body";
   import TicketQuestions from "plexus-ui:ticket-questions";
   import TicketEdit from "plexus-ui:ticket-edit";
   import TicketRelations from "plexus-ui:ticket-relations";
@@ -58,6 +62,9 @@
     "escape": { to: () => b.navigate("#/board"), label: "back to the board" },
     "g b": { to: () => b.navigate("#/board"), label: "go to the board" },
   });
+
+  // EDITOR-4: the ticket page is "the ticket last opened" for the editor at #/ (editor-screen reads it).
+  $effect(() => { try { if (id) localStorage.setItem("menger.editor.last", id); } catch { /* a private window */ } });
 
   /** Whether this ticket's newest revision names `field` (`deleted`, `undeleted`). */
   const revised = (field) => latest.rows.some((r) => r.ticket === id && Array.isArray(r.fields) && r.fields.includes(field));
@@ -101,7 +108,7 @@
       <div class="tp">
         <div class="cell head"><TicketHead {id}/></div>
         <div class="cell main">
-          <TicketBody {id}/>
+          <div class="body" data-surface="ticket-body">{#key id}<EditorBody {id} kind="ticket" head={false}/>{/key}</div>
           <TicketQuestions {id}/>
           <div class={knocked === 0 ? "hole" : knocked % 2 === 1 ? "hole heard" : "hole heard-again"} data-mark="ticket-edit" data-id={id}><TicketEdit {id}/></div>
           <TicketRelations {id}/>
@@ -131,6 +138,7 @@
   .side { grid-column: 2; grid-row: 3; min-width: 0; }
   .revs { grid-column: 2; grid-row: 4; min-width: 0; }
   .revs:has(:global([data-open="true"])) { grid-column: 1 / -1; grid-row: 2; }
+  .body { padding-top: 14px; border-top: var(--border) solid var(--line); }
   .hole { margin-top: 14px; border-radius: var(--radius); }
   .side > .hole { margin-top: 0; }
   .hole.heard { animation: heard var(--motion-flash) var(--ease); }

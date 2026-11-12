@@ -362,8 +362,12 @@ ctrl/⌘+s inside it) reads the body (`tickets.get`), finds its `n`th
 `tweet-writer`, and only while that is still the source it was drawn from
 replaces it and writes the body (`tickets.amend`), every other byte kept;
 else it refuses, saying so. Words are written escaped (`&`, `<`). In the
-editor, in a document, or with no ticket known it is drawn only, and says
-so. `tests/pages/writer.mjs`.
+editor — a ticket's page, `…/edit`, a document (EDITOR-24: one component,
+editor-body, wherever a body is written) — the body is the editor's to
+save: the writer says `body.tag` on the bus and the editor replaces that
+tag alone in its text and saves the body its own way (a ticket's amend, a
+document's CRDT), refusing the same way. With no ticket or document known
+it is drawn only, and says so. `tests/pages/writer.mjs`.
 
 **v1's definitions** (COMPS-5). A fence with no `html` holding v1's custom
 element — a `<template>`, or a script reading `this.root`, `this.menger` or

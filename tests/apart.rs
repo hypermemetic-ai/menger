@@ -2160,7 +2160,7 @@ fn the_tokens_are_whole() {
 /// on `session`'s page.
 const PAGES: [(&str, &[&str], &[&str]); 16] = [
     ("page-editor", &["#/", "#/edit/:id", "#/doc/:doc"], &["editor-screen"]),
-    ("page-ticket", &["#/ticket/:id", "#/sv/ticket/:id"], &["ticket-head", "ticket-body", "ticket-edit", "ticket-relations", "ticket-actions", "ticket-commits", "ticket-history", "ticket-revisions"]),
+    ("page-ticket", &["#/ticket/:id", "#/sv/ticket/:id"], &["ticket-head", "editor-body", "ticket-edit", "ticket-relations", "ticket-actions", "ticket-commits", "ticket-history", "ticket-revisions"]),
     ("page-new", &["#/new", "#/new/:parent"], &["ticket-create"]),
     ("page-search", &["#/search", "#/search/:q", "#/search/:q/f/:filter"], &["search-page"]),
     ("page-ready", &["#/ready", "#/ready/:filter"], &["work-ready"]),
