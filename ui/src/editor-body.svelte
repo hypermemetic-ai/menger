@@ -143,7 +143,7 @@
   import { getAllContexts, mount, setContext, tick, unmount, untrack } from "svelte";
   import { bus, live } from "plexus-ui/host";
   import { ticketHref } from "./ticket-links.svelte";
-  import TicketView, { blocks, pieceClass, refDefs } from "./ticket-view.svelte";
+  import TicketView, { blocks, pageTag, pieceClass, refDefs } from "./ticket-view.svelte";
   import Margin, { threadMarks } from "./doc-margin.svelte";
   import PillTable, { providePills } from "./ticket-pills.svelte";
   import { ingest } from "./media-ingest.svelte";
@@ -451,7 +451,10 @@
       if (this.piece.wrap) d.setAttribute("data-tag", this.piece.wrap.tag);
       if (this.hand) { d.classList.add("eb-hand"); d.setAttribute("data-hand", this.hand); }
       // ticket-view itself, drawing this piece alone: the drawing #/ticket/:id makes of it.
-      d.view = mount(TicketView, { target: d, props: { body: this.text, piece: this.piece, defs: this.defs, block: true }, context: contexts });
+      // EDITOR-24: the props are kept (`shown`), so a framed piece is handed its new text where it is (updateDOM).
+      let shown = $state.raw({ body: this.text, piece: this.piece, defs: this.defs });
+      d.redraw = (w) => { shown = { body: w.text, piece: w.piece, defs: w.defs }; };
+      d.view = mount(TicketView, { target: d, props: { get body() { return shown.body; }, get piece() { return shown.piece; }, get defs() { return shown.defs; }, block: true }, context: contexts });
       // EDITOR-10: a lone file or URL drawn as its kind — a player, a viewer, a card.
       drawAll(d, b);
       d.addEventListener("mousedown", (ev) => {
@@ -474,6 +477,13 @@
      *  is, the focus and the caret in it too (COMPS-23's rule, here). Anything else is drawn again. */
     updateDOM(dom) {
       const was = dom.widget;
+      // A frame (a mockup, a live page, a body framed whole) whose text changed from outside keeps its
+      // component, which loads the new page behind the one on screen, as the read page does: never no frame.
+      if (was && dom.redraw && this.piece.page && was.piece.page && pageTag(this.piece) === pageTag(was.piece) && this.hand === was.hand && pieceClass(this.piece) === pieceClass(was.piece)) {
+        dom.widget = this;
+        dom.redraw(this);
+        return true;
+      }
       if (!was || !this.piece.src || !isOwn(this.text) || this.hand !== was.hand || this.defs !== was.defs || pieceClass(this.piece) !== pieceClass(was.piece) || this.piece.src.n !== was.piece.src?.n) return false;
       dom.widget = this;
       return true;

@@ -379,24 +379,26 @@ export default async (ctx) => {
     }
   });
 
-  // SURFACE-16: ticket-body keeps its live spec and places ticket-view, a
-  // sibling inlined in its module: the marks as before, no section of its own.
+  // SURFACE-16, EDITOR-24: the page's body is the editor (editor-body), which draws each block through
+  // ticket-view, a sibling inlined in its module; an outside amend is drawn in place; a ticket with no
+  // body shows the editor's own invitation to write.
   await test("ticket_body_draws_through_ticket_view", async () => {
     const t = made("the view's ticket", "--body", body("The **glaze** fires at cone 6.\n"));
     const none = made("the view's empty ticket");
     const { page, tp, context, seen } = await open(t.id);
     try {
-      const b = tp.locator("[data-surface=ticket-body] [data-surface=ticket-view] [data-field=body][data-ticket-body]");
+      const b = tp.locator("[data-surface=ticket-body] [data-surface=editor-body] [data-field=body]");
       await eventually("the body, through the view", async () => (await text(b)).includes("fires at cone 6"));
-      assert(trimmed(await b.locator("strong").textContent({ timeout: 1000 })) === "glaze", "the body as markdown");
+      assert(trimmed(await b.locator("[data-block] strong").textContent({ timeout: 1000 })) === "glaze", "the body as markdown, a drawn block");
       assert((await tp.locator("[data-surface=ticket-body] [data-field=title], [data-surface=ticket-body] [data-field=status]").count()) === 0, "the page's title and status stay ticket-head's");
       assert((await tp.locator("[data-surface=ticket-body] [data-slot]:not([data-slot=editor-body])").count()) === 0 && (await tp.locator("[data-surface=ticket-body] [data-surface=editor-body][data-kind=ticket]").count()) === 1, "the body is the editor's (EDITOR-24), the view no section of its own");
-      assert(!seen.requests.some((u) => /\/components\/ticket-view\.js$/.test(new URL(u).pathname)), "the view's code came inside ticket-body's module");
+      assert(!seen.requests.some((u) => /\/components\/ticket-view\.js$/.test(new URL(u).pathname)), "the view's code came inside the editor's module");
       sy("tickets", "amend", "--id", t.id, "--body", body("Now *bisque* first.\n"));
       await eventually("an amend redraws the body in place", async () => (await text(b)).includes("bisque"), 5_000);
       await page.evaluate((r) => (location.hash = r), `${ROUTE}${none.id}`);
-      const empty = tp.locator("[data-surface=ticket-body] [data-surface=ticket-view] [data-field=body][data-empty]");
-      await eventually("no body yet", async () => (await text(empty)) === "No body yet.", 5_000);
+      const empty = tp.locator("[data-surface=ticket-body] [data-surface=editor-body] [data-field=body] .cm-placeholder");
+      await eventually("no body yet: the editor's invitation", async () => (await text(empty)).startsWith("Write here"), 5_000);
+      assert((await tp.locator("[data-surface=ticket-body] [data-block]").count()) === 0, "and no block of the ticket before");
     } finally {
       await context.close();
     }
@@ -427,7 +429,7 @@ export default async (ctx) => {
     const alone = bundle(path.dirname(session), "view-alone", {
       engine: v1.engine,
       edit: (ui) => {
-        for (const f of fs.readdirSync(path.join(ui, "src"))) if (f !== "ticket-view.svelte" && f !== "mermaid-diagram.svelte" && !["m-mockup.svelte", "m-live.svelte", "m-page.svelte", "m-details.svelte", "tag-components.svelte", "component-def.svelte"].includes(f) && f !== "ticket-links.svelte" && !f.startsWith("code-")) fs.rmSync(path.join(ui, "src", f));
+        for (const f of fs.readdirSync(path.join(ui, "src"))) if (f !== "ticket-view.svelte" && f !== "mermaid-diagram.svelte" && !["m-mockup.svelte", "m-live.svelte", "m-page.svelte", "m-details.svelte", "tag-components.svelte", "tag-source.svelte", "component-def.svelte"].includes(f) && f !== "ticket-links.svelte" && !f.startsWith("code-")) fs.rmSync(path.join(ui, "src", f));
         fs.writeFileSync(path.join(ui, "src", "view-host.svelte"), host);
         fs.writeFileSync(path.join(ui, "routes.json"), JSON.stringify({ "#/": "view-host" }));
         fs.writeFileSync(path.join(ui, "slots.json"), "{}");
@@ -435,7 +437,7 @@ export default async (ctx) => {
     });
     const m = JSON.parse(alone.manifest);
     // COMPS-4: and what draws its tags and says its definitions (tag-components, component-def); EDITOR-22: its folds' line (m-details).
-    const drawers = Object.keys(m.components).filter((c) => c === "mermaid-diagram" || ["m-mockup", "m-live", "m-page", "m-details", "tag-components", "component-def"].includes(c) || c === "ticket-links" || c.startsWith("code-"));
+    const drawers = Object.keys(m.components).filter((c) => c === "mermaid-diagram" || ["m-mockup", "m-live", "m-page", "m-details", "tag-components", "tag-source", "component-def"].includes(c) || c === "ticket-links" || c.startsWith("code-"));
     assert(JSON.stringify(Object.keys(m.components).filter((c) => !drawers.includes(c)).sort()) === JSON.stringify(["ticket-view", "view-host"]) && drawers.includes("mermaid-diagram") && ["m-mockup", "m-live", "m-page"].every((c) => drawers.includes(c)) && drawers.includes("code-card") && drawers.includes("code-rust"), `the bundle holds the view, what draws its diagrams and code, and its page: ${Object.keys(m.components)}`);
     // COMPS-4: nothing of menger's called — the only uses are the framework's ui service's (what a tag names,
     // asked only once a tag or a definition is on screen; a definition's save), which every tenant mounts.
