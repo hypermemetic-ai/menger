@@ -32,24 +32,28 @@
   // A deleted ticket's tombstone answers `ids`: its key is the first.
   const gone = $derived(t.rows.filter((r) => Array.isArray(r.ids)).map((r) => r.ids[0]));
   const rows = $derived(t.rows.filter((r) => r.title != null && !Array.isArray(r.ids)));
+  // The page stays while another uid is read (a link by uid followed from the ticket on screen): the ticket
+  // last shown is kept until the new one answers, so the page is given a new ticket, never made again — its
+  // nav, its top and what is open in them stay as they are.
+  const reading = $derived(t.status === "pending" || t.status === "resyncing");
+  let last = $state(null);
+  $effect(() => { if (rows.length) last = { id: rows[0].id, address: rows[0].address }; });
+  const shown = $derived(rows[0] ?? (reading ? last : null));
 </script>
 
 <section class="page-t" data-surface="ticket-by-uid" data-uid={uid}>
   {#if !shaped}
     <p class="empty" data-empty data-not-found>{"No ticket " + uid + " here — a link by uid names 8 letters and digits."}</p>
-  {:else if held.length === 0}
-    {#if t.status === "pending" || t.status === "resyncing"}
-      <div class="wait" data-loading aria-busy="true"></div>
-    {:else}
-      <p class="empty" data-empty data-not-found>{"No ticket " + uid + " here" + (t.message == null ? "" : " — " + t.message) + "."}</p>
-    {/if}
-  {:else}
+  {:else if gone.length}
     {#each gone as key (key)}
       <PageTicket id={key}/>
     {/each}
-    {#each rows as r (r.id)}
-      <PageTKey key={r.id} address={r.address}/>
-    {/each}
+  {:else if shown}
+    <PageTKey key={shown.id} address={shown.address}/>
+  {:else if reading}
+    <div class="wait" data-loading aria-busy="true"></div>
+  {:else}
+    <p class="empty" data-empty data-not-found>{"No ticket " + uid + " here" + (t.message == null ? "" : " — " + t.message) + "."}</p>
   {/if}
 </section>
 
