@@ -901,6 +901,21 @@
     if (state.kind === "refused") done(false, state.text); else done(true);
   });
 
+  /** EDITOR-24 (the owner, 2026-11-11: "pin the flag at run time and a test"): the editor draws the whole
+   *  document, as the read page does — find-in-page reaches every block and a frame scrolled away keeps its
+   *  state. CodeMirror draws its window and 1,000 px around it and has no setting for more; what it does
+   *  have is `viewState.printing`, its own switch for "no viewport limiting" while the browser prints, which
+   *  it sets and clears itself. Held true here. The field is CodeMirror's own, not its interface: when an
+   *  upgrade moves it, nothing is pinned, the surface says `data-draws="window"` and
+   *  tests/pages/editor.mjs's the_editor_draws_the_whole_document goes red. */
+  function drawWhole(v) {
+    const vs = v.viewState;
+    if (!vs || typeof vs.printing !== "boolean") { host.dataset.draws = "window"; console.error("editor-body: CodeMirror's viewState.printing is gone — the editor draws its window only (EDITOR-24)"); return; }
+    Object.defineProperty(vs, "printing", { get: () => true, set() {}, configurable: true });
+    host.dataset.draws = "whole";
+    v.requestMeasure();
+  }
+
   function init(tk) {
     acked = isDoc ? null : tk.body;
     view = new EditorView({
@@ -942,6 +957,7 @@
       }),
     });
     host.editorView = view; // the page tests read the document and the caret through it
+    drawWhole(view);
     if (isDoc) moved();
   }
   /** Whether the surface can be drawn: the document read — and, for a doc, its CRDT synced. */

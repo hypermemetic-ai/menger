@@ -130,6 +130,35 @@ graph TD
 </m-status>
 `;
 
+  // EDITOR-24: the editor draws the whole document, not CodeMirror's window and 1,000 px around it — the
+  // pin on CodeMirror's own `viewState.printing` (editor-body's drawWhole). Red when an upgrade moves the field.
+  await test("the_editor_draws_the_whole_document", async () => {
+    const N = 400;
+    const LONG = Array.from({ length: N }, (_, i) => `Paragraph ${i + 1} of the long body, far from the top.`).join("\n\n") + "\n";
+    const id = make("a long body", LONG);
+    for (const route of [`#/edit/${id}`, `#/ticket/${id}`]) {
+      const { context, page } = await openPage(route);
+      const ed = page.locator("[data-surface=editor-body]");
+      try {
+        await page.setViewportSize({ width: 1280, height: 800 });
+        await eventually(`the editor at ${route}`, async () => (await ed.locator(".cm-content[data-field=body-source]").count()) === 1, 10_000);
+        assert((await page.locator(BODY).getAttribute("data-draws")) === "whole", `${route}: the pin is held (data-draws=whole) — CodeMirror's viewState.printing`);
+        await eventually(`${route}: every block is in the page, the last one 400 paragraphs down`, async () => (await ed.locator(".blk").count()) === N, 15_000);
+        const tall = await ed.locator(".cm-content").evaluate((e) => e.getBoundingClientRect().height);
+        assert(tall > 5 * 800, `${route}: the body is far taller than the window (${tall}px), so the window alone would not hold it`);
+        assert((await ed.locator(".blk").last().textContent()).includes(`Paragraph ${N} of the long body`), `${route}: the last block is drawn with its text`);
+        assert((await ed.locator(".cm-gap").count()) === 0, `${route}: nothing stands in for undrawn text`);
+        // Still whole after a scroll and a measure.
+        await page.mouse.wheel(0, 3000);
+        await sleep(300);
+        assert((await ed.locator(".blk").count()) === N, `${route}: still every block after a scroll`);
+        assert(get(id).body === LONG, `${route}: looking writes nothing`);
+      } finally {
+        await context.close();
+      }
+    }
+  });
+
   await test("the_surface_draws_every_block_as_the_view_does", async () => {
     const id = make("the same drawing", HOUSE);
     const { context, page, ed } = await open(id);
