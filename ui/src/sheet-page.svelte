@@ -251,9 +251,9 @@
       // COMPS-16: a thread as its own tag's content — two posts, one of two paragraphs and one over 280 — as the
       // sheet's ticket's first writer (a save there refuses: that body holds none); drawn only, with no ticket.
       ["tweet-writer", TweetWriter, (t) => ({ ticket: t, n: "0", source: `<tweet-writer>\n<tweet-post>The first post's words.\n\nA second paragraph.</tweet-post>\n<tweet-post>${"x".repeat(285)}</tweet-post>\n</tweet-writer>` }), ["hover", "focus"], { empty: { source: "<tweet-writer>\n</tweet-writer>" } }],
-      // A body outlined as an OpenSpec change: its counts, sections, one group of two requirements (one with no
-      // scenario), a question and two tasks, from words of its own.
-      ["spec-outline", SpecOutline, (t) => ({ body: "## Why\n\n## Requirements\n\n### firing\n\n#### Requirement: A firing can be paused\n\n##### Scenario: paused at the hold\n\n#### Requirement: A firing is logged\n\n## Design\n\n### Open Questions\n\n1. **Gas or electric.** Which first?\n\n## Tasks\n\n- [x] 1. Wire the kiln\n- [ ] 2. Fire it\n" }), ["hover", "focus"], {}],
+      // An OpenSpec change held by its tag and drawn: its counts, a question, its sections as tabs, and (the
+      // requirements chosen) one capability of two requirements, one with no scenario.
+      ["spec-outline", SpecOutline, (t) => ({ source: "<spec-outline>\n# The kiln\n\n## Requirements\n\n### firing\n\n#### Requirement: A firing can be paused\n\nThe kiln SHALL hold its temperature.\n\n##### Scenario: paused at the hold\n- **WHEN** a firing is paused\n- **THEN** it holds\n\n#### Requirement: A firing is logged\n\n## Design\n\n### Open Questions\n\n1. **Gas or electric.** Which first?\n\n## Tasks\n\n- [x] 1. Wire the kiln\n- [ ] 2. Fire it\n</spec-outline>" }), ["hover", "focus", "selected"], {}, false, { selected: ["[role=tab][aria-selected=false]"] }],
       ["tag-source", TagSource, (t) => ({}), [], {}],
       // V2-30: a doc's margin, alone — its threads as a list (a ticket's id: none).
       ["doc-margin", DocMargin, ID, [], {}],
