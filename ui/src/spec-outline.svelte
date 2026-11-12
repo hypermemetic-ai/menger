@@ -3,7 +3,9 @@
      group of requirements as a line that opens to list them. A click on a section or a requirement scrolls
      the body to its heading. A requirement with no scenario is marked, since OpenSpec asks for at least one.
      It is placed by its tag (a native tag is handed the `ticket` it sits in), reads that ticket's body and
-     follows its changes, and writes nothing. In a document, or with no ticket known, it draws nothing.
+     follows its changes, and writes nothing. A tag written with words of its own outlines those instead
+     (`body`, which is how the sheet draws it). In a document with no words, or with no ticket known, it
+     draws nothing.
      What it reads from the body (`outline`):
      - a heading `Requirement: <name>` is a requirement, grouped under the nearest heading before it that
        is neither a requirement nor a scenario (a capability's name, or `Requirements`);
@@ -59,12 +61,12 @@
 <script>
   import { live } from "plexus-ui/host";
 
-  let { ticket = "" } = $props();
-  const id = () => ticket;
+  let { ticket = "", body = "" } = $props();
+  const id = () => (body ? "" : ticket);
   const read = id() ? live({ snapshot: "tickets.get", params: () => ({ id: ticket }), changes: "tickets.watch", key: "id",
                              on: { amended: "upsert:ticket", updated: "upsert:ticket", revision_restored: "upsert:ticket" } }) : null;
   const row = $derived(read?.rows.find((r) => r.body != null));
-  const o = $derived(outline(row?.body));
+  const o = $derived(outline(body || row?.body));
   const any = $derived(o.requirements > 0 || o.tasks.total > 0 || o.questions.length > 0);
 
   let open = $state({});
@@ -135,7 +137,7 @@
   .spec { display: grid; gap: 8px; padding: 12px 14px; background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius); font-family: var(--font-text); }
   .spec p, .spec ul { margin: 0; padding: 0; list-style: none; }
   .spec button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
-  .spec button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--radius-xs); }
+  .spec button:focus-visible, .spec button:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--radius-xs); }
 
   .spec-stats { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 18px; color: var(--muted); }
   .spec-stats b { color: var(--ink); font-weight: var(--weight-strong); font-variant-numeric: tabular-nums; }
@@ -145,11 +147,11 @@
 
   .spec-sections { display: flex; flex-wrap: wrap; gap: 4px 6px; }
   .spec .spec-sections button { padding: 1px 8px; color: var(--muted); border: var(--border) solid var(--line); border-radius: var(--radius-pill); }
-  .spec .spec-sections button:hover { color: var(--ink); background: var(--hover); }
+  .spec .spec-sections button:hover, .spec .spec-sections button:global([data-sheet~=hover]) { color: var(--ink); background: var(--hover); }
 
   .spec-groups { border-top: var(--border) solid var(--line); padding-top: 6px; }
   .spec .spec-group, .spec .spec-reqs button { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 3px 4px; border-radius: var(--radius-sm); }
-  .spec .spec-group:hover, .spec .spec-reqs button:hover { background: var(--hover); }
+  .spec .spec-group:hover, .spec .spec-reqs button:hover, .spec .spec-group:global([data-sheet~=hover]), .spec .spec-reqs button:global([data-sheet~=hover]) { background: var(--hover); }
   .spec-tri { flex: none; align-self: center; width: 0; height: 0; border-top: 4px solid transparent; border-bottom: 4px solid transparent; border-left: 6px solid var(--muted); transition: transform var(--motion-fast) var(--ease); }
   [aria-expanded=true] > .spec-tri { transform: rotate(90deg); }
   .spec-group .spec-name { font-weight: var(--weight-medium); }
@@ -162,6 +164,6 @@
   .spec-questions { display: grid; gap: 2px; border-top: var(--border) solid var(--line); padding-top: 6px; }
   .spec .spec-questions button { padding: 2px 4px; color: var(--st-pending-fg); border-radius: var(--radius-sm); }
   .spec .spec-questions button::before { content: "? "; font-weight: var(--weight-strong); }
-  .spec .spec-questions button:hover { background: var(--hover); }
+  .spec .spec-questions button:hover, .spec .spec-questions button:global([data-sheet~=hover]) { background: var(--hover); }
   @media print { .spec { display: none; } }
 </style>

@@ -16,3 +16,5 @@ input.in_order            BIDIR-6      no method of this service declares `input
 input.end_with_seq        BIDIR-6      no method of this service declares `input`
 input.past_credit         BIDIR-6      no method of this service declares `input`
 input.closed_before_done  BIDIR-6      no method of this service declares `input`
+ends.revoked              KEEL-59      menger takes plexus-core 0.8.1, which is before the server ends a call whose grant was revoked
+ends.sign_in_ended        KEEL-59      menger takes plexus-core 0.8.1, which is before the server ends a call whose sign-in ended
