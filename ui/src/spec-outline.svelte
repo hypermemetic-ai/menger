@@ -254,6 +254,8 @@
   const allOpen = (s) => keys(s).every((k) => open[k]);
   function openAll(s) { const to = !allOpen(s); for (const k of keys(s)) open[k] = to; }
   // In an editor a click on a drawn block enters its source; here it would turn the whole spec to markdown.
+  // The focus of a click on its words is its own (`tabindex`), never the editor's around it: the editor, given
+  // the focus, puts its caret at the document's start and scrolls there.
   const hold = (ev) => { if (editor === "true" && !ev.target?.closest?.("[data-edit]")) ev.stopPropagation(); };
 </script>
 
@@ -311,7 +313,7 @@
 
 {#if any && holds}
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-<section class="spec" data-surface="spec-outline" data-holds aria-label={spec.title || "Spec"} bind:this={root} onmousedown={hold}>
+<section class="spec" data-surface="spec-outline" data-holds aria-label={spec.title || "Spec"} bind:this={root} onmousedown={hold} tabindex="-1">
   {#if spec.title}<h2 class="spec-title">{spec.title}</h2>{/if}
   {@render stats()}
   {#if open_.length}
@@ -419,6 +421,7 @@
   .spec p, .spec ul, .spec dl, .spec dd, .spec h2, .spec h3 { margin: 0; padding: 0; list-style: none; }
   .spec button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-align: left; }
   .spec button:focus-visible, .spec button:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--radius-xs); }
+  section.spec { outline: none; }
   .spec-title { font-family: var(--font-display); font-size: 18px; font-weight: var(--weight-strong); color: var(--ink); }
 
   .spec-stats { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 18px; color: var(--muted); }
