@@ -216,9 +216,9 @@ Every firing SHALL be logged.
       assert.deepEqual(await bodyOf.locator("[data-scenario] [data-step]").evaluateAll((els) => els.map((e) => [e.dataset.step, e.querySelector("dd").textContent.trim()])),
         [["WHEN", "a firing is paused at 1040"], ["THEN", "it holds 1040"]]);
       // A question is an input of the body: listed while open, it goes to its section, and is answered there.
-      await eventually("the question is listed", async () => (await page.locator(`${H} [data-question]`).allInnerTexts()).join() === "Gas or electric?", 10_000);
-      assert.equal(await page.locator(`${H} [data-stat=questions] b`).innerText(), "1");
-      await page.locator(`${H} [data-question]`).click();
+      await eventually("the question is counted", async () => (await page.locator(`${H} [data-stat=questions] b`).count()) === 1 && (await page.locator(`${H} [data-stat=questions] b`).innerText()) === "1", 10_000);
+      assert.equal(await page.locator(`${H} [data-question]`).count(), 0, "a question with a card is not said again under the counts");
+      await page.locator(`${H} [data-stat=questions]`).click();
       await eventually("the design tab is chosen", async () => (await page.locator(`${H} [data-section=Design]`).getAttribute("aria-selected")) === "true", 5_000);
       const q = page.locator(`${H} [data-input=fuel]`);
       assert.equal(await q.getAttribute("data-state"), "open");
@@ -227,7 +227,7 @@ Every firing SHALL be logged.
       await eventually("the answer is kept and said", async () => (await q.getAttribute("data-state")) === "answered" && /electric/.test(await q.locator("[data-field=answer]").innerText()), 10_000);
       const kept = sy("tickets", "inputs", "list", "--ticket", held).flatMap((e) => e.items ?? [e.input ?? e]).find((i) => i?.id === "fuel");
       assert.equal(kept?.answer?.value?.option, "electric", "the service's answer");
-      await eventually("no question is left open", async () => (await page.locator(`${H} [data-question]`).count()) === 0, 10_000);
+      await eventually("no question is left open", async () => (await page.locator(`${H} [data-stat=questions]`).count()) === 0, 10_000);
       await q.locator("[data-action='tickets.inputs.clear']").click();
       await eventually("cleared, it is open again", async () => (await q.getAttribute("data-state")) === "open", 10_000);
     } finally { await context.close(); }
