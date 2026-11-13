@@ -18,7 +18,10 @@
      as the engine's router merges them. Aliases are left out (`#/rhx/…`,
      `#/sv/…`, and a pattern whose component a listed one already shows);
      the board's pages first, then the rest by name. Click, Enter or Space
-     opens it; the arrows move, typing filters, Enter goes, Escape closes. -->
+     opens it; the arrows move, typing filters, Enter goes, Escape closes.
+     The note window (note-quick, by its bound mark) rides here, so every page
+     with the top bar has its keys — cmd+option+n / ctrl+alt+n — and the
+     bar's `note` button opens it (`note.open` on the bus). -->
 <script module>
   export const uses = ["tickets.health", "tickets.watch", "auth.requires", "auth.whoami", "ui.routes.list", "ui.watch", "ui.history"];
 
@@ -41,6 +44,7 @@
 <script>
   import { tick } from "svelte";
   import { bus, live } from "plexus-ui/host";
+  import NoteQuick from "plexus-ui:note-quick";
 
   let { here = "board", filter = null } = $props();
   const b = bus();
@@ -214,6 +218,7 @@
   <div class="top-search" data-form="search" role="search">
     <input type="search" name="q" placeholder="search titles and bodies" aria-label="search" spellcheck="false" autocomplete="off" onkeydown={searched}/>
   </div>
+  <button class="top-jump" type="button" data-action="note.open" title="write a note (cmd+option+n, or ctrl+alt+n)" onclick={() => b.emit("note.open", {})}>note <kbd class="top-kbd">ctrl</kbd><kbd class="top-kbd">alt</kbd><kbd class="top-kbd">n</kbd></button>
   <button class="top-jump" type="button" data-action="palette.open" onclick={() => b.emit("palette.open", {})}>jump <kbd class="top-kbd">ctrl</kbd><kbd class="top-kbd">k</kbd></button>
   {#if editor && onApp}
     <a class="top-edit" href={studio} data-action="page.edit" aria-keyshortcuts="Control+E" aria-label="edit this page" title={"edit this page in the studio: " + hash}>
@@ -221,6 +226,7 @@
       <span class="top-tip" role="tooltip">edit this page in the studio<br><code>{studio}</code></span>
     </a>
   {/if}
+  <NoteQuick/>
 </header>
 
 <style>
@@ -256,6 +262,7 @@
   .top-search input:hover, .top-search input:global([data-sheet~=hover]) { border-color: var(--muted); }
   .top-search input:focus-visible, .top-search input:global([data-sheet~=focus]) { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px var(--sel); }
   .top-jump { display: inline-flex; gap: 6px; align-items: center; padding: 3px 8px; font-size: 12px; color: var(--muted); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; transition: color var(--motion-fast) var(--ease), border-color var(--motion-fast) var(--ease); }
+  .app-top > :global([data-slot=note-quick]) { display: contents; }
   .top-jump:hover, .top-jump:global([data-sheet~=hover]) { color: var(--ink); border-color: var(--muted); }
   .top-edit { position: relative; display: inline-flex; gap: 6px; align-items: center; padding: 3px 8px; font-size: 12px; color: var(--accent); text-decoration: none; background: var(--sel); border: var(--border) solid var(--accent); border-radius: var(--radius); cursor: pointer; transition: background-color var(--motion-fast) var(--ease); }
   .top-edit:hover, .top-edit:global([data-sheet~=hover]) { background: var(--card); }
