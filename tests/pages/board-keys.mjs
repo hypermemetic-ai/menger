@@ -357,13 +357,13 @@ export default async (ctx) => {
     const want = "/studio/#/page/" + encodeURIComponent("#/f/ready");
     assert(((await pencil.getAttribute("href")) ?? "") === want, `the pencil goes to ${want}: ${await pencil.getAttribute("href")}`);
     assert(((await pencil.textContent()) ?? "").includes(want.replace("/studio/", "")) || ((await pencil.getAttribute("title")) ?? "").includes("#/f/ready"), "its tooltip names where it goes");
-    // The host's overlay lists it under app-top.
+    // The host's overlay lists it under the global keys.
     await calm(page);
     await page.keyboard.press("?");
     const overlay = page.locator("[data-engine-keys]");
     await eventually("? opens the overlay", async () => (await overlay.count()) === 1, 2_000);
-    const mine = await overlay.locator("[data-component=app-top] [data-chord]").evaluateAll((els) => els.map((e) => [e.getAttribute("data-chord"), e.querySelector("[data-label]")?.textContent ?? ""]));
-    assert(mine.some(([c, l]) => c === "ctrl+e" && l.includes("edit this page")), `the overlay lists ctrl+e · edit this page under app-top: ${JSON.stringify(mine)}`);
+    const mine = await overlay.locator("[data-component=keys-global] [data-chord]").evaluateAll((els) => els.map((e) => [e.getAttribute("data-chord"), e.querySelector("[data-label]")?.textContent ?? ""]));
+    assert(mine.some(([c, l]) => c === "ctrl+e" && l.includes("edit this page")), `the overlay lists ctrl+e · edit this page under keys-global: ${JSON.stringify(mine)}`);
     await page.keyboard.press("Escape");
     await calm(page);
     await page.keyboard.press("Control+e");

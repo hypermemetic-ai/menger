@@ -117,9 +117,7 @@
     close();
   }
 
-  b.keys({
-    "ctrl+k": { to: show, label: "jump to a ticket" },
-  });
+  // ctrl+k is keys-global's: it emits `palette.open`, as the bar's button does.
   b.on("palette.open", show);
   b.on("palette.close", close);
   // The open palette's keys: bound while it is open, let go when it closes.

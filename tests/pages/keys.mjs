@@ -174,6 +174,52 @@ export default async (ctx) => {
     assert(reds.length === 0, `${reds.length} chords reached the page or the browser:\n  ${reds.join("\n  ")}`);
   });
 
+  // The global keys: one component (keys-global) binds every page-wide chord and emits its action on the
+  // bus; it rides in app-top, the `top` of every layout, so each chord is on every page with the top bar.
+  await test("the_global_keys_are_one_registry_on_every_page", async () => {
+    const ui = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "..", "ui");
+    const slots = JSON.parse(fs.readFileSync(path.join(ui, "slots.json"), "utf8"));
+    const bare = Object.entries(slots).filter(([, s]) => "palette" in s && s.top !== "app-top").map(([l]) => l);
+    assert(bare.length === 0, `a layout's top is not app-top, so it has no global keys: ${bare.join(", ")}`);
+    assert(fs.readFileSync(path.join(ui, "src", "app-top.svelte"), "utf8").includes('"plexus-ui:keys-global"'), "app-top places keys-global");
+    const GLOBAL = ["ctrl+k", "ctrl+m", "ctrl+alt+n", "alt+meta+n", "ctrl+s", "meta+s", "ctrl+e"];
+    const id = make("keys everywhere", "a body\n");
+    const reds = [];
+    for (const route of ["#/board", "#/queue", "#/search/keys", `#/ticket/${id}`, "#/"]) {
+      const { context, page } = await at(route, topUp);
+      try {
+        await focus(page, "body");
+        await press(page, "?");
+        await eventually(`${route}: the overlay opens`, async () => (await page.locator("[data-engine-keys]").count()) === 1, 2_000);
+        const groups = await page.locator("[data-engine-keys] [data-component]").evaluateAll((els) => els.map((e) => [e.getAttribute("data-component"), [...e.querySelectorAll("[data-chord]")].map((c) => c.getAttribute("data-chord"))]));
+        const mine = groups.filter(([c]) => c === "keys-global");
+        if (mine.length !== 1 || JSON.stringify([...mine[0][1]].sort()) !== JSON.stringify([...GLOBAL].sort())) reds.push(`${route}: keys-global lists ${JSON.stringify(mine)}`);
+        // Nothing else binds a global chord, but an editor's own ctrl+k and ctrl+s where it is on the page.
+        const twice = groups.filter(([c]) => c !== "keys-global" && c !== "editor-body").flatMap(([c, chords]) => chords.filter((ch) => GLOBAL.includes(ch)).map((ch) => `${c} binds ${ch}`));
+        if (twice.length) reds.push(`${route}: ${twice.join(", ")}`);
+        await page.keyboard.press("Escape");
+        await eventually(`${route}: the overlay closes`, async () => (await page.locator("[data-engine-keys]").count()) === 0, 2_000);
+        // The note's chord from a field and from the body, and the palette's: each the host's, each acted on.
+        for (const where of ["input", "body"]) {
+          await focus(page, where);
+          const seen = (await press(page, "Control+m")).at(-1);
+          if (!seen || seen.prevented !== true || seen.reached) reds.push(`${route} ctrl+m in ${where}: ${JSON.stringify(seen)}`);
+          await sleep(150);
+          if ((await page.locator("[data-surface=note-quick] [data-note-open]").count()) !== 1) reds.push(`${route} ctrl+m in ${where}: no note window`);
+          await page.keyboard.press("Escape");
+          await eventually(`${route}: the note closes`, async () => (await page.locator("[data-note-open]").count()) === 0, 2_000);
+        }
+        await focus(page, "body");
+        await press(page, "Control+k");
+        await sleep(150);
+        if ((await page.locator("input[data-palette-input]").count()) !== 1) reds.push(`${route} ctrl+k: no palette`);
+      } finally {
+        await context.close();
+      }
+    }
+    assert(reds.length === 0, `the global keys:\n  ${reds.join("\n  ")}`);
+  });
+
   await test("the_overlay_lists_the_editors_chords", async () => {
     const id = make("keys overlay", "a body\n");
     const { context, page } = await at(`#/edit/${id}`, editorUp);
