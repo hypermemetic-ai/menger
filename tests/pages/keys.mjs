@@ -182,7 +182,7 @@ export default async (ctx) => {
     const bare = Object.entries(slots).filter(([, s]) => "palette" in s && s.top !== "app-top").map(([l]) => l);
     assert(bare.length === 0, `a layout's top is not app-top, so it has no global keys: ${bare.join(", ")}`);
     assert(fs.readFileSync(path.join(ui, "src", "app-top.svelte"), "utf8").includes('"plexus-ui:keys-global"'), "app-top places keys-global");
-    const GLOBAL = ["ctrl+k", "ctrl+m", "ctrl+alt+n", "alt+meta+n", "ctrl+s", "meta+s", "ctrl+e"];
+    const GLOBAL = ["ctrl+k", "ctrl+shift+l", "shift+meta+l", "g n", "ctrl+alt+n", "alt+meta+n", "ctrl+s", "meta+s", "ctrl+e"];
     const id = make("keys everywhere", "a body\n");
     const reds = [];
     for (const route of ["#/board", "#/queue", "#/search/keys", `#/ticket/${id}`, "#/"]) {
@@ -202,10 +202,10 @@ export default async (ctx) => {
         // The note's chord from a field and from the body, and the palette's: each the host's, each acted on.
         for (const where of ["input", "body"]) {
           await focus(page, where);
-          const seen = (await press(page, "Control+m")).at(-1);
-          if (!seen || seen.prevented !== true || seen.reached) reds.push(`${route} ctrl+m in ${where}: ${JSON.stringify(seen)}`);
+          const seen = (await press(page, "Control+Shift+L")).at(-1);
+          if (!seen || seen.prevented !== true || seen.reached) reds.push(`${route} ctrl+shift+l in ${where}: ${JSON.stringify(seen)}`);
           await sleep(150);
-          if ((await page.locator("[data-surface=note-quick] [data-note-open]").count()) !== 1) reds.push(`${route} ctrl+m in ${where}: no note window`);
+          if ((await page.locator("[data-surface=note-quick] [data-note-open]").count()) !== 1) reds.push(`${route} ctrl+shift+l in ${where}: no note window`);
           await page.keyboard.press("Escape");
           await eventually(`${route}: the note closes`, async () => (await page.locator("[data-note-open]").count()) === 0, 2_000);
         }

@@ -28,7 +28,7 @@
     ["g q", ["g", "q"], "queue"],
     ["g w", ["g", "w"], "waves"],
     ["ctrl+k", ["ctrl", "k"], "jump"],
-    ["ctrl+m", ["ctrl", "m"], "note"],
+    ["ctrl+shift+l", ["ctrl", "shift", "l"], "note"],
     ["escape", ["esc"], "clear"],
     ["?", ["?"], "every key"],
   ];

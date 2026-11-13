@@ -1,5 +1,5 @@
 // A note written from anywhere (note-quick, placed by app-top's bound mark):
-// ctrl+m opens a small window on any page with the top bar — the global
+// ctrl+shift+l opens a small window on any page with the top bar — the global
 // keys' chord (keys-global emits `note.open`), ctrl+alt+n too, and the bar's
 // `note` button; in a field and in the editor as well. ctrl+enter keeps it
 // as a doc (`docs.create { title, body }`, the first line its title when
@@ -28,8 +28,15 @@ export default async (ctx) => {
       await eventually(`${route}: ctrl+alt+n opens the note window`, async () => (await win(page).count()) === 1, 3_000);
       await page.keyboard.press("Escape");
       await eventually(`${route}: escape closes it`, async () => (await win(page).count()) === 0, 2_000);
-      await page.keyboard.press("Control+m");
-      await eventually(`${route}: ctrl+m opens the note window`, async () => (await win(page).count()) === 1, 3_000);
+      // `g n`, plain keys outside a text field: the chord no browser takes.
+      await page.locator("body").click({ position: { x: 5, y: 5 } }).catch(() => {});
+      await page.keyboard.press("g");
+      await page.keyboard.press("n");
+      await eventually(`${route}: g n opens the note window`, async () => (await win(page).count()) === 1, 3_000);
+      await page.keyboard.press("Escape");
+      await eventually(`${route}: escape closes it`, async () => (await win(page).count()) === 0, 2_000);
+      await page.keyboard.press("Control+Shift+L");
+      await eventually(`${route}: ctrl+shift+l opens the note window`, async () => (await win(page).count()) === 1, 3_000);
       const body = win(page).locator("[data-field=note-body]");
       assert(await body.evaluate((e) => e === document.activeElement), `${route}: the note's text has the focus`);
       const keep = win(page).locator("[data-action=\"note.keep\"]");
@@ -42,7 +49,7 @@ export default async (ctx) => {
       assert(!(await sentCalls(page)).some((c) => c.method === "docs.create"), `${route}: escape keeps nothing`);
 
       // Opened again it is empty; the first line is the title; ctrl+enter keeps it.
-      await page.keyboard.press("Control+m");
+      await page.keyboard.press("Control+Shift+L");
       await eventually(`${route}: opened again`, async () => (await win(page).count()) === 1, 2_000);
       assert((await body.inputValue()) === "", `${route}: opened again, the note is empty`);
       const text = `# kiln note ${route}\n\nfire twice a week`;
@@ -83,8 +90,8 @@ export default async (ctx) => {
     // The caret in the editor's text, then in the top's search box: the chord is the host's in both.
     for (const [where, field] of [["the editor", text], ["the search box", page.locator("[data-surface=app-top] [data-form=search] input")]]) {
       await field.click();
-      await page.keyboard.press("Control+m");
-      await eventually(`ctrl+m in ${where} opens the note window`, async () => (await win(page).count()) === 1, 3_000);
+      await page.keyboard.press("Control+Shift+L");
+      await eventually(`ctrl+shift+l in ${where} opens the note window`, async () => (await win(page).count()) === 1, 3_000);
       assert(await win(page).locator("[data-field=note-body]").evaluate((e) => e === document.activeElement), `from ${where}, the note's text has the focus`);
       await page.keyboard.press("Escape");
       await eventually(`escape closes it (${where})`, async () => (await win(page).count()) === 0, 2_000);
