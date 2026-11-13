@@ -1198,4 +1198,120 @@ graph TD
       await context.close();
     }
   });
+
+  // EDITOR-26 (the owner, 2026-11-13: "I need cmd z on document edits"): undo and redo are the engine's
+  // keys, so they reach the body whatever has focus on its page — after Escape, on a button, on the page —
+  // on Linux's keys (ctrl) and on a Mac's (meta, Chromium told `navigator.platform` is MacIntel before the
+  // page loads, as CodeMirror reads it). With the caret in the text one press is one step; with the focus in
+  // another field (a doc's title, the top's search) the key is that field's own undo, the body untouched.
+  await test("undo_and_redo_reach_the_body_in_every_focus", async () => {
+    const BODY0 = "first line\n\nsecond line\n";
+    const MAC = () => { Object.defineProperty(Navigator.prototype, "platform", { get: () => "MacIntel", configurable: true }); };
+    const at = (s, n) => s.slice(0, 10) + n + s.slice(10);
+    const reds = [];
+    const check = (ok, what) => { if (!ok) reds.push(what); };
+    const settle = () => sleep(800); // past CodeMirror's and Yjs's 500 ms grouping: the next key is a step of its own
+    for (const [os, mod] of [["linux", "Control"], ["mac", "Meta"]]) {
+      for (const kind of ["doc", "ticket"]) {
+        const where = `${os} ${kind}`;
+        // A body of its own each time: what one run leaves is not the next's start.
+        const ticketId = kind === "ticket" ? make(`undo everywhere ${os}`, BODY0) : null;
+        const docId = kind === "doc" ? sy("docs", "create", "--title", "Undone", "--body", bodyFile(`undone-${os}`, BODY0)).find((e) => e.type === "created").doc.id : null;
+        const route = kind === "doc" ? `#/doc/${docId}` : `#/ticket/${ticketId}`;
+        const { context, page } = await openPage(route);
+        try {
+          // The browser's own undo, said as a `historyUndo` / `historyRedo` beforeinput: none, when the press is the engine's.
+          await context.addInitScript(() => { window.__native = []; addEventListener("beforeinput", (e) => { if (/^history/.test(e.inputType)) window.__native.push(e.inputType); }, true); });
+          if (os === "mac") await context.addInitScript(MAC);
+          await page.reload();
+          await eventually(`${where}: the editor`, async () => (await page.locator(".cm-content[data-field=body-source]").count()) === 1, 8_000);
+          check(await page.evaluate(() => navigator.platform) === (os === "mac" ? "MacIntel" : navigator.platform), `${where}: the platform`);
+          const start = await src(page);
+          check(start === BODY0, `${where}: the body as made (${JSON.stringify(start)})`);
+          // First, on a fresh page, a change no key typed — bold, the engine's command — then Escape and undo:
+          // the browser's own undo stack holds nothing of the editor's yet, so only the engine's key can undo it.
+          await page.evaluate((s) => { const v = document.querySelector(s).editorView; v.focus(); v.dispatch({ selection: { anchor: 12, head: 18 } }); }, BODY);
+          await page.keyboard.press(`${mod}+b`);
+          await settle();
+          await page.keyboard.press("Escape");
+          await page.keyboard.press(`${mod}+z`);
+          await sleep(150);
+          check(await src(page) === BODY0, `${where}: ${mod}+z after Escape undoes a bold on a fresh page (${JSON.stringify(await src(page))})`);
+          await page.evaluate(() => window.__native.splice(0));
+          // Type, Escape (the editor's own key: it blurs), then undo and redo with the focus on the page.
+          await caretAt(page, 10);
+          await page.keyboard.type(" typed");
+          await settle();
+          await page.keyboard.press("Escape");
+          const focus = await page.evaluate(() => document.activeElement?.tagName);
+          check(focus === "BODY", `${where}: Escape leaves the focus on the page (${focus})`);
+          const y0 = await page.evaluate(() => scrollY);
+          await page.keyboard.press(`${mod}+z`);
+          await sleep(150);
+          check(await src(page) === BODY0, `${where}: ${mod}+z after Escape undoes (${JSON.stringify(await src(page))})`);
+          check(await page.evaluate(() => document.activeElement?.tagName) === "BODY", `${where}: undo leaves the focus where it was`);
+          check(await page.evaluate(() => scrollY) === y0, `${where}: undo leaves the page where it was`);
+          await page.keyboard.press(`${mod}+Shift+z`);
+          await sleep(150);
+          check(await src(page) === at(BODY0, " typed"), `${where}: ${mod}+shift+z redoes (${JSON.stringify(await src(page))})`);
+          await page.keyboard.press(`${mod}+z`);
+          await sleep(150);
+          // The undo is saved as any edit is.
+          if (kind === "ticket") await eventually(`${where}: the undo saved`, async () => get(ticketId).body === BODY0, 5_000).catch(() => check(false, `${where}: the undo saved (${JSON.stringify(get(ticketId).body)})`));
+          else await eventually(`${where}: the undo saved`, async () => docOf(docId).body === BODY0, 5_000).catch(() => check(false, `${where}: the undo saved (${JSON.stringify(docOf(docId).body)})`));
+          const native = await page.evaluate(() => window.__native.splice(0));
+          check(native.length === 0, `${where}: the browser's own undo never ran (${native.join(", ")})`);
+          // With the caret in the text: one press, one step.
+          await caretAt(page, 10);
+          await page.keyboard.type(" one");
+          await settle();
+          await page.keyboard.type(" two");
+          await settle();
+          await page.keyboard.press(`${mod}+z`);
+          await sleep(150);
+          check(await src(page) === at(BODY0, " one"), `${where}: one ${mod}+z in the text undoes one step (${JSON.stringify(await src(page))})`);
+          await page.keyboard.press(`${mod}+z`);
+          await sleep(150);
+          check(await src(page) === BODY0, `${where}: a second ${mod}+z the step before (${JSON.stringify(await src(page))})`);
+          // Undo, the focus on a control of the editor's (its image button): the body's.
+          await caretAt(page, 10);
+          await page.keyboard.type(" btn");
+          await settle();
+          await page.locator("[data-surface=editor-body] [data-action=image]").focus();
+          await page.keyboard.press(`${mod}+z`);
+          await sleep(150);
+          check(await src(page) === BODY0, `${where}: ${mod}+z on the editor's button undoes the body (${JSON.stringify(await src(page))})`);
+          // A change no key typed (bold, the engine's command on a selection), then Escape: undone the same.
+          await page.evaluate((s) => { const v = document.querySelector(s).editorView; v.focus(); v.dispatch({ selection: { anchor: 0, head: 5 } }); }, BODY);
+          await page.keyboard.press(`${mod}+b`);
+          await sleep(150);
+          check(await src(page) === "**first** line\n\nsecond line\n", `${where}: ${mod}+b bolds (${JSON.stringify(await src(page))})`);
+          await settle();
+          await page.keyboard.press("Escape");
+          await page.keyboard.press(`${mod}+z`);
+          await sleep(150);
+          check(await src(page) === BODY0, `${where}: ${mod}+z after bold and Escape undoes the bold (${JSON.stringify(await src(page))})`);
+          // Another field's own undo: a doc's title, the top's search on a ticket's page.
+          await caretAt(page, 10);
+          await page.keyboard.type(" kept");
+          await settle();
+          const field = kind === "doc" ? page.locator("[data-surface=editor-body] [data-field=title]") : page.locator("[data-surface=app-top] [data-form=search] input");
+          const value = (f) => f.evaluate((el) => ("value" in el ? el.value : el.textContent));
+          await field.click();
+          await page.keyboard.press("End");
+          const was = await value(field);
+          await page.keyboard.type("XYZ");
+          check((await value(field)) === was + "XYZ", `${where}: typed into the field (${JSON.stringify(await value(field))})`);
+          await page.keyboard.press(`${mod}+z`);
+          await sleep(150);
+          check((await value(field)) === was, `${where}: ${mod}+z in the field undoes the field (${JSON.stringify(await value(field))}, was ${JSON.stringify(was)})`);
+          check(await src(page) === at(BODY0, " kept"), `${where}: ${mod}+z in the field leaves the body (${JSON.stringify(await src(page))})`);
+          if (kind === "doc") { await page.keyboard.press("Enter"); await sleep(PAUSE + 300); }
+        } finally {
+          await context.close();
+        }
+      }
+    }
+    assert(reds.length === 0, `${reds.length} wrong:\n  ${reds.join("\n  ")}`);
+  });
 };

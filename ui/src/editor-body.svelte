@@ -24,7 +24,7 @@
      another tab), and a drawn block's lone file or URL is drawn by
      media-draw (a player, a PDF viewer, a file card, a link card). EDITOR-6: a selection and one line become a
      queued request. Keys: mod+b / mod+i bold and italic, mod+k a link,
-     mod+z / mod+shift+z undo and redo, mod+s saves now, mod+enter asks an
+     mod+z / mod+shift+z (and ctrl+y) undo and redo in every focus on the page (EDITOR-26), mod+s saves now, mod+enter asks an
      agent. CodeMirror comes from ../plexus-ui/package.json (the node_modules
      the svelte/1 build reads), bundled into this module by the tool.
      V2-29: the same surface writes a document of the docs service (`kind:
@@ -137,6 +137,36 @@
     }
     return i;
   }
+
+  // EDITOR-26: undo and redo, whatever has focus. Every editor on the page registers here (a sheet may hold
+  // more than one); each binds the keys with `only`, so one press runs one of these functions, which picks:
+  // the editor whose text has the caret; else, with the focus in another field of the page (a title, an
+  // input, a textarea, a select), that field's own undo — the engine took the press, so it is asked of the
+  // browser (`execCommand`); else the editor last focused or written, without taking the focus.
+  const editors = [];
+  let lastEditor = null;
+  /** The editable field the focus is in, outside any editor's text, or none. */
+  function fieldOf(el) {
+    while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
+    if (!el || el === document.body || el === document.documentElement) return null;
+    if (el.tagName === "IFRAME") return el; // a framed page hears its own keys; nothing of the body's
+    return el.matches?.("input, textarea, select") || el.isContentEditable ? el : null;
+  }
+  export function undoKey(redo) {
+    const mine = editors.find((e) => e.view()?.hasFocus);
+    if (mine) return void mine.step(redo);
+    const field = fieldOf(document.activeElement);
+    if (field) { if (field.tagName !== "IFRAME") document.execCommand(redo ? "redo" : "undo"); return; }
+    const e = lastEditor && editors.includes(lastEditor) ? lastEditor : editors[editors.length - 1];
+    e?.step(redo);
+  }
+  export function editorHere(e) {
+    editors.push(e);
+    return {
+      used() { lastEditor = e; },
+      gone() { const i = editors.indexOf(e); if (i >= 0) editors.splice(i, 1); if (lastEditor === e) lastEditor = null; },
+    };
+  }
 </script>
 
 <script>
@@ -150,7 +180,7 @@
   import { drawAll } from "./media-draw.svelte";
   import { Annotation, EditorSelection, EditorState, StateEffect, StateField, Transaction } from "@codemirror/state";
   import { Decoration, EditorView, WidgetType, keymap, placeholder } from "@codemirror/view";
-  import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+  import { defaultKeymap, history, historyKeymap, indentWithTab, undo as cmUndo, redo as cmRedo } from "@codemirror/commands";
   import { markdown as markdownSupport, markdownKeymap, markdownLanguage } from "@codemirror/lang-markdown";
   import { syntaxTree } from "@codemirror/language";
   import * as Y from "yjs";
@@ -797,8 +827,17 @@
     commands[`${mod}+i`] = { to: inEditor(wrapWith("*")), label: "italic" };
     commands[`${mod}+k`] = { to: link, label: "a link (in the text; elsewhere, jump to a ticket)", only: true };
     commands[`${mod}+enter`] = { to: inEditor(() => openAsk()), label: "ask an agent about the selection" };
+    // EDITOR-26: undo and redo in every focus (`undoKey`, above): in the text, after Escape, on a button.
+    // The engine takes the press before CodeMirror, so its own Mod-z never runs too: one press, one step.
+    commands[`${mod}+z`] = { to: () => undoKey(false), label: "undo", only: true };
+    commands[`${mod}+shift+z`] = { to: () => undoKey(true), label: "redo", only: true };
   }
+  commands["ctrl+y"] = { to: () => undoKey(true), label: "redo", only: true };
   b.keys(commands);
+  // A doc's undo is its CRDT's (Yjs's UndoManager, y-codemirror.next's commands); a ticket's CodeMirror's history.
+  const yUndo = yUndoManagerKeymap.find((k) => k.key === "Mod-z").run, yRedo = yUndoManagerKeymap.find((k) => k.key === "Mod-Shift-z").run;
+  const undoHere = editorHere({ view: () => view, step: (redo) => { if (view) (isDoc ? (redo ? yRedo : yUndo) : (redo ? cmRedo : cmUndo))(view); } });
+  $effect(() => () => undoHere.gone());
 
   // ── EDITOR-5, EDITOR-10: anything from outside ───────────────────────────
   // A file of any kind and size, a URL alone, pasted HTML, an image from another tab: media-ingest's,
@@ -905,6 +944,7 @@
     if (!s) return done(false, `the body no longer holds this <${d.name}>: nothing saved`);
     if (s.text !== d.was) return done(false, "this was changed since it was drawn (someone else's edit): nothing saved");
     wroteOwn(d.next);
+    undoHere.used(); // EDITOR-26: an undo off the text takes this save back
     view.dispatch({ changes: { from: s.from, to: s.to, insert: d.next }, scrollIntoView: false });
     if (isDoc) return done(true); // the CRDT has it
     await flush();
@@ -955,6 +995,7 @@
           EditorView.updateListener.of((u) => {
             if (u.selectionSet) hasSelection = !u.state.selection.main.empty;
             if (u.focusChanged && u.view.hasFocus !== u.state.field(focused)) queueMicrotask(() => view?.dispatch({ effects: focusFx.of(view.hasFocus) }));
+            if (u.focusChanged && u.view.hasFocus) undoHere.used(); // EDITOR-26: the editor an undo off the text is for
             if (u.docChanged && !u.transactions.some((tr) => tr.annotation(Outside))) edited();
             if (isDoc && (u.docChanged || u.geometryChanged || u.viewportChanged)) moved();
           }),
