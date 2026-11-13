@@ -1703,11 +1703,19 @@ count, search, the links, the palette's button), `bar`
 board's keymap (`keys-help`), `main`, `bulk` the bulk bar (`bulk-bar`,
 hearing the rows' `board.selected`) and `palette`. The board's keys are `board-rows-sv`'s (FRAME-36's
 `bus.keys`: `j`/`k`, `enter`, `x`, `shift+x`, `c`, `/` the filter line,
-`g b`, `g r`, `g w`, `escape`; `ctrl+k` the palette's own; `?` the host's
+`g b`, `g r`, `g w`, `escape`; `?` the host's
 overlay), its selection
 `[data-selected]` and `[data-checked]`, said on the bus as `board.selected
 { ids }` and `board.focus { id }`. A right-click on a section puts another
 component there (`ui slots set`), and `ui slots clear` takes it back.
+**The global keys are one component's**, `keys-global`,
+placed by `app-top`'s bound mark and so on every page with the top bar: its
+`GLOBAL` lists every page-wide chord and the action it emits on the bus —
+`ctrl+k` `palette.open`, `ctrl+m` (and `ctrl+alt+n`) `note.open`, `ctrl+s`
+`page.save`, `ctrl+e` `page.edit` — and what carries an action out hears it
+there (`b.on`), as it hears the top's buttons. A new global key is a line of
+`GLOBAL`; no other component binds a page-wide chord. A chord is matched by
+the letter it types, so one with option held does nothing on a Mac.
 FRAME-25: the board rides FRAME-19's bus — the
 palette's `live` held by `when` and its typing coalesced by `debounce_ms: 80`,
 the window's by `debounce_ms: 20`, in the host's registry (no timer of

@@ -1,8 +1,9 @@
 // A note written from anywhere (note-quick, placed by app-top's bound mark):
-// ctrl+alt+n (cmd+option+n on a Mac) opens a small window on any page with
-// the top bar, the bar's `note` button too; ctrl+enter keeps it as a doc
-// (`docs.create { title, body }`, the first line its title when none is
-// typed), escape closes it and keeps nothing. Run alone by
+// ctrl+m opens a small window on any page with the top bar — the global
+// keys' chord (keys-global emits `note.open`), ctrl+alt+n too, and the bar's
+// `note` button; in a field and in the editor as well. ctrl+enter keeps it
+// as a doc (`docs.create { title, body }`, the first line its title when
+// none is typed), escape closes it and keeps nothing. Run alone by
 // `node tests/pages_browser.mjs --group notes`.
 //
 // Marks: `[data-surface=note-quick]`, `[data-note-open]` (the window),
@@ -22,8 +23,13 @@ export default async (ctx) => {
       const { page, context } = await openPage(route);
       await page.locator("[data-surface=app-top]").first().waitFor({ timeout: 15_000 });
       await sleep(300);
+      // Each of the note's chords opens it; escape closes it.
       await page.keyboard.press("Control+Alt+n");
       await eventually(`${route}: ctrl+alt+n opens the note window`, async () => (await win(page).count()) === 1, 3_000);
+      await page.keyboard.press("Escape");
+      await eventually(`${route}: escape closes it`, async () => (await win(page).count()) === 0, 2_000);
+      await page.keyboard.press("Control+m");
+      await eventually(`${route}: ctrl+m opens the note window`, async () => (await win(page).count()) === 1, 3_000);
       const body = win(page).locator("[data-field=note-body]");
       assert(await body.evaluate((e) => e === document.activeElement), `${route}: the note's text has the focus`);
       const keep = win(page).locator("[data-action=\"note.keep\"]");
@@ -36,7 +42,7 @@ export default async (ctx) => {
       assert(!(await sentCalls(page)).some((c) => c.method === "docs.create"), `${route}: escape keeps nothing`);
 
       // Opened again it is empty; the first line is the title; ctrl+enter keeps it.
-      await page.keyboard.press("Control+Alt+n");
+      await page.keyboard.press("Control+m");
       await eventually(`${route}: opened again`, async () => (await win(page).count()) === 1, 2_000);
       assert((await body.inputValue()) === "", `${route}: opened again, the note is empty`);
       const text = `# kiln note ${route}\n\nfire twice a week`;
@@ -65,6 +71,25 @@ export default async (ctx) => {
     await eventually("kept", async () => (await kept.count()) === 1, 5_000);
     const d = doc(await kept.getAttribute("data-note-kept"));
     assert(d?.title === "glaze list" && d.body === "celadon\ntenmoku", `the typed title and the text: ${JSON.stringify(d)}`);
+    await context.close();
+  });
+
+  await test("a_note_opens_from_a_field_and_from_the_editor", async () => {
+    const id = sy("docs", "create", "--title", "Kiln log").find((e) => e.type === "created").doc.id;
+    const { page, context } = await openPage(`#/doc/${id}`);
+    const text = page.locator(".cm-content[data-field=body-source]");
+    await text.waitFor({ timeout: 15_000 });
+    await sleep(300);
+    // The caret in the editor's text, then in the top's search box: the chord is the host's in both.
+    for (const [where, field] of [["the editor", text], ["the search box", page.locator("[data-surface=app-top] [data-form=search] input")]]) {
+      await field.click();
+      await page.keyboard.press("Control+m");
+      await eventually(`ctrl+m in ${where} opens the note window`, async () => (await win(page).count()) === 1, 3_000);
+      assert(await win(page).locator("[data-field=note-body]").evaluate((e) => e === document.activeElement), `from ${where}, the note's text has the focus`);
+      await page.keyboard.press("Escape");
+      await eventually(`escape closes it (${where})`, async () => (await win(page).count()) === 0, 2_000);
+    }
+    assert(!(await sentCalls(page)).some((c) => c.method === "docs.create"), "nothing was kept");
     await context.close();
   });
 };

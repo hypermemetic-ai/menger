@@ -34,7 +34,9 @@
   import FiltersSaved from "plexus-ui:filters-saved";
   import HelloList from "plexus-ui:hello-list";
   import JumpPaletteSv from "plexus-ui:jump-palette-sv";
+  import KeysGlobal from "plexus-ui:keys-global";
   import KeysHelp from "plexus-ui:keys-help";
+  import NoteQuick from "plexus-ui:note-quick";
   import NavChildrenSv from "plexus-ui:nav-children-sv";
   import NavCounts from "plexus-ui:nav-counts";
   import NavFacets from "plexus-ui:nav-facets";
@@ -190,6 +192,8 @@
       ["filter-line-sv", FilterLineSv, (t) => ({ filter: "status Ready" }), ["hover", "focus"], { refused: { filter: REFUSED } }],
       ["bulk-bar", BulkBar, (t) => ({ ids: t }), ["hover", "focus", "disabled"], { loading: { sheet: "loading" } }, false, { disabled: ["[data-action=dry-run]"] }],
       ["keys-help", KeysHelp, F, [], {}],
+      // The global keys, drawn as their list: every page-wide chord and the action it emits.
+      ["keys-global", KeysGlobal, (t) => ({ sheet: "list" }), [], {}],
       ["ticket-chip-sv", TicketChipSv, ID, ["hover", "focus"], gone],
       // V2-42: a ticket's link, from the one helper (by name here: the sheet's id has no uid in hand).
       ["ticket-links", TicketLinks, ID, [], {}],
@@ -207,6 +211,7 @@
     ]],
     ["the palette and the search", [
       ["jump-palette-sv", JumpPaletteSv, (t) => ({ sheet: code(t) }), ["hover", "focus", "selected"], { empty: { sheet: "zzqqxxjj" } }, false, HITS],
+      ["note-quick", NoteQuick, (t) => ({ sheet: "fire twice a week" }), ["focus", "disabled"], {}, false, { focus: [".note-body"], disabled: [".note-keep"] }],
       // STUDIO-12: its jump button is app-top's now — disabled is the pager's prev, on a query the bodies answer.
       ["search-page", SearchPage, (t) => ({ q: t }), ["hover", "focus", "disabled", "selected"], { disabled: { q: "ready" }, loading: { q: t0(), sheet: "loading" }, empty: { q: "zzqqxxjj" }, refused: { q: "ready", filter: REFUSED } }, true, { disabled: ["[data-action=prev]"] }],
     ]],

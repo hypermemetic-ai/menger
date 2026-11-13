@@ -261,7 +261,8 @@ export default async ({ test, assert, eventually, sleep, openPage, sy, groupsNow
     };
     await blank();
     const closed = await chords();
-    assert(JSON.stringify(closed) === JSON.stringify(["ctrl+k"]), `closed, the palette holds ctrl+k alone: ${JSON.stringify(closed)}`);
+    // ctrl+k is the global keys' (keys-global emits palette.open): closed, the palette holds no key.
+    assert(JSON.stringify(closed) === JSON.stringify([]), `closed, the palette holds no key: ${JSON.stringify(closed)}`);
     // Ten opens and closes: nothing left behind.
     for (let i = 0; i < 10; i++) {
       taken(await pressed(page, "Control+k"), `ctrl+k (${i + 1})`);
@@ -279,7 +280,7 @@ export default async ({ test, assert, eventually, sleep, openPage, sy, groupsNow
     await eventually("open", async () => (await palInput(page).count()) === 1, 2_000);
     await pal(page).locator(".palette-foot").click();
     const open = await chords();
-    assert(JSON.stringify(open) === JSON.stringify(["arrowdown", "arrowup", "ctrl+k", "enter", "escape"]), `open, its five keys once each: ${JSON.stringify(open)}`);
+    assert(JSON.stringify(open) === JSON.stringify(["arrowdown", "arrowup", "enter", "escape"]), `open, its four keys once each: ${JSON.stringify(open)}`);
   });
 
   await test("a_corrected_query_says_so", async () => {
