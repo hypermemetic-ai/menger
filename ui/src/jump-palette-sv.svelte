@@ -15,10 +15,24 @@
      (`>waves to GLAZE-12`) fills its route with it, and without one says
      what it needs. A command asks no ticket.
      SURFACE-10: `sheet`, a query, draws it open on that query for the sheet
-     (#/sheet) — its field not focused, its keys not bound. -->
+     (#/sheet) — its field not focused, its keys not bound.
+     ARCHIVE-9 (the owner, 2026-11-13: "we need it on the quick search
+     too"): the archive switch, as the search page's (ARCHIVE-8) — on, both
+     lists ask under `archived or not archived` (a filter that names the
+     archive admits it) and an archived row says so; off, as before. It sits
+     beside the field (Tab from the field reaches it), and ctrl+i flips it
+     while the palette is open, the caret staying in the field. Off at every
+     page load; kept for the page's life (`kept`, the module's), through the
+     palette's closes and remounts. `>search words` with it on routes to
+     #/search/words/include/archived. -->
 <script module>
   // PERF-15: a row is the four fields drawn, not the whole summary row.
-  const FIELDS = ["id", "uid", "title", "kind", "status"];
+  // ARCHIVE-9: and `archived`, the mark (a live row carries none).
+  const FIELDS = ["id", "uid", "title", "kind", "status", "archived"];
+  /** ARCHIVE-9: the archive's filter — every ticket, archived or not. */
+  const EITHER = "archived or not archived";
+  /** ARCHIVE-9: the switch, kept while the page stays loaded (off at each load). */
+  const kept = { archived: false };
   export const uses = ["tickets.find", "tickets.search"];
 
   // [name, route (an argument appended), what the argument is].
@@ -61,8 +75,11 @@
   let need = $state("");
   const command = $derived(q.startsWith(">"));
   const fq = $derived(command ? "" : q);
-  const found = live({ snapshot: "tickets.find", params: () => ({ query: fq, limit: 12, fields: FIELDS }), key: "id", when: () => fq.length > 0, debounce_ms: 80 });
-  const searched = live({ snapshot: "tickets.search", params: () => ({ query: fq, limit: 8 }), key: "id", when: () => fq.length > 0, debounce_ms: 80 });
+  let archived = $state(kept.archived);
+  let field = $state(null);
+  const asks = () => (archived ? { filter: EITHER } : {});
+  const found = live({ snapshot: "tickets.find", params: () => ({ query: fq, limit: 12, fields: FIELDS, ...asks() }), key: "id", when: () => fq.length > 0, debounce_ms: 80 });
+  const searched = live({ snapshot: "tickets.search", params: () => ({ query: fq, limit: 8, ...asks() }), key: "id", when: () => fq.length > 0, debounce_ms: 80 });
   // Read through the stores, held from the start (as before SURFACE-8): a
   // getter read only while there is a query would let the collection go
   // between queries, and the next key would ask at once, past the debounce.
@@ -86,6 +103,12 @@
     sel = "";
     need = "";
   }
+  /** ARCHIVE-9: the archive switch, flipped (ctrl+i) or set (the box); the caret back in the field. */
+  function include(on = !archived) {
+    archived = kept.archived = on;
+    need = "";
+    field?.focus();
+  }
   function step(by) {
     if (!order.length) return;
     const at = Math.max(0, order.indexOf(current));
@@ -99,7 +122,7 @@
       need = `>${c.name} needs ${c.needs}: type it after the command`;
       return;
     }
-    b.navigate(c.route);
+    b.navigate(c.name === "search" && archived ? c.route + "/include/archived" : c.route);
     close();
   }
   function clicked(ev, c) {
@@ -128,6 +151,7 @@
       "arrowdown": { to: () => step(1), in_inputs: true, label: "the next hit" },
       "arrowup": { to: () => step(-1), in_inputs: true, label: "the hit before" },
       "enter": { to: choose, in_inputs: true, label: "open the selected" },
+      "ctrl+i": { to: () => include(), in_inputs: true, label: "include archived tickets, or not" },
     });
   });
   function focus(node) {
@@ -139,8 +163,14 @@
   {#if open}
     <div class="scrim" data-scrim onclick={close} aria-hidden="true"></div>
     <div class="palette-sheet" role="dialog" aria-label="jump to a ticket">
-      <input class="palette-input" data-palette-input spellcheck="false" autocomplete="off" use:focus
-             placeholder="jump to a ticket — an id or words; > for a command" bind:value={q} oninput={typed}/>
+      <div class="palette-head">
+        <input class="palette-input" data-palette-input spellcheck="false" autocomplete="off" use:focus bind:this={field}
+               aria-label="jump to a ticket" placeholder="jump to a ticket — an id or words; > for a command" bind:value={q} oninput={typed}/>
+        <label class="palette-arch" data-field="include" title="include archived tickets (ctrl+i)">
+          <input type="checkbox" data-action="archived" aria-keyshortcuts="Control+I" checked={archived} onchange={(e) => include(e.currentTarget.checked)}/>
+          include archived
+        </label>
+      </div>
       {#if command}
         <p class="palette-label">commands</p>
         <ul class="palette-hits" data-palette-commands>
@@ -153,7 +183,7 @@
       {:else if q !== ""}
         <ul class="palette-hits" data-palette-hits>
           {#each hits as f (f.id)}
-            <li><a class="palette-hit" data-palette-hit={f.id} data-selected={current === "f:" + f.id ? "" : undefined} href={ticketHref(f, base)} onclick={close}><span class="row-id">{f.id}</span> <span class="row-title">{f.title}</span></a></li>
+            <li><a class="palette-hit" data-palette-hit={f.id} data-selected={current === "f:" + f.id ? "" : undefined} data-archived={f.archived ? "" : undefined} href={ticketHref(f, base)} onclick={close}><span class="row-id">{f.id}</span> <span class="row-title">{f.title}</span>{#if f.archived}<span class="arch" data-field="archived">archived</span>{/if}</a></li>
           {/each}
         </ul>
         {#if $found.status === "pending"}<div class="palette-loading" data-loading><i></i><i></i></div>{/if}
@@ -161,12 +191,12 @@
         <p class="palette-label">in titles and bodies</p>
         <ul class="palette-hits search" data-search-hits>
           {#each best as h (h.id)}
-            <li><a class="palette-hit" data-search-hit={h.id} data-selected={current === "s:" + h.id ? "" : undefined} href={ticketHref(h, base)} onclick={close}><span class="row-id">{h.id}</span> <span class="row-title">{h.title}</span></a></li>
+            <li><a class="palette-hit" data-search-hit={h.id} data-selected={current === "s:" + h.id ? "" : undefined} data-archived={h.archived ? "" : undefined} href={ticketHref(h, base)} onclick={close}><span class="row-id">{h.id}</span> <span class="row-title">{h.title}</span>{#if h.archived}<span class="arch" data-field="archived">archived</span>{/if}</a></li>
           {/each}
         </ul>
         {#if $found.status === "live" && $searched.status === "live" && hits.length === 0 && best.length === 0}<p class="palette-empty" data-empty>Nothing says “{q}”.</p>{/if}
       {/if}
-      <div class="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>enter</kbd> {command ? "go" : "open"}</span><span><kbd>esc</kbd> close</span><span><kbd>{">"}</kbd> commands</span></div>
+      <div class="palette-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>enter</kbd> {command ? "go" : "open"}</span><span><kbd>esc</kbd> close</span><span><kbd>{">"}</kbd> commands</span><span class="foot-arch"><kbd>ctrl</kbd><kbd>i</kbd> archived {archived ? "on" : "off"}</span></div>
     </div>
   {/if}
 </div>
@@ -175,7 +205,8 @@
   .jump-palette .scrim { position: fixed; inset: 0; z-index: 9; background: var(--shadow); }
   .jump-palette .palette-sheet { position: fixed; z-index: 10; top: 12vh; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; width: min(640px, calc(100vw - 32px)); max-height: 70vh; overflow: hidden; background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-xl); box-shadow: 0 10px 30px var(--shadow); }
   .jump-palette[data-sheet-open] .palette-sheet { top: 8px; left: 8px; right: 8px; width: auto; max-height: calc(100% - 16px); transform: none; }
-  .jump-palette .palette-input { padding: 12px 14px; font-size: 14px; color: var(--ink); background: none; border: 0; border-bottom: var(--border) solid var(--line); outline: none; }
+  .jump-palette .palette-head { display: flex; align-items: center; border-bottom: var(--border) solid var(--line); }
+  .jump-palette .palette-input { flex: 1; min-width: 0; padding: 12px 14px; font-size: 14px; color: var(--ink); background: none; border: 0; outline: none; }
   .jump-palette .palette-input:focus-visible, .jump-palette .palette-input:global([data-sheet~=focus]) { box-shadow: inset 0 -2px 0 var(--focus); }
   .jump-palette .palette-hits { list-style: none; margin: 0; padding: 4px; overflow: auto; }
   .jump-palette .palette-hit, .jump-palette .palette-cmd { cursor: pointer; display: flex; gap: 10px; align-items: center; height: var(--pitch); padding: 0 10px; overflow: hidden; white-space: nowrap; color: var(--ink); text-decoration: none; border-radius: var(--radius); transition: background-color var(--motion-fast) var(--ease); }
@@ -184,6 +215,13 @@
   .jump-palette .palette-hit:focus-visible, .jump-palette .palette-cmd:focus-visible, .jump-palette .palette-hit:global([data-sheet~=focus]), .jump-palette .palette-cmd:global([data-sheet~=focus]) { outline: none; background: var(--row-sel); box-shadow: inset 0 0 0 2px var(--focus); }
   .jump-palette .row-id { flex: none; color: var(--accent); font-variant-numeric: tabular-nums; }
   .jump-palette .row-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  /* ARCHIVE-9: the switch beside the field, and the archived mark as the search page draws it (ARCHIVE-8). */
+  .jump-palette .palette-arch { flex: none; display: inline-flex; gap: 5px; align-items: center; padding: 0 14px 0 6px; font-size: 12px; color: var(--muted); white-space: nowrap; cursor: pointer; }
+  .jump-palette .palette-arch input { margin: 0; accent-color: var(--accent); cursor: pointer; }
+  .jump-palette .palette-arch input:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .jump-palette .palette-arch:hover { color: var(--ink); }
+  .jump-palette .arch { flex: none; margin-left: auto; padding: 0 6px; font-size: 10px; line-height: 16px; color: var(--muted); background: var(--chip-bg); border: var(--border) solid var(--chip-line); border-radius: var(--radius-pill); white-space: nowrap; }
+  .jump-palette .palette-hit[data-archived] .row-title { color: var(--muted); }
   .jump-palette .gt { color: var(--muted); }
   .jump-palette .cmd b { color: var(--accent); font-weight: var(--weight-bold); }
   .jump-palette .arg { color: var(--muted); }
@@ -193,6 +231,6 @@
   .jump-palette .palette-need { margin: 4px 14px 8px; font-size: 11px; color: var(--warn); }
   .jump-palette .palette-loading { display: flex; flex-direction: column; gap: 6px; padding: 6px 14px; }
   .jump-palette .palette-loading i { display: block; height: 12px; border-radius: var(--radius-sm); background: var(--skeleton); }
-  .jump-palette .palette-foot { display: flex; gap: 14px; padding: 6px 14px; font-size: 11px; color: var(--muted); border-top: var(--border) solid var(--line); }
+  .jump-palette .palette-foot { display: flex; flex-wrap: wrap; gap: 4px 14px; padding: 6px 14px; font-size: 11px; color: var(--muted); border-top: var(--border) solid var(--line); }
   .jump-palette kbd { display: inline-block; min-width: 18px; padding: 0 5px; font: 11px/17px var(--font-text); text-align: center; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-bottom-width: 2px; border-radius: var(--radius-sm); }
 </style>

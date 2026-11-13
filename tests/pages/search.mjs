@@ -280,7 +280,8 @@ export default async ({ test, assert, eventually, sleep, openPage, sy, groupsNow
     await eventually("open", async () => (await palInput(page).count()) === 1, 2_000);
     await pal(page).locator(".palette-foot").click();
     const open = await chords();
-    assert(JSON.stringify(open) === JSON.stringify(["arrowdown", "arrowup", "enter", "escape"]), `open, its four keys once each: ${JSON.stringify(open)}`);
+    // ARCHIVE-9: and ctrl+i, the archive switch.
+    assert(JSON.stringify(open) === JSON.stringify(["arrowdown", "arrowup", "ctrl+i", "enter", "escape"]), `open, its five keys once each: ${JSON.stringify(open)}`);
   });
 
   await test("a_corrected_query_says_so", async () => {
@@ -371,5 +372,94 @@ export default async ({ test, assert, eventually, sleep, openPage, sy, groupsNow
     await eventually("off keeps the filter", async () => (await hash(page)) === "#/search/zembla/f/" + encodeURIComponent("status Draft"), 3_000);
     await eventually("off: the live one alone again", async () => JSON.stringify(await resultIds(page, "find")) === JSON.stringify([live]), 5_000);
     sy("tickets", "restore", "--ids", `${goneTitle},${goneBody}`);
+  });
+
+  // ARCHIVE-9 (the owner, 2026-11-13: "we need it on the quick search too"): the palette's archive switch,
+  // `input[data-action=archived]` beside its field, off at every load. Off, nothing archived is found; on
+  // (ctrl+i, the caret staying in the field; or Tab to the box and space), both lists ask under `archived
+  // or not archived` and an archived row says so (`[data-archived]`, `[data-field=archived]`), as the
+  // search page's; enter opens it. `>search words` with it on routes to …/include/archived.
+  await test("the_palettes_archive_switch_finds_archived_tickets_and_says_so", async () => {
+    const EITHER = "archived or not archived";
+    const live = make("the vexlor shelf", "a shelf that is still in use");
+    const goneTitle = make("the vexlor kiln", "a kiln that was sold");
+    const goneBody = make("an old glaze note", "the vexlor slip crazed on every pot, so the batch was thrown out");
+    const archived = sy("tickets", "archive", "--ids", `${goneTitle},${goneBody}`, "--message", "the first season");
+    assert(!archived.some((e) => e.type === "refused" || e.type === "error"), `archived: ${JSON.stringify(archived)}`);
+    try {
+      const found = findIds("vexlor", "--filter", EITHER), searched = searchOf("vexlor", "--filter", EITHER).ids;
+      assert(found.includes(goneTitle) && searched.includes(goneBody), `the service answers the archived under the filter: ${found} / ${searched}`);
+      const palHits = () => attrs(pal(page).locator("[data-palette-hit]"), "data-palette-hit");
+      const palBest = () => attrs(pal(page).locator("[data-search-hit]"), "data-search-hit");
+      const box = () => pal(page).locator("input[data-action=archived]");
+      const inField = () => palInput(page).evaluate((e) => e === document.activeElement);
+
+      const { page } = await probed(SV.route);
+      await eventually("the board's palette is mounted", async () => (await pal(page).count()) === 1);
+      await page.locator("body").click({ position: { x: 5, y: 5 } }).catch(() => {});
+      await page.keyboard.press("Control+k");
+      await eventually("ctrl+k opens the palette, its field focused", inField, 2_000);
+      assert(!(await box().isChecked()), "the switch is off at load");
+      assert(trimmed(await pal(page).locator("label[data-field=include]").innerText()) === "include archived", "the switch is named");
+      await page.keyboard.type("vexlor");
+      await eventually("off: the live one alone", async () => JSON.stringify(await palHits()) === JSON.stringify([live]), 3_000);
+      await sleep(300);
+      assert(!(await palBest()).includes(goneBody) && (await pal(page).locator("[data-archived]").count()) === 0, "off: nothing archived is drawn");
+
+      // On by the key, the caret in the field: both lists hold the archived, each row marked.
+      taken(await pressed(page, "Control+i"), "ctrl+i");
+      await eventually("the switch is on", async () => box().isChecked(), 2_000);
+      assert(await inField(), "the caret stays in the field");
+      assert((await palInput(page).inputValue()) === "vexlor", "nothing typed into the field");
+      await eventually("find's hits, the archived too", async () => JSON.stringify(await palHits()) === JSON.stringify(found), 5_000);
+      await eventually("search's hits, the archived too", async () => JSON.stringify(await palBest()) === JSON.stringify(searched), 5_000);
+      for (const [mark, id] of [["data-palette-hit", goneTitle], ["data-search-hit", goneBody]]) {
+        const row = pal(page).locator(`[${mark}="${id}"]`);
+        assert((await row.getAttribute("data-archived")) === "" && trimmed(await row.locator("[data-field=archived]").textContent()) === "archived", `${mark}: ${id}'s row says it is archived`);
+      }
+      assert((await pal(page).locator(`[data-palette-hit="${live}"][data-archived], [data-palette-hit="${live}"] [data-field=archived]`).count()) === 0, "a live row carries no mark");
+      assert(await page.evaluate(() => document.scrollingElement.scrollWidth <= document.scrollingElement.clientWidth), "the page does not scroll sideways");
+      // Typing goes on in the field; the arrows move to the archived title; enter opens it.
+      await page.keyboard.type(" ");
+      await page.keyboard.press("Backspace");
+      const order = [...found, ...searched];
+      for (let i = 0; i < order.indexOf(goneTitle); i++) taken(await pressed(page, "ArrowDown"), "arrowdown");
+      await eventually("the archived title is selected", async () => (await pal(page).locator("[data-selected]").getAttribute("data-palette-hit", { timeout: 500 })) === goneTitle, 2_000);
+      taken(await pressed(page, "Enter"), "enter");
+      await eventually(`enter opens ${goneTitle}`, async () => ticketAt(await hash(page), goneTitle), 3_000);
+
+      // Kept while the page stays loaded; off again by Tab to the box and space, then nothing archived.
+      await page.evaluate((r) => (location.hash = r), SV.route);
+      await eventually("the board's palette", async () => (await pal(page).count()) === 1);
+      await page.locator("body").click({ position: { x: 5, y: 5 } }).catch(() => {});
+      await page.keyboard.press("Control+k");
+      await eventually("open again", inField, 2_000);
+      assert(await box().isChecked(), "still on while the page stays loaded");
+      await page.keyboard.type("vexlor");
+      await eventually("the archived body found again", async () => (await palBest()).includes(goneBody), 5_000);
+      await page.keyboard.press("Tab");
+      assert(await box().evaluate((e) => e === document.activeElement), "Tab from the field reaches the switch");
+      await page.keyboard.press(" ");
+      await eventually("off by space", async () => !(await box().isChecked()), 2_000);
+      await eventually("the caret back in the field", inField, 2_000);
+      await eventually("off: the live one alone again", async () => JSON.stringify(await palHits()) === JSON.stringify([live]) && !(await palBest()).includes(goneBody), 5_000);
+
+      // `>search` carries the switch to the search page.
+      await page.keyboard.press("Control+i");
+      await eventually("on again", async () => box().isChecked(), 2_000);
+      await palInput(page).fill(">search vexlor");
+      await eventually("search is the selected command", async () => (await pal(page).locator("[data-command][data-selected]").getAttribute("data-command", { timeout: 500 })) === "search", 2_000);
+      await page.keyboard.press("Enter");
+      await eventually(">search keeps the archive", async () => (await hash(page)) === "#/search/vexlor/include/archived", 3_000);
+
+      // A reload: off again.
+      await page.reload();
+      await eventually("the search page draws", async () => (await sp(page).count()) === 1);
+      await page.locator('[data-surface=app-top] [data-action="palette.open"]').click();
+      await eventually("open after a reload", async () => (await palInput(page).count()) === 1, 2_000);
+      assert(!(await box().isChecked()), "a reload turns it off");
+    } finally {
+      sy("tickets", "restore", "--ids", `${goneTitle},${goneBody}`);
+    }
   });
 };
