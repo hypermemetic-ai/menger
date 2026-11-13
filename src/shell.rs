@@ -358,6 +358,10 @@ async fn router(cfg: ShellConfig, at: std::net::SocketAddr) -> Router {
     if let Some(serve) = cfg.media.clone() {
         app = app.merge(Router::new().route(MEDIA_ROUTE, get(crate::media_route::get)).with_state((serve, cfg.login.clone())));
     }
+    // One address for the app (owner, 2026-11-13: "remove the non-app
+    // binding"): `/` goes to `/app/`. Inside the session check below, so a
+    // visit without a session still goes to the login page.
+    app = app.layer(axum::middleware::from_fn(root_is_the_app));
     if let Some(login) = cfg.login.as_ref().filter(|l| l.require) {
         app = app.route_layer(axum::middleware::from_fn_with_state(login.clone(), require_session));
     }
@@ -408,6 +412,15 @@ async fn router(cfg: ShellConfig, at: std::net::SocketAddr) -> Router {
     } else {
         app
     }
+}
+
+/// `/` is not a second address of the app: it answers with a redirect to
+/// `/app/` (a browser carries the `#/…` over). Any other path passes.
+async fn root_is_the_app(req: Request, next: axum::middleware::Next) -> Response {
+    if req.uri().path() == "/" && matches!(*req.method(), axum::http::Method::GET | axum::http::Method::HEAD) {
+        return (StatusCode::FOUND, [(header::LOCATION, "/app/")]).into_response();
+    }
+    next.run(req).await
 }
 
 /// ACCESS-30: [`HSTS`] on the answer.

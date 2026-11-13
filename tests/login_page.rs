@@ -864,7 +864,7 @@ async fn the_home_screen_files_need_no_session() {
 async fn every_page_refuses_to_be_framed() {
     let m = start().await;
     let id = sign_in(&m).await;
-    for path in ["/", "/app/", "/login", "/login/me"] {
+    for path in ["/app/", "/login", "/login/me"] {
         let r = m.http.get(m.url(path)).header("cookie", m.jar(&id)).send().await.unwrap();
         let h = r.headers();
         assert_eq!(h.get("x-frame-options").and_then(|v| v.to_str().ok()), Some("DENY"), "{path}");
@@ -873,7 +873,7 @@ async fn every_page_refuses_to_be_framed() {
         let csp = h.get("content-security-policy").and_then(|v| v.to_str().ok()).unwrap_or_default();
         assert!(csp.contains("frame-ancestors 'none'"), "{path}: {csp}");
         // ACCESS-28: a page's scripts are its own, never any inline one.
-        if ["/", "/app/"].contains(&path) {
+        if path == "/app/" {
             let scripts = csp.split(';').map(str::trim).find(|d| d.starts_with("script-src ")).unwrap_or_default();
             assert!(scripts.starts_with("script-src ") && !scripts.contains("'unsafe-inline'") && !scripts.contains("https:"), "{path}: {csp}");
         }
