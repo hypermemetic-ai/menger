@@ -320,4 +320,55 @@ export default async ({ test, assert, eventually, sleep, openPage, sy, groupsNow
     await eventually("the hit is drawn", async () => (await pal(page).locator(`[data-palette-hit="${id}"]`).count()) === 1, 3_000);
     assert((await pal(page).locator("img").count()) === 0 && !(await page.evaluate(() => window.__xss)), "the palette draws no element from a title");
   });
+
+  // ARCHIVE-8 (the owner, 2026-11-13: "we need search to optionally search through archived"): the page's
+  // archive switch, `[data-action=archived]`, off by default. Off, nothing archived is found, as ever; on
+  // (#/search/:q/include/archived, and …/f/:filter after it), both lists ask under `(archived or not
+  // archived)` and an archived row says so (`[data-archived]`, `[data-field=archived]`). The choice is the
+  // address's: a reload keeps it. An agent says the same with the filter.
+  await test("the_archive_switch_finds_archived_tickets_and_says_so", async () => {
+    const EITHER = "archived or not archived";
+    const live = make("the zembla shelf", "a shelf that is still in use");
+    const goneTitle = make("the zembla kiln", "a kiln that was sold");
+    const goneBody = make("an old firing note", "the zembla slip crazed on every pot, so the batch was thrown out");
+    const archived = sy("tickets", "archive", "--ids", `${goneTitle},${goneBody}`, "--message", "the first season");
+    assert(!archived.some((e) => e.type === "refused" || e.type === "error"), `archived: ${JSON.stringify(archived)}`);
+    // The service: off by default, on by the filter (find and search alike).
+    assert(JSON.stringify(findIds("zembla")) === JSON.stringify([live]), `find alone answers the live one: ${findIds("zembla")}`);
+    assert(searchOf("zembla").ids.every((id) => id !== goneBody && id !== goneTitle), `search alone answers nothing archived: ${searchOf("zembla").ids}`);
+    const found = findIds("zembla", "--filter", EITHER), searched = searchOf("zembla", "--filter", EITHER).ids;
+    assert(found.includes(live) && found.includes(goneTitle), `find under the filter answers both titles: ${found}`);
+    assert(searched.includes(goneBody), `search under the filter answers the archived body: ${searched}`);
+
+    const { page } = await openPage("#/search/zembla");
+    const box = sp(page).locator("input[data-action=archived]");
+    await eventually("off: the live one alone", async () => JSON.stringify(await resultIds(page, "find")) === JSON.stringify([live]));
+    assert(!(await box.isChecked()), "the switch is off by default");
+    assert((await sp(page).locator("[data-archived]").count()) === 0 && !(await resultIds(page, "search")).includes(goneBody), "nothing archived is drawn");
+    assert((await sp(page).locator("label[data-field=include]").innerText()).trim() === "include archived", "the switch is named");
+
+    // On: the address says so, both lists find the archived, each archived row is marked.
+    await box.focus();
+    await page.keyboard.press(" ");
+    await eventually("the address holds the choice", async () => (await hash(page)) === "#/search/zembla/include/archived", 3_000);
+    await eventually("find's rows, the archived too", async () => JSON.stringify(await resultIds(page, "find")) === JSON.stringify(found), 5_000);
+    await eventually("search's rows, the archived too", async () => JSON.stringify(await resultIds(page, "search")) === JSON.stringify(searched), 5_000);
+    assert(await box.isChecked(), "the switch is on");
+    for (const [kind, id] of [["find", goneTitle], ["search", goneBody]]) {
+      const row = sp(page).locator(`[data-result=${kind}][data-id="${id}"]`);
+      assert((await row.getAttribute("data-archived")) === "" && trimmed(await row.locator("[data-field=archived]").textContent()) === "archived", `${kind}: ${id}'s row says it is archived`);
+    }
+    assert((await sp(page).locator(`[data-result=find][data-id="${live}"][data-archived]`).count()) === 0 && (await sp(page).locator(`[data-result=find][data-id="${live}"] [data-field=archived]`).count()) === 0, "a live row carries no mark");
+    assert(await page.evaluate(() => document.scrollingElement.scrollWidth <= document.scrollingElement.clientWidth), "the page does not scroll sideways");
+
+    // A reload keeps it; under a filter too; off again is as before.
+    await page.reload();
+    await eventually("after a reload, still on", async () => (await box.isChecked()) && (await resultIds(page, "find")).includes(goneTitle), 10_000);
+    await page.evaluate(() => (location.hash = "#/search/zembla/include/archived/f/" + encodeURIComponent("status Draft")));
+    await eventually("under the route's filter, the archived too", async () => (await resultIds(page, "find")).includes(goneTitle) && trimmed(await sp(page).locator("[data-field=filter] code").textContent()) === "status Draft", 5_000);
+    await box.click();
+    await eventually("off keeps the filter", async () => (await hash(page)) === "#/search/zembla/f/" + encodeURIComponent("status Draft"), 3_000);
+    await eventually("off: the live one alone again", async () => JSON.stringify(await resultIds(page, "find")) === JSON.stringify([live]), 5_000);
+    sy("tickets", "restore", "--ids", `${goneTitle},${goneBody}`);
+  });
 };
