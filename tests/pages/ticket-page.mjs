@@ -89,6 +89,62 @@ export default async (ctx) => {
     } finally { await context.close(); }
   });
 
+  // The column right of the body collapses by itself under 1360px, before the nav (which goes under 960px):
+  // its button shows it there without keeping anything, and a column hidden by hand stays hidden at every
+  // width. Collapsed either way, its parts are not placed. Each width is set after the page opens, then the
+  // page is reloaded where it must be opened at that width.
+  await test("the_side_column_collapses_by_width", async () => {
+    const t = made("the kiln's narrow window");
+    const { page, tp, context } = await open(t.id);
+    try {
+      const grid = () => page.locator("[data-surface=ticket-page] .tp");
+      const parts = () => page.locator("[data-surface=ticket-page]").locator("[data-mark=ticket-actions], [data-surface=ticket-history], [data-surface=ticket-revisions]").count();
+      const navDrawn = () => page.locator("[data-surface=ticket-nav]").isVisible();
+      const state = async () => [await grid().getAttribute("data-side", { timeout: 1000 }).catch(() => null), await grid().getAttribute("data-side-why", { timeout: 1000 }).catch(() => null)];
+      const collapsed = (why) => async () => { const [s, w] = await state(); return s === "closed" && w === why && (await parts()) === 0; };
+      const drawn = async () => (await state())[0] === "open" && (await page.locator("[data-surface=ticket-page] [data-mark=ticket-actions]").count()) === 1;
+      const reopen = async () => {
+        await page.reload();
+        await eventually("the head is drawn again", async () => (await text(page.locator("[data-surface=ticket-head] [data-field=title]"))).length > 0, 20_000);
+      };
+      // 1. Opened at 1200px, nothing hidden: the nav is drawn, the column collapsed, its button offers it.
+      await page.setViewportSize({ width: 1200, height: 900 });
+      await reopen();
+      await eventually("at 1200px the column is collapsed for want of room", collapsed("width"), 10_000);
+      assert(await navDrawn(), "at 1200px the nav is drawn");
+      const button = page.locator("[data-side-hide]");
+      assert((await button.getAttribute("aria-expanded")) === "false" && /show/i.test(await button.getAttribute("title")), "its button offers to show it");
+      // 2. Widened to 1500px: drawn, with no click.
+      await page.setViewportSize({ width: 1500, height: 900 });
+      await eventually("widened, the column is drawn by itself", drawn, 10_000);
+      // 3. At 1200px the button shows it; nothing is kept, so at 1500px after a reload it is shown as well.
+      await page.setViewportSize({ width: 1200, height: 900 });
+      await eventually("narrowed, it collapses again", collapsed("width"), 10_000);
+      await button.click();
+      await eventually("its button shows it in the narrow window", drawn, 10_000);
+      assert((await page.evaluate(() => localStorage.getItem("menger.ticket.side"))) !== "closed", "showing it kept no hidden");
+      await page.setViewportSize({ width: 1500, height: 900 });
+      await reopen();
+      await eventually("reloaded at 1500px, it is shown", drawn, 10_000);
+      // 4. Hidden by hand at 1500px: hidden at 1200px and at 1500px again.
+      await page.locator("[data-side-hide]").click();
+      await eventually("hidden by hand", collapsed("hand"), 5_000);
+      await page.setViewportSize({ width: 1200, height: 900 });
+      await eventually("narrowed, hidden by hand still", collapsed("hand"), 5_000);
+      await page.setViewportSize({ width: 1500, height: 900 });
+      await eventually("widened, hidden by hand still", collapsed("hand"), 5_000);
+      await page.locator("[data-side-hide]").click();
+      await eventually("shown again by hand", drawn, 10_000);
+      // 5. Opened at 800px: neither the nav nor the column is drawn, and the body has the width.
+      await page.setViewportSize({ width: 800, height: 900 });
+      await reopen();
+      await eventually("at 800px the column is collapsed", collapsed("width"), 10_000);
+      assert(!(await navDrawn()), "at 800px the nav is not drawn");
+      const w = await tp.locator("[data-surface=ticket-body]").evaluate((e) => e.getBoundingClientRect().width);
+      assert(w >= 720, `the body has the width (${w} of 800)`);
+    } finally { await context.close(); }
+  });
+
   // A link by uid followed from a ticket's page gives the page another ticket: the page, its nav and its top
   // are the ones that were there (nothing flashes), and the head says the new ticket.
   await test("a_ticket_followed_from_a_ticket_keeps_the_page", async () => {
