@@ -36,9 +36,12 @@
      (`data-nav=open|closed`), `[data-nav-hide]` (`[aria-expanded]`).
      The column right of the body collapses the same way (the owner: "the information section should also be
      collapsed"): the actions, the commits, the history and the revisions. `hide ›` above it takes the column
-     away and gives the body the width; hidden, its parts are not placed, so they read nothing. Kept in this
-     browser (`menger.ticket.side`), shown unless it was hidden. Marks: `.tp[data-side=open|closed]`,
-     `[data-side-hide]` (`[aria-expanded]`). -->
+     away and gives the body the width; hidden, its parts are not placed, so they read nothing. Hidden by hand
+     is kept in this browser (`menger.ticket.side`) and holds at every width. The page also collapses the
+     column by itself when the window is under 1360px wide, before the nav goes (under 960px); its button
+     shows it there, under the body on a narrow window, until the window next crosses 1360px, and that is not
+     kept. The width is read in script, so a collapsed column's parts are not placed either. Marks:
+     `.tp[data-side=open|closed]` (closed, `data-side-why=hand|width`), `[data-side-hide]` (`[aria-expanded]`). -->
 <script module>
   export const uses = ["tickets.get", "tickets.watch", "tickets.revisions.list"];
 </script>
@@ -82,12 +85,33 @@
     try { localStorage.setItem(NAV, nav ? "open" : "closed"); } catch { /* a private window */ }
   }
   let topH = $state(0);
-  // The column right of the body: shown unless this browser hid it.
+  // The column right of the body: hidden by hand when this browser hid it; collapsed by the page when the
+  // window is under 1360px wide, unless its button showed it since the window last crossed that width.
   const SIDE = "menger.ticket.side";
-  let side = $state((() => { try { return localStorage.getItem(SIDE) !== "closed"; } catch { return true; } })());
+  let sideHand = $state((() => { try { return localStorage.getItem(SIDE) === "closed"; } catch { return false; } })());
+  const narrowQuery = typeof matchMedia === "function" ? matchMedia("(max-width: 1359px)") : null;
+  let narrow = $state(narrowQuery?.matches ?? false);
+  let sideShown = $state(false);
+  $effect(() => {
+    if (!narrowQuery) return;
+    const on = () => { narrow = narrowQuery.matches; sideShown = false; };
+    narrowQuery.addEventListener("change", on);
+    return () => narrowQuery.removeEventListener("change", on);
+  });
+  const side = $derived(!sideHand && (!narrow || sideShown));
+  const sideWhy = $derived(side ? null : sideHand ? "hand" : "width");
+  function keepSide(value) {
+    try { localStorage.setItem(SIDE, value); } catch { /* a private window */ }
+  }
   function toggleSide() {
-    side = !side;
-    try { localStorage.setItem(SIDE, side ? "open" : "closed"); } catch { /* a private window */ }
+    if (side) {
+      // Hidden in a narrow window, it is only collapsed again; in a wide one, it is hidden by hand and kept.
+      if (narrow) sideShown = false;
+      else { sideHand = true; keepSide("closed"); }
+    } else {
+      if (sideHand) { sideHand = false; keepSide("open"); }
+      if (narrow) sideShown = true;
+    }
   }
 
   // EDITOR-4: the ticket page is "the ticket last opened" for the editor at #/ (editor-screen reads it).
@@ -138,7 +162,7 @@
       {/if}
     {:else}
       <p class="tp-tools"><button type="button" class="tp-nav-toggle" data-side-hide aria-expanded={side} title={side ? "Hide the actions, commits and history" : "Show the actions, commits and history"} onclick={toggleSide}>{side ? "hide ›" : "‹ details"}</button></p>
-      <div class="tp" data-side={side ? "open" : "closed"}>
+      <div class="tp" data-side={side ? "open" : "closed"} data-side-why={sideWhy}>
         <div class="cell head"><TicketHead {id}/></div>
         <div class="cell main">
           <div class="body" data-surface="ticket-body">{#key id}<EditorBody {id} kind="ticket" head={false}/>{/key}</div>
