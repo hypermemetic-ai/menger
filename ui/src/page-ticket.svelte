@@ -191,6 +191,9 @@
   .tp-frame { display: flex; align-items: flex-start; }
   .tp-frame > .ticket-page { flex: 1; min-width: 0; }
   .tp-nav { position: sticky; flex: none; width: 300px; box-sizing: border-box; overflow: auto; background: var(--panel); border-right: var(--border) solid var(--line); }
+  /* EDITOR-25 (the owner: "I don't want scroll bar on the nav"): it scrolls by the wheel, the keys and touch, and draws no bar. */
+  .tp-nav { scrollbar-width: none; }
+  .tp-nav::-webkit-scrollbar { display: none; }
   .tp-nav[data-nav=closed] { width: auto; background: transparent; border-right: 0; }
   .tp-nav-toggle { display: block; margin: 6px 6px 2px auto; padding: 1px 8px; font: inherit; font-size: 11px; color: var(--muted); background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius-pill); cursor: pointer; }
   .tp-nav[data-nav=closed] .tp-nav-toggle { margin: 8px 0 0 8px; }

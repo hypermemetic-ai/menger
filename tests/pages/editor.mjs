@@ -1198,4 +1198,59 @@ graph TD
       await context.close();
     }
   });
+
+  // EDITOR-25: the owner, 2026-11-13: "long text in code blocks can overflow." A fence of one 400-character
+  // line (and a long inline token) on a desktop: drawn, and with the caret in the fence (its source shown),
+  // nothing of the body stands past the body's column, and the page never scrolls sideways. The drawn card
+  // keeps its own sideways scroll inside its box (`.scroll`); the source wraps, as on a phone.
+  const LINE400 = "let fired = [" + Array.from({ length: 60 }, (_, i) => `c${i}`).join(",") + "];";
+  const LONGCODE = `# Long code\n\nA token: \`${"x".repeat(300)}\` inline.\n\n\`\`\`rust\n${(LINE400 + " // " + "y".repeat(400)).slice(0, 400)}\n\`\`\`\n\n\`\`\`\n${"z".repeat(400)}\n\`\`\`\n\nafter\n`;
+  /** What stands past the column the editor sits in (its parent's box), anything inside a box that clips or
+   *  scrolls sideways aside; and the document's own sideways scroll. */
+  const pastColumn = (page) => page.evaluate(() => {
+    const ed = document.querySelector("[data-surface=editor-body]");
+    const col = ed.parentElement.getBoundingClientRect();
+    const name = (e) => `${e.localName}${typeof e.className === "string" && e.className.trim() ? "." + e.className.trim().split(/\s+/).join(".") : ""}`;
+    const clipped = (e) => { for (let a = e.parentElement; a && a !== ed; a = a.parentElement) if (getComputedStyle(a).overflowX !== "visible") return true; return false; };
+    const past = [];
+    for (const e of [ed, ...ed.querySelectorAll("*")]) {
+      if (e instanceof SVGElement && !(e instanceof SVGSVGElement)) continue;
+      const r = e.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0 && r.right > col.right + 1 && !clipped(e)) past.push(`${name(e)} ${Math.round(r.right)}>${Math.round(col.right)}`);
+    }
+    const s = document.scrollingElement;
+    return { past, sw: s.scrollWidth, cw: s.clientWidth, col: Math.round(col.width) };
+  });
+  await test("a_long_code_line_stays_inside_the_body", async () => {
+    const tid = make("a long code line", LONGCODE);
+    const did = sy("docs", "create", "--title", "A long code line", "--body", bodyFile("long-code-doc", LONGCODE)).find((e) => e.type === "created").doc.id;
+    for (const route of [`#/ticket/${tid}`, `#/doc/${did}`]) {
+      const { context, page } = await openPage(route);
+      try {
+        await page.setViewportSize({ width: 1280, height: 2000 });
+        const ed = page.locator("[data-surface=editor-body]");
+        await eventually(`${route}: the editor`, async () => (await ed.locator(".cm-content[data-field=body-source]").count()) === 1, 10_000);
+        await eventually(`${route}: both cards drawn`, async () => (await ed.locator(".blk [data-surface=code-card]").count()) === 2, 10_000);
+        await sleep(300);
+        const drawn = await pastColumn(page);
+        assert(drawn.past.length === 0, `${route}, drawn: nothing past the body's column (${drawn.col}px) — ${drawn.past.slice(0, 8).join(", ")}`);
+        assert(drawn.sw <= drawn.cw, `${route}, drawn: the page is ${drawn.sw} wide at ${drawn.cw}`);
+        const text = await src(page);
+        for (const [what, needle] of [["the painted fence", "let fired"], ["the plain fence", "zzzz"], ["the inline token", "xxxx"]]) {
+          await caretAt(page, text.indexOf(needle) + 200);
+          await eventually(`${route}: ${what}'s source shown`, async () => (await ed.locator(".cm-line").count()) > 0, 5_000);
+          await sleep(200);
+          const open = await pastColumn(page);
+          assert(open.past.length === 0, `${route}, the caret in ${what}: nothing past the body's column (${open.col}px; the page ${open.sw} wide at ${open.cw}) — ${open.past.length} past, the farthest ${open.past.at(-1)}`);
+          assert(open.sw <= open.cw, `${route}, the caret in ${what}: the page is ${open.sw} wide at ${open.cw}`);
+          if (what.endsWith("fence")) {
+            const ws = await ed.locator(".cm-line.eb-fence").first().evaluate((e) => getComputedStyle(e).whiteSpace);
+            assert(ws === "pre-wrap", `${route}: ${what}'s source wraps on a desktop: ${ws}`);
+          }
+        }
+      } finally {
+        await context.close();
+      }
+    }
+  });
 };

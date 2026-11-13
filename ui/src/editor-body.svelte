@@ -1145,7 +1145,10 @@
   .editor-body :global(.eb-bullet) { display: inline-block; width: 1em; color: var(--muted); }
   .editor-body :global(.eb-li) { padding-left: 4px; }
   .editor-body :global(.eb-quote) { padding-left: 14px; color: var(--muted); border-left: 2px solid var(--line); }
-  .editor-body :global(.eb-fence) { padding: 0 12px; font-family: var(--font-text); font-size: 12.5px; white-space: pre; background: var(--panel); }
+  /* EDITOR-25 (the owner: "long text in code blocks can overflow"): the caret's fence wraps at every width,
+     its rows hung past each line's own indent (EDITOR-12's phone rule, code-card's): the surface's scroller is
+     `overflow: visible`, so a line kept whole would run out of the body's column and widen the page. */
+  .editor-body :global(.eb-fence) { padding: 0 12px; padding-left: calc(12px + (var(--ind, 0) + 2) * 1ch); text-indent: calc((var(--ind, 0) + 2) * -1ch); font-family: var(--font-text); font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; background: var(--panel); }
   .editor-body :global(.eb-fence .tok-keyword), .editor-body :global(.eb-fence .tok-atom), .editor-body :global(.eb-fence .tok-bool) { color: var(--code-keyword); }
   .editor-body :global(.eb-fence .tok-string), .editor-body :global(.eb-fence .tok-string2), .editor-body :global(.eb-fence .tok-literal) { color: var(--code-string); }
   .editor-body :global(.eb-fence .tok-number) { color: var(--code-number); }
@@ -1162,11 +1165,10 @@
   .editor-body :global(.eb-upload[data-state=refused]) { color: var(--warn); border-color: var(--warn); }
   .editor-body :global(.eb-hand) { cursor: pointer; background: var(--sel); box-shadow: inset 2px 0 0 var(--accent); }
   .editor-body :global(.eb-hand::after) { content: attr(data-hand); float: right; padding-left: 8px; font-family: var(--font-text); font-size: 10px; color: var(--muted); }
-  /* EDITOR-12: on a phone (under 641 px) the surface never scrolls sideways: the caret's fence wraps, its rows
-     hung past each line's own indent (code-card's rule); every line breaks a long word; who is here wraps. */
+  /* EDITOR-12: on a phone (under 641 px) the surface never scrolls sideways: every line breaks a long word (the
+     caret's fence wraps at every width, EDITOR-25); who is here wraps. */
   @media (max-width: 640px) {
     .editor-body :global(.cm-content) { overflow-wrap: anywhere; word-break: normal; }
-    .editor-body :global(.eb-fence) { white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; padding-left: calc(12px + (var(--ind, 0) + 2) * 1ch); text-indent: calc((var(--ind, 0) + 2) * -1ch); }
     .who, .when, .asked, .state { overflow-wrap: anywhere; min-width: 0; }
     .say { min-width: 0; flex-basis: 100%; }
     .pick[data-action=ask-open] { margin-left: 0; }

@@ -68,6 +68,30 @@ export default async (ctx) => {
     } finally { await context.close(); }
   });
 
+  // EDITOR-25: the owner, 2026-11-13: "I don't want scroll bar on the nav". Taller than the window, the nav
+  // still scrolls (by the wheel, and by script as keys and touch do), and shows no bar: `scrollbar-width: none`,
+  // no width taken by one (`offsetWidth === clientWidth` less its border).
+  await test("the_nav_scrolls_with_no_scroll_bar", async () => {
+    const g = root();
+    const { context, page } = await openPage(`${ROUTE}${g.root}`);
+    try {
+      await page.setViewportSize({ width: 1280, height: 400 });
+      const nav = page.locator("[data-surface=ticket-nav]");
+      await eventually("the nav is drawn", async () => (await nav.locator("[data-nav-mode]").count()) > 0, 20_000);
+      // Taller than itself whatever the seed: a spacer under the tree, as a long tree would be.
+      await nav.evaluate((e) => { const s = document.createElement("div"); s.style.height = "3000px"; s.dataset.spacer = ""; e.append(s); });
+      const m = await nav.evaluate((e) => { const c = getComputedStyle(e); return { sh: e.scrollHeight, ch: e.clientHeight, ow: e.offsetWidth, cw: e.clientWidth, bl: parseFloat(c.borderLeftWidth), br: parseFloat(c.borderRightWidth), sbw: c.scrollbarWidth, oy: c.overflowY }; });
+      assert(m.sh > m.ch, `the nav is taller than its box: ${JSON.stringify(m)}`);
+      assert(m.oy === "auto" || m.oy === "scroll", `the nav scrolls: ${JSON.stringify(m)}`);
+      assert(m.sbw === "none", `no scroll bar drawn: scrollbar-width ${m.sbw}`);
+      assert(m.ow - m.bl - m.br === m.cw, `no width taken by a bar: ${JSON.stringify(m)}`);
+      const box = await nav.boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.wheel(0, 600);
+      await eventually("the wheel scrolls it", async () => (await nav.evaluate((e) => e.scrollTop)) > 0, 5_000);
+    } finally { await context.close(); }
+  });
+
   // The column right of the body collapses the same way: hidden, its parts are not placed and the body takes
   // the width; hidden still when the page is opened again.
   await test("the_side_column_collapses", async () => {
