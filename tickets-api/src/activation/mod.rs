@@ -872,7 +872,8 @@ impl TicketsActivation {
         group = "write",
         target = "ids",
         example(note = "two finished tickets", params = r#"{"ids": ["KILN-3", "KILN-4"], "message": "landed and deployed"}"#),
-        example(note = "what would go, and what is live", params = r#"{"ids": ["KILN-1"], "dry_run": true}"#)
+        example(note = "what would go, and what is live", params = r#"{"ids": ["KILN-1"], "dry_run": true}"#),
+        example(note = "a season, tagged", params = r#"{"ids": ["KILN-1"], "tags": ["season-1", "kiln"], "message": "first season fired"}"#)
     )]
     pub async fn archive(
         &self,
@@ -887,11 +888,13 @@ impl TicketsActivation {
         tz: Option<Zone>,
         /// Why — kept on the mark and in each transition (optional).
         message: Option<Message>,
+        /// Tags kept on every mark it sets — each a label: letters, digits and -, lower-cased (e.g. ["season-1"]); found again by 'archived tag season-1' (optional; none: an untagged archive).
+        tags: Option<Vec<Label>>,
         /// Answer what the write would do and write nothing (optional; default false).
         dry_run: Option<bool>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         let act = act_of(&user, None, message);
-        archive_stream(self.store.clone(), user, Picked { ids, filter, max, tz }, act, dry_run.unwrap_or(false))
+        archive_stream(self.store.clone(), user, Picked { ids, filter, max, tz }, tags.unwrap_or_default(), act, dry_run.unwrap_or(false))
     }
 
     /// Restore archived tickets — each named (or a filter's archived ones) back in every view with its archived ancestors; with_children, the subtree archived with it; yields restored { ids, ancestors, still_archived, by, dry_run }.

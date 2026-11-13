@@ -524,6 +524,10 @@ fn is_zero64(n: &u64) -> bool {
 /// `message`), and which write set it (the id of that write's first
 /// transition: every ticket one archive took shares it, so a restore
 /// `with_children` brings back exactly what went with its ticket).
+/// ARCHIVE-6: and the tags that write gave it (`archive --tags`), each a
+/// label ([`Label`]: lower case), in the order given, each once — none for
+/// an archive with no tag, omitted on the wire, and none for a mark stored
+/// before tags were (the field's default: no row is rewritten).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Archived {
     pub at_unix: i64,
@@ -531,6 +535,8 @@ pub struct Archived {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     pub write: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<Label>,
 }
 
 /// ARCHIVE-2: a ticket an archive took that was still live work (not in

@@ -528,12 +528,12 @@ async fn verify_derived_names_an_altered_tally_and_holder_and_a_form_4_file_is_b
     drop(conn);
     let (code, out, _) = verify(&db);
     assert_eq!(code, Some(1), "{out}");
-    assert!(out.contains("stored in form 4; this build reads 17"), "{out}");
+    assert!(out.contains("stored in form 4; this build reads 18"), "{out}");
     let s = spawn_server(&db, dir.path(), "form4").await;
     let c = connect(s.port).await;
     one(&c, "tickets.health", json!({})).await.unwrap();
     let log = s.log();
-    assert!(log.contains("it was stored in form 4, this build writes 17"), "{log}");
+    assert!(log.contains("it was stored in form 4, this build writes 18"), "{log}");
     assert!(log.contains("kept the tree over 6000 tickets"), "{log}");
     drop(c);
     s.kill9();
@@ -655,13 +655,13 @@ async fn a_form_5_file_gains_form_6_once_and_answers_as_before() {
     drop(conn);
     let (code, out, _) = verify(&db);
     assert_eq!(code, Some(1), "{out}");
-    assert!(out.contains("stored in form 5; this build reads 17"), "{out}");
+    assert!(out.contains("stored in form 5; this build reads 18"), "{out}");
 
     // The first open gains form 6, once, and answers as before.
     let s = spawn_server(&db, dir.path(), "form5").await;
     let after = answers(connect(s.port).await).await;
     let log = s.log();
-    let built = log.lines().find(|l| l.contains("it was stored in form 5, this build writes 17")).unwrap_or_else(|| panic!("{log}"));
+    let built = log.lines().find(|l| l.contains("it was stored in form 5, this build writes 18")).unwrap_or_else(|| panic!("{log}"));
     eprintln!("form 5 → 8: {}", &built[built.find("built once").unwrap_or(0)..]);
     assert_eq!(after.len(), before.len());
     for (i, (a, b)) in after.iter().zip(&before).enumerate() {
@@ -672,7 +672,7 @@ async fn a_form_5_file_gains_form_6_once_and_answers_as_before() {
     assert_eq!(code, Some(0), "{out}\n{err}");
     let conn = rusqlite::Connection::open(&db).unwrap();
     let form: i64 = conn.query_row("SELECT form FROM derived_state", [], |r| r.get(0)).unwrap();
-    assert_eq!(form, 17, "V2-20: a build writes form 17");
+    assert_eq!(form, 18, "V2-20, ARCHIVE-6: a build writes form 18");
     assert_eq!(docs_cells(&conn), 2, "the board notes' cell and the ordinary docs' apart");
     let menger: i64 = conn.query_row("SELECT count(*) FROM cells WHERE menger = 1", [], |r| r.get(0)).unwrap();
     assert!(menger >= 1);
@@ -770,7 +770,7 @@ async fn a_file_from_before_uids_gains_one_for_every_ticket_and_tombstone_once()
         let form: i64 = conn.query_row("SELECT form FROM derived_state", [], |r| r.get(0)).unwrap();
         assert_eq!(form, 15, "and is in form 15");
     }
-    // V2-42: v2 reads form 17, so before its first open the file is a form
+    // V2-42: v2 reads form 17 (ARCHIVE-6: 18), so before its first open the file is a form
     // behind — said, not a uid difference; the open builds it again.
     let (code, out, err) = verify(&db);
     assert_eq!(code, Some(1), "{out}\n{err}");

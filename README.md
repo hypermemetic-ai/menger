@@ -593,7 +593,7 @@ whole. synapse `-j` prints the `rows` event as one line (SYNAPSE-36).
 | `label` | `[--id] [--ids] [--add] [--remove]` | labels (`needs-you`, …) |
 | `rename` | `--id --to [--message] [--dry-run]` | into a subtask id under its own parent |
 | `reshortcode` | `--ids --to [--parent] [--new-scope] [--with-children] [--message] [--dry-run]` | move tickets into another shortcode, renumbered |
-| `archive` | `[--ids] [--filter] [--max] [--message] [--dry-run] [--tz]` | out of every view with the subtree |
+| `archive` | `[--ids] [--filter] [--max] [--tags] [--message] [--dry-run] [--tz]` | out of every view with the subtree |
 | `restore` | `[--ids] [--filter] [--max] [--with-children] [--message] [--dry-run] [--tz]` | back, with archived ancestors |
 | `delete` | `[--ids] [--filter] [--max] [--children] [--unblock] [--message] [--tz]` | gone for good, a tombstone kept (admin) |
 | `undelete` | `--ids` | back within 30 days (admin) |
@@ -995,6 +995,14 @@ or a filter and archives each with its whole subtree; `restore` brings a
 ticket back with its archived ancestors (`--with-children`: the subtree
 archived with it). An archived ticket is in no view unless the filter names
 `archived`; `get` still answers it. `--dry-run true` writes nothing.
+An archive may be tagged (ARCHIVE-6): `--tags season-1,kiln` — any number,
+each a label (lower case; a bad one refuses the write) — kept on the mark
+of every ticket it archives, which `get`, the `archived` answer and
+`watch`'s `archived` carry. An archive with no tag is as it was: the mark
+has no `tags`. `archived tag <name>` (and `archived tag in (a, b)`) finds
+what carries one, from the cells, and names the archive, so `restore
+--filter 'archived tag season-1'` brings back what was archived with it. A
+ticket already archived keeps the tags of the write that archived it.
 
 **Search** (SEARCH-2) is SQLite FTS5 in the same file: every word required,
 prefixes and near typos too, best first, each `hit` with its passage; a
@@ -1013,7 +1021,8 @@ answered from the kept cells, never by testing a ticket:
 - **Predicates**: `status <name>`, `category <open|ready|active|review|done|dropped|static>`,
   `kind <name>`, `severity <…>`, `blocked`, `ready`, `has commits`,
   `menger doc`, `label <name>`, `in <SHORTCODE>`, `under <ID or SHORTCODE>`,
-  `epic <name>` (`epic any`), `archived`, `frozen`, `hidden`, `ticket <ID>`,
+  `epic <name>` (`epic any`), `archived`, `archived tag <name>` (ARCHIVE-6:
+  a tag its archive mark holds), `frozen`, `hidden`, `ticket <ID>`,
   `saved "Name"` and `text "…"` (on rows; alone, as a top-level `and`
   group).
 - **History** (MENGER-13, FILTER-52): `entered <status> [window] [by who]`,

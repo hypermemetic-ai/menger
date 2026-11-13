@@ -5,7 +5,8 @@
 //! every view without it unless the filter names `archived`, `get` with the
 //! mark, `health`'s count, a restore with its ancestor chain, the
 //! `archived` / `restored` cells, and a create under an archived parent
-//! answering `created` then the chain's `restored`.
+//! answering `created` then the chain's `restored`. ARCHIVE-6: an archive's
+//! tags, kept on its marks and found by `archived tag <name>`.
 
 
 /// ACCESS-24: the test provider — every server runs `key`, every client is its `--admin`.
@@ -183,4 +184,51 @@ async fn archive_and_restore_over_the_wire() {
     assert_eq!(evs.last().unwrap()["type"], "restored", "{evs:?}");
     // Neither ids nor a filter: refused in band.
     assert_eq!(one(&client, "tickets.archive", json!({})).await["type"], "error");
+}
+
+/// ARCHIVE-6: `tickets.archive { tags }` over the wire — the mark of every
+/// ticket it archives carries them (in the answer, on `watch`, in `get`),
+/// an untagged archive's mark has no `tags` key, `archived tag <name>`
+/// lists what carries it, a restore by that filter brings back only it,
+/// and a bad tag is refused before the method runs, naming the parameter.
+#[tokio::test]
+async fn a_tagged_archive_over_the_wire() {
+    let port = start_server().await;
+    let client = connect(port).await;
+    for params in [
+        json!({"epic": "TAG", "title": "the season", "kind": "scope"}),
+        json!({"epic": "TAG", "title": "fired", "parent": "TAG-1"}),
+        json!({"epic": "LOOSE", "title": "loose", "kind": "scope"}),
+    ] {
+        assert_eq!(one(&client, "tickets.create", params).await["type"], "created");
+    }
+    let mut watch = call(&client, "tickets.watch", json!({})).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let a = one(&client, "tickets.archive", json!({"ids": ["TAG-1"], "tags": ["Season-1", "kiln"], "message": "first season fired"})).await;
+    assert_eq!((a["type"].clone(), a["ids"].clone(), a["mark"]["tags"].clone()), (json!("archived"), json!(["TAG-1", "TAG-2"]), json!(["season-1", "kiln"])), "{a}");
+    let heard = watch_until(&mut watch, "archived").await;
+    assert_eq!(heard.last().unwrap()["mark"]["tags"], json!(["season-1", "kiln"]), "watch's `archived` carries them");
+    assert_eq!(one(&client, "tickets.get", json!({"id": "TAG-2"})).await["ticket"]["archived"]["tags"], json!(["season-1", "kiln"]));
+
+    let b = one(&client, "tickets.archive", json!({"ids": ["LOOSE-1"]})).await;
+    assert!(b["mark"].get("tags").is_none(), "no tag: no `tags` key — {b}");
+    assert!(one(&client, "tickets.get", json!({"id": "LOOSE-1"})).await["ticket"]["archived"].get("tags").is_none());
+
+    let listed = |evs: Vec<Value>| evs.into_iter().filter(|e| e["type"] == "summary").map(|e| e["summary"]["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    let list = |filter: &str| call(&client, "tickets.list", json!({"filter": filter, "summary": true}));
+    assert_eq!(listed(collect(list("archived tag season-1").await).await), ["TAG-1", "TAG-2"]);
+    assert_eq!(listed(collect(list("archived tag in (kiln, other)").await).await), ["TAG-1", "TAG-2"]);
+    assert_eq!(listed(collect(list("archived and not archived tag season-1").await).await), ["LOOSE-1"]);
+
+    let r = one(&client, "tickets.restore", json!({"filter": "archived tag season-1"})).await;
+    assert_eq!((r["type"].clone(), r["ids"].clone()), (json!("restored"), json!(["TAG-1", "TAG-2"])), "{r}");
+    assert_eq!(listed(collect(list("archived").await).await), ["LOOSE-1"], "the untagged archive stays");
+
+    // A bad tag: refused by its type, naming the parameter, nothing written.
+    let mut sub = call(&client, "tickets.archive", json!({"ids": ["TAG-1"], "tags": ["a_b"]})).await;
+    let item = sub.next().await.expect("an item").unwrap();
+    assert_eq!((item["code"].as_str(), item["error_kind"].as_str()), (Some("-32602"), Some("invalid_params")), "{item}");
+    assert!(item["message"].as_str().unwrap().contains("tags"), "names the parameter: {item}");
+    assert!(one(&client, "tickets.get", json!({"id": "TAG-1"})).await["ticket"].get("archived").is_none(), "nothing written");
 }

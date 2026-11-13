@@ -136,9 +136,18 @@ use crate::address::{ShortcodeId, TicketId, TicketName};
 /// written without reading them. One way: a form-16 build reading a form-17
 /// file refuses it as newer than it writes.
 ///
+/// ARCHIVE-6 is form 18: a cell says which tags its tickets' archive mark
+/// holds (`archive_tags`, the set as a JSON list, sorted, as `labels` is) —
+/// so `archived tag <name>` is answered from the cells. Every mark a form-17
+/// file holds was set with no tag (the tags are new with this form), so
+/// every cell it stores is form 18's as it is: it gains the column, `[]` by
+/// default, in place, once, on its first open ([`upgrade`]), with no record
+/// and no cell touched. One way: a form-17 build refuses a form-18 file as
+/// newer than it writes.
+///
 /// Public, so a test of the binary (`tests/derived.rs`) writes a file in the
 /// form before it and holds the open to building this one once.
-pub const FORM: i64 = 17;
+pub const FORM: i64 = 18;
 
 /// COMMENT-2, IDENTITY-21, AUTH-7: the forms [`upgrade`] takes to [`FORM`]
 /// in place. MENGER-12: none — form 10 moves the cells, so every older form
@@ -148,8 +157,9 @@ pub const FORM: i64 = 17;
 /// TICKETS-6: and form 13, which gains the cells' `frozen` (so do 10 to 12).
 /// TICKETS-27: and form 14, which gains the cells' `hidden` (so do 10 to 13).
 /// V2-4: none again — form 16 moves the cells, so every older form is built
-/// again; V2-20: so does form 17.
-const UPGRADES_FROM: [i64; 0] = [];
+/// again; V2-20: so does form 17. ARCHIVE-6: form 17, which gains the
+/// cells' `archive_tags`.
+const UPGRADES_FROM: [i64; 1] = [17];
 
 /// IDENTITY-21: what form 8 adds beside the tables — a comment's signer.
 
@@ -188,6 +198,19 @@ const FROZEN_COLUMN: (&str, &str) = ("cells", "frozen");
 
 /// TICKETS-27: the column form 15 adds, `(table, column)`.
 const HIDDEN_COLUMN: (&str, &str) = ("cells", "hidden");
+
+/// ARCHIVE-6: the column form 18 adds, `(table, column)` — `TEXT NOT NULL
+/// DEFAULT '[]'`: no tag.
+const ARCHIVE_TAGS_COLUMN: (&str, &str) = ("cells", "archive_tags");
+
+/// ARCHIVE-6: [`ARCHIVE_TAGS_COLUMN`] added where it is missing.
+fn add_archive_tags_column(conn: &Connection) -> rusqlite::Result<()> {
+    let (table, column) = ARCHIVE_TAGS_COLUMN;
+    if !db::has_column(conn, table, column)? {
+        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} TEXT NOT NULL DEFAULT '[]'"), [])?;
+    }
+    Ok(())
+}
 
 /// TICKETS-27: [`HIDDEN_COLUMN`] added where it is missing.
 fn add_hidden_column(conn: &Connection) -> rusqlite::Result<()> {
@@ -351,7 +374,8 @@ const SCHEMA: &str = "
             labels   TEXT NOT NULL DEFAULT '[]',
             archived INTEGER NOT NULL DEFAULT 0,
             frozen   INTEGER NOT NULL DEFAULT 0,
-            hidden   INTEGER NOT NULL DEFAULT 0
+            hidden   INTEGER NOT NULL DEFAULT 0,
+            archive_tags TEXT NOT NULL DEFAULT '[]'
         );
         CREATE TABLE IF NOT EXISTS cell_bits (
             epic TEXT NOT NULL,
@@ -716,8 +740,8 @@ fn write_tree(conn: &Connection, t: &tree::Stored) -> rusqlite::Result<()> {
 /// FILTER-4: one cell of the table.
 fn put_cell(conn: &Connection, id: u32, key: &Key) -> rusqlite::Result<()> {
     conn.prepare_cached(
-        "INSERT INTO cells (id, state, kind, severity, blocked, commits, menger, asking, labels, archived, frozen, hidden)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        "INSERT INTO cells (id, state, kind, severity, blocked, commits, menger, asking, labels, archived, frozen, hidden, archive_tags)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
     )?
     .execute(params![
         id,
@@ -732,6 +756,7 @@ fn put_cell(conn: &Connection, id: u32, key: &Key) -> rusqlite::Result<()> {
         key.archived(),
         key.frozen(),
         key.hidden(),
+        serde_json::to_string(&*key.archive_tags().labels()).expect("serialize archive tags"),
     ])?;
     Ok(())
 }
@@ -960,6 +985,8 @@ pub(super) fn build(conn: &mut Connection, found: State) -> anyhow::Result<Cache
     add_frozen_column(&tx)?;
     // TICKETS-27: and from form 14 or older the cells' `hidden`.
     add_hidden_column(&tx)?;
+    // ARCHIVE-6: and from form 17 or older the cells' `archive_tags`.
+    add_archive_tags_column(&tx)?;
     create_children_index(&tx)?;
     drop_ready_index(&tx)?;
     // IDENTITY-21: form 8's members table.
@@ -1043,11 +1070,13 @@ pub(super) fn upgrade(conn: &mut Connection, form: i64) -> anyhow::Result<bool> 
     add_frozen_column(&tx)?;
     // TICKETS-27: form 15's column, 0 — nothing was hidden.
     add_hidden_column(&tx)?;
+    // ARCHIVE-6: form 18's column, `[]` — no archive was tagged.
+    add_archive_tags_column(&tx)?;
     mark_stale(&tx, false)?;
     tx.commit()?;
     tracing::warn!(
-        "ORG-3, ARCHIVE-2, ACCESS-22, TICKETS-6, TICKETS-27: the file gained stored form {FORM} — the shortcodes, orgs and pins tables, the archive's columns, the teams' tables, the cells' frozen and hidden — in {:.1} ms, durably; \
-         it was in form {form}, whose derived state is form {FORM}'s (every shortcode is named by its id already), \
+        "ARCHIVE-6: the file gained stored form {FORM} — the cells' archive_tags, every one empty — in {:.1} ms, durably; \
+         it was in form {form}, whose derived state is form {FORM}'s (no archive there was tagged), \
          so nothing was built again; every later open reads it",
         started.elapsed().as_secs_f64() * 1000.0
     );
@@ -1331,9 +1360,17 @@ fn read_cell_table(conn: &Connection) -> rusqlite::Result<BTreeMap<u32, Key>> {
     let frozen = if db::has_column(conn, "cells", "frozen")? { "frozen" } else { "0" };
     // TICKETS-27: and `hidden` as 0 in one from before form 15.
     let hidden = if db::has_column(conn, "cells", "hidden")? { "hidden" } else { "0" };
+    // ARCHIVE-6: and `archive_tags` as none in one from before form 18.
+    let tags = if db::has_column(conn, "cells", "archive_tags")? { "archive_tags" } else { "'[]'" };
     let mut stmt = conn.prepare(&format!(
-        "SELECT id, state, kind, severity, blocked, commits, menger, asking, labels, {archived}, {frozen}, {hidden} FROM cells ORDER BY id"
+        "SELECT id, state, kind, severity, blocked, commits, menger, asking, labels, {archived}, {frozen}, {hidden}, {tags} FROM cells ORDER BY id"
     ))?;
+    let set = |r: &rusqlite::Row<'_>, idx: usize| -> rusqlite::Result<cells::LabelSet> {
+        let raw: Vec<String> = serde_json::from_str(r.get_ref(idx)?.as_str()?).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(idx, rusqlite::types::Type::Text, e.to_string().into())
+        })?;
+        Ok(cells::LabelSet::of(&raw.into_iter().map(crate::vocab::Label::stored).collect::<Vec<_>>()))
+    };
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
         let severity = match r.get_ref(3)?.as_str_or_null()? {
@@ -1348,12 +1385,9 @@ fn read_cell_table(conn: &Connection) -> rusqlite::Result<BTreeMap<u32, Key>> {
             r.get(5)?,
             r.get(6)?,
         );
-        // MENGER-12: the set as stored, interned again in this process.
-        let labels: Vec<String> = serde_json::from_str(r.get_ref(8)?.as_str()?).map_err(|e| {
-            rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, e.to_string().into())
-        })?;
-        let labels: Vec<crate::vocab::Label> = labels.into_iter().map(crate::vocab::Label::stored).collect();
-        let key = key.with(r.get(7)?, cells::LabelSet::of(&labels)).archiving(r.get(9)?).freezing(r.get(10)?).hiding(r.get(11)?);
+        // MENGER-12: the set as stored, interned again in this process —
+        // ARCHIVE-6: and the archive mark's tags the same way.
+        let key = key.with(r.get(7)?, set(r, 8)?).archiving(r.get(9)?).archive_tagged(set(r, 12)?).freezing(r.get(10)?).hiding(r.get(11)?);
         out.insert(r.get(0)?, key);
     }
     Ok(out)
@@ -1574,7 +1608,7 @@ pub fn verify(path: &Path) -> anyhow::Result<Verdict> {
         State::Older(form) if UPGRADES_FROM.contains(&form) => {
             return Ok(Verdict::NotStored(format!(
                 "the derived state is stored in form {form}; this build reads {FORM} (the next open \
-                 adds the shortcodes, orgs and pins tables and the archive's columns, and builds nothing again)"
+                 adds the cells' archive_tags column, and builds nothing again)"
             )))
         }
         State::Older(form) => {

@@ -417,6 +417,7 @@ fn facts(id: &str, title: &str, status: Status, kind: Kind) -> Facts {
         asking: false,
         labels: Vec::new(),
         archived: false,
+        archive_tags: Vec::new(),
         frozen: false,
         hidden: false,
         id: id.into(),
@@ -578,6 +579,69 @@ fn asking_and_label_round_trip_and_admit() {
     assert!(parsed("label a and not label a").admits_nothing().is_some());
     assert!(parsed("label a and not label b").admits_nothing().is_none());
     assert!(parsed("asking and kind doc and status Doc").admits_nothing().is_none(), "a doc may ask");
+}
+
+/// ARCHIVE-6: `archived tag <name>` — read whatever its case (folded to
+/// lower case, a label's rule), written back canonical, listable
+/// (`archived tag in (a, b)`), inside `not` and nested groups; it names the
+/// archive (lifts the default that hides the archived), as `archived`
+/// does; it admits an archived ticket whose mark holds the tag, never a
+/// live one; a bad tag is refused, naming why; and `archived` alone, and
+/// `archived within …`, read as they did.
+#[test]
+fn archived_tag_round_trips_names_the_archive_and_admits() {
+    let tag = |t: &str| Field::ArchivedTag(t.into());
+    let cases: Vec<(&str, Vec<Group>, &str)> = vec![
+        ("archived tag season-1", vec![one(is(tag("season-1")))], "archived tag season-1"),
+        ("ARCHIVED TAG Season-1", vec![one(is(tag("season-1")))], "archived tag season-1"),
+        ("archived tag \"kiln\"", vec![one(is(tag("kiln")))], "archived tag kiln"),
+        ("not archived tag kiln", vec![one(not(tag("kiln")))], "not archived tag kiln"),
+        ("archived tag in (a, b)", vec![Group::any(vec![is(tag("a")), is(tag("b"))])], "archived tag in (a, b)"),
+        ("not archived tag in (a, b)", vec![Group::all(vec![not(tag("a")), not(tag("b"))])], "not archived tag in (a, b)"),
+        ("archived tag a or kind doc", vec![Group::any(vec![is(tag("a")), is(kind(Kind::Doc))])], "(archived tag a or kind doc)"),
+        ("archived", vec![one(is(Field::Archived))], "archived"),
+    ];
+    for (text, want, canonical) in cases {
+        let f = parsed(text);
+        assert_eq!(f.groups, want, "{text}");
+        assert_eq!(f.format(), canonical, "{text}");
+        assert_eq!(parsed(canonical), f, "{canonical} is a fixed point");
+    }
+    // Nested, under `not`: a group of a group holds it.
+    let nested = parsed("(kind build or (archived tag a and not label p1))");
+    assert_eq!(parsed(&nested.format()), nested);
+    assert!(nested.names_archived(), "a nested tag names the archive");
+    assert_eq!((tag("x").name(), tag("x").value()), ("archived tag", Some("x".to_string())));
+    assert!(parsed("archived tag a").names_archived() && parsed("not archived tag a").names_archived());
+    assert!(!parsed("label a").names_archived());
+    assert!(matches!(parsed("archived within 7d").groups[0].preds[0].field, Field::History(_)), "a window is still the log's");
+    for (text, why) in [("archived tag", "needs a value"), ("archived tag a_b", "not a label"), ("archived tag \"two words\"", "not a label")] {
+        let e = refused(text);
+        assert_eq!(e.chunks.len(), 1, "{text}: {e}");
+        assert!(e.chunks[0].why.contains(why), "{text}: {}", e.chunks[0].why);
+    }
+
+    // The evaluator: archived with both tags, archived with none, live
+    // holding a label of the same name.
+    let mut season = facts("KILN-1", "season", Status::Complete, Kind::Build);
+    (season.archived, season.archive_tags) = (true, vec!["season-1".into(), "kiln".into()]);
+    let mut bare = facts("KILN-3", "bare", Status::Complete, Kind::Build);
+    bare.archived = true;
+    let mut live = facts("KILN-9", "live", Status::Ready, Kind::Build);
+    live.labels = vec!["season-1".into()];
+    let who = |text: &str| -> Vec<&str> {
+        [&season, &bare, &live].into_iter().filter(|t| parsed(text).matches(t)).map(|t| t.id.as_str()).collect()
+    };
+    assert_eq!(who("archived tag season-1"), ["KILN-1"]);
+    assert_eq!(who("archived tag in (kiln, other)"), ["KILN-1"]);
+    assert_eq!(who("archived"), ["KILN-1", "KILN-3"]);
+    assert_eq!(who("not archived tag season-1"), ["KILN-3", "KILN-9"], "it names the archive: the untagged archived pass, the live as ever");
+    assert_eq!(who("archived and not archived tag season-1"), ["KILN-3"]);
+    assert_eq!(who("label season-1"), ["KILN-9"], "a tag is not a label");
+    // Merges as a label's: two inclusions never intersect.
+    assert_eq!(parsed("archived tag in (a, b)").and(&parsed("archived tag in (b, c)")).format(), "archived tag in (a, b) and archived tag in (b, c)");
+    assert!(parsed("archived tag a and not archived tag a").admits_nothing().is_some());
+    assert!(parsed("archived tag a and archived tag b").admits_nothing().is_none());
 }
 
 /// `palette_match` from `frontend/src/keys.rs` — find's rule, which the
@@ -879,6 +943,7 @@ fn random_facts(rng: &mut Rng, pools: &Pools) -> Facts {
         asking: rng.coin(),
         labels: pools.labels.iter().filter(|_| rng.coin()).map(|l| l.to_string()).collect(),
         archived: false,
+        archive_tags: Vec::new(),
         frozen: false,
         hidden: false,
         id,
@@ -986,6 +1051,7 @@ fn some_world_matches(f: &Filter) -> bool {
                     asking: false,
                     labels: chosen(&labels, l),
                     archived: false,
+                    archive_tags: Vec::new(),
                     frozen: false,
                     hidden: false,
                     id: "QQ-1".into(),

@@ -26,7 +26,8 @@
 //!
 //! Stored form 4: `cells (id, state, kind, severity, blocked, commits)` —
 //! form 6 (FILTER-21) adds `menger`, form 10 (MENGER-12) `asking` and
-//! `labels` (the set as a JSON list, sorted) —
+//! `labels` (the set as a JSON list, sorted), form 18 (ARCHIVE-6)
+//! `archive_tags` (the archive mark's tags, the same way) —
 //! `cell_bits (epic, cell, hi, card, bits)` — one row per 2¹⁶-sequence
 //! container, `bits` the container serialized as Roaring serializes one: at
 //! most 4,096 members as their low 16 bits, little-endian, two bytes each;
@@ -141,6 +142,10 @@ pub struct Key {
     /// never shares a cell with a live one, and a view that does not name
     /// the archive admits no cell that holds one: nothing walks them.
     archived: bool,
+    /// ARCHIVE-6: the tags its archive mark holds (none when it is live, or
+    /// was archived with no tag) — a set as `labels` is, so `archived tag
+    /// <name>` is answered from the cells.
+    archive_tags: LabelSet,
     /// TICKETS-6: it is a frozen scope.
     frozen: bool,
     /// TICKETS-27: it is hidden from the nav's views.
@@ -163,6 +168,7 @@ impl Key {
             asking: false,
             labels: LabelSet::NONE,
             archived: false,
+            archive_tags: LabelSet::NONE,
             frozen: false,
             hidden: false,
         }
@@ -171,6 +177,11 @@ impl Key {
     /// ARCHIVE-2: this cell, archived or not.
     pub(super) fn archiving(self, archived: bool) -> Self {
         Self { archived, ..self }
+    }
+
+    /// ARCHIVE-6: this cell, its archive mark holding `tags`.
+    pub(super) fn archive_tagged(self, archive_tags: LabelSet) -> Self {
+        Self { archive_tags, ..self }
     }
 
     /// TICKETS-6: this cell, frozen or not.
@@ -204,6 +215,7 @@ impl Key {
         )
         .with(asking, LabelSet::of(&t.labels))
         .archiving(t.archived.is_some())
+        .archive_tagged(t.archived.as_ref().map_or(LabelSet::NONE, |m| LabelSet::of(&m.tags)))
         .freezing(t.frozen)
         .hiding(t.hidden)
     }
@@ -248,6 +260,11 @@ impl Key {
         self.archived
     }
 
+    /// ARCHIVE-6: the tags its archive mark holds.
+    pub fn archive_tags(self) -> LabelSet {
+        self.archive_tags
+    }
+
     /// TICKETS-6: whether it is frozen.
     pub fn frozen(self) -> bool {
         self.frozen
@@ -261,16 +278,18 @@ impl Key {
 
 /// As `--verify-derived` names a cell: `(Ready, build, none, blocked, no
 /// commits)` — FILTER-21: `, menger doc` last when it is one; MENGER-12:
-/// then `, asking` when it is, and `, labels a b` when it holds any.
+/// then `, asking` when it is, and `, labels a b` when it holds any;
+/// ARCHIVE-6: `, archived tags a b` when its mark holds tags.
 impl fmt::Display for Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let labels = match self.labels.is_empty() {
+        let set = |head: &str, s: LabelSet| match s.is_empty() {
             true => String::new(),
-            false => format!(", labels {}", self.labels.labels().iter().map(Label::as_str).collect::<Vec<_>>().join(" ")),
+            false => format!(", {head} {}", s.labels().iter().map(Label::as_str).collect::<Vec<_>>().join(" ")),
         };
+        let labels = set("labels", self.labels);
         write!(
             f,
-            "({}, {}, {}, {}, {}{}{}{}{}{}{})",
+            "({}, {}, {}, {}, {}{}{}{}{}{}{}{})",
             self.status(),
             self.kind(),
             self.severity().map_or("none".to_string(), |s| s.as_str().to_ascii_lowercase()),
@@ -280,6 +299,7 @@ impl fmt::Display for Key {
             if self.asking { ", asking" } else { "" },
             labels,
             if self.archived { ", archived" } else { "" },
+            set("archived tags", self.archive_tags),
             if self.frozen { ", frozen" } else { "" },
             if self.hidden { ", hidden" } else { "" },
         )

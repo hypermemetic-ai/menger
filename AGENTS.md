@@ -130,7 +130,7 @@ reaches; neither opens the tickets file. A body shows an image as
 
 **The tickets service** is v1's core and nothing else: the cache
 (`tickets-api/src/store/`), the cells and the lens over Roaring bitmaps, the
-kept tree, the stored derived state (form 17), FTS5 search, questions
+kept tree, the stored derived state (form 18), FTS5 search, questions
 (`tickets inputs`) and the queue (V2-20; README "Questions and the queue"), the filter
 language. `tickets-api/tests/cut.rs` holds the cut: no module of a service
 that went, no flag for one, and README and this file naming none of them.
@@ -499,10 +499,14 @@ synapse -P 4460 menger tickets unfreeze --id KILN-1
 
 **The archive** (ARCHIVE-2) is a mark apart from status — a ticket with its
 whole subtree out of every view unless a filter names `archived`; `restore`
-brings it back with its archived ancestors:
+brings it back with its archived ancestors. An archive may be tagged
+(ARCHIVE-6: `--tags`, each a label; none is as before), and `archived tag
+<name>` finds what carries one:
 
 ```sh
 synapse -P 4460 menger tickets archive --ids KILN-1 --dry-run true --message "first season fired"
+synapse -P 4460 menger tickets archive --ids KILN-1 --tags season-1,kiln --message "first season fired"
+synapse -P 4460 menger tickets list --filter 'archived tag season-1' --summary true
 synapse -P 4460 menger tickets archive --filter 'category done and under KILN' --max 500
 synapse -P 4460 menger tickets restore --ids KILN-4 --with-children true
 ```

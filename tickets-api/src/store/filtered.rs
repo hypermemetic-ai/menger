@@ -372,6 +372,7 @@ fn facts(letters: &str, key: Key, lineage: &[&str], holds: &[&str]) -> Facts {
         asking: key.asking(),
         labels: key.labels().labels().iter().map(|l| l.to_string()).collect(),
         archived: key.archived(),
+        archive_tags: key.archive_tags().labels().iter().map(|l| l.to_string()).collect(),
         frozen: key.frozen(),
         hidden: key.hidden(),
         lineage: lineage.iter().map(|l| l.to_string()).collect(),

@@ -492,7 +492,11 @@ pub(super) async fn random_write(store: &Store, rng: &mut Rng, epics: &[&str], t
         let sel = super::update_many::Selection::Ids(vec![id.clone()]);
         let moved = match own.below(3) {
             0 => store.restore(SYS, sel, own.below(2) == 0, false).await.map(|r| r.ids.len()),
-            _ => store.archive(SYS, sel, false).await.map(|a| a.ids.len()),
+            // ARCHIVE-6: tagged or not, by a draw of its own.
+            _ => {
+                let tags: &[&str] = [&[][..], &["season-1"], &["kiln", "season-1"]][own.below(3)];
+                store.archive_tagged(SYS, sel, tags, false).await.map(|a| a.ids.len())
+            }
         };
         tally.archived += usize::from(moved.as_ref().is_ok_and(|n| *n > 0));
         return format!("archive or restore of {id}: {moved:?}");

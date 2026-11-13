@@ -57,7 +57,15 @@ pub(super) fn marking(store: &Store, caller: &VerifiedUser, ids: &[String], what
 }
 
 /// ARCHIVE-2: `archive` — the selection, the permits, the write.
-pub(super) fn archive_stream(store: Arc<Store>, caller: VerifiedUser, picked: Picked, act: Result<Act, String>, dry_run: bool) -> impl Stream<Item = TicketsEvent> + Send + 'static {
+/// ARCHIVE-6: `tags` go on every mark it sets.
+pub(super) fn archive_stream(
+    store: Arc<Store>,
+    caller: VerifiedUser,
+    picked: Picked,
+    tags: Vec<Label>,
+    act: Result<Act, String>,
+    dry_run: bool,
+) -> impl Stream<Item = TicketsEvent> + Send + 'static {
     stream! {
         let (select, act) = match selection(&store, &caller, picked, false).and_then(|s| Ok((s, act?))) {
             Ok(c) => c,
@@ -69,7 +77,8 @@ pub(super) fn archive_stream(store: Arc<Store>, caller: VerifiedUser, picked: Pi
         let caller = Arc::new(caller);
         let (gate, at) = (Arc::clone(&caller), store.clone());
         let may = move |ids: &[String]| marking(&at, &gate, ids, "archive");
-        match store.archive_by(select, act, dry_run, may).await {
+        let tags = tags.into_iter().map(String::from).collect();
+        match store.archive_tagged_by(select, tags, act, dry_run, may).await {
             Ok(ArchiveAnswer { ids, live, unqueued, mark, dry_run }) => yield TicketsEvent::Archived { ids, live, unqueued, mark, dry_run },
             Err(e) => yield said(&store, &caller, e),
         }

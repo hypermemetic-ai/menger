@@ -8,7 +8,9 @@
 //! children, and what stays named; `archived` / `restored` as filter cells;
 //! the queue left and an agent's reply; a `may` that refuses writing
 //! nothing; and the derived state a scan, durable, `--verify-derived`
-//! consistent.
+//! consistent. ARCHIVE-6: an archive's tags — kept on every mark it sets,
+//! none for an untagged one, `archived tag <name>` answered from the cells,
+//! a restore by tag, a bad tag refused, and form 17 gaining them in place.
 
 use super::update_many::Selection;
 use super::*;
@@ -349,10 +351,139 @@ async fn a_random_walk_with_archives_holds_its_kept_state_to_a_scan() {
             let live: Vec<String> = store.page(SYS, PageQuery { limit: Some(10_000), ..PageQuery::default() }).unwrap().tickets.into_iter().map(|t| t.id.to_string()).collect();
             assert!(live.iter().all(|id| !archived.contains(id)), "a view never holds the archive, after {what}");
             assert_eq!(listed(&store, "archived"), archived, "the archive, asked for, after {what}");
+            // ARCHIVE-6: the walk tags some archives; each tag filter, from
+            // the cells, is what the rows' marks say.
+            let plain = super::tests_filtered::Plain::of(&store);
+            for text in ["archived tag season-1", "archived tag in (kiln, season-1)", "not archived tag kiln", "archived and not archived tag season-1", "(archived tag kiln or status Ready)"] {
+                let filter = crate::filter::Filter::parse(text).unwrap();
+                let judge = |t: &Row, k: super::cells::Key| filter.matches(&plain.facts(t, k));
+                super::tests_filtered::assert_lens_is_a_scan(&store, &plain, &Lens::parse(text).unwrap(), &judge, &mut rng, &format!("{text} after {what}"));
+            }
             assert_eq!(store.count(SYS) + archived.len(), store.tickets.read().unwrap().len(), "after {what}");
         }
     }
     assert!(tally.archived >= 20, "the walk archived and restored: {}", tally.archived);
+    let tagged = store.tickets.read().unwrap().order.values().filter(|t| t.archived.as_ref().is_some_and(|m| !m.tags.is_empty())).count();
+    assert!(tagged > 0, "the walk left tagged archives standing");
+}
+
+/// The marks' tags, by id, of `ids`.
+async fn tags_of(store: &Store, ids: &[&str]) -> Vec<(String, Vec<String>)> {
+    let mut out = Vec::new();
+    for id in ids {
+        let t = store.get(SYS, id).await.unwrap();
+        out.push((id.to_string(), t.archived.map(|m| m.tags.into_iter().map(String::from).collect()).unwrap_or_default()));
+    }
+    out
+}
+
+#[tokio::test]
+async fn a_tagged_archive_keeps_its_tags_on_every_mark_and_the_filter_finds_them() {
+    let store = store().await;
+    let mut rx = store.subscribe_filtered();
+    let a = store.archive_tagged(SYS, ids(&["K-1"]), &["Season-1", "kiln", "season-1"], false).await.unwrap();
+    let want: Vec<String> = vec!["season-1".into(), "kiln".into()];
+    assert_eq!(a.mark.tags, want, "lower-cased, in the order given, each once");
+    assert_eq!(texts(&a.ids), ["K-1", "K-2", "K-3", "K-4", "K-5", "K-6", "K-7", "K-8"]);
+    for (id, tags) in tags_of(&store, &["K-1", "K-4", "K-8"]).await {
+        assert_eq!(tags, want, "{id}: `get` carries the mark's tags");
+    }
+    let sent: Vec<Change> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+    assert!(sent.iter().any(|c| matches!(c, Change::Archived { mark, .. } if mark.tags == want)), "watch's `archived` carries them");
+    // On the wire: the mark's `tags`.
+    let wire = serde_json::to_value(&a.mark).unwrap();
+    assert_eq!(wire["tags"], serde_json::json!(["season-1", "kiln"]));
+    // The filter: from the cells, the archive named.
+    assert_eq!(listed(&store, "archived tag season-1"), ["K-1", "K-2", "K-3", "K-4", "K-5", "K-6", "K-7", "K-8"]);
+    assert_eq!(listed(&store, "archived tag kiln and status Complete"), ["K-2", "K-3"]);
+    assert_eq!(listed(&store, "archived tag in (other, kiln) and kind doc"), ["K-5"]);
+    assert!(listed(&store, "archived tag other").is_empty());
+    assert!(listed(&store, "status Complete").is_empty(), "a filter that does not name the archive still hides it");
+    let counted = |f: &str| store.counts(SYS, &Lens::parse(f).unwrap()).into_iter().map(|(_, n)| n).sum::<u64>();
+    assert_eq!(counted("archived tag season-1"), 8);
+    // Already archived: a no-op — its tags are the write's that archived it.
+    let again = store.archive_tagged(SYS, ids(&["K-6"]), &["other"], false).await.unwrap();
+    assert!(again.ids.is_empty());
+    assert_eq!(tags_of(&store, &["K-6"]).await[0].1, want);
+    assert_derived(&store, "a tagged archive");
+}
+
+#[tokio::test]
+async fn an_archive_with_no_tag_is_as_it_was() {
+    let store = store().await;
+    store.archive_tagged(SYS, ids(&["K-6"]), &["season-1"], false).await.unwrap();
+    let a = store.archive(SYS, ids(&["K-3"]), false).await.unwrap();
+    assert!(a.mark.tags.is_empty());
+    assert_eq!(texts(&a.ids), ["K-3"]);
+    let wire = serde_json::to_value(&a.mark).unwrap();
+    assert!(wire.get("tags").is_none(), "no tag: omitted on the wire — {wire}");
+    assert!(store.get(SYS, "K-3").await.unwrap().archived.unwrap().tags.is_empty());
+    assert_eq!(listed(&store, "archived tag season-1"), ["K-6", "K-7", "K-8"], "the untagged archive is not answered");
+    assert_eq!(listed(&store, "archived"), ["K-3", "K-6", "K-7", "K-8"]);
+    assert_eq!(listed(&store, "archived and not archived tag season-1"), ["K-3"]);
+    // A mark stored before tags were reads with none.
+    let old: crate::types::Archived = serde_json::from_str(r#"{"at_unix":1,"by":"owner","write":7}"#).unwrap();
+    assert!(old.tags.is_empty());
+    assert_derived(&store, "tagged and untagged");
+}
+
+#[tokio::test]
+async fn a_restore_by_tag_brings_back_what_was_archived_with_it() {
+    let store = store().await;
+    store.archive_tagged(SYS, ids(&["K-6"]), &["season-1"], false).await.unwrap();
+    store.archive(SYS, ids(&["K-2"]), false).await.unwrap();
+    store.archive_tagged(SYS, ids(&["G-2"]), &["season-2"], false).await.unwrap();
+    // As the activation sends it: the filter, and `archived`.
+    let sel = Selection::Filter { lens: Lens::parse("archived tag season-1 and archived").unwrap(), max: 500 };
+    let r = store.restore(SYS, sel, false, false).await.unwrap();
+    assert_eq!(texts(&r.ids), ["K-6", "K-7", "K-8"]);
+    assert!(listed(&store, "archived tag season-1").is_empty());
+    assert_eq!(listed(&store, "archived"), ["G-2", "K-2"], "one archived without the tag, and one with another, stay");
+    assert!(store.get(SYS, "K-7").await.unwrap().archived.is_none());
+    assert_derived(&store, "a restore by tag");
+}
+
+#[tokio::test]
+async fn a_bad_tag_is_refused_and_nothing_written() {
+    let store = store().await;
+    let before = written(&store);
+    for bad in [&["ok", "a_b"][..], &["two words"], &[""], &[&*"a".repeat(33)]] {
+        let e = store.archive_tagged(SYS, ids(&["K-6"]), bad, false).await.unwrap_err();
+        assert!(e.to_string().contains("a tag is a label"), "{bad:?}: {e}");
+    }
+    assert_eq!(written(&store), before);
+    assert!(store.get(SYS, "K-6").await.unwrap().archived.is_none());
+    assert!(crate::filter::Filter::parse("archived tag a_b").is_err(), "nor named in a filter");
+}
+
+#[tokio::test]
+async fn a_form_17_file_gains_archive_tags_in_place_and_verifies() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("form17.db");
+    let store = Store::open(&path).unwrap();
+    fixture(&store).await;
+    store.archive(SYS, ids(&["K-6"]), false).await.unwrap();
+    let mark = store.get(SYS, "K-7").await.unwrap().archived.unwrap();
+    drop(store);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch("ALTER TABLE cells DROP COLUMN archive_tags; UPDATE derived_state SET form = 17;").unwrap();
+    // A form-17 mark: its JSON has no `tags`.
+    let stored: String = conn.query_row("SELECT archived FROM tickets WHERE id = 'K-7'", [], |r| r.get(0)).unwrap();
+    assert!(!stored.contains("tags"), "{stored}");
+    drop(conn);
+    assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::NotStored(why) if why.contains("form 17; this build reads 18")));
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.get(SYS, "K-7").await.unwrap().archived, Some(mark), "the old mark reads, with no tag");
+    assert_eq!(listed(&store, "archived"), ["K-6", "K-7", "K-8"]);
+    store.archive_tagged(SYS, ids(&["G-2"]), &["season-1"], false).await.unwrap();
+    assert_eq!(listed(&store, "archived tag season-1"), ["G-2"]);
+    drop(store);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), FORM);
+    drop(conn);
+    assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { .. }), "{:?}", Store::verify_derived(&path).unwrap());
+    let store = Store::open(&path).unwrap();
+    assert_eq!(listed(&store, "archived tag season-1"), ["G-2"], "the reopen reads the tags from the cells");
 }
 
 #[tokio::test]
@@ -372,13 +503,13 @@ async fn a_form_11_file_gains_the_archives_columns_in_place() {
     )
     .unwrap();
     drop(conn);
-    assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::NotStored(why) if why.contains("form 11; this build reads 17")));
+    assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::NotStored(why) if why.contains(&format!("form 11; this build reads {FORM}"))));
     let store = Store::open(&path).unwrap();
     assert_eq!(store.groups(SYS), groups, "answers as before, nothing built again");
     store.archive(SYS, ids(&["K-6"]), false).await.unwrap();
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
-    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), 17);
+    assert_eq!(conn.query_row("SELECT form FROM derived_state", [], |r| r.get::<_, i64>(0)).unwrap(), FORM);
     drop(conn);
     assert!(matches!(Store::verify_derived(&path).unwrap(), Verdict::Consistent { .. }));
 }
