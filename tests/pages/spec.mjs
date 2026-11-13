@@ -279,11 +279,74 @@ Every firing SHALL be logged.
       assert.match(await page.locator(`${H} [data-kid="${kidB}"]`).innerText(), /tied to no requirement/);
       await page.locator(`${H} [data-section=Requirements]`).click();
       const chip = page.locator(`${H} .spec-req-line`, { has: page.locator('[data-req="A firing can be paused"]') }).locator("[data-built]");
-      same(await chip.evaluateAll((els) => els.map((e) => [e.dataset.built, e.dataset.status])), [[kidA, "Draft"]]);
-      assert.match(await chip.getAttribute("href"), new RegExp(kidA));
+      // EDITOR-27: `[data-built]` holds the ticket's pill (ticket-pills'), which carries the status and the link.
+      await eventually("what builds it is a pill", async () => (await chip.locator("a.tpill[data-pill]").count()) === 1, 10_000);
+      same(await chip.evaluateAll((els) => els.map((e) => [e.dataset.built, e.querySelector("a.tpill[data-pill]")?.dataset.status])), [[kidA, "Draft"]]);
+      assert.match(await chip.locator("a.tpill").getAttribute("href"), new RegExp(kidA));
       // The statement is drawn without the line that names them.
       await page.locator(`${H} [data-req="A firing can be paused"]`).click();
       ok(!/Built by/.test(await page.locator(`${H} [data-req-body] [data-unit=requirement]`).innerText()), "the statement repeats what builds it");
+    } finally { await context.close(); }
+  });
+
+  // EDITOR-27: the labels of what builds a spec are the app's ticket pill (ticket-pills' `a.tpill[data-pill]`, the
+  // one an id in a body is), one line high at any width; a narrow row keeps its pills whole and stays in its box.
+  await test("spec_outline_labels_are_the_ticket_pill_and_never_wrap", async () => {
+    const A = "ACCOUNT";
+    const long = "a building ticket whose title runs on well past the width of any phone that draws it";
+    const top = createdId(sy("tickets", "create", "--epic", A, "--kind", "scope", "--title", "the account spec"), "account spec");
+    const kids = [];
+    for (const [i, st] of [[1, "Complete"], [2, "In Review"], [3, "Complete"]]) {
+      const k = createdId(sy("tickets", "create", "--epic", A, "--kind", "build", "--parent", top, "--title", `${long} (${i})`), `account kid ${i}`);
+      sy("tickets", "set_status", "--id", k, "--status", st);
+      kids.push(k);
+    }
+    sy("tickets", "amend", "--id", top, "--body", bodyFile("acct", `Built first: ${kids[0]}.\n\n<spec-outline>\n# Accounts\n\n## Requirements\n\n### sign in\n\n#### Requirement: An account signs in\n\nAn account SHALL sign in. **Built by:** ${kids.join(", ")}\n\n##### Scenario: signed in\n- **WHEN** it signs in\n- **THEN** it is in\n</spec-outline>\n`));
+    const { context, page } = await openPage(`#/ticket/${top}`);
+    try {
+      await page.evaluate(() => (document.documentElement.dataset.theme = "dark"));
+      await eventually("the spec is drawn", async () => (await page.locator(H).count()) === 1, 15_000);
+      await page.locator(`${H} [data-section=Requirements]`).click();
+      const body = `[data-surface=ticket-body] [data-ticket-body] a.tpill[data-pill="${kids[0]}"]`;
+      const labels = `${H} :is([data-kid], [data-built])`;
+      const outside = () => page.locator(body).evaluateAll((els, h) => els.filter((e) => !e.closest(h)).length, H);
+      await eventually("the body's id and every label are pills", async () => (await outside()) === 1
+        && (await page.locator(`${H} [data-kid] a.tpill[data-pill]`).count()) === 3 && (await page.locator(`${H} [data-built] a.tpill[data-pill]`).count()) === 3, 15_000);
+      for (const [w, h] of [[390, 844], [1280, 900]]) {
+        await page.setViewportSize({ width: w, height: h });
+        await page.waitForTimeout(300);
+        const got = await page.evaluate(([body, labels, H]) => {
+          const look = (e) => { const s = getComputedStyle(e); return [s.fontFamily, s.fontSize, s.lineHeight, s.whiteSpace, s.paddingLeft, s.borderTopLeftRadius, s.color, s.backgroundColor, s.textDecorationLine].join("|"); };
+          const marks = (e) => [e.localName, e.className, ...[...e.attributes].map((a) => a.name).filter((n) => n !== "class").sort()].join(" ");
+          const ref = [...document.querySelectorAll(body)].find((e) => !e.closest(H));
+          const row = (e) => e.closest("[data-kid], .spec-req-line");
+          const out = { w: innerWidth, sideways: document.documentElement.scrollWidth - document.documentElement.clientWidth, ref: { h: ref.getBoundingClientRect().height, marks: marks(ref), look: look(ref) }, labels: [] };
+          for (const l of document.querySelectorAll(labels)) {
+            const a = l.matches("a") ? l : l.querySelector("a");
+            const r = a.getBoundingClientRect(), rr = row(l).getBoundingClientRect();
+            out.labels.push({ id: l.dataset.kid ?? l.dataset.built, h: r.height, w: r.width, left: r.left, right: r.right, rowLeft: rr.left, rowRight: rr.right, marks: marks(a), stage: a.dataset.stage, look: look(a), text: a.textContent });
+          }
+          const kidRows = [...document.querySelectorAll("[data-kid]")].map((k) => { const r = k.getBoundingClientRect(), p = k.parentElement.getBoundingClientRect(); return [r.left - p.left, p.right - r.right]; });
+          out.rowsIn = kidRows.every(([l, r]) => l >= -0.5 && r >= -0.5);
+          return out;
+        }, [body, labels, H]);
+        console.log(`  EDITOR-27 at ${w}: body pill ${got.ref.h}px high; labels ${JSON.stringify(got.labels.map((l) => [l.id, Math.round(l.h * 10) / 10, Math.round(l.w)]))}`);
+        ok(got.sideways <= 0, `at ${w} the page scrolls sideways by ${got.sideways}px`);
+        ok(got.rowsIn, `at ${w} a row stands past the list's edge`);
+        ok(got.labels.length === 6, `at ${w} six labels, got ${got.labels.length}`);
+        for (const l of got.labels) {
+          ok(l.marks === got.ref.marks, `at ${w} ${l.id}'s label is not the body's pill: ${l.marks} vs ${got.ref.marks}`);
+          ok(l.text === l.id, `at ${w} ${l.id}'s pill says ${JSON.stringify(l.text)}`);
+          ok(Math.abs(l.h - got.ref.h) < 0.5, `at ${w} ${l.id}'s pill is ${l.h}px high, a one-line pill ${got.ref.h}px`);
+          ok(l.left >= l.rowLeft - 0.5 && l.right <= l.rowRight + 0.5, `at ${w} ${l.id}'s pill stands past its row: ${JSON.stringify(l)}`);
+          if (l.id === kids[0]) ok(l.look === got.ref.look, `at ${w} ${l.id}'s pill is drawn unlike the body's: ${l.look} vs ${got.ref.look}`);
+        }
+        if (process.env.E27_SHOTS) {
+          await page.locator(`${H} [data-kids]`).evaluate((e) => e.scrollIntoView({ block: "center" }));
+          await page.waitForTimeout(300);
+          await page.locator(H).screenshot({ path: path.join(process.env.E27_SHOTS, `e27-${process.env.E27_TAG ?? "after"}-${w}.png`) });
+        }
+      }
     } finally { await context.close(); }
   });
 

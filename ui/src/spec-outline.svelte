@@ -41,8 +41,8 @@
      `[data-question]`, `[data-open-all]`, `[data-edit]`, `[data-input=<id>]` (`[data-kind]`, `[data-state]`;
      `[data-option=<value>]`, `[data-action]`, `[data-field=question|answer|recommendation]`),
      `[data-unit=<kind>]` with `[data-edit-unit]`, `[data-editing]` (its `textarea`, `[data-save]`,
-     `[data-cancel]`, `[data-refused]`), `[data-built=<id>]` (`data-status`), `[data-kids]` with
-     `[data-kid=<id>]` (`[data-untied]`). -->
+     `[data-cancel]`, `[data-refused]`), `[data-built=<id>]`, `[data-kids]` with
+     `[data-kid=<id>]` (`[data-untied]`) — each holding its ticket's pill, `a.tpill[data-pill]` (EDITOR-27). -->
 <script module>
   export const uses = ["tickets.get", "tickets.watch", "tickets.list", "tickets.amend", "tickets.inputs.list", "tickets.inputs.answer", "tickets.inputs.clear"];
 
@@ -222,7 +222,8 @@
   import TicketView from "./ticket-view.svelte";
   import SpecTasks from "./spec-tasks.svelte";
   import { tagSpans, wroteOwn } from "./tag-source.svelte";
-  import { ticketHref } from "./ticket-links.svelte";
+  // EDITOR-27: a ticket it names is the app's ticket pill, made by the pass every body's ids go through.
+  import PillTable, { drawPills } from "./ticket-pills.svelte";
 
   let { ticket = "", body = "", source = "", n = "0", editor = "" } = $props();
   const tagged = !!inner(source).trim();
@@ -265,7 +266,6 @@
   // What builds it: the ticket's children, live; a requirement names the ones that build it.
   const kids = b ? live({ snapshot: "tickets.list", params: () => ({ parent: ticket, summary: true, limit: 200 }), changes: "tickets.watch", key: "id",
                           on: { created: "upsert:ticket", status_changed: "upsert:ticket", updated: "upsert:ticket", deleted: "remove:ids" } }) : null;
-  const kid = (id) => kids?.rows.find((k) => k.id === id) ?? null;
   const tied = $derived(new Set(holds ? spec.sections.flatMap((s) => (s.groups ?? []).flatMap((g) => g.reqs.flatMap((r) => r.ids))) : []));
   const children = $derived((kids?.rows ?? []).filter((k) => k.id != null && k.kind !== "doc"));
 
@@ -459,13 +459,12 @@
 {/snippet}
 
 {#snippet chip(id)}
-  {@const k = kid(id)}
-  <a class="spec-built tpill" data-built={id} data-status={k?.status ?? ""} href={ticketHref(k ?? { id })} title={k?.title ?? id}>{id}{#if k?.status}<span class="spec-status">{k.status}</span>{/if}</a>
+  <span class="spec-pill" data-built={id} use:drawPills>{id}</span>
 {/snippet}
 
 {#if any && holds}
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-<section class="spec" data-surface="spec-outline" data-holds aria-label={spec.title || "Spec"} bind:this={root} onmousedown={hold} onkeydown={typed} tabindex="-1">
+<PillTable/><section class="spec" data-surface="spec-outline" data-holds aria-label={spec.title || "Spec"} bind:this={root} onmousedown={hold} onkeydown={typed} tabindex="-1">
   {#if spec.title}<h2 class="spec-title">{spec.title}</h2>{/if}
   {@render stats()}
   {#if plain.length}
@@ -477,7 +476,7 @@
   <ul class="spec-kids" data-kids aria-label="The tickets under this one">
     {#each children as k (k.id)}
       <li data-kid={k.id} data-untied={tied.has(k.id) ? undefined : ""}>
-        <a class="spec-built tpill" data-status={k.status ?? ""} href={ticketHref(k)}>{k.id}<span class="spec-status">{k.status}</span></a>
+        <span class="spec-pill" use:drawPills>{k.id}</span>
         <span class="spec-kid-title">{k.title}</span>
         <span class="spec-kid-kind">{k.kind}</span>
         {#if !tied.has(k.id)}<span class="spec-warn">tied to no requirement</span>{/if}
@@ -680,18 +679,17 @@
   .spec-box-tools { display: flex; align-items: center; gap: 12px; }
   .spec-hint { color: var(--muted); font-size: 12px; }
 
-  .spec-req-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-  .spec-req-line > .spec-req { flex: 1; min-width: 0; width: auto; }
-  .spec-builts { flex: none; display: inline-flex; flex-wrap: wrap; gap: 4px; padding-right: 4px; }
-  .spec-built { display: inline-flex; align-items: baseline; gap: 5px; padding: 0 7px; font-size: 12px; line-height: 18px; color: var(--accent); text-decoration: none; background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius-pill); font-variant-numeric: tabular-nums; }
-  .spec-built:hover, .spec-built:global([data-sheet~=hover]) { background: var(--hover); }
-  .spec-built:focus-visible, .spec-built:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
-  .spec-status { color: var(--muted); }
-  .spec-built[data-status=Complete] .spec-status { color: var(--live); }
-  .spec-kids { display: grid; gap: 3px; padding-top: 6px; border-top: var(--border) solid var(--line); }
+  /* EDITOR-27: the pills are ticket-pills' own, drawn as every body draws them (the body's sheet around this
+     tag); here only their place: whole, one line, never shrunk. A line too narrow for them takes them below. */
+  .spec-req-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; }
+  .spec-req-line > .spec-req { flex: 1 1 14em; min-width: 0; width: auto; }
+  .spec-builts { flex: 0 1 auto; display: inline-flex; flex-wrap: wrap; gap: 4px; min-width: 0; padding: 0 4px; }
+  .spec-pill { flex: none; max-width: 100%; white-space: nowrap; }
+  .spec-kids { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; padding-top: 6px; border-top: var(--border) solid var(--line); }
   .spec-kids li { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-  .spec-kid-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .spec-kid-title { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .spec-kid-kind { flex: none; color: var(--muted); font-size: 12px; }
+  .spec-kids .spec-warn { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 
   .spec-questions { display: grid; gap: 2px; }
   nav .spec-questions { border-top: var(--border) solid var(--line); padding-top: 6px; }
