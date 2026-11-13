@@ -67,6 +67,22 @@ export default async (ctx) => {
     }
   });
 
+  // The shell serves the app at the bare address too (`/#/board`, no `/app/`): the keys are bound there as well.
+  await test("the_global_keys_work_at_the_bare_address", async () => {
+    const { page, context } = await openPage("#/board");
+    await page.goto(`${ctx.server.origin}/#/board`);
+    await page.locator("[data-surface=app-top]").first().waitFor({ timeout: 15_000 });
+    await sleep(500);
+    assert((await page.evaluate(() => location.pathname)) === "/", "the page is at the bare address");
+    await page.keyboard.press("g");
+    await page.keyboard.press("n");
+    await eventually("g n opens the note window at /", async () => (await win(page).count()) === 1, 3_000);
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Control+k");
+    await eventually("ctrl+k opens the palette at /", async () => (await page.locator("input[data-palette-input]").count()) === 1, 3_000);
+    await context.close();
+  });
+
   await test("a_note_has_its_typed_title_and_opens_from_the_bar", async () => {
     const { page, context } = await openPage("#/board");
     await page.locator("[data-surface=app-top] [data-action=\"note.open\"]").first().click({ timeout: 15_000 });
