@@ -11,23 +11,23 @@
 # Every state the tokens paint is drawn at #/sheet (sheet-page), both schemes.
 
 [colour.paper]
-"--bg"       = ['#fbfaf7', '#141412', 'the page']
-"--panel"    = ['#ffffff', '#1c1b19', 'the nav, the top bar, a panel head']
-"--card"     = ['#ffffff', '#22211e', 'a control face, a menu, the palette']
-"--hover"    = ['#f1efe9', '#26251f', 'a row or control under the pointer']
+"--bg"       = ['#f8fafd', '#121417', 'the page']
+"--panel"    = ['#ffffff', '#191b1e', 'the nav, the top bar, a panel head']
+"--card"     = ['#ffffff', '#1f2124', 'a control face, a menu, the palette']
+"--hover"    = ['#eceff3', '#222529', 'a row or control under the pointer']
 "--sel"      = ['#eef1fc', '#1d2235', 'a flash, a pressed toggle']
 "--row-sel"  = ['#e2e8fb', '#232b45', 'the selected row']
-"--skeleton" = ['#ebe8e1', '#2a2925', 'a row still loading']
-"--shadow"   = ['#1d1c1a24', '#00000080', 'the lift under a menu or the palette']
+"--skeleton" = ['#e6e9ec', '#26292d', 'a row still loading']
+"--shadow"   = ['#191b1f24', '#00000080', 'the lift under a menu or the palette']
 
 [colour.ink]
-"--ink"      = ['#1d1c1a', '#ecebe6', 'text']
-"--muted"    = ['#6b6860', '#9b988f', 'labels, counts, hints']
-"--disabled" = ['#a19e96', '#6b6860', 'a control that will not act']
+"--ink"      = ['#191b1f', '#eaecef', 'text']
+"--muted"    = ['#62676d', '#9399a0', 'labels, counts, hints']
+"--disabled" = ['#989da2', '#64696f', 'a control that will not act']
 
 [colour.line]
-"--line"      = ['#e4e1d9', '#2e2d29', 'hairlines']
-"--tree-line" = ['#d3cfc4', '#3a3934', "the tree's connectors"]
+"--line"      = ['#dfe1e5', '#2a2d31', 'hairlines']
+"--tree-line" = ['#ccd0d4', '#36393e', "the tree's connectors"]
 
 [colour.accent]
 "--accent" = ['#3b5bdb', '#8ea6ff', 'ids, links, the selected bar']
@@ -45,8 +45,8 @@
 "--chip-hover" = ['#dfe3ea', '#2d3038', 'a chip under the pointer: a step from --chip-bg']
 
 [colour.status]   # one pair per status, each over 4.5:1 in both modes
-"--st-draft-bg"      = ['#efe9e0', '#2b2721', 'Draft']
-"--st-draft-fg"      = ['#72644c', '#c9b99a', 'Draft']
+"--st-draft-bg"      = ['#e5eaf2', '#23282f', 'Draft']
+"--st-draft-fg"      = ['#596575', '#b0bed0', 'Draft']
 "--st-pending-bg"    = ['#f3e8c8', '#3a3115', 'Pending']
 "--st-pending-fg"    = ['#7a5d00', '#e8cf7a', 'Pending']
 "--st-ready-bg"      = ['#e3ecf7', '#1b2e46', 'Ready']
@@ -61,8 +61,8 @@
 "--st-blocked-fg"    = ['#aa2233', '#f09a9a', 'Blocked']
 "--st-superseded-bg" = ['#f3d9d9', '#3b2224', 'Superseded']
 "--st-superseded-fg" = ['#aa2222', '#dea3a3', 'Superseded']
-"--st-canceled-bg"   = ['#ecebe7', '#2c2b28', 'Canceled']
-"--st-canceled-fg"   = ['#5f5d57', '#b9b6ae', 'Canceled']
+"--st-canceled-bg"   = ['#e9ebee', '#292b2e', 'Canceled']
+"--st-canceled-fg"   = ['#5a5d62', '#b3b7bb', 'Canceled']
 "--st-epic-bg"       = ['#e6dcf5', '#2e2143', 'Epic']
 "--st-epic-fg"       = ['#5b3a8c', '#cdb4f2', 'Epic']
 "--st-doc-bg"        = ['#e8e8ec', '#26262c', 'Doc']
@@ -74,13 +74,13 @@
 "--kind-execution" = ['#2f7a2a', '#6cc66a', 'execution: a square']
 "--kind-gap"       = ['#b3261e', '#ff8a80', 'gap: a triangle']
 "--kind-spike"     = ['#6b3fa0', '#c7abf2', 'spike: a ring']
-"--kind-doc"       = ['#6b6860', '#9b988f', "doc: a page's outline"]
+"--kind-doc"       = ['#62676d', '#9399a0', "doc: a page's outline"]
 
 [colour.severity]   # the three bars
 "--sev-critical" = ['#b3261e', '#ff8a80', 'critical: three bars']
 "--sev-high"     = ['#c4561b', '#ffab70', 'high: three bars']
 "--sev-medium"   = ['#9a6b00', '#e6c065', 'medium: two bars']
-"--sev-low"      = ['#6b6860', '#9b988f', 'low: one bar']
+"--sev-low"      = ['#62676d', '#9399a0', 'low: one bar']
 
 [colour.code]   # EDITOR-9: code painted by its language (@lezer/highlight's classes), on --panel; One Light / One Dark's hues
 "--code-keyword"  = ['#a626a4', '#c678dd', 'a keyword, an atom, a boolean']
@@ -101,7 +101,7 @@
 [colour.chart]   # V2-70: a chart's series, in this fixed order (never cycled; a fourth folds or facets) — the dataviz skill's
                  # categorical slots 1–3 (blue, orange, aqua), slot 1 light on menger's accent, validated by its
                  # validate_palette.js against --panel: light #ffffff all checks pass (aqua 2.8:1 — relief: the legend,
-                 # the tooltip and the table view), dark #1c1b19 all pass; adjacent and all-pairs alike
+                 # the tooltip and the table view), dark #191b1e all pass; adjacent and all-pairs alike
 "--chart-1" = ['#3b5bdb', '#3987e5', "a chart's first series (files kept; fetched)"]
 "--chart-2" = ['#eb6834', '#d95926', "a chart's second series (tickets; served)"]
 "--chart-3" = ['#1baf7a', '#199e70', "a chart's third series (documents)"]
