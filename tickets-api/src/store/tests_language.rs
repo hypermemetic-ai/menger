@@ -39,15 +39,18 @@ fn random_field(rng: &mut Rng, field: usize, names: &[String]) -> Field {
         // never does.
         11 => Field::Asking,
         12 => Field::Label(["needs-you", "p1", "later", "never"][rng.below(4)].into()),
+        // ARCHIVE-6: `archived tag` — one an archive may carry, or never.
+        13 => Field::ArchivedTag(["season-1", "kiln", "never"][rng.below(3)].into()),
         _ => Field::HasCommits,
     }
 }
 
 /// FILTER-21: `menger` draws `menger doc` among the fields — MENGER-12: and
-/// `asking` and `label`; without it the draws are the ones they were
-/// (`tests_tree` and `tests_lensed` replay them).
+/// `asking` and `label` — ARCHIVE-6: and `archived tag`; without it the
+/// draws are the ones they were (`tests_tree` and `tests_lensed` replay
+/// them).
 fn random_pred(rng: &mut Rng, names: &[String], menger: bool) -> Predicate {
-    let which = rng.below(if menger { 13 } else { 10 });
+    let which = rng.below(if menger { 14 } else { 10 });
     let field = random_field(rng, if which == 9 { 8 } else { which }, names);
     Predicate { field, not: rng.below(2) == 0 }
 }
@@ -73,7 +76,7 @@ fn random_group(rng: &mut Rng, epics: &[String], menger: bool) -> Group {
             // `field in (a, b)`, or `not field in (a, b)` — FILTER-13: of
             // `under` too.
             // MENGER-12: and of `label`, in this module's own walks.
-            let field = if menger { [0, 1, 2, 3, 4, 8, 12][rng.below(7)] } else { [0, 1, 2, 3, 4, 8][rng.below(6)] };
+            let field = if menger { [0, 1, 2, 3, 4, 8, 12, 13][rng.below(8)] } else { [0, 1, 2, 3, 4, 8][rng.below(6)] };
             let (incl, n) = (rng.below(2) == 0, 2 + rng.below(2));
             let preds = (0..n).map(|_| Predicate { field: random_field(rng, field, epics), not: !incl }).collect();
             if incl {

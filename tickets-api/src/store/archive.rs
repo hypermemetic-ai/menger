@@ -22,6 +22,15 @@
 //! warning. A ticket already archived is no-op. A queued ticket leaves the
 //! queue (recorded as by the archive): an archived ticket asks nothing.
 //!
+//! **Tags** (ARCHIVE-6): an archive may be tagged — any number, each a
+//! label (lower case, [`crate::labels::normalize`]: a bad one refuses the
+//! write, naming it), kept on the mark of every ticket it archives, in the
+//! order given, each once. An archive with no tag is as it was: the mark's
+//! `tags` empty. A ticket already archived keeps the tags of the write that
+//! archived it. The tags are part of the cell
+//! ([`super::cells::Key::archive_tags`]), so `archived tag <name>` is
+//! answered from the cells, as `label <name>` is.
+//!
 //! **Restore** takes ids or a filter (of archived tickets) and brings each
 //! back, with its archived ancestors — the chain, never their other
 //! children (ARCHIVE-1 `restore-under`) — and, `with_children`, the
@@ -47,6 +56,7 @@ use super::update_many::{Selection, UPDATE_MANY_CEILING};
 use super::*;
 use crate::filter::{category_of, Category};
 use crate::queue::QueueAction;
+use crate::vocab::Label;
 use crate::types::{Archived, LiveTicket, Transition, TransitionField, ARCHIVE_ARCHIVED, ARCHIVE_LIVE};
 
 /// ARCHIVE-2: what `archive` did (or, `dry_run`, would do).
@@ -74,6 +84,24 @@ pub struct RestoreAnswer {
     pub still_archived: Vec<TicketId>,
     pub by: String,
     pub dry_run: bool,
+}
+
+/// ARCHIVE-6: an archive's tags as its mark keeps them — each a label
+/// ([`crate::labels::normalize`]), in the order given, each once; or the
+/// refusal naming every one that is not.
+fn archive_tags(raw: &[String]) -> Result<Vec<Label>, StoreError> {
+    let (mut out, mut bad): (Vec<Label>, Vec<String>) = (Vec::new(), Vec::new());
+    for t in raw {
+        match t.parse::<Label>() {
+            Ok(l) if !out.contains(&l) => out.push(l),
+            Ok(_) => {}
+            Err(why) => bad.push(why),
+        }
+    }
+    match bad.is_empty() {
+        true => Ok(out),
+        false => Err(StoreError::Invalid(format!("archive: a tag is a label — {}; nothing written", bad.join("; ")))),
+    }
 }
 
 /// The tickets' keys, in the store's order, each once.
@@ -233,12 +261,14 @@ impl Store {
         self.archive_by(select, Act::default(), dry_run, |ids| Ok(sys.permits(ids))).await
     }
 
-    /// ARCHIVE-2: each ticket `select` names and its whole subtree archived
-    /// in one write by `act` (the module doc); `dry_run`, the answer and
-    /// nothing written. `may` is asked of every ticket the write would
-    /// archive, descendants included, before anything is written — its
-    /// refusal is the write's; ACCESS-11: it answers one permit per ticket,
-    /// checked under the write-serial lock to cover exactly them.
+    /// [`Store::archive_tagged_by`] as nobody signed in, every ticket
+    /// allowed.
+    pub async fn archive_tagged(&self, sys: &System, select: Selection, tags: &[&str], dry_run: bool) -> Result<ArchiveAnswer, StoreError> {
+        let tags = tags.iter().map(|t| t.to_string()).collect();
+        self.archive_tagged_by(select, tags, Act::default(), dry_run, |ids| Ok(sys.permits(ids))).await
+    }
+
+    /// [`Store::archive_tagged_by`] with no tag — the archive as it was.
     pub async fn archive_by(
         &self,
         select: Selection,
@@ -246,6 +276,26 @@ impl Store {
         dry_run: bool,
         may: impl FnOnce(&[String]) -> Result<Vec<Permit<Editor>>, String> + Send,
     ) -> Result<ArchiveAnswer, StoreError> {
+        self.archive_tagged_by(select, Vec::new(), act, dry_run, may).await
+    }
+
+    /// ARCHIVE-2: each ticket `select` names and its whole subtree archived
+    /// in one write by `act` (the module doc); `dry_run`, the answer and
+    /// nothing written. `may` is asked of every ticket the write would
+    /// archive, descendants included, before anything is written — its
+    /// refusal is the write's; ACCESS-11: it answers one permit per ticket,
+    /// checked under the write-serial lock to cover exactly them.
+    /// ARCHIVE-6: `tags` go on every mark it sets, each a label (a bad
+    /// one refuses the write before anything is read).
+    pub async fn archive_tagged_by(
+        &self,
+        select: Selection,
+        tags: Vec<String>,
+        act: Act,
+        dry_run: bool,
+        may: impl FnOnce(&[String]) -> Result<Vec<Permit<Editor>>, String> + Send,
+    ) -> Result<ArchiveAnswer, StoreError> {
+        let tags = archive_tags(&tags)?;
         let serial = self.serial().await;
         let now = chrono::Utc::now().timestamp();
         let named = self.selected(select)?;
@@ -269,7 +319,8 @@ impl Store {
         if ids.len() > UPDATE_MANY_CEILING {
             return Err(StoreError::Invalid(format!("archive: {} tickets with their subtrees — one write takes at most {UPDATE_MANY_CEILING}; nothing written", ids.len())));
         }
-        let mark = Archived { at_unix: now, by: act.actor.clone(), message: act.message.clone(), write: if dry_run || ids.is_empty() { 0 } else { write } };
+        let write = if dry_run || ids.is_empty() { 0 } else { write };
+        let mark = Archived { at_unix: now, by: act.actor.clone(), message: act.message.clone(), write, tags };
         let answer = ArchiveAnswer { ids: ids.iter().map(TicketId::new).collect(), live, unqueued: queued, mark: mark.clone(), dry_run };
         let proofs = may(&ids).map_err(StoreError::Invalid)?;
         {

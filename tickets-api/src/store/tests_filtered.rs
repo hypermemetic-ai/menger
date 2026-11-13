@@ -327,6 +327,8 @@ impl Plain {
             asking: k.asking(),
             labels: t.labels.iter().map(|l| l.to_string()).collect(),
             archived: k.archived(),
+            // ARCHIVE-6: the row's own mark, never the cell's.
+            archive_tags: t.archived.as_ref().map(|m| m.tags.iter().map(|l| l.to_string()).collect()).unwrap_or_default(),
             frozen: k.frozen(),
             hidden: k.hidden(),
             id: t.id.to_string(),
