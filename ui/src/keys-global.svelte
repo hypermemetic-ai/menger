@@ -15,8 +15,12 @@
      sheet (#/sheet) and binds nothing.
      The chords are matched by the letter the press types (the engine reads
      `KeyboardEvent.key`), so one with option held never matches on a Mac —
-     option+n types no letter there. The note's chord for every keyboard is
-     ctrl+m; ctrl+alt+n stays for Linux and Windows, alt+meta+n for the day
+     option+n types no letter there. ctrl+m went: Firefox mutes the tab on it
+     and the page never hears it (owner, 2026-11-13, Firefox on macOS: "ctrl m
+     mutes … only mute"). The note's chords are ctrl+shift+l and cmd+shift+l,
+     and `g n` — plain keys no browser takes, outside a text field only (a
+     chord with no ctrl, cmd or option is never bound in inputs: it would eat
+     typing); ctrl+alt+n stays for Linux and Windows, alt+meta+n for the day
      the engine matches the physical key. -->
 <script module>
   export const uses = [];
@@ -24,20 +28,20 @@
   /** Every global action: its name on the bus, the chords that run it, and what the overlay says. */
   export const GLOBAL = [
     { action: "palette.open", chords: ["ctrl+k"], label: "jump to a ticket" },
-    { action: "note.open", chords: ["ctrl+m", "ctrl+alt+n", "alt+meta+n"], label: "write a note" },
+    { action: "note.open", chords: ["ctrl+shift+l", "shift+meta+l", "g n", "ctrl+alt+n", "alt+meta+n"], label: "write a note" },
     { action: "page.save", chords: ["ctrl+s", "meta+s"], label: "save" },
     { action: "page.edit", chords: ["ctrl+e"], label: "edit this page in the studio (an editor's)" },
   ];
 
   /** The keys of a chord as the bar shows them: the first chord of `action`. */
-  export const capsOf = (action) => (GLOBAL.find((g) => g.action === action)?.chords[0] ?? "").split("+");
+  export const capsOf = (action) => (GLOBAL.find((g) => g.action === action)?.chords[0] ?? "").split("+").map((c) => c.replace(/^meta$/, "cmd"));
 
   // The mounted registries' buses, in the order they came: the first holds the keys.
   const mounted = [];
   let off = null;
   function bind(b) {
     const keys = {};
-    for (const g of GLOBAL) for (const chord of g.chords) keys[chord] = { to: () => b.emit(g.action, {}), label: g.label, in_inputs: true };
+    for (const g of GLOBAL) for (const chord of g.chords) keys[chord] = { to: () => b.emit(g.action, {}), label: g.label, in_inputs: /(^|\+)(ctrl|meta|alt)\+/.test(chord) };
     return b.keys(keys);
   }
   function hold(b) {

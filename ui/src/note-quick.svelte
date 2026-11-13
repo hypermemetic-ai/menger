@@ -1,7 +1,7 @@
 <!-- A note, written from anywhere (owner, 2026-11-13: "create a note using
      a keybinding that brings up a little window to enter in my note"). It
      opens on `note.open` on the bus: the global keys emit it (keys-global:
-     ctrl+m, and ctrl+alt+n off a Mac) and so does the top bar's `note`
+     ctrl+shift+l, cmd+shift+l, `g n` outside a text field, and ctrl+alt+n off a Mac) and so does the top bar's `note`
      button. A small window: a title line and the note; cmd/ctrl+enter keeps
      it (`docs.create { title, body }`), escape closes it and keeps nothing.
      With no title the note's first line is its title. Kept, the window
