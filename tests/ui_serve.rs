@@ -153,22 +153,16 @@ async fn no_live_version_is_the_placeholder() {
     assert!(call(&admin, "ui.versions", json!({})).await.is_empty(), "versions answers none");
 }
 
-/// UI-13 (owner, 2026-10-29: "I need a frontend on test"): `/` serves what
-/// `/app/` serves — the live entrypoint, stamped, never kept — so a sign-in
-/// that returns to `/` lands on the app; with no session it asks for one.
+/// The app has one address (owner, 2026-11-13: "remove the non-app
+/// binding"): `/` goes to `/app/` — so a sign-in that returns to `/` still
+/// lands on the app (UI-13); with no session it asks for one.
 #[tokio::test]
-async fn the_root_serves_what_app_serves() {
+async fn the_root_goes_to_the_app() {
     let m = start().await;
-    let admin = connect(m.ws).await;
-    let pushed = call(&admin, "ui.push", push_params(1, &UI_SIGNER)).await;
-    assert_eq!(pushed[0]["type"], "pushed", "{pushed:?}");
     let token = support::mint_session(m.ws).await;
     let root = m.get("/", Some(&token)).await;
-    assert_eq!(root.status(), 200);
-    assert_eq!(cache(&root).as_deref(), Some("no-store"), "the root is the entrypoint, never kept");
-    let (at_root, at_app) = (root.text().await.unwrap(), m.get("/app/", Some(&token)).await.text().await.unwrap());
-    assert!(at_root.contains(&format!("version 1 on {}", m.ws)), "the live entrypoint at /: {at_root}");
-    assert_eq!(at_root, at_app, "/ and /app/ are one page");
+    assert_eq!(root.status(), 302, "/ is not a second address of the app");
+    assert_eq!(root.headers().get("location").and_then(|v| v.to_str().ok()), Some("/app/"));
     let anonymous = m.get("/", None).await;
     assert_eq!(anonymous.status(), 303, "no session: the login page");
 }
