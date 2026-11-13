@@ -166,7 +166,9 @@
     return () => removeEventListener("pointerdown", away, true);
   });
   // On the app's own page only: drawn in a studio frame, it binds nothing.
-  const onApp = location.pathname.startsWith("/app");
+  // The shell serves the app at `/` as well as `/app/` (owner, 2026-11-13: the keys were dead at the bare
+  // address), so "the app's own page" is every page but the studio's and a frame's.
+  const onApp = !/^\/(studio|frame)(\/|$)/.test(location.pathname) && window.parent === window;
   // The page-wide chords are keys-global's (placed below): ctrl+e emits `page.edit`, which an editor's
   // top answers — a viewer's does nothing, and the browser never takes the press to its search.
   b.on("page.edit", () => { if (editor && onApp) location.assign("/studio/#/page/" + encodeURIComponent(location.hash || "#/")); });

@@ -62,7 +62,9 @@
 
   let { sheet = null } = $props();
   const b = bus();
-  const onApp = location.pathname.startsWith("/app");
+  // The shell serves the app at `/` as well as `/app/` (owner, 2026-11-13: the keys were dead at the bare
+  // address), so "the app's own page" is every page but the studio's and a frame's.
+  const onApp = !/^\/(studio|frame)(\/|$)/.test(location.pathname) && window.parent === window;
   $effect(() => {
     if (sheet != null || !onApp) return;
     return hold(b);
