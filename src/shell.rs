@@ -360,8 +360,11 @@ async fn router(cfg: ShellConfig, at: std::net::SocketAddr) -> Router {
     }
     // One address for the app (owner, 2026-11-13: "remove the non-app
     // binding"): `/` goes to `/app/`. Inside the session check below, so a
-    // visit without a session still goes to the login page.
-    app = app.layer(axum::middleware::from_fn(root_is_the_app));
+    // visit without a session still goes to the login page. Only where the
+    // app is served (the ui store): with none, `/` is the placeholder.
+    if cfg.ui.is_some() {
+        app = app.layer(axum::middleware::from_fn(root_is_the_app));
+    }
     if let Some(login) = cfg.login.as_ref().filter(|l| l.require) {
         app = app.route_layer(axum::middleware::from_fn_with_state(login.clone(), require_session));
     }
