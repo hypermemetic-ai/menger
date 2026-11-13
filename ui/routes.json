@@ -35,6 +35,8 @@
   "#/search": "page-search",
   "#/search/:q": "page-search",
   "#/search/:q/f/:filter": "page-search",
+  "#/search/:q/include/:include": "page-search",
+  "#/search/:q/include/:include/f/:filter": "page-search",
   "#/edit/:id": "page-editor",
   "#/doc/:doc": "page-editor",
   "#/form/:id": "page-edit",

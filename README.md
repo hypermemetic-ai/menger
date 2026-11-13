@@ -994,7 +994,10 @@ held is let go.
 or a filter and archives each with its whole subtree; `restore` brings a
 ticket back with its archived ancestors (`--with-children`: the subtree
 archived with it). An archived ticket is in no view unless the filter names
-`archived`; `get` still answers it. `--dry-run true` writes nothing.
+`archived`; `get` still answers it. A filter that names it admits the archived to whatever else it says, so
+`archived or not archived` is every ticket, archived or not: `tickets search --query kiln --filter
+'archived or not archived'` (and `find` the same) looks through the archive too, which is what the
+search page's "include archived" switch asks (ARCHIVE-8: `#/search/:q/include/archived`). `--dry-run true` writes nothing.
 An archive may be tagged (ARCHIVE-6): `--tags season-1,kiln` — any number,
 each a label (lower case; a bad one refuses the write) — kept on the mark
 of every ticket it archives, which `get`, the `archived` answer and
