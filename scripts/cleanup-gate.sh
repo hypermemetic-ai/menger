@@ -35,7 +35,10 @@
 #               a worktree removed takes its own with it (`cargo metadata`'s
 #               build_directory, read from each workspace in it before it goes)
 #   scratch-db  /tmp/menger-*.db, .db-shm, .db-wal, .sessions.jsonl(.lock),
-#               .log — a throwaway server's database, sessions and log
+#               .log — a throwaway server's database, sessions and log; and
+#               (SCRATCH-NAMES) its other services' files, named after it —
+#               menger-NAME.{ui,media,docs,quota}.db(-shm, -wal) and the
+#               directory menger-NAME.media.blobs
 #   pages-tmp   V2-38: /tmp/claude-UID/ui8-pages-… — a browser page-test run's work
 #               directory (tests/pages_browser.mjs, which removes its own since
 #               V2-38; these are what a killed run left). By --path at once, as a
@@ -271,6 +274,8 @@ remove_path() {
     shape=target
   elif [[ -f $r && $(dirname "$r") == "$TMPR" && $(basename "$r") =~ ^menger-.+\.(db|db-shm|db-wal|sessions\.jsonl|sessions\.jsonl\.lock|log)$ ]]; then
     shape=scratch-db
+  elif [[ -d $r && ! -L $p && $(dirname "$r") == "$TMPR" && $(basename "$r") =~ ^menger-.+\.media\.blobs$ ]]; then
+    shape=scratch-db
   elif [[ -d $r && ! -L $p && $(dirname "$r") == "$SCR" && $(basename "$r") =~ ^ui8-pages-[A-Za-z0-9._-]+$ ]]; then
     shape=pages-tmp
   elif under "$r" "$SCR"; then
@@ -293,7 +298,7 @@ remove_path() {
     esac
   fi
   # what rm -r takes must not be, or cross, a mount
-  case $shape in target|target-part|cargo-build|session|ws-scratch|sweep|ui8-work|pages-tmp)
+  case $shape in target|target-part|cargo-build|session|ws-scratch|sweep|ui8-work|pages-tmp|scratch-db)
     if [[ -d $r ]] && { mountpoint -q -- "$r" 2>/dev/null || [[ $(stat -c %d -- "$r" 2>/dev/null) != "$(stat -c %d -- "$(dirname "$r")" 2>/dev/null)" ]]; }; then
       refuse "$shown" 'a mount point, never removed'; return
     fi ;;
@@ -344,11 +349,11 @@ remove_path() {
         if out=$(git -C "$main" branch -d -- "$br" 2>&1); then extra=", branch $br deleted"
         else extra=", branch $br kept (${out//$'\n'/ })"; fi
       fi ;;
-    target|target-part|cargo-build|session|ws-scratch|sweep|ui8-work|pages-tmp)
+    target|target-part|cargo-build|session|ws-scratch|sweep|ui8-work|pages-tmp|scratch-db)
       if [[ -d $r ]]; then out=$(rm -r --one-file-system -- "$r" 2>&1); rc=$?
       else out=$(rm -f -- "$r" 2>&1); rc=$?; fi
       [[ $rc == 0 ]] || { refuse "$shown" "rm: ${out//$'\n'/ }"; return; } ;;
-    scratch-db|pipeline-log)
+    pipeline-log)
       out=$(rm -f -- "$r" 2>&1) || { refuse "$shown" "rm: $out"; return; } ;;
   esac
   # a hash's XX/ parent goes when its last build-dir does (rmdir: only if empty)
@@ -367,12 +372,14 @@ mins() { if (( $1 > 0 && $1 % 60 == 0 )); then echo "$(( $1 / 60 ))h"; else echo
 
 # ── NAME → its leftovers ───────────────────────────────────────────────────
 paths_for_name() {
-  local n=$1 f repo
+  local n=$1 f repo s db=()
   if [[ ! $n =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ || $n == *..* ]]; then
     refuse "$n" 'not a gate name (letters, digits, . _ -; no ..)'; return
   fi
-  for f in "$WS/.$n" "$WS/$n" "$CT/$n" "$SCR/$n" \
-           "$TMPR/menger-$n.db" "$TMPR/menger-$n.db-shm" "$TMPR/menger-$n.db-wal" "$TMPR/menger-$n.sessions.jsonl" "$TMPR/menger-$n.sessions.jsonl.lock" "$TMPR/menger-$n.log"; do
+  # SCRATCH-NAMES: the server's database and its other services' files, named after it
+  for s in "" .ui .media .docs .quota; do db+=("$TMPR/menger-$n$s.db" "$TMPR/menger-$n$s.db-shm" "$TMPR/menger-$n$s.db-wal"); done
+  for f in "$WS/.$n" "$WS/$n" "$CT/$n" "$SCR/$n" "${db[@]}" "$TMPR/menger-$n.media.blobs" \
+           "$TMPR/menger-$n.sessions.jsonl" "$TMPR/menger-$n.sessions.jsonl.lock" "$TMPR/menger-$n.log"; do
     [[ -e $f || -L $f ]] && printf '%s\n' "$f"
   done
   for repo in "$WS"/*/; do
@@ -392,7 +399,7 @@ candidates() {
     done < <(git_q "${repo%/}" worktree list --porcelain | grep '^worktree ' | tail -n +2)
   done
   for f in "$WS"/.[!.]* "$CT"/* "$CB"/*/* "$TMPR"/menger-*.db "$TMPR"/menger-*.db-shm "$TMPR"/menger-*.db-wal "$TMPR"/menger-*.sessions.jsonl "$TMPR"/menger-*.sessions.jsonl.lock \
-           "$TMPR"/menger-*.log "$SCR"/* "$TMPR/theme-sweep"; do
+           "$TMPR"/menger-*.log "$TMPR"/menger-*.media.blobs "$SCR"/* "$TMPR/theme-sweep"; do
     [[ -e $f || -L $f ]] && printf '%s\n' "$f"
   done
   ui8_dirs all

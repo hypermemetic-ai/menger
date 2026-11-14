@@ -175,6 +175,33 @@ out=$(cd "$SCR/sess3" && CLEANUP_GATE_ROOT=$T "$CG" --yes --path "$SCR/sess3" 2>
 has "the caller's own directory" "$out" "you are inside it"; there "inside" "$SCR/sess3/f"
 hasnt "no hand-written rm -r in this test" "$(grep -v '^#' "$SELF" | grep -v hasnt)" "rm -r"
 
+# ── SCRATCH-NAMES: a dev server's other files, named after its database ────
+# --db-path /tmp/menger-NAME.db puts ui, media, docs and quota beside it as
+# menger-NAME.<service>.db (-shm, -wal) and the media's bytes in
+# menger-NAME.media.blobs/ — all the gate's, by name, by path and in --list.
+NM=()
+for s in "" .ui .media .docs .quota; do for e in .db .db-shm .db-wal; do echo x >"$TM/menger-names$s$e"; NM+=("$TM/menger-names$s$e"); done; done
+mkdir -p "$TM/menger-names.media.blobs/ab"; echo png >"$TM/menger-names.media.blobs/ab/abcd"; NM+=("$TM/menger-names.media.blobs")
+echo x >"$TM/menger-other.media.db"; mkdir -p "$TM/menger-other.media.blobs"; echo x >"$TM/media.db"; mkdir -p "$TM/media/blobs"
+ln -s "$T/elsewhere" "$TM/menger-link.media.blobs"
+cg "names: dry run" 0 names
+for p in "${NM[@]}"; do has "names: dry run lists $p" "$out" "scratch-db $p"; there "names: dry run keeps" "$p"; done
+hasnt "names: never another server's" "$out" "menger-other"
+cg "names: --list" 2 --list
+for p in "$TM/menger-names.media.db-wal" "$TM/menger-names.quota.db" "$TM/menger-names.media.blobs" "$TM/menger-other.media.blobs"; do has "--list: $p" "$out" "scratch-db $p"; done
+has "--list: a link is no blobs" "$out" "refused  $TM/menger-link.media.blobs → $T/elsewhere — not a leftover shape"
+out=$(CLEANUP_GATE_ROOT=$T "$CG" --sweep 2>&1)   # the sweep takes build output only: a server's files are its gate's
+hasnt "names: the sweep never names a server's files" "$out" "menger-names"
+cg "names: removed" 0 --yes names
+for p in "${NM[@]}"; do gone "names" "$p"; done
+has "names: the blobs, whole" "$out" "removed  scratch-db $TM/menger-names.media.blobs"
+there "names: another server's stay" "$TM/menger-other.media.db"; there "names: … and its blobs" "$TM/menger-other.media.blobs"
+cg "another's blobs by path" 0 --yes --path "$TM/menger-other.media.blobs"; gone "blobs by path" "$TM/menger-other.media.blobs"
+refused "the shared media.db of before" "not a leftover shape" --path "$TM/media.db"
+refused "the shared media/ of before" "not a leftover shape" --path "$TM/media"
+refused "a link named as blobs" "not a leftover shape" --path "$TM/menger-link.media.blobs"
+there "a link's target stays" "$T/elsewhere"
+
 # ── CI-2: build-dirs, and the sweep ────────────────────────────────────────
 CB=$H/.cache/cargo-build
 aged() { local when=$1; shift; find "$@" -depth -exec touch -h -d "$when" {} +; }   # PATH… modified WHEN, all through

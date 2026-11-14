@@ -137,9 +137,18 @@ synapse -P 4460 _login menger --key builder --as builder   # once per server sta
 synapse -P 4460 menger tickets health
 ```
 
-The ui service's file is `ui.db` beside the database unless
-`--ui-db-path` names another; two dev servers in one directory share it, so
-give each its own. A push needs `--ui-signer` (below, "The ui service").
+**Every file of a server is named after its database** (SCRATCH-NAMES).
+The ui, media, docs and quota services each keep a file beside the
+database unless its flag (`--ui-db-path`, `--media-db-path`,
+`--docs-db-path`, `--quota-db-path`) names another. Beside a database
+named as a data directory's — `tickets.db` (prod, test, the image) or
+`local.db` (a local start) — they are `ui.db`, `media.db`, `docs.db`,
+`quota.db` and the media's bytes in `media/blobs/`; beside any other, they
+carry the database's stem: `/tmp/menger-dev.db` → `/tmp/menger-dev.ui.db`,
+`.media.db`, `.docs.db`, `.quota.db` and `/tmp/menger-dev.media.blobs/`, as
+its sessions are `/tmp/menger-dev.sessions.jsonl`. So two dev servers in
+one directory share no file, and `scripts/cleanup-gate.sh dev` takes all of
+one. A push needs `--ui-signer` (below, "The ui service").
 
 **A restart keeps every session** (FRAME-21). The login's session table —
 every browser's sign-in and every agent's `session login` token — is kept
@@ -298,7 +307,7 @@ where it has one (a list in it is `;`-separated).
 
 | group | flags |
 |---|---|
-| run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path`, `--ui-signer`, `--ui-compiler`, `--ui-allow-rhx` (SV-6: rhx/1 taken again — without it every `ui.push` and `ui.author` carrying an rhx component is refused `rhx_disabled`, naming it; `MENGER_UI_ALLOW_RHX`), `--ui-author-key`, `--media-db-path` (`media.db` beside the database), `--media-store` (`disk`), `--media-blob-dir`, `--media-max-bytes`, `--quota-db-path` (`quota.db` beside the database), `--quota-plan` (the defaults a new quota file starts from; the built-in `free-1k`), `--ui-channel` (UI-15: the live pointer this environment serves in its ui file; default from `--env`: `test`, `prod`, else `default`), `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell`, `--no-mcp` (V2-43: no `/mcp`), `--child NAME=stdio:CMD` or `NAME=ws://…` (POLYGLOT-5: an activation in another process mounted under NAME behind the gate; repeatable; `--child-timeout`, `--child-max-calls`, `--child-env`, `--child-key`: plexus-core's `ChildArgs`; one that does not answer stops the start, exit 2; NAME a service of menger's own is refused) |
+| run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path` (`ui.db` beside the database — named after it beside one not named `tickets.db` or `local.db`, `menger-dev.ui.db`; so every file below, SCRATCH-NAMES), `--ui-signer`, `--ui-compiler`, `--ui-allow-rhx` (SV-6: rhx/1 taken again — without it every `ui.push` and `ui.author` carrying an rhx component is refused `rhx_disabled`, naming it; `MENGER_UI_ALLOW_RHX`), `--ui-author-key`, `--media-db-path` (`media.db` beside the database), `--media-store` (`disk`), `--media-blob-dir` (`media/blobs` beside `media.db`; `<stem>.media.blobs` beside a `<stem>.media.db`), `--media-max-bytes`, `--docs-db-path` (`docs.db` beside the database), `--quota-db-path` (`quota.db` beside the database), `--quota-plan` (the defaults a new quota file starts from; the built-in `free-1k`), `--ui-channel` (UI-15: the live pointer this environment serves in its ui file; default from `--env`: `test`, `prod`, else `default`), `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell`, `--no-mcp` (V2-43: no `/mcp`), `--child NAME=stdio:CMD` or `NAME=ws://…` (POLYGLOT-5: an activation in another process mounted under NAME behind the gate; repeatable; `--child-timeout`, `--child-max-calls`, `--child-env`, `--child-key`: plexus-core's `ChildArgs`; one that does not answer stops the start, exit 2; NAME a service of menger's own is refused) |
 | sign-in | `--auth-provider`, `--admin`, `--public-url`, `--login-button`, `--login-email`, `--login-password`, `--login-forgot`, `--identity`, `--workos-api-key-file`, `--allowed-origin`, `--frame-ancestor` (an origin that may frame the shell's pages; none by default), `--live-origin` (an origin the shell's pages may frame), `--allowed-host`, `--trusted-proxy`, `--return-origin`, `--session-hours` (12), `--session-idle-minutes` (120), `--mcp-authorization-server` (V2-43: `/mcp` a protected resource naming it) |
 | maintenance and testing | `--dev-login`, `--dev-password`, `--dev-idp-ws`, `--dev-user` (all `--env test` only), `--verify-derived`, `--seed-synthetic`, `--seed-value`, `--seed-shape` (`flat`, `nested`), `--seed-into-existing` |
 | limits | `--max-body-bytes` (8 MiB), `--max-message-bytes` (32 MiB; V2-54: one socket message — a UI bundle is pushed in one), `--max-calls-per-connection` (256), `--idle-timeout-secs` (900), `--max-connections` (1,024), `--max-connections-per-ip` (256), `--max-connections-per-principal` (4; V2-31: a person's), `--max-connections-per-agent` (64; V2-31: a `key:` principal's), `--max-writes-per-second` (20; V2-31), `--max-anonymous-connections` (128), `--max-anonymous-connections-per-ip` (32) |
@@ -697,7 +706,8 @@ sha256; a range; stat; delete; orphans; and `presign`). The metadata —
 hash, type, name, size, owners, uploads — stays in `media.db`. One
 implementation ships: the disk, `<root>/<sha256>` (`--media-store disk`,
 the default; `--media-blob-dir` / `MENGER_MEDIA_BLOB_DIR`, by default
-`media/blobs` beside `media.db` — another disk or a network mount works
+`media/blobs` beside `media.db`, `<stem>.media.blobs` beside a
+`<stem>.media.db` (SCRATCH-NAMES, "Run") — another disk or a network mount works
 unchanged). A store that signs addresses (an object store) makes
 `/media/<hash>` redirect to one after the permit and egress checks; the
 disk signs none and the shell streams. `--media-store s3` is refused until
