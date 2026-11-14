@@ -88,7 +88,7 @@ export default async (ctx) => {
         throw new Error(`${e.message}\nthe body drawn: ${what.slice(0, 2000)}\nconsole: ${seen.console.slice(-10).join("\n")}`);
       });
       assert((await page.locator("[data-surface=tag-component][data-name=tweet-writer]").getAttribute("data-mode")) === "native", "native");
-      assert((await tw.getAttribute("data-ticket")) === id && (await tw.getAttribute("data-n")) === "0" && (await tw.getAttribute("data-where")) === "editor", "told its ticket and its place, in the page's editor (EDITOR-24)");
+      assert((await tw.getAttribute("data-ticket")) === id && (await tw.getAttribute("data-n")) === "0" && (await tw.getAttribute("data-where")) === "ticket", "told its ticket and its place, on the drawn page (EDITOR-29)");
       const state = tw.locator("[data-field=state]");
       const post = (n) => tw.locator(`[data-post="${n}"]`);
       const words = (n) => post(n).locator("[data-field=text]").inputValue();

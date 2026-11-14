@@ -45,7 +45,7 @@
      margin beside the text (doc-margin, a sibling) holds each thread at its
      range's height, the range underlined in the caret's block, and follows
      the text as it changes (`marginTick`).
-     EDITOR-24: the ticket's page places this too (page-ticket, `head={false}`: the page's head has the
+     EDITOR-24: the ticket's page placed this too until EDITOR-29 (page-ticket, `head={false}`: the page's head has the
      title, so none is drawn here) — one component wherever a body is written, so what it gains a
      ticket's page, `…/edit` and a document gain together. A tag that keeps its own state (tweet-writer)
      saves through it: it says `body.tag { kind, id, name, n, was, next, token }` on the bus; the editor

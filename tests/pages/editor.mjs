@@ -136,7 +136,7 @@ graph TD
     const N = 400;
     const LONG = Array.from({ length: N }, (_, i) => `Paragraph ${i + 1} of the long body, far from the top.`).join("\n\n") + "\n";
     const id = make("a long body", LONG);
-    for (const route of [`#/edit/${id}`, `#/ticket/${id}`]) {
+    for (const route of [`#/edit/${id}`]) { // EDITOR-29: a ticket's page draws its body, no editor there
       const { context, page } = await openPage(route);
       const ed = page.locator("[data-surface=editor-body]");
       try {
@@ -1243,7 +1243,21 @@ graph TD
   await test("a_long_code_line_stays_inside_the_body", async () => {
     const tid = make("a long code line", LONGCODE);
     const did = sy("docs", "create", "--title", "A long code line", "--body", bodyFile("long-code-doc", LONGCODE)).find((e) => e.type === "created").doc.id;
-    for (const route of [`#/ticket/${tid}`, `#/doc/${did}`]) {
+    // EDITOR-29: a ticket's page draws its body (no editor): both cards drawn, the page never wider than its window.
+    {
+      const { context, page } = await openPage(`#/ticket/${tid}`);
+      try {
+        await page.setViewportSize({ width: 1280, height: 2000 });
+        await eventually("the ticket's page: both cards drawn", async () => (await page.locator("[data-surface=ticket-body] [data-surface=code-card]").count()) === 2, 10_000);
+        await sleep(300);
+        assert((await page.locator("[data-surface=ticket-page] [data-surface=editor-body], [data-surface=ticket-page] .cm-editor").count()) === 0, "the ticket's page holds no editor");
+        const w = await page.evaluate(() => { const s = document.scrollingElement; const b = document.querySelector("[data-surface=ticket-body]"); const col = b.parentElement.getBoundingClientRect(); return { sw: s.scrollWidth, cw: s.clientWidth, right: Math.round(b.getBoundingClientRect().right), col: Math.round(col.right) }; });
+        assert(w.sw <= w.cw && w.right <= w.col + 1, `the ticket's page, drawn: the body inside its column and the page no wider than its window: ${JSON.stringify(w)}`);
+      } finally {
+        await context.close();
+      }
+    }
+    for (const route of [`#/edit/${tid}`, `#/doc/${did}`]) {
       const { context, page } = await openPage(route);
       try {
         await page.setViewportSize({ width: 1280, height: 2000 });
@@ -1291,7 +1305,7 @@ graph TD
         // A body of its own each time: what one run leaves is not the next's start.
         const ticketId = kind === "ticket" ? make(`undo everywhere ${os}`, BODY0) : null;
         const docId = kind === "doc" ? sy("docs", "create", "--title", "Undone", "--body", bodyFile(`undone-${os}`, BODY0)).find((e) => e.type === "created").doc.id : null;
-        const route = kind === "doc" ? `#/doc/${docId}` : `#/ticket/${ticketId}`;
+        const route = kind === "doc" ? `#/doc/${docId}` : `#/edit/${ticketId}`; // EDITOR-29: a ticket is written at …/edit, its page draws it
         const { context, page } = await openPage(route);
         try {
           // The browser's own undo, said as a `historyUndo` / `historyRedo` beforeinput: none, when the press is the engine's.
