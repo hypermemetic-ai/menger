@@ -14,7 +14,8 @@
 //! `component_removed`. Then the change, cut to the reach by the store.
 
 use super::*;
-use crate::store::Watcher;
+use crate::store::{Watcher, Writer, Wrote};
+use tokio::sync::broadcast::{error::RecvError, Receiver};
 
 /// What a `watch` call asks.
 pub(super) struct WatchAsk {
@@ -24,13 +25,41 @@ pub(super) struct WatchAsk {
     pub(super) tz: Option<Zone>,
     /// TICKETS-7: and the revisions every write keeps (`revised`).
     pub(super) revisions: bool,
+    /// TICKETS-39: only the writes this principal made, each said `wrote`.
+    pub(super) actor: Option<crate::vocab::Principal>,
+}
+
+/// TICKETS-39: what the watch reads — the store's channels as before, or,
+/// for an actor watch, the attributed one (every change, cell moves and
+/// revisions among them, each with its writer).
+enum Feed {
+    Changes(Receiver<Change>),
+    Wrote(Receiver<Wrote>),
+}
+
+impl Feed {
+    /// The next change, and who wrote it (`None` on the plain channels).
+    async fn recv(&mut self) -> Result<(Option<Arc<Writer>>, Change), RecvError> {
+        match self {
+            Feed::Changes(rx) => rx.recv().await.map(|c| (None, c)),
+            Feed::Wrote(rx) => rx.recv().await.map(|w| (w.by, w.change)),
+        }
+    }
+}
+
+/// TICKETS-39: `ev` as an actor watch sends it — dressed (its uids) and
+/// wrapped with its writer; as itself on any other watch.
+fn said(store: &Store, by: Option<&Writer>, ev: TicketsEvent) -> TicketsEvent {
+    let Some(by) = by else { return ev };
+    let event = serde_json::to_value(store.dressed(ev)).unwrap_or_default();
+    TicketsEvent::Wrote { actor: by.actor.clone(), name: by.name.clone(), event }
 }
 
 /// TICKETS-7: the next revision a write kept, when the watch asked for them —
 /// never, when it did not.
-async fn revision(rx: &mut Option<tokio::sync::broadcast::Receiver<Change>>) -> Result<Change, tokio::sync::broadcast::error::RecvError> {
+async fn revision(rx: &mut Option<Receiver<Change>>) -> Result<(Option<Arc<Writer>>, Change), RecvError> {
     match rx {
-        Some(rx) => rx.recv().await,
+        Some(rx) => rx.recv().await.map(|c| (None, c)),
         None => std::future::pending().await,
     }
 }
@@ -38,14 +67,15 @@ async fn revision(rx: &mut Option<tokio::sync::broadcast::Receiver<Change>>) -> 
 /// Why the watch woke.
 enum Woke {
     Access,
-    Change(Result<Change, tokio::sync::broadcast::error::RecvError>),
+    Change(Result<(Option<Arc<Writer>>, Change), RecvError>),
     Tick,
 }
 
 /// The stream. The caller is verified, and the channel subscribed, at the
 /// call — before the stream is first polled.
 pub(super) fn watch_stream(store: Arc<Store>, access: Access, user: VerifiedUser, ask: WatchAsk) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-    let WatchAsk { epic, filter: asked, membership, tz, revisions } = ask;
+    let WatchAsk { epic, filter: asked, membership, tz, revisions, actor } = ask;
+    let actor = actor.map(|a| a.to_string());
     let (epic, ambiguous) = watched_shortcode(&store, epic.as_deref());
     // IDENTITY-19, IDENTITY-21: who is watching, and through what reach.
     let opened = Sight::open(&store, &access, user).and_then(|sight| {
@@ -67,8 +97,14 @@ pub(super) fn watch_stream(store: Arc<Store>, access: Access, user: VerifiedUser
         }
         Err(e) => (Err(e), false),
     };
-    let mut rx = if filtered { store.subscribe_filtered() } else { store.subscribe() };
-    let mut revised = (revisions && !membership).then(|| store.subscribe_revisions());
+    // TICKETS-39: an actor watch reads the attributed channel alone — its
+    // revisions in it, taken only when asked.
+    let mut rx = match (&actor, filtered) {
+        (Some(_), _) => Feed::Wrote(store.subscribe_wrote()),
+        (None, true) => Feed::Changes(store.subscribe_filtered()),
+        (None, false) => Feed::Changes(store.subscribe()),
+    };
+    let mut revised = (revisions && !membership && actor.is_none()).then(|| store.subscribe_revisions());
     stream! {
         let (mut sight, clock, watcher) = match opened {
             Ok(o) => o,
@@ -124,8 +160,9 @@ pub(super) fn watch_stream(store: Arc<Store>, access: Access, user: VerifiedUser
                         Some(w) => Some(w.lens().clone()),
                         None => sight.sight().lens().cloned(),
                     };
+                    // TICKETS-39: no write's — not said to an actor watch.
                     for m in store.moved_between(before.as_ref(), after.as_ref(), epic.as_ref()) {
-                        yield membership_event(&store, m);
+                        if actor.is_none() { yield membership_event(&store, m); }
                     }
                 }
             }
@@ -134,46 +171,64 @@ pub(super) fn watch_stream(store: Arc<Store>, access: Access, user: VerifiedUser
                 Woke::Tick => {
                     if let Some(w) = watcher.as_mut() {
                         for m in w.tick(&store, epic.as_ref()) {
-                            yield membership_event(&store, m);
+                            if actor.is_none() { yield membership_event(&store, m); }
                         }
                     }
                     continue;
                 }
                 Woke::Change(next) => next,
             };
-            match (next, watcher.as_mut()) {
+            // TICKETS-39: an actor watch hears only its actor's writes —
+            // every other change is still followed (a watcher's state moves
+            // with it), and nothing of it is said; a revision only when asked.
+            let by = match &next {
+                Ok((by, _)) => by.clone(),
+                Err(_) => None,
+            };
+            let mine = match &actor {
+                None => true,
+                Some(a) => by.as_deref().is_some_and(|w| &w.actor == a),
+            };
+            let quiet = actor.is_some() && !revisions && matches!(&next, Ok((_, Change::Revised { .. })));
+            let mut out: Vec<TicketsEvent> = Vec::new();
+            match (next.map(|(_, c)| c), watcher.as_mut()) {
                 (Ok(Change::CellsMoved { moves }), Some(w)) => {
-                    for m in w.membership(&store, &moves, epic.as_ref()) {
-                        yield membership_event(&store, m);
-                    }
+                    out.extend(w.membership(&store, &moves, epic.as_ref()).into_iter().map(|m| membership_event(&store, m)));
                 }
                 // FILTER-13: a filter asking `under` — what the write
                 // worked out for this watch.
                 (Ok(Change::UnderMoved { moves }), Some(w)) => {
-                    for m in w.under_membership(&moves) {
-                        yield membership_event(&store, m);
-                    }
+                    out.extend(w.under_membership(&moves).into_iter().map(|m| membership_event(&store, m)));
                 }
-                (Ok(change), _) if !membership => {
+                (Ok(change), _) if !membership && !quiet => {
                     // WAVE-6: of a `placements_changed`, the changes in the
                     // epic. ACCESS-12: then cut to the reach by the store.
-                    if let Some(ev) = change.in_epic(epic.as_ref()).and_then(|c| sight.relay(&store, c)) {
-                        yield ev;
-                    }
+                    out.extend(change.in_epic(epic.as_ref()).and_then(|c| sight.relay(&store, c)));
                 }
                 (Ok(_), _) => {}
-                (Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)), _) => {
+                (Err(RecvError::Lagged(missed)), _) => {
                     yield TicketsEvent::Lagged { missed };
                 }
-                (Err(tokio::sync::broadcast::error::RecvError::Closed), _) => break,
+                (Err(RecvError::Closed), _) => break,
             }
             // FILTER-36: a saved filter it names, changed — said after the
             // change that changed it.
+            let mut failed = None;
             if let Some(w) = watcher.as_mut() {
                 match w.resaved(&store, epic.as_ref()) {
-                    Ok(moved) => for m in moved { yield membership_event(&store, m); },
-                    Err(message) => { yield TicketsEvent::Error { message }; return; }
+                    Ok(moved) => out.extend(moved.into_iter().map(|m| membership_event(&store, m))),
+                    Err(message) => failed = Some(message),
                 }
+            }
+            if mine {
+                let writer = actor.as_ref().and(by.as_deref());
+                for ev in out {
+                    yield said(&store, writer, ev);
+                }
+            }
+            if let Some(message) = failed {
+                yield TicketsEvent::Error { message };
+                return;
             }
         }
     }

@@ -43,7 +43,9 @@ pub(super) fn queue_stream(
     ask: Ask,
     source: Option<CallerSource>,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-    stream! {
+    // TICKETS-39: its writes run as its caller, as `answered!`'s do.
+    let running_as = caller_act(&caller);
+    crate::store::acting_stream(running_as, stream! {
         // ACCESS-11: the editor's permit for `id`; the store writes it.
         let on = match permit::<crate::access::Editor>(&store, &caller, &id) {
             Ok(p) => p,
@@ -74,7 +76,7 @@ pub(super) fn queue_stream(
             Ok(ev) => yield ev,
             Err(e) => yield refused(&store, &caller, id, e),
         }
-    }
+    })
 }
 
 /// APP-23: `request_changes` — the caller (the gate held the grant on `id`),
@@ -86,7 +88,9 @@ pub(super) fn request_changes_stream(
     body: String,
     source: Option<CallerSource>,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-    stream! {
+    // TICKETS-39: its writes run as its caller, as `answered!`'s do.
+    let running_as = caller_act(&caller);
+    crate::store::acting_stream(running_as, stream! {
         // ACCESS-11: the editor's permit for `id`; the store writes it.
         let on = match permit::<crate::access::Editor>(&store, &caller, &id) {
             Ok(p) => p,
@@ -107,7 +111,7 @@ pub(super) fn request_changes_stream(
             Ok(other) => yield wire(other),
             Err(e) => yield refused(&store, &caller, id, e),
         }
-    }
+    })
 }
 
 /// MENGER-39: `queued` — a page of the queue in the caller's reach, most

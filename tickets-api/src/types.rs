@@ -1808,6 +1808,18 @@ pub enum TicketsEvent {
     /// grants moved or its sign-in ended, was refused (`reason`, and why in
     /// words). The last event of the stream.
     WatchClosed { reason: WatchEnd, message: String },
+    /// TICKETS-39: on a `watch { actor }`, each event of a write that actor
+    /// made — `actor` the principal the server verified for the call that
+    /// wrote, `name` its display name when it has one, `event` the event as
+    /// a watch without `actor` sends it (its `type` and fields). Nothing of
+    /// another actor's write is sent; `lagged`, `watch_closed` and `error`
+    /// go out as themselves.
+    Wrote {
+        actor: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        event: serde_json::Value,
+    },
     /// MNG-10: one shortcode's roll-up (yielded per shortcode by `groups`,
     /// in shortcode order).
     Group { group: Group },

@@ -37,7 +37,7 @@ use crate::queue::Urgency;
 use crate::types::{InputState, InputValue, Kind, Row, Severity, Status, SummaryRow, TicketsEvent};
 // ACCESS-8: every parameter a type (MACRO-12's `typed_params` holds it).
 use crate::vocab::{
-    Body, CallerSource, Cursor, DeleteChildren, FilterText, InputId, InputIds, Label, MengerPath, Message, Query, Question, Reason, SeverityChange, ShortcodeRef,
+    Body, CallerSource, Cursor, DeleteChildren, FilterText, InputId, InputIds, Label, MengerPath, Message, Principal, Query, Question, Reason, SeverityChange, ShortcodeRef,
     SummaryField, TicketRef, Title, Zone,
 };
 use crate::address::OrgId;
@@ -1341,9 +1341,15 @@ impl TicketsActivation {
     /// move it says what entered and left (`entered` / `left`, past 256
     /// `recount`) and hears through the new reach; refused — signed out,
     /// expired, held nowhere — it ends with `watch_closed { reason, message }`.
+    ///
+    /// TICKETS-39: with `actor`, only the events of writes that principal
+    /// made (the principal the server verified for the call that wrote),
+    /// each as `wrote { actor, name, event }`; nothing of another's write —
+    /// its rows, entered / left, roll-ups — and nothing no write made.
     #[plexus_macros::method(
         group = "read",
         example(note = "follow active and in-review work", params = r#"{"filter": "category in (active, review)"}"#),
+        example(note = "one person's writes, each naming who made it", params = r#"{"actor": "key:54a9677a62e4289ee5a2d0a4751a6f188abafd8b1f2b2d4019ec0768eb3b0d28"}"#),
         example(note = "what entered Coding in the last hour — and what ages out of it", params = r#"{"filter": "entered Coding within 1h", "membership": true}"#)
     )]
     pub async fn watch(
@@ -1359,10 +1365,12 @@ impl TicketsActivation {
         tz: Option<Zone>,
         /// Also send revised { ticket, rev, fields } for every revision a write keeps, after its other events (optional; default false; TICKETS-7).
         revisions: Option<bool>,
+        /// Only the writes this principal made, each sent as wrote { actor, name, event } — decided by the server from who each write was verified as; within your reach alone (optional; TICKETS-39).
+        actor: Option<Principal>,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         // ACCESS-12: the caller followed as the grants move, every change
         // cut to its reach (activation/watch.rs).
-        let ask = WatchAsk { epic, filter, membership: membership.unwrap_or(false), tz, revisions: revisions.unwrap_or(false) };
+        let ask = WatchAsk { epic, filter, membership: membership.unwrap_or(false), tz, revisions: revisions.unwrap_or(false), actor };
         dressing(self.store.clone(), watch_stream(Arc::clone(&self.store), self.access.clone(), user, ask))
     }
 

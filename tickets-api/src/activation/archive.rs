@@ -66,7 +66,9 @@ pub(super) fn archive_stream(
     act: Result<Act, String>,
     dry_run: bool,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-    stream! {
+    // TICKETS-39: its writes run as its caller, as `answered!`'s do.
+    let running_as = caller_act(&caller);
+    crate::store::acting_stream(running_as, stream! {
         let (select, act) = match selection(&store, &caller, picked, false).and_then(|s| Ok((s, act?))) {
             Ok(c) => c,
             Err(message) => {
@@ -82,7 +84,7 @@ pub(super) fn archive_stream(
             Ok(ArchiveAnswer { ids, live, unqueued, mark, dry_run }) => yield TicketsEvent::Archived { ids, live, unqueued, mark, dry_run },
             Err(e) => yield said(&store, &caller, e),
         }
-    }
+    })
 }
 
 /// ARCHIVE-2: `restore` — the selection (of archived tickets), the permits,
@@ -95,7 +97,9 @@ pub(super) fn restore_stream(
     act: Result<Act, String>,
     dry_run: bool,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-    stream! {
+    // TICKETS-39: its writes run as its caller, as `answered!`'s do.
+    let running_as = caller_act(&caller);
+    crate::store::acting_stream(running_as, stream! {
         let (select, act) = match selection(&store, &caller, picked, true).and_then(|s| Ok((s, act?))) {
             Ok(c) => c,
             Err(message) => {
@@ -110,7 +114,7 @@ pub(super) fn restore_stream(
             Ok(r) => yield restored(r),
             Err(e) => yield said(&store, &caller, e),
         }
-    }
+    })
 }
 
 /// A restore's answer as its event.

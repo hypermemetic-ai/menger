@@ -154,6 +154,35 @@ pub async fn acting<F: std::future::Future>(act: Act, f: F) -> F::Output {
     ACTING.scope(RefCell::new(act), f).await
 }
 
+/// TICKETS-39: [`acting`] for a stream — every poll of `s` runs as `act`,
+/// and what the stream says of its act ([`say_act`]) holds for its next
+/// poll. A method whose body is a stream of its own (a delete, the queue,
+/// an archive) writes as its caller this way, as `answered!`'s body does.
+pub fn acting_stream<S>(act: Act, s: S) -> impl futures::Stream<Item = S::Item> + Send + 'static
+where
+    S: futures::Stream + Send + 'static,
+    S::Item: Send + 'static,
+{
+    async_stream::stream! {
+        use futures::StreamExt;
+        let mut s = Box::pin(s);
+        let mut act = act;
+        loop {
+            let (next, now) = ACTING
+                .scope(RefCell::new(act), async {
+                    let next = s.next().await;
+                    (next, ACTING.with(|c| c.borrow().clone()))
+                })
+                .await;
+            act = now;
+            match next {
+                Some(item) => yield item,
+                None => break,
+            }
+        }
+    }
+}
+
 /// The call's act from here on — a method that reads its caller's source
 /// and message says them (`activation/sight.rs`'s `act_of`). Outside
 /// [`acting`], nothing.
@@ -279,6 +308,9 @@ pub(super) struct Kept {
 
 struct Recording {
     act: Act,
+    /// TICKETS-39: who the write's events are said to be by — the caller's
+    /// act, when the write runs inside [`acting`]; none outside it.
+    writer: Option<std::sync::Arc<super::wrote::Writer>>,
     /// The moment the write keeps its revisions at — the store's clock.
     now: i64,
     touched: Vec<Touch>,
@@ -298,8 +330,9 @@ pub(super) struct Writing(());
 impl Writing {
     /// Opens the write's recording, as `act` (the caller's, when known).
     pub(super) fn begin(act: Option<Act>, now: i64) -> Self {
+        let writer = act.as_ref().map(|a| std::sync::Arc::new(super::wrote::Writer::of(a)));
         let act = act.unwrap_or_default();
-        RECORDING.with(|r| *r.borrow_mut() = Some(Recording { act, now, touched: Vec::new(), said: HashMap::new(), kept: Vec::new() }));
+        RECORDING.with(|r| *r.borrow_mut() = Some(Recording { act, writer, now, touched: Vec::new(), said: HashMap::new(), kept: Vec::new() }));
         Writing(())
     }
 }
@@ -316,7 +349,11 @@ fn with<T>(f: impl FnOnce(&mut Recording) -> T) -> Option<T> {
 
 /// The write acts as `act` — a write handed one (`update_by`, `delete_by`, …).
 pub(super) fn act(act: &Act) {
-    with(|r| r.act = act.clone());
+    with(|r| {
+        r.act = act.clone();
+        // TICKETS-39: and its events are said to be by it.
+        r.writer = Some(std::sync::Arc::new(super::wrote::Writer::of(act)));
+    });
 }
 
 /// A step's transition — who moved its ticket, and what caused it.
@@ -675,8 +712,17 @@ pub(super) fn publish(tx: &Broadcast) {
     })
     .unwrap_or_default();
     for k in kept {
-        let _ = tx.revisions.send(Change::Revised { shortcode: k.shortcode, ticket: k.ticket, rev: k.rev, fields: k.fields });
+        let revised = Change::Revised { shortcode: k.shortcode, ticket: k.ticket, rev: k.rev, fields: k.fields };
+        // TICKETS-39: and to `watch { actor }`, with its writer.
+        tx.wrote(&revised);
+        let _ = tx.revisions.send(revised);
     }
+}
+
+/// TICKETS-39: who the write running on this thread is by — `None` outside
+/// a write, or for one no call's act runs.
+pub(super) fn writer() -> Option<std::sync::Arc<super::wrote::Writer>> {
+    with(|r| r.writer.clone()).flatten()
 }
 
 // ── Reads ────────────────────────────────────────────────────────────────

@@ -151,7 +151,9 @@ pub(super) fn update_many_stream(
     source: Option<CallerSource>,
     message: Option<Message>,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-    stream! {
+    // TICKETS-39: its writes run as its caller, as `answered!`'s do.
+    let running_as = caller_act(&caller);
+    crate::store::acting_stream(running_as, stream! {
         let chosen = Ok::<_, String>(caller).and_then(|caller| {
             let select = match (ids, filter) {
                 (Some(ids), None) => Selection::Ids(texts(ids)),
@@ -200,5 +202,5 @@ pub(super) fn update_many_stream(
             }
             Err(e) => yield said(&store, &caller, e),
         }
-    }
+    })
 }
