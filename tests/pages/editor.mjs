@@ -686,6 +686,11 @@ graph TD
       await away(page);
       const video = ed.locator(`.blk [data-media=video] video[src$="/media/${hash}"]`);
       await eventually("drawn as a player", async () => (await video.count()) === 1, 5_000);
+      // EDITOR-28, the owner's case: the caption's `download` under the video, pressed in the editor, downloads.
+      const vdl = ed.locator(".blk [data-media=video] .mx-cap a[download]");
+      const [vgot] = await Promise.all([page.waitForEvent("download", { timeout: 10_000 }), vdl.click()]);
+      assert(vgot.suggestedFilename() === "walk through.mp4", `the video downloads under its name: ${vgot.suggestedFilename()}`);
+      assert((await video.count()) === 1, "and the player is still drawn, the block not entered");
       const meta = await video.evaluate((v) => new Promise((r) => { if (v.readyState >= 1) r(v.readyState); v.onloadedmetadata = () => r(v.readyState); v.onerror = () => r(`error ${v.error?.code}`); setTimeout(() => r(`state ${v.readyState}`), 4000); }));
       // A synthetic MP4 has no moov: the browser asks for it by range and says so; a real one plays. Either way it asked.
       assert(meta !== undefined, "the player read it");
@@ -702,6 +707,10 @@ graph TD
         await again.click();
         await eventually("the offer goes once pressed", async () => !(await again.isVisible()), 3_000);
         assert((await player.evaluate((v) => v.currentTime)) === 0, "back at the start");
+        // EDITOR-28: and on the ticket's page, where the owner pressed it.
+        const rdl = ro.page.locator("[data-surface=ticket-body] [data-media=video] .mx-cap a[download]");
+        const [rgot] = await Promise.all([ro.page.waitForEvent("download", { timeout: 10_000 }), rdl.click()]);
+        assert(rgot.suggestedFilename() === "walk through.mp4", `downloads from the ticket's page: ${rgot.suggestedFilename()}`);
         if (shots) await ro.page.screenshot({ path: path.join(shots, "media-video-ticket.png") });
       } finally {
         await ro.context.close();
@@ -712,10 +721,11 @@ graph TD
   });
 
   await test("a_pdf_and_any_file_pasted_together_draw_as_a_viewer_and_a_card", async () => {
-    const id = make("files", "files:\n");
+    const lead = "see [elsewhere](https://example.invalid/) first\n\nfiles:";
+    const id = make("files", `${lead}\n`);
     const { context, page, ed } = await open(id);
     try {
-      await caretAt(page, "files:".length);
+      await caretAt(page, lead.length);
       await pasteAll(page, [{ b64: btoa("%PDF-1.4\n%fake pdf\n"), type: "application/pdf", name: "deck.pdf" }, { b64: btoa("PK\u0003\u0004 not much of a zip"), type: "application/zip", name: "notes.zip" }]);
       await eventually("both in the source", async () => /\[deck\.pdf\]\(media:[0-9a-f]{64}\)/.test(get(id).body) && /\[notes\.zip\]\(media:[0-9a-f]{64}\)/.test(get(id).body), 10_000);
       const pdf = /\[deck\.pdf\]\(media:([0-9a-f]{64})\)/.exec(get(id).body)[1];
@@ -728,6 +738,15 @@ graph TD
       assert((await dl.getAttribute("download")) === "notes.zip", "a download");
       const r = await page.request.get(await dl.getAttribute("href"));
       assert(r.status() === 200 && r.headers()["content-type"] === "application/octet-stream" && /^attachment;/.test(r.headers()["content-disposition"]), `served as an attachment: ${JSON.stringify(r.headers())}`);
+      // EDITOR-28: pressed, it downloads — the block's click handler leaves a file's own link to the browser.
+      const [got] = await Promise.all([page.waitForEvent("download", { timeout: 5_000 }), dl.click()]);
+      assert(got.suggestedFilename() === "notes.zip", `the download, under its name: ${got.suggestedFilename()}`);
+      assert((await ed.locator(".blk [data-media=file]").count()) === 1, "and the block is still drawn, not entered");
+      // Any other link in a block is as it was: not followed, the click enters its block.
+      const here = await page.evaluate(() => location.href);
+      await ed.locator(".blk a[href^='https://example.invalid']").click();
+      await eventually("the link's block is its source", async () => (await ed.locator(".cm-line").evaluateAll((ls) => ls.some((l) => l.innerText.includes("[elsewhere]")))), 5_000);
+      assert((await page.evaluate(() => location.href)) === here && page.context().pages().length === 1, "an ordinary link is not followed");
       if (shots) await page.screenshot({ path: path.join(shots, "media-pdf-file.png"), fullPage: true });
     } finally {
       await context.close();
