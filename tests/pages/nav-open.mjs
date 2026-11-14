@@ -103,13 +103,14 @@ export default async (ctx) => {
 
   await test("the_nav_leaves_the_scroll_to_the_person", async () => {
     assert(far, "a root with 300 children in the seed");
-    // The walk's `get`s held back 1.5 s in the page, so the person's wheel comes before the row, every run.
+    // The node's second page (`limit: 400`, asked only on the way to the row) held back 1.5 s in the page, so
+    // the person's wheel comes before the row, every run.
     const { page, context } = await openPage(`#/ticket/${far}`);
     try {
       await context.addInitScript(() => {
         const send = WebSocket.prototype.send;
         WebSocket.prototype.send = function (d) {
-          if (typeof d === "string" && d.includes('"tickets.get"') && document.querySelector("[data-nav-group]")) { setTimeout(() => send.call(this, d), 1500); return; }
+          if (typeof d === "string" && d.includes('"tickets.list"') && /"limit":\s*400\b/.test(d)) { setTimeout(() => send.call(this, d), 1500); return; }
           return send.call(this, d);
         };
       });

@@ -14,7 +14,8 @@
      reloads. SHELL.176-4: the row of the ticket open beside the nav is
      marked (`nav.current`), and a node the way to it runs through
      (`nav.want(node)`, the child it leads to) asks its next page while that
-     child is not among its rows and the last page came back full. -->
+     child is not among its rows and the last page came back full — twice
+     as many each time, so a child 3,000 down costs five asks, not fifteen. -->
 <script module>
   // PERF-15: a row is the fields drawn, not the whole summary row.
   const FIELDS = ["id", "uid", "title", "kind", "status", "child_count", "parent"];
@@ -56,7 +57,7 @@
   // SHELL.176-4: the way to the open ticket runs through this node: page until its child is drawn.
   const wanted = $derived(nav.want?.(parent ?? epic) ?? null);
   $effect(() => {
-    if (wanted != null && $kids.status === "live" && !listed.has(wanted) && list.length >= PAGE * pages && pages < 100) pages += 1;
+    if (wanted != null && $kids.status === "live" && !listed.has(wanted) && list.length >= PAGE * pages && pages < 64) pages *= 2;
   });
 </script>
 
