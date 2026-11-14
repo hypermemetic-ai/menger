@@ -296,7 +296,7 @@ async fn a_body_past_the_cap_is_the_typed_body_too_large() {
 async fn amend_yields_amended_and_watch_carries_only_what_changed() {
     let service = service();
     one(service.create(operator(), "AM".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
-    let mut watch = Box::pin(service.watch(operator(), None, None, None, None, None).await);
+    let mut watch = Box::pin(service.watch(operator(), None, None, None, None, None, None).await);
 
     let ev = one(service.amend(operator(), "am-1".into(), None, Some("the body, now".into())).await).await;
     let wire = serde_json::to_value(&ev).unwrap();
@@ -336,7 +336,7 @@ async fn amend_yields_amended_and_watch_carries_only_what_changed() {
 #[tokio::test]
 async fn watch_sees_creations_and_status_changes() {
     let service = service();
-    let mut watch = Box::pin(service.watch(operator(), None, None, None, None, None).await);
+    let mut watch = Box::pin(service.watch(operator(), None, None, None, None, None, None).await);
 
     one(service.create(operator(), "MNG".into(), "a".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     match watch.next().await.expect("change") {
@@ -403,7 +403,7 @@ async fn ids_and_page(
 async fn create_adds_new_id_to_blockers_unlocks_and_watch_carries_it() {
     let service = service();
     one(service.create(operator(), "DAG".into(), "a".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
-    let mut watch = Box::pin(untransitioned(service.watch(operator(), None, None, None, None, None).await));
+    let mut watch = Box::pin(untransitioned(service.watch(operator(), None, None, None, None, None, None).await));
 
     one(service
         .create(operator(), "DAG".into(), "b".into(), None, None, Some(vec!["DAG-1".into()]), None, None, None, None)
@@ -450,7 +450,7 @@ async fn create_adds_new_id_to_blockers_unlocks_and_watch_carries_it() {
 async fn create_with_parent_updates_children_and_watch_carries_the_parent() {
     let service = service();
     one(service.create(operator(), "FAM".into(), "P".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
-    let mut watch = Box::pin(untransitioned(service.watch(operator(), None, None, None, None, None).await));
+    let mut watch = Box::pin(untransitioned(service.watch(operator(), None, None, None, None, None, None).await));
 
     match one(
         service.create(operator(), 
@@ -787,7 +787,7 @@ async fn create_rejects_longer_cycles() {
 #[tokio::test]
 async fn watch_epic_filter_drops_other_epics() {
     let service = service();
-    let mut watch = Box::pin(service.watch(operator(), Some("mng".into()), None, None, None, None).await);
+    let mut watch = Box::pin(service.watch(operator(), Some("mng".into()), None, None, None, None, None).await);
 
     one(service.create(operator(), "OTHER".into(), "x".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
     one(service.create(operator(), "MNG".into(), "y".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
@@ -826,8 +826,8 @@ async fn a_watch_that_falls_behind_reads_one_lagged_then_the_newest_changes() {
     const HELD: u64 = 256; // Store::with_connection's broadcast capacity
     let service = service();
     one(service.create(operator(), "LAG".into(), "root".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
-    let mut watch = Box::pin(service.watch(operator(), None, None, None, None, None).await);
-    let mut other = Box::pin(service.watch(operator(), Some("other".into()), None, None, None, None).await);
+    let mut watch = Box::pin(service.watch(operator(), None, None, None, None, None, None).await);
+    let mut other = Box::pin(service.watch(operator(), Some("other".into()), None, None, None, None, None).await);
 
     let mut broadcast: Vec<String> = Vec::new();
     for k in 2..=CREATES + 1 {
@@ -878,7 +878,7 @@ async fn set_parent_yields_parent_changed_and_maps_errors_in_band() {
     one(service.create(operator(), "SP".into(), "a".into(), None, None, None, None, None, None, None).await).await; // SP-2 → SP-1
     one(service.create(operator(), "SP".into(), "b".into(), None, None, None, None, None, None, None).await).await; // SP-3 → SP-1
     one(service.create(operator(), "OT".into(), "other".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
-    let mut watch = Box::pin(service.watch(operator(), None, None, None, None, None).await);
+    let mut watch = Box::pin(service.watch(operator(), None, None, None, None, None, None).await);
 
     match one(service.set_parent(operator(), "sp-3".into(), "sp-2".into()).await).await {
         TicketsEvent::ParentChanged { ticket, previous } => {

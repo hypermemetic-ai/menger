@@ -20,7 +20,9 @@ pub(super) fn delete_stream(
     unblock: Option<bool>,
     message: Option<Message>,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-    stream! {
+    // TICKETS-39: its writes run as its caller, as `answered!`'s do.
+    let running_as = caller_act(&caller);
+    crate::store::acting_stream(running_as, stream! {
         let chosen = Ok::<_, String>(caller).and_then(|caller| {
             let select = match (ids, filter) {
                 (Some(ids), None) if !ids.is_empty() => Selection::Ids(texts(ids)),
@@ -53,12 +55,14 @@ pub(super) fn delete_stream(
             Ok(Deleted { ids, tombstones }) => yield TicketsEvent::Deleted { ids, tombstones },
             Err(e) => yield said(&store, &caller, e),
         }
-    }
+    })
 }
 
 /// ACT-5: `undelete` — the caller's grant on each id, then the store's write.
 pub(super) fn undelete_stream(store: Arc<Store>, caller: VerifiedUser, ids: Vec<String>) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-    stream! {
+    // TICKETS-39: its writes run as its caller, as `answered!`'s do.
+    let running_as = caller_act(&caller);
+    crate::store::acting_stream(running_as, stream! {
         let act = match act_of(&caller, None, None) {
             Ok(a) => a,
             Err(message) => {
@@ -75,7 +79,7 @@ pub(super) fn undelete_stream(store: Arc<Store>, caller: VerifiedUser, ids: Vec<
             Ok(Undeleted { ids, tickets }) => yield TicketsEvent::Undeleted { ids, tickets },
             Err(e) => yield veiled(&store, &caller, e),
         }
-    }
+    })
 }
 
 /// ACT-6: `reshortcode` — who asks, the grants, and the store's write.
@@ -85,7 +89,9 @@ pub(super) fn reshortcode_stream(
     mut ask: Reshortcode,
     message: Option<Message>,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-    stream! {
+    // TICKETS-39: its writes run as its caller, as `answered!`'s do.
+    let running_as = caller_act(&caller);
+    crate::store::acting_stream(running_as, stream! {
         let act = match act_of(&caller, None, message) {
             Ok(a) => a,
             Err(message) => {
@@ -120,7 +126,7 @@ pub(super) fn reshortcode_stream(
             }
             Err(e) => yield said(&store, &caller, e),
         }
-    }
+    })
 }
 
 /// TICKETS-26: `rename` — who asks, the grant on the ticket, and the store's
@@ -131,7 +137,9 @@ pub(super) fn rename_stream(
     mut ask: Rename,
     message: Option<Message>,
 ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
-    stream! {
+    // TICKETS-39: its writes run as its caller, as `answered!`'s do.
+    let running_as = caller_act(&caller);
+    crate::store::acting_stream(running_as, stream! {
         let act = match act_of(&caller, None, message) {
             Ok(a) => a,
             Err(message) => {
@@ -147,5 +155,5 @@ pub(super) fn rename_stream(
             Ok(Reshortcoded { moves, tickets }) => yield TicketsEvent::Reshortcoded { moves, tickets },
             Err(e) => yield said(&store, &caller, e),
         }
-    }
+    })
 }

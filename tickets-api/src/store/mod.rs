@@ -294,6 +294,9 @@ pub(crate) struct Broadcast {
     filtered: broadcast::Sender<Change>,
     /// TICKETS-7: the revisions writes keep — `watch { revisions }`'s.
     revisions: broadcast::Sender<Change>,
+    /// TICKETS-39: every change of `filtered` and `revisions`, each with who
+    /// made its write — `watch { actor }`'s; fed only while one is open.
+    wrote: broadcast::Sender<wrote::Wrote>,
     /// ORG-23: `epics.watch`'s — an epic's change, a principal moved.
     pub(super) epics: broadcast::Sender<era_archive::EpicSignal>,
     /// ACCESS-12: the grants generation, as the last write left it — what
@@ -311,6 +314,7 @@ impl Broadcast {
             plain: broadcast::channel(BROADCAST_CAPACITY).0,
             filtered: broadcast::channel(BROADCAST_CAPACITY).0,
             revisions: broadcast::channel(BROADCAST_CAPACITY).0,
+            wrote: broadcast::channel(BROADCAST_CAPACITY).0,
             epics: broadcast::channel(BROADCAST_CAPACITY).0,
             grants: Arc::new(tokio::sync::watch::channel(0).0),
         }
@@ -325,6 +329,8 @@ impl Broadcast {
     /// Sends `change` to every subscriber it is for: a cell move to the
     /// filtered channel alone; anything else to both.
     fn send(&self, change: Change) {
+        // TICKETS-39: with the writer the write runs as, while anyone asks.
+        self.wrote(&change);
         let watched = self.filtered.receiver_count() > 0;
         if let Change::CellsMoved { .. } | Change::UnderMoved { .. } = change {
             if watched {
@@ -4740,6 +4746,13 @@ impl Store {
     pub fn subscribe_filtered(&self) -> broadcast::Receiver<Change> {
         self.tx.filtered.subscribe()
     }
+
+    /// TICKETS-39: `watch { actor }`'s channel — what [`Store::subscribe_filtered`]
+    /// and [`Store::subscribe_revisions`] give, in their order, each change
+    /// with the writer of the write that made it ([`Wrote`]).
+    pub fn subscribe_wrote(&self) -> broadcast::Receiver<Wrote> {
+        self.tx.wrote.subscribe()
+    }
 }
 
 /// MNG-10: the per-shortcode roll-ups — AGS-20's nav tree, computed by the
@@ -5005,7 +5018,7 @@ pub use reshortcode::{Rename, Reshortcode, Reshortcoded};
 /// ticket's work runs — the `deployed` cells.
 // TICKETS-7: every change keeps a revision.
 pub(crate) mod revisions;
-pub use revisions::{acting, say_act, BodyCharge, DiffView, RevisionPage, Restoring};
+pub use revisions::{acting, acting_stream, say_act, BodyCharge, DiffView, RevisionPage, Restoring};
 pub use eras::{reading_as, reading_now};
 /// TICKETS-9: the assignees and their history.
 /// APP-23: a change request — a comment and an unqueue, one write.
@@ -5057,6 +5070,11 @@ mod tests_frames;
 /// the reach and redacted as a read is; a moved reach's entered and left.
 mod watching;
 pub use watching::WatchSight;
+/// TICKETS-39: who made each write, as `watch { actor }` hears it.
+mod wrote;
+pub use wrote::{Writer, Wrote};
+#[cfg(test)]
+mod tests_wrote;
 mod reads;
 mod lensed;
 pub use lensed::{narrowing, narrowing_lens, narrowing_of, ready_and, MEMBER_MAX};

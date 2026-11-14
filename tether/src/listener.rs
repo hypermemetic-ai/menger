@@ -167,7 +167,7 @@ impl Listener {
         let t = self.remote.connect().await?;
         let tickets = TicketsClient::new(t.clone());
         let comments = CommentsClient::new(t.clone());
-        let mut tw = tickets.watch(None, None, None, None, None);
+        let mut tw = tickets.watch(None, None, None, None, None, None);
         let mut cw = comments.watch();
         self.start_position(&comments).await?;
         let rows = tickets.queued_all(Some(true)).await.map_err(|e| format!("the queue: {e}"))?;

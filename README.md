@@ -611,7 +611,7 @@ whole. synapse `-j` prints the `rows` event as one line (SYNAPSE-36).
 | `request_changes` | `--id --body [--source]` | handed back: the words on the queue's log, the entry out |
 | `queued` | `[--id] [--snoozed] [--limit] [--after]` | a page of the queue, most urgent first, then oldest |
 | `await_reply` | `--id [--since] [--input] [--timeout-minutes]` | an agent waits for the first response |
-| `watch` | `[--epic] [--filter] [--membership] [--revisions] [--tz]` | every change, open-ended |
+| `watch` | `[--epic] [--filter] [--membership] [--revisions] [--tz] [--actor]` | every change, open-ended; with `--actor PRINCIPAL` (TICKETS-39) only the writes that principal made — decided by the server from who each write was verified as, within your reach alone — each sent `wrote { actor, name, event }`, `event` the event a watch without `--actor` sends; nothing of another's write (its rows, `entered` / `left`, roll-ups), nothing no write made, and `lagged`, `watch_closed`, `error` as themselves |
 | `commits link` | `--commits [--id] [--ids]` | the commits that finished a ticket |
 | `commits unlink` | `--id --commits` | take them off |
 | `filters save` · `list` · `get` · `rename` · `delete` · `check` | `--name --filter` · — · `--name` · `--name --to` · `--name` · `--filter` | saved filters (FILTER-46) |

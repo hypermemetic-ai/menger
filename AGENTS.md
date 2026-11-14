@@ -436,6 +436,7 @@ synapse -P 4460 menger tickets search --query 'set_status' --filter 'not categor
 synapse -P 4460 menger tickets history --id MNG-7
 synapse -P 4460 menger tickets watch          # open-ended
 synapse -P 4460 menger tickets watch --filter 'category in (active, review)' --membership true
+synapse -P 4460 menger tickets watch --actor key:54a9677a62e4289ee5a2d0a4751a6f188abafd8b1f2b2d4019ec0768eb3b0d28   # open-ended: only the writes of that principal, each wrote (TICKETS-39)
 ```
 
 A body is a file (`--body @body.md`, its contents exactly), never

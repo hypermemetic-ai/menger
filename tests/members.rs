@@ -1014,3 +1014,96 @@ async fn an_accepted_person_has_an_organization_of_their_own() {
     let owned = call(&ada, "orgs.list", json!({})).await.iter().filter(|o| o["org"]["owner"] == me.as_str()).count();
     assert_eq!(owned, 1);
 }
+
+// ── TICKETS-39: a watch of one actor's writes ─────────────────────────────
+
+/// Every item an actor watch heard is a `wrote` naming that actor.
+fn all_by(heard: &[Value], actor: &str) {
+    for e in heard {
+        assert_eq!((e["type"].as_str(), e["actor"].as_str()), (Some("wrote"), Some(actor)), "only the actor's writes, each said `wrote`: {heard:?}");
+    }
+}
+
+/// The inner events of what an actor watch heard: `(type, ticket id)`.
+fn inner(heard: &[Value]) -> Vec<(String, String)> {
+    heard
+        .iter()
+        .map(|e| {
+            let ev = &e["event"];
+            let id = ev["ticket"]["id"].as_str().or(ev["id"].as_str()).unwrap_or("").to_string();
+            (ev["type"].as_str().unwrap_or("").to_string(), id)
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn an_actor_watch_hears_that_actor_s_writes_alone_each_naming_it() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    tickets(&ada).await;
+    call(&ada, "members.grant", grant(ALICE, "IDENTITY", "editor")).await;
+    call(&ada, "members.grant", grant(BOB, "IDENTITY", "editor")).await;
+    let (alice, bob) = (as_(&w, ALICE, "alice").await, as_(&w, BOB, "bob").await);
+    let alice_p = format!("idp:{ALICE}");
+    let mut of_alice = sub(&ada, "tickets.watch", json!({ "actor": alice_p })).await;
+    let mut filtered = sub(&ada, "tickets.watch", json!({ "actor": alice_p, "filter": "label seen" })).await;
+    let mut plain = sub(&ada, "tickets.watch", json!({})).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Bob writes first — a title, and a label that moves IDENTITY-2 into the filter.
+    call(&bob, "tickets.amend", json!({ "id": "IDENTITY-2", "title": "bob's" })).await;
+    call(&bob, "tickets.label", json!({ "id": "IDENTITY-2", "add": ["seen"] })).await;
+    // Then Alice: a title, the label off (out of the filter), and a queue write.
+    call(&alice, "tickets.amend", json!({ "id": "IDENTITY-2", "title": "alice's" })).await;
+    call(&alice, "tickets.label", json!({ "id": "IDENTITY-2", "remove": ["seen"] })).await;
+    let q = call(&alice, "tickets.queue", json!({ "id": "IDENTITY-2", "urgency": "today", "reason": "look" })).await;
+    assert_eq!(q[0]["type"], "queued", "{q:?}");
+    // And Ada, whom nobody here follows.
+    call(&ada, "tickets.amend", json!({ "id": "OUGHT-2", "title": "ada's" })).await;
+
+    let (heard, _) = drain(&mut of_alice, Duration::from_millis(800)).await;
+    all_by(&heard, &alice_p);
+    assert_eq!(heard[0]["name"], "alice", "the display name beside the principal: {heard:?}");
+    let evs = inner(&heard);
+    assert!(evs.contains(&("amended".into(), "IDENTITY-2".into())), "{evs:?}");
+    assert!(evs.contains(&("labels_changed".into(), "IDENTITY-2".into())), "{evs:?}");
+    assert!(evs.iter().any(|(t, _)| t == "queued"), "a queue write is its caller's too: {evs:?}");
+    assert!(!format!("{heard:?}").contains("bob's"), "nothing of Bob's write: {heard:?}");
+    assert!(!format!("{heard:?}").contains("OUGHT-2"), "nothing of Ada's: {heard:?}");
+    let titles: Vec<&str> = heard.iter().filter_map(|e| e["event"]["ticket"]["title"].as_str()).collect();
+    assert!(titles.iter().all(|t| *t == "alice's"), "{titles:?}");
+
+    // The filtered one: Bob's label moved IDENTITY-2 in — not said; Alice's moved it out — said.
+    let (heard, _) = drain(&mut filtered, Duration::from_millis(300)).await;
+    all_by(&heard, &alice_p);
+    let evs = inner(&heard);
+    assert!(!evs.iter().any(|(t, _)| t == "entered"), "Bob's write moved it in, and that is Bob's: {evs:?}");
+    assert!(evs.contains(&("left".into(), "IDENTITY-2".into())), "{evs:?}");
+
+    // Without `actor`, the stream is as it was: no `wrote`, every writer's.
+    let (heard, _) = drain(&mut plain, Duration::from_millis(300)).await;
+    assert!(heard.iter().all(|e| e["type"] != "wrote"), "{heard:?}");
+    assert_eq!(amended(&heard), ["IDENTITY-2", "IDENTITY-2", "OUGHT-2"]);
+}
+
+#[tokio::test]
+async fn an_actor_watch_never_widens_the_watcher_s_reach() {
+    let w = start().await;
+    let ada = as_(&w, ADA, "ada").await;
+    tickets(&ada).await;
+    call(&ada, "members.grant", grant(BOB, "OUGHT", "viewer")).await;
+    let bob = as_(&w, BOB, "bob").await;
+    let mut watch = sub(&bob, "tickets.watch", json!({ "actor": format!("idp:{ADA}") })).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    call(&ada, "tickets.amend", json!({ "id": "IDENTITY-2", "title": "unseen" })).await;
+    call(&ada, "tickets.amend", json!({ "id": "OUGHT-2", "title": "seen" })).await;
+    let (heard, _) = drain(&mut watch, Duration::from_millis(800)).await;
+    all_by(&heard, &format!("idp:{ADA}"));
+    let amended: Vec<String> = inner(&heard).into_iter().filter(|(t, _)| t == "amended").map(|(_, id)| id).collect();
+    assert_eq!(amended, ["OUGHT-2"], "IDENTITY-2 is out of Bob's reach, whoever wrote it");
+    assert!(!format!("{heard:?}").contains("unseen"), "{heard:?}");
+
+    // An actor is a principal: a display name is refused before the watch opens.
+    let named = call(&bob, "tickets.watch", json!({ "actor": "ada" })).await;
+    assert!(format!("{named:?}").contains("principal"), "{named:?}");
+}
