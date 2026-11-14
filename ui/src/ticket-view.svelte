@@ -378,7 +378,9 @@
     const seen = new Map();
     return blocks(body).map((p) => {
       // COMPS-23: a block-form tag is kept by its name and place, so its own save moves no block.
-      const t = p.src ? `tag\u0000${p.src.name}\u0000${p.src.n ?? ""}` : `${p.wrap?.open ?? ""}\u0000${p.h ?? ""}\u0000${p.text}`;
+      // EDITOR-29: a framed piece (a mockup, a live page, a body framed whole) is kept by its tag and place too,
+      // so an amend hands its component the new text and the new page loads behind the one on screen.
+      const t = p.src ? `tag\u0000${p.src.name}\u0000${p.src.n ?? ""}` : p.page ? `page\u0000${pageTag(p)}` : `${p.wrap?.open ?? ""}\u0000${p.h ?? ""}\u0000${p.text}`;
       const c = seen.get(t) ?? 0;
       seen.set(t, c + 1);
       return { ...p, k: `${t}\u0000${c}` };

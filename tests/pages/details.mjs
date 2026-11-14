@@ -112,12 +112,10 @@ After the folds.
       await first.click();
       got = await folds(page, scopeT);
       assert(got[0].expanded === "false" && got[0].hidden === "until-found", "again closes it");
-      // EDITOR-24: the page's body is the editor, so the sentence is the block's text: a click there is the
-      // caret's (its source shows, the other two stay drawn); the caret out again, the fold is drawn as it was left.
+      // The sentence opens it too (EDITOR-29: the page's body is drawn, so a click there is the fold's).
       await page.locator(`${scopeT} m-details[data-folds] .det-sum`).nth(2).click({ position: { x: 4, y: 4 } });
-      await eventually("the sentence's block is its source", async () => (await page.locator(`${scopeT} m-details[data-folds]`).count()) === 2 && (await page.locator(`${scopeT} .cm-line`).evaluateAll((ls) => ls.some((l) => l.textContent.includes("<m-details")))), 5_000);
-      await page.keyboard.press("Escape");
-      await eventually("drawn again, closed", async () => { const f = await folds(page, scopeT); return f.length === 3 && f[2].expanded === "false"; }, 5_000);
+      assert((await folds(page, scopeT))[2].expanded === "true", "a click on the sentence opens it");
+      await page.locator(`${scopeT} m-details[data-folds] .det-mark`).nth(2).click();
       // Keyboard: Tab reaches the mark, Enter and Space toggle it.
       await first.focus();
       assert(await first.evaluate((e) => document.activeElement === e), "the mark takes focus");

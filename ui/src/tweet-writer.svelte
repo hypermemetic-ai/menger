@@ -19,7 +19,7 @@
      when that is still the source it was drawn from — replaces that tag alone and writes the body back
      (`tickets.amend`), every other byte kept; when it is gone or someone changed it, it refuses and says
      so, overwriting nothing. Words are written escaped (`&` and `<`), so a word never closes the tag.
-     EDITOR-24: in the editor — a ticket's page, `…/edit`, a document — the body is the editor's to save, so
+     EDITOR-24: in the editor — `…/edit`, a document (EDITOR-29: never a ticket's page, which draws its body) — the body is the editor's to save, so
      the writer hands it the tag (`body.tag` on the bus: the tag's name, place, the source it was drawn from
      and the new one) and the editor replaces that tag alone in its text and saves the body its own way (a
      ticket's amend, a document's CRDT), answering `body.tag.done`; changed or gone, it refuses the same way.
