@@ -14,17 +14,28 @@
      filter (`#/board` none, `#/f/:filter` the text); every section gets it
      as `data-filter`. FRAME-50: the facets and the saved filters wait for
      `board.drawn` (`after`): a section cannot assume the board beside it is
-     mounted yet. -->
+     mounted yet. SHELL.176-3: the route with no filter is the Recent view —
+     `changed within 7d · order changed`, the board's default (owner,
+     2026-11-13: "give me a recent tickets page, or filter on the board. make
+     that the default board view") — and every section gets that text, so it
+     is shown, changed and cleared as any filter is. The All view,
+     `#/f/· order code` (every ticket in the store's order), is the board with
+     no filter, as `#/board` was: its sections get none. The top (its search
+     carries the board's filter) gets only a filter the route names, so a
+     search from the default board is not cut to the last seven days. -->
 <script module>
   export const uses = [];
+  /** SHELL.176-3: the board's filter when the route names none (filter-chips' RECENT). */
+  const RECENT = "changed within 7d · order changed";
 </script>
 
 <script>
-  let { filter = null } = $props();
+  let { filter: routed = null } = $props();
+  const filter = $derived(routed == null ? RECENT : /^\s*·\s*order code\s*$/i.test(routed) ? null : routed);
 </script>
 
 <div class="board-layout" data-board-layout data-filter={filter}>
-  <div data-slot="top" data-filter={filter} data-here="board"></div>
+  <div data-slot="top" data-filter={routed == null ? null : filter} data-here="board"></div>
   <div data-slot="bar" data-filter={filter}></div>
   <div class="board-body">
     <div class="board-side">

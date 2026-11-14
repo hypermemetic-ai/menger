@@ -86,7 +86,10 @@ const ROW_PITCH = 28; // board-rows-sv's `data-row-height`: the board scrolls at
 // fetches for the board's rows from another version.
 const BOARDS = {
   sv: {
-    name: "sv", tag: "_sv", route: "#/board", filterRoute: "#/f/", ticketRoute: "#/ticket/",
+    // SHELL.176-3: `#/board` opens on Recent (`changed within 7d · order changed`); `all` is the
+    // unfiltered board — every ticket in the store's order, `#/f/· order code` — which the tests of
+    // the board's own mechanics (extents, scroll, live rows, the nav) open.
+    name: "sv", tag: "_sv", route: "#/board", all: `#/f/${encodeURIComponent("· order code")}`, filterRoute: "#/f/", ticketRoute: "#/ticket/",
     layout: "board-frame", top: "board-layout-sv", nav: "nav-tree-sv", main: "board-rows-sv", palette: "jump-palette-sv", page: "page-ticket",
     sections: [["top", "app-top"], ["bar", "board-layout-sv"], ["nav", "nav-tree-sv"], ["facets", "nav-facets"], ["saved", "filters-saved"], ["keys", "keys-help"], ["main", "board-rows-sv"], ["bulk", "bulk-bar"], ["palette", "jump-palette-sv"]],
     module: "board-rows-sv.js", epics: ["AAAC", "AAAD"],
@@ -386,7 +389,7 @@ async function main() {
       // adopted (no <link> but the theme's), the rows drawn by their own
       // rules, light and dark both from theme.css — each screenshotted.
       await onBoard(B, "the_board_wears_its_sheets_on_the_theme", async () => {
-        const { page, seen } = await openPage(B.route);
+        const { page, seen } = await openPage(B.all);
         await boardUp(page, B);
         const asPath = await versionPaths(page);
         const paths = seen.requests.map((u) => new URL(u).pathname).map((p) => asPath[p] ?? p);
@@ -430,7 +433,7 @@ async function main() {
       await onBoard(B, "the_board_asks_extents_then_one_page", async () => {
         const { total } = rowsOf(extentsNow());
         const expected = summaries("--limit", String(PAGE));
-        const { page } = await openPage(B.route);
+        const { page } = await openPage(B.all);
         await boardUp(page, B);
         await sleep(1_500); // what else the page asks, it asks now
         const calls = await sentCalls(page);
@@ -476,7 +479,7 @@ async function main() {
         const next = summaries("--after", before, "--limit", "1")[0]?.id;
         assert(next === target, `row ${SCROLL_ROW} by arithmetic is the one after row ${SCROLL_ROW - 1} (${target} vs list's ${next})`);
 
-        const { page } = await openPage(B.route);
+        const { page } = await openPage(B.all);
         await boardUp(page, B);
         const origin = await marked(page);
         await sleep(500);
@@ -508,7 +511,7 @@ async function main() {
         const [root] = sy("tickets", "create", "--epic", B.epics[0], "--kind", "scope", "--title", "the board's first shortcode");
         assert(root?.type === "created", `the scope was made: ${JSON.stringify(root)}`);
         const total = rowsOf(extentsNow()).total;
-        const { page, seen } = await openPage(B.route);
+        const { page, seen } = await openPage(B.all);
         await eventually("the board shows the new shortcode's root", async () => (await main(page, B).locator(`.board-row[data-id="${root.ticket.id}"]`).count()) === 1);
         assert((await count(page, B)) === total, `the count before is ${total}`);
         const origin = await marked(page);
@@ -529,7 +532,7 @@ async function main() {
       });
 
       await onBoard(B, "a_status_change_patches_the_row_in_place", async () => {
-        const { page } = await openPage(B.route);
+        const { page } = await openPage(B.all);
         await boardUp(page, B);
         const origin = await marked(page);
         const row = main(page, B).locator(".board-row[data-id]").nth(3);
@@ -551,7 +554,7 @@ async function main() {
 
       await onBoard(B, "a_new_shortcode_appears_on_the_open_board", async () => {
         const total = rowsOf(extentsNow()).total;
-        const { page } = await openPage(B.route);
+        const { page } = await openPage(B.all);
         await boardUp(page, B);
         assert((await count(page, B)) === total, `the count before is ${total}`);
         const origin = await marked(page);
@@ -607,7 +610,7 @@ async function main() {
 
       await onBoard(B, "the_nav_switches_tree_and_flat", async () => {
         const expected = summaries("--limit", String(PAGE)).map((t) => t.id);
-        const { page } = await openPage(B.route);
+        const { page } = await openPage(B.all);
         await eventually("Tree is drawn", async () => (await nav(page, B).locator("[data-nav-group]").count()) > 0);
         const asked = (await sentCalls(page)).length;
         await nav(page, B).locator("[data-nav-mode=flat]").click({ timeout: 2000 });
@@ -922,7 +925,7 @@ async function main() {
       });
 
       await onBoard(B, "a_section_of_the_board_is_swapped_by_right_click", async () => {
-        const { page, seen } = await openPage(B.route);
+        const { page, seen } = await openPage(B.all);
         await eventually("v2's board draws", async () => (await main(page, B).locator(".board-newer").count()) === 1);
         await boardUp(page, B);
         // FRAME-30: a sheet is its version's — v2's count in --accent, v1's in --ink.

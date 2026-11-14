@@ -100,7 +100,7 @@ export default async (ctx) => {
         fs.appendFileSync(path.join(ui, "src", "nav-facets.svelte"), '<p class="facets-f50">swapped</p>\n');
       },
     });
-    const { page, context } = await openPage("#/board");
+    const { page, context } = await openPage(`#/f/${encodeURIComponent("· order code")}`);
     try {
       await eventually("the board drawn and the facets' chips", async () =>
         (await page.locator("[data-board][data-surface=board-rows][data-drawn]").count()) === 1 && (await facets(page).locator("[data-facet]").count()) > 0, 10000);
@@ -130,7 +130,7 @@ export default async (ctx) => {
   // the clear puts nav-facets back: each draws. Then, the behaviour held:
   // none of the three nav components' sources looks at the page.
   await test("a_nav_section_remounted_after_the_board_drew_hears_it", async () => {
-    const { page, context } = await openPage("#/board");
+    const { page, context } = await openPage(`#/f/${encodeURIComponent("· order code")}`);
     try {
       await eventually("the board drawn and the facets' chips", async () =>
         (await page.locator("[data-board][data-surface=board-rows][data-drawn]").count()) === 1 && (await facets(page).locator("[data-facet]").count()) > 0, 10000);

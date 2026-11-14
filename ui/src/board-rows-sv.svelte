@@ -21,10 +21,24 @@
      `board.drawn` once on the bus — sticky (FRAME-53): kept for a nav section
      mounted after it — and keeps `[data-drawn]` (the tests' mark; no component
      looks at it): the nav's facets, saved filters and counts ask then, not
-     beside the rows. -->
+     beside the rows. SHELL.176-3: under `· order changed` (the Recent view,
+     the board's default) the page is the store's newest-touched-first, each
+     row asks `updated_unix` too and says how long ago it changed, and the
+     window is kept newest first as changes land (a ticket written moves to
+     the top of the rows drawn). -->
 <script module>
   // PERF-15: a row is the four fields drawn, not the whole summary row.
   const FIELDS = ["id", "uid", "title", "kind", "status"];
+  /** SHELL.176-3: how long ago `unix` was, short: `now`, `5m`, `3h`, `2d`, else the date — against
+   *  the clock read when the row is drawn (a label, no timer: it moves when the row is drawn again). */
+  export function ago(unix, now = new Date().getTime() / 1000) {
+    const s = Math.max(0, now - (unix ?? 0));
+    if (s < 60) return "now";
+    if (s < 3600) return Math.floor(s / 60) + "m";
+    if (s < 86400) return Math.floor(s / 3600) + "h";
+    if (s < 30 * 86400) return Math.floor(s / 86400) + "d";
+    return new Date(unix * 1000).toISOString().slice(0, 10);
+  }
   export const uses = ["tickets.nav.extents", "tickets.watch", "tickets.nav.counts", "tickets.list"];
 </script>
 
@@ -46,10 +60,12 @@
                            on: { extent: "upsert:.", created: "upsert:ticket" } });
   const counts = live({ snapshot: "tickets.nav.counts", params: () => ({ filter: filter ?? null }), key: "shortcode", on: { count: "upsert:." } });
 
+  // SHELL.176-3: the Recent order, `· order changed` in the filter's display part.
+  const recent = $derived(/·\s*order changed\s*($|·)/i.test(filter ?? ""));
   let first = $state(0);
   let win = $state({ after: null, at: null });
   const rows = live({ snapshot: "tickets.list",
-    params: () => ({ summary: true, limit: PAGE, fields: FIELDS, filter: filter ?? null, after: win.after, at: win.at }),
+    params: () => ({ summary: true, limit: PAGE, fields: recent ? [...FIELDS, "updated_unix"] : FIELDS, filter: filter ?? null, after: win.after, at: win.at }),
     changes: "tickets.watch", changes_params: () => ({ filter: filter ?? null }), key: "id",
     on: { created: "upsert:ticket", status_changed: "upsert:ticket", amended: "upsert:ticket",
           kind_changed: "upsert:ticket", labels_changed: "upsert:ticket", deleted: "remove:ids" },
@@ -64,6 +80,8 @@
       b.emit("board.drawn", {}, { sticky: true });
     });
   });
+  // The rows drawn: under the Recent order, newest write first as changes land.
+  const shown = $derived(recent ? [...rows.rows].sort((a, z) => (z.updated_unix ?? 0) - (a.updated_unix ?? 0)) : rows.rows);
   const held = (e) => (e.last_seq ?? e.seq) - (e.holes ?? []).length;
   const total = $derived(filter == null ? $extents.rows.reduce((a, e) => a + held(e), 0) : $counts.rows.reduce((a, c) => a + c.held, 0));
 
@@ -93,7 +111,7 @@
   let checked = $state([]);
   let anchor = null;
   let scroller;
-  const ids = () => rows.rows.map((r) => r.id);
+  const ids = () => shown.map((r) => r.id);
   function focus(id) {
     sel = id;
     b.emit("board.focus", { id });
@@ -172,17 +190,17 @@
   }
 </script>
 
-<section class="board" data-board data-surface="board-rows" data-drawn={drawn ? "" : undefined}>
+<section class="board" data-board data-surface="board-rows" data-drawn={drawn ? "" : undefined} data-order={recent ? "changed" : undefined}>
   <header class="board-head">
     <span class="board-count">{total}</span>
-    <span class="board-count-label">tickets</span>
+    <span class="board-count-label">tickets{#if recent}<span data-order-note>{" · most recently changed first"}</span>{/if}</span>
     {#if checked.length}<span class="board-checked"><b data-field="checked">{checked.length}</b> checked</span>{/if}
     {#if rows.status !== "live"}<span class="board-status" data-board-status={rows.status}>{rows.status}</span>{/if}
   </header>
   <div class="board-scroll" data-row-height="28" onscroll={scrolled} bind:this={scroller}>
     <div class="board-space" style={"height:" + PITCH * total + "px"}>
       <div class="board-window" style={"transform:translateY(" + PITCH * first + "px)"}>
-      {#each rows.rows as r (r.id)}
+      {#each shown as r (r.id)}
         <div class="board-line">
         <a class="board-row" data-id={r.id} data-status={r.status} href={ticketHref(r, base)}
            data-selected={sel === r.id ? "" : undefined} data-checked={checked.includes(r.id) ? "" : undefined}>
@@ -191,6 +209,7 @@
           <span class="row-title" data-field="title">{r.title}</span>
           <span class="row-kind" data-field="kind">{r.kind}</span>
           <span class="row-status" data-field="status">{r.status}</span>
+          {#if recent}<span class="row-when" data-field="changed" title={r.updated_unix ? new Date(r.updated_unix * 1000).toLocaleString() : ""}>{ago(r.updated_unix)}</span>{/if}
         </a>
         <button class="row-check" type="button" data-action="check" data-check={r.id} aria-label={"check " + r.id} onclick={() => clicked(r.id)}></button>
         </div>
@@ -223,6 +242,8 @@
   .board-row:focus-visible, .board-row:global([data-sheet~=focus]) { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
   .board-row[data-checked], .board-row:global([data-sheet~=checked]) { background: var(--sel); }
   .board-row[data-selected], .board-row:global([data-sheet~=selected]) { background: var(--row-sel); box-shadow: inset 3px 0 0 var(--accent); }
+  .board[data-order=changed] .board-row { grid-template-columns: 10px 104px minmax(0, 1fr) auto auto 40px; }
+  .row-when { font-size: 11px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
   .row-id { color: var(--accent); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; }
   .row-title { overflow: hidden; text-overflow: ellipsis; }
   .row-kind { color: var(--muted); font-size: 11px; }
@@ -246,6 +267,7 @@
   .kmark[data-kind=doc] { width: 7px; height: 9px; background: none; border: var(--border) solid var(--kind-doc); border-radius: var(--radius-xs); }
   @media (max-width: 720px) {
     .board-row { grid-template-columns: 10px 88px minmax(0, 1fr) auto; }
+    .board[data-order=changed] .board-row { grid-template-columns: 10px 88px minmax(0, 1fr) auto 40px; }
     .row-kind { display: none; }
   }
   @media (prefers-reduced-motion: reduce) {

@@ -1036,7 +1036,9 @@ answered from the kept cells, never by testing a ticket:
   `before`, `between`; UTC unless `--tz Europe/Berlin`.
 - **Groups**: `in (A, B)`, `not …`, `(a or (b and c))` to any depth
   (FILTER-36); a display part after `·` (`tree`, `flat`, `columns a, b`,
-  `order code`).
+  `order code`; SHELL.176-3: `order changed`, a filtered `list` newest last
+  touch first — the board's default view, Recent, is `changed within 7d ·
+  order changed`, and its All view `· order code`).
 - **Saved filters** (FILTER-46): `tickets filters save --name N --filter F`,
   read back as `saved "N"`, expanded by the server.
 

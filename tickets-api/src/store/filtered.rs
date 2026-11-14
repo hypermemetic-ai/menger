@@ -327,6 +327,11 @@ impl Lens {
         (self.judge)(letters, key, lineage, holds)
     }
 
+    /// SHELL.176-3: the order its display asks, if any.
+    pub fn order(&self) -> Option<crate::filter::Order> {
+        self.filter.as_ref().and_then(|f| f.display.order)
+    }
+
     /// The filter's text.
     pub fn text(&self) -> &str {
         &self.text
@@ -763,6 +768,9 @@ impl Store {
         };
         let view = view(cache, q)?;
         let take = limit.map_or(usize::MAX, |n| n as usize);
+        if q.lens.order() == Some(crate::filter::Order::Changed) {
+            return Ok(Self::cut_by_touch(cache, &view, cursor.as_ref(), after, at, take, rest));
+        }
         let (first, keys) = match (&cursor, at) {
             (Some(key), _) => (view.rank(key), view.page_after(key, take)),
             (None, Some(p)) => match view.select(p) {
@@ -800,6 +808,49 @@ impl Store {
             remaining,
             first: Some(first),
         })
+    }
+
+    /// SHELL.176-3: a filtered page under `order changed` — `view`'s matches
+    /// newest last touch first ([`Times`](super::times::Times)' touch index,
+    /// walked from its newest end; FILTER-30's touch), cut at a position
+    /// (`at`) or strictly after a ticket (`cursor`, which need not match:
+    /// its own place in the touch order), as [`Store::cut_filtered`] cuts
+    /// one in the store's order. A walk of the matches up to the page's end,
+    /// never a sort.
+    fn cut_by_touch(cache: &Cache, view: &View<'_>, cursor: Option<&OrderKey>, after: Option<&str>, at: Option<u64>, take: usize, rest: Rest) -> Page {
+        let mut walk = cache.log.newest_touched();
+        let mut first = 0u64;
+        if let Some(key) = cursor {
+            for (epic, seq) in walk.by_ref() {
+                if *epic == key.shortcode && seq == key.seq {
+                    break;
+                }
+                first += u64::from(view.contains(epic, seq));
+            }
+            first += u64::from(view.contains(&key.shortcode, key.seq));
+        }
+        let mut matches = walk.filter(|(epic, seq)| view.contains(epic, *seq));
+        if cursor.is_none() {
+            first = at.unwrap_or(0);
+            for _ in 0..first {
+                if matches.next().is_none() {
+                    break;
+                }
+            }
+        }
+        let tickets: Vec<Row> = matches
+            .take(take)
+            .filter_map(|(epic, seq)| cache.order.get(&OrderKey { shortcode: epic.clone(), seq }).cloned())
+            .collect();
+        let remaining = match rest {
+            Rest::Count => view.total().saturating_sub(first).saturating_sub(tickets.len() as u64),
+            Rest::Skip => 0,
+        };
+        let next = match remaining {
+            0 => None,
+            _ => tickets.last().map(|t| t.id.to_string()).or_else(|| after.map(str::to_string)),
+        };
+        Page { tickets, next, remaining, first: Some(first) }
     }
 
     /// FILTER-4: a `watch { filter }`'s filter, compiled against the cells

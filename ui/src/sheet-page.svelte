@@ -31,6 +31,7 @@
   import BoardRowsSv from "plexus-ui:board-rows-sv";
   import BulkBar from "plexus-ui:bulk-bar";
   import FilterLineSv from "plexus-ui:filter-line-sv";
+  import FilterChips from "plexus-ui:filter-chips";
   import FiltersSaved from "plexus-ui:filters-saved";
   import HelloList from "plexus-ui:hello-list";
   import JumpPaletteSv from "plexus-ui:jump-palette-sv";
@@ -190,6 +191,7 @@
       ["app-top", AppTop, (t) => ({ here: "board" }), ["hover", "focus"], {}],
       ["board-layout-sv", BoardLayoutSv, F, ["hover", "focus"], { refused: { filter: REFUSED } }],
       ["filter-line-sv", FilterLineSv, (t) => ({ filter: "status Ready" }), ["hover", "focus"], { refused: { filter: REFUSED } }],
+      ["filter-chips", FilterChips, (t) => ({ filter: "changed within 7d and status in (Ready, Coding) and (kind gap or label urgent) · order changed" }), ["hover", "focus", "checked"], {}],
       ["bulk-bar", BulkBar, (t) => ({ ids: t }), ["hover", "focus", "disabled"], { loading: { sheet: "loading" } }, false, { disabled: ["[data-action=dry-run]"] }],
       ["keys-help", KeysHelp, F, [], {}],
       // The global keys, drawn as their list: every page-wide chord and the action it emits.
