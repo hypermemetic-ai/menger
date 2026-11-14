@@ -16,7 +16,8 @@
      and `]` are ticket-head's, which knows the siblings (and keeps the
      prefix). The key strip says them; the palette is the page's `palette`
      section (jump-palette-sv by ui/slots.json: app-top's jump button and
-     ctrl+k). V2-50 (main's TICKETS-36): a name that fits several tickets —
+     ctrl+k); SHELL.176-5: handed the ticket open here (`data-current`), the
+     quick search lists its siblings and keeps it among the recent tickets. V2-50 (main's TICKETS-36): a name that fits several tickets —
      `get` answering `ambiguous { id, candidates, choices }` — draws the
      collision page in the ticket's place (ticket-collision: every choice
      with its parent, each a link by uid); one ticket is its page, its
@@ -182,7 +183,7 @@
     {/if}
   </article>
   </div>
-  <div data-slot="palette"></div>
+  <div data-slot="palette" data-current={id}></div>
 </section>
 
 <style>
