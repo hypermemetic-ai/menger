@@ -144,7 +144,14 @@ exits "commits-from-git, unknown commit" 1 "$REC" --project p --env e --state su
 cat >"$SCRATCH/synapse" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$@" >>"$SYNAPSE_ARGS"; printf -- '---\n' >>"$SYNAPSE_ARGS"
-[[ ${SYNAPSE_FAIL:-} == 1 ]] && exit 4; echo '{"type":"recorded"}'
+[[ ${SYNAPSE_FAIL:-} == 1 ]] && exit 4
+# DEPLOY-62: SYNAPSE_RECORDS=absent — a v2 tracker: no deployments.record, its gate's word for it
+if [[ ${SYNAPSE_RECORDS:-} == absent ]]; then
+  [[ " $* " == *" auth requires "* ]] && { echo '{"type":"data","content":{"type":"error","message":"no method deployments.record here"}}'; exit 1; }
+  echo 'error: forbidden: needs deployments.record' >&2; exit 1
+fi
+[[ " $* " == *" auth requires "* ]] && { echo '{"type":"data","content":{"type":"requires","method":"deployments.record"}}'; exit 0; }
+echo '{"type":"recorded"}'
 EOF
 chmod +x "$SCRATCH/synapse"
 export SYNAPSE=$SCRATCH/synapse SYNAPSE_ARGS=$SCRATCH/args
@@ -169,9 +176,15 @@ while [[ $# -gt 0 ]]; do case $1 in --params) params=$2; shift ;; --url) url=$2;
   --agent|--header) printf '%s %s\n' "$1" "$2" >>"$CALL_LOG"; shift ;; -*) ;; *) method=$1 ;; esac; shift; done
 printf '%s %s %s\n' "$url" "$method" "$params" >>"$CALL_LOG"
 case $method in
+  # DEPLOY-62: STUB_RECORDS=absent — v2: the gate refuses the absent method as a missing grant,
+  # and auth.requires says it is not there; STUB_RECORDS=granted: there, the key lacks its grant
+  auth.requires)
+    [[ ${STUB_RECORDS:-} == absent ]] && { echo '{"type":"error","message":"no method deployments.record here"}'; exit 3; }
+    echo '{"type":"requires","method":"deployments.record","grant":"deployments.record","roles":["deployer","admin"]}' ;;
   deployments.environments)
     for e in production prod staging review/pr-412; do printf '{"type":"environment","environment":{"name":"%s","revision":"%s"}}\n' "$e" "$STUB_PREV"; done ;;
   deployments.record)
+    [[ -n ${STUB_RECORDS:-} ]] && { echo '{"code":"-32003","error_kind":"forbidden","grant":"deployments.record","message":"needs deployments.record","type":"error"}'; exit 3; }
     printf '%s\n' "$params" >>"$CAPTURE"
     [[ ${CALL_FAIL:-} == 1 ]] && { echo '{"type":"error","message":"needs deployments.record on SHOP"}'; exit 3; }
     echo '{"type":"deployed","deployment":{"id":7,"project":"SHOP","environment":"staging","state":"succeeded","revision":"0123456789ab"},"carried":["SHOP-3"],"duplicate":false}' ;;
@@ -197,6 +210,24 @@ has "--url ws: environments asked first" "$(head -n 3 "$CALL_LOG")" 'wss://menge
 has "--url ws: the header passed" "$(<"$CALL_LOG")" "--header X-A: 1"
 has "--url ws: the answer printed" "$out" '"deployed"'
 CALL_FAIL=1 exits "--url ws: a refusal fails" 3 "$REC" --project shop --env staging --state started --revision abcdef1 --send --url ws://h:1
+# DEPLOY-62: a tracker with no deployments.record (v2) told apart from a refused grant and from no answer
+STUB_RECORDS=absent exits "v2: no deployments.record — exit 4" 4 "$REC" --project shop --env staging --state started --revision abcdef1 --send --url ws://h:1
+has "v2: said" "$err" "record: the tracker at ws://h:1 has no deployments.record — it keeps no deployment records (menger v2 cut the deployments service); nothing sent"
+[[ $err != *refused* && -z $out ]] && ok || bad "v2: said as a refusal: $out $err"
+: >"$CALL_LOG"; STUB_RECORDS=absent exits "v2: two records, said once" 4 "$REC" --from pipeline-log "$FX/pipeline.log" --send --url ws://h:1
+same_json "v2: said once" "$(grep -c 'has no deployments.record' <<<"$err")" 1
+same_json "v2: stops at the first" "$(grep -c ' deployments.record ' "$CALL_LOG")" 1
+STUB_RECORDS=granted exits "a refused grant is not the absent method — exit 3" 3 "$REC" --project shop --env staging --state started --revision abcdef1 --send --url ws://h:1
+has "a refused grant: said as refused" "$err" "record: ws://h:1 refused staging started abcdef1"
+[[ $err != *"has no deployments.record"* ]] && ok || bad "a refused grant read as the absent method"
+STUB_RECORDS=absent exits "--probe: v2 — exit 4" 4 "$REC" --probe --url wss://h/ws
+has "--probe: v2, said" "$err" "has no deployments.record"
+exits "--probe: a tracker that keeps records — exit 0" 0 "$REC" --probe --url wss://h/ws
+has "--probe: keeps, said" "$err" "keeps deployment records"
+SYNAPSE_RECORDS=absent exits "--probe through synapse: v2 — exit 4" 4 "$REC" --probe --port 4460
+SYNAPSE_FAIL=1 exits "--probe through synapse: no answer — exit 3" 3 "$REC" --probe --port 4460
+SYNAPSE_RECORDS=absent exits "--send through synapse: v2 — exit 4" 4 "$REC" --project p --env e --state started --revision abcdef1 --send
+has "--send through synapse: v2, said" "$err" "has no deployments.record"
 exits "--url ws --dry-run sends nothing" 0 "$REC" --project shop --env staging --state started --revision abcdef1 --send --url ws://h:1 --dry-run
 has "--url ws --dry-run sends nothing" "$err" "would send"
 # DEPLOY-28: --complete — a succeeded record's carried tickets In Review there → Complete

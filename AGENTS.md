@@ -368,7 +368,13 @@ deploy/pipeline releases                      # every release: its suite, tested
 - **Every remote test and remote prod records itself on the tracker**
   (DEPLOY-12, DEPLOY-28) as the `pipeline` key, through `deploy/record`; a
   record the tracker does not take waits in
-  `~/.local/share/menger-deploy/outbox/` and never fails a deploy.
+  `~/.local/share/menger-deploy/outbox/` and never fails a deploy. A
+  tracker with no `deployments.record` — v2, prod since 2026-11-05 — is
+  asked once a run (`deploy/record --probe`, exit 4; DEPLOY-62): nothing is
+  sent or queued, the run says once that the deploy is in
+  `deployments.log`, and what waited is set aside in
+  `outbox/undeliverable/` (its `README` says why and when), never retried;
+  `deploy/pipeline outbox` does the same on asking.
 - **Production changes only through `remote prod`**, and only to a release
   that passed test and whose suite passed. A `cargo build` in a checkout
   changes nothing that is serving.

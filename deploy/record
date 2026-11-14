@@ -60,7 +60,15 @@
 #                                   runs now (deployments.environments, over --url or
 #                                   synapse) — what this deployment replaces; then
 #                                   --commits-from-git has its range
-# Exit: 0 done · 1 usage or input refused · 2 the record breaks the schema · 3 send failed.
+# --probe [--url URL | --port P …]  does the tracker keep deployment records at all? Asks
+#                                   auth.requires for deployments.record — nothing is sent.
+#                                   Exit 0: it does (or would not say), 4: it has no
+#                                   deployments.record (menger v2 cut the deployments
+#                                   service), 3: no answer. A --send that is refused asks the
+#                                   same, so a tracker without the method is told apart from
+#                                   a refused grant and from no answer: exit 4, said once.
+# Exit: 0 done · 1 usage or input refused · 2 the record breaks the schema · 3 send failed ·
+#       4 the tracker has no deployments.record (nothing sent; never a grant to give).
 set -euo pipefail
 
 HERE=$(dirname "$(readlink -f "$0")")
@@ -76,7 +84,7 @@ command -v jq >/dev/null || die "needs jq on PATH"
 
 # ── flags ───────────────────────────────────────────────────────────────────
 from=flags input="" validate=0 compact=0 from_git=0 repo=. send=0 port=4455 host="" token="" dry=0
-url="" agent=${MENGER_AGENT:-ci} prev_from_menger=0 headers=() complete=0 complete_agent=
+url="" agent=${MENGER_AGENT:-ci} prev_from_menger=0 headers=() complete=0 complete_agent= probe=0
 maps=()
 over=() # jq --arg pairs: name value
 commits=() tickets=()
@@ -116,6 +124,7 @@ while [[ $# -gt 0 ]]; do
     --complete) complete=1 ;;
     --complete-agent) arg "$@"; complete_agent=$2; shift ;;
     --compact|-c) compact=1 ;;
+    --probe) probe=1 ;;
     --*=*) set -- "${1%%=*}" "${1#*=}" "${@:2}"; continue ;;
     *) die "unknown argument '$1' (deploy/record --help)" ;;
   esac; shift
@@ -307,7 +316,7 @@ form_pipeline_log() {
 
 form_flags() { jq -nc '{input: {}, record: {}}'; }
 
-forms=$(mktemp); trap 'rm -f "$forms"' EXIT
+forms=$(mktemp); trap 'rm -f "$forms" "$forms.err"' EXIT
 case $from in
   flags) form_flags ;;
   github-actions) form_github_actions ;;
@@ -382,8 +391,11 @@ menger_call() {
       jq -c '.data[]?' <<<"$out" || { say "record: $url answered no JSON: ${out:0:200}"; return 3; }
       jq -e '[.data[]? | select(.type == "error")] | length == 0' <<<"$out" >/dev/null || return 3 ;;
     *)
-      out=$("$SYNAPSE" -j "${sargs[@]}" -p "$params" menger "${method%%.*}" "${method#*.}") || return 3
-      jq -c 'select(.type == "data") | .content' <<<"$out"
+      local rc=0
+      out=$("$SYNAPSE" -j "${sargs[@]}" -p "$params" menger "${method%%.*}" "${method#*.}") || rc=3
+      # a failed call's items too: what it said is how a caller tells why (records_kept)
+      jq -c 'select(.type == "data") | .content' <<<"$out" 2>/dev/null || printf '%s\n' "$out"
+      [[ $rc == 0 ]] || return 3
       jq -e -s 'all(.[]; .type != "error" and (.content.type? // "") != "error")' <<<"$out" >/dev/null || return 3 ;;
   esac
 }
@@ -391,6 +403,38 @@ sargs=()
 [[ -n $host ]] && sargs+=(-H "$host")
 sargs+=(-P "$port")
 [[ -n $token ]] && sargs+=(-t "$token")
+where=${url:-${host:-127.0.0.1}:$port}
+
+# ── does the tracker keep records at all? ──────────────────────────────────
+# menger v2 cut the deployments service: its gate answers a call to the absent
+# deployments.record as it answers a missing grant (forbidden, needs
+# deployments.record), so the gate's own reading — auth.requires — says which:
+# "no method deployments.record here". 0 it has it (or would not say),
+# 4 it has none, 3 no answer at all.
+records_kept() {
+  local out rc=0
+  out=$(menger_call auth.requires '{"method":"deployments.record"}' 2>&1) || rc=$?
+  if grep -q 'no method deployments\.record' <<<"$out"; then return 4; fi
+  [[ $rc == 0 ]] && return 0
+  grep -q 'type' <<<"$out" && return 0 # an answer, not the absence: the send's own refusal stands
+  return 3
+}
+# absent ANSWER — ANSWER, a refused deployments.record's: 0 (said) when the
+# tracker has no such method (the answer says so, or auth.requires does); else 1.
+absent() {
+  if grep -Eq 'no method deployments\.record|-32601|[Mm]ethod not found' <<<"${1:-}"; then :
+  else local rc=0; records_kept || rc=$?; [[ $rc == 4 ]] || return 1; fi
+  say "record: the tracker at $where has no deployments.record — it keeps no deployment records (menger v2 cut the deployments service); nothing sent"
+}
+if [[ $probe == 1 ]]; then
+  rc=0; records_kept || rc=$?
+  case $rc in
+    0) say "record: the tracker at $where keeps deployment records (deployments.record)" ;;
+    4) say "record: the tracker at $where has no deployments.record — it keeps no deployment records" ;;
+    *) say "record: the tracker at $where did not answer" ;;
+  esac
+  exit "$rc"
+fi
 
 # ── previous from menger: what the environment runs now ────────────────────
 if [[ $prev_from_menger == 1 ]]; then
@@ -478,7 +522,8 @@ if [[ -n $url ]]; then
   while IFS= read -r r; do
     if [[ $dry == 1 ]]; then say "record: would send to $url deployments.record:"; printf '%s\n' "$r"; continue; fi
     out=$(menger_call deployments.record "$r") \
-      || { [[ -n $out ]] && printf '%s\n' "$out"; say "record: $url refused $(jq -r '"\(.environment) \(.state) \(.revision)"' <<<"$r")"; exit 3; }
+      || { absent "$out" && exit 4
+           [[ -n $out ]] && printf '%s\n' "$out"; say "record: $url refused $(jq -r '"\(.environment) \(.state) \(.revision)"' <<<"$r")"; exit 3; }
     printf '%s\n' "$out"
     [[ $complete == 1 ]] && complete_carried "$r" "$out"
   done <<<"$records"
@@ -486,6 +531,11 @@ if [[ -n $url ]]; then
 fi
 [[ $dry == 1 ]] && sargs+=(-n)
 while IFS= read -r r; do
-  "$SYNAPSE" "${sargs[@]}" -p "$r" menger deployments record \
-    || { say "record: synapse failed sending $(jq -r '"\(.environment) \(.state) \(.revision)"' <<<"$r")"; exit 3; }
+  rc=0; out=$("$SYNAPSE" "${sargs[@]}" -p "$r" menger deployments record 2>"$forms.err") || rc=$?
+  [[ -n $out ]] && printf '%s\n' "$out"
+  [[ -s $forms.err ]] && cat "$forms.err" >&2
+  if [[ $rc != 0 ]]; then
+    [[ $dry == 0 ]] && absent "$out$(<"$forms.err")" && exit 4
+    say "record: synapse failed sending $(jq -r '"\(.environment) \(.state) \(.revision)"' <<<"$r")"; exit 3
+  fi
 done <<<"$records"

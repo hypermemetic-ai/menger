@@ -60,6 +60,9 @@
 #   deploy/pipeline releases                every release: its suite, tested?, where it runs
 #   deploy/pipeline backfill                deployments.log → menger's deployments
 #                                           (idempotent: a record kept is not kept twice)
+#   deploy/pipeline outbox                  what waits in the outbox, and whether the tracker keeps
+#                                           records at all; one with no deployments.record (v2):
+#                                           what waits is set aside in outbox/undeliverable/
 #   deploy/pipeline landing [REV] [--check] DEPLOY-17: landing/ at REV (default main) → gate →
 #                                           infra's pin moved, the edge applied, the live page
 #                                           verified, the pin committed; recorded as env `edge`
@@ -77,7 +80,12 @@
 # deployment record (deploy/record → deployments.record): `started` before it
 # begins, then `succeeded` or `failed`. Every record goes through the outbox,
 # oldest first; one the tracker does not take waits there for the next run. A
-# record never fails a deploy, nor holds one up longer than a bounded send. Where:
+# record never fails a deploy, nor holds one up longer than a bounded send.
+# DEPLOY-62: a tracker with no deployments.record (menger v2 cut the deployments
+# service) is asked once a run (deploy/record --probe, exit 4): nothing is sent,
+# nothing queued, it is said once — the deploy is in deployments.log — and what
+# waited in the outbox is set aside in outbox/undeliverable/ (its README says why
+# and when), kept, never retried. Where:
 #   MENGER_DEPLOY_TRACKER_URL (wss://app.menger.sh/ws) — DEPLOY-28: the tracker since RUN-13,
 #   reached as the pipeline's key; `local`: a tracker on this machine —
 #   MENGER_DEPLOY_TRACKER_PORT (4455) · MENGER_DEPLOY_TRACKER_HOST · MENGER_DEPLOY_TRACKER_TOKEN
@@ -237,6 +245,7 @@ git_repo() { if git -C "$BUILD" rev-parse --git-dir >/dev/null 2>&1; then echo "
 # never holds the run up past a bounded send (MENGER_DEPLOY_RECORD_TIMEOUT).
 tell() {
   if [[ $2 == started ]]; then PENDING=("$1" "$3" "${4:-}"); else PENDING=(); fi
+  tracker_keeps || return 0 # DEPLOY-62: v2 keeps no records — nothing sent, nothing queued
   ( set +e; tell_ "$@" ) || true
 }
 # DEPLOY-21: the environment ENV promotes from — test and the landing page's
@@ -265,6 +274,57 @@ tell_() {
   enqueue "$rec" && flush_outbox
 }
 
+# tracker_route — how a record reaches the tracker: TR_VIA (synapse|key), TR_ARGS
+# (deploy/record's flags) and TR_ENV (the key's file, named to deploy/record).
+tracker_route() {
+  TR_VIA=synapse TR_ARGS=(--send --port "$TRACKER_PORT") TR_ENV=()
+  [[ -n $TRACKER_HOST ]] && TR_ARGS+=(--host "$TRACKER_HOST")
+  [[ -n $TRACKER_TOKEN ]] && TR_ARGS+=(--token "$TRACKER_TOKEN")
+  # ACCESS-47: with the pipeline's key (and no token given), over the socket
+  # signed in as it; the seed stays in its file, read by menger-call.
+  # DEPLOY-28: app.menger.sh (MENGER_DEPLOY_TRACKER_URL) is under login: always the key.
+  if [[ -n $TRACKER_URL ]]; then
+    TR_VIA=key TR_ARGS=(--send --url "$TRACKER_URL" --agent pipeline)
+    TR_ENV=(env -u MENGER_DEPLOY_KEY MENGER_DEPLOY_KEY_FILE="$DEPLOY_KEY_FILE")
+  elif [[ -n $DEPLOY_KEY_FILE && -z $TRACKER_TOKEN ]]; then
+    TR_VIA=key TR_ARGS=(--send --url "ws://${TRACKER_HOST:-127.0.0.1}:$TRACKER_PORT" --agent pipeline)
+    TR_ENV=(env -u MENGER_DEPLOY_KEY MENGER_DEPLOY_KEY_FILE="$DEPLOY_KEY_FILE")
+  fi
+}
+
+# DEPLOY-62: does the tracker keep deployment records? Asked once a run
+# (deploy/record --probe: auth.requires deployments.record), bounded by a send's
+# time. `no` only when it says it has no deployments.record; no answer, or no key
+# to ask with, is `yes` — the records go to the outbox as before.
+TRACKER_KEEPS=""
+tracker_keeps() {
+  if [[ -z $TRACKER_KEEPS ]]; then
+    TRACKER_KEEPS=yes
+    tracker_route
+    if [[ $TR_VIA == synapse || -n $DEPLOY_KEY_FILE ]]; then
+      local rc=0 pargs=("${TR_ARGS[@]:1}")
+      "${TR_ENV[@]}" timeout -k 2 "$SEND_TIMEOUT" "$RECORD" --probe "${pargs[@]}" >/dev/null 2>&1 || rc=$?
+      if [[ $rc == 4 ]]; then
+        TRACKER_KEEPS=no
+        say "record: the tracker ($TRACKER_NAME, v2) keeps no deployment records; this deploy is in deployments.log"
+        set_aside
+      fi
+    fi
+  fi
+  [[ $TRACKER_KEEPS == yes ]]
+}
+# set_aside — every record waiting in the outbox into outbox/undeliverable/ (moved, never
+# deleted), and a line in its README saying why and when. The drain never reads it.
+set_aside() {
+  local q n=0 u=$OUTBOX/undeliverable
+  [[ -d $OUTBOX ]] || return 0
+  for q in $(queued); do mkdir -p "$u" && mv "$OUTBOX/$q" "$u/" && n=$((n + 1)); done
+  [[ $n -gt 0 ]] || return 0
+  printf '%s  %s record(s) set aside: the tracker %s has no deployments.record (menger v2 cut the deployments service), so they can never be delivered. Kept, never retried; each deploy is in deployments.log (deploy/pipeline status, releases). DEPLOY-62.\n' \
+    "$(date -u +%FT%TZ)" "$n" "$TRACKER_NAME" >>"$u/README"
+  say "record: $n waiting record(s) set aside in $u"
+}
+
 QSEQ=0
 enqueue() { # RECORD → the outbox, named to sort in the order queued
   mkdir -p "$OUTBOX" || return 1
@@ -284,19 +344,8 @@ flush_outbox() {
   local lock f out rc sent=0 dup=0 refused=0 left
   exec {lock}>>"$OUTBOX/.lock"
   flock -n "$lock" || { say "record: another run is sending the outbox"; return 0; }
-  local sargs=(--send --port "$TRACKER_PORT") via=synapse kenv=()
-  [[ -n $TRACKER_HOST ]] && sargs+=(--host "$TRACKER_HOST")
-  [[ -n $TRACKER_TOKEN ]] && sargs+=(--token "$TRACKER_TOKEN")
-  # ACCESS-47: with the pipeline's key (and no token given), over the socket
-  # signed in as it; the seed stays in its file, read by menger-call.
-  # DEPLOY-28: app.menger.sh (MENGER_DEPLOY_TRACKER_URL) is under login: always the key.
-  if [[ -n $TRACKER_URL ]]; then
-    via=key sargs=(--send --url "$TRACKER_URL" --agent pipeline)
-    kenv=(env -u MENGER_DEPLOY_KEY MENGER_DEPLOY_KEY_FILE="$DEPLOY_KEY_FILE")
-  elif [[ -n $DEPLOY_KEY_FILE && -z $TRACKER_TOKEN ]]; then
-    via=key sargs=(--send --url "ws://${TRACKER_HOST:-127.0.0.1}:$TRACKER_PORT" --agent pipeline)
-    kenv=(env -u MENGER_DEPLOY_KEY MENGER_DEPLOY_KEY_FILE="$DEPLOY_KEY_FILE")
-  fi
+  tracker_route
+  local sargs=("${TR_ARGS[@]}") via=$TR_VIA kenv=("${TR_ENV[@]}")
   [[ $via == key && -z $DEPLOY_KEY_FILE ]] && { say "record: no key for $TRACKER_NAME (MENGER_DEPLOY_KEY_FILE: $HOME/.plexus/keys/pipeline.key) — the records wait in $OUTBOX"; exec {lock}>&-; return 0; }
   # A run's flush stops after a few sends' worth of time; backfill's does not.
   local until=$((SECONDS + 3 * SEND_TIMEOUT))
@@ -318,7 +367,12 @@ flush_outbox() {
              elif .type == "error" then "type: error", "message: \(.message)" else (.line // empty) end' <<<"$out")
       [[ $rc == 3 ]] && grep -q '^type: error' <<<"$out" && rc=0
     fi
-    if [[ $rc == 0 ]] && grep -q '^type: deployed' <<<"$out"; then
+    if [[ $rc == 4 ]]; then
+      # DEPLOY-62: the tracker has no deployments.record (deploy/record said so): this and
+      # everything waiting is set aside, said once; never a grant to give
+      say "record: the tracker ($TRACKER_NAME, v2) keeps no deployment records; this deploy is in deployments.log"
+      TRACKER_KEEPS=no; set_aside; break
+    elif [[ $rc == 0 ]] && grep -q '^type: deployed' <<<"$out"; then
       local env how=sent; env=$(jq -r .environment "$OUTBOX/$f")
       if grep -q '^duplicate: true' <<<"$out"; then dup=$((dup + 1)); how="already kept"; else sent=$((sent + 1)); fi
       [[ ${QUIET:-} == 1 ]] || say "record: $(what "$OUTBOX/$f") → menger $TRACKER_NAME ($how)"
@@ -332,7 +386,8 @@ flush_outbox() {
     else
       # a gate's refusal (the key not signed in, or not granted) is the
       # tracker's setup, not the record's: it waits, and is said once
-      grep -q '^gate: ' <<<"$out" && say "record: menger $TRACKER_NAME refused the pipeline's key ($(sed -n 's/^gate: //p' <<<"$out" | head -n 1)) — grant it deployer on MENGER (deploy/README.md \"Recording deployments\")"
+      # (DEPLOY-62: a tracker with no deployments.record is exit 4 above, never this)
+      grep -q '^gate: ' <<<"$out" && say "record: menger $TRACKER_NAME refused the pipeline's key ($(sed -n 's/^gate: //p' <<<"$out" | head -n 1)): the method is there and the key lacks its grant — give it a role that holds it, deployer on MENGER (deploy/README.md \"Recording deployments\")"
       break
     fi
   done
@@ -768,6 +823,7 @@ prune() { # keep what test and prod run (and ran last before it), and the newest
 # own log line makes the record that run sent.
 cmd_backfill() {
   [[ -f $LOG ]] || die "no $LOG"
+  tracker_keeps || { say "backfill: nothing sent — deployments.log is the record"; return 0; }
   local recs r filled n=0 repo; repo=$(git_repo)
   recs=$("$RECORD" --from pipeline-log "$LOG" -c) || die "deploy/record could not read $LOG"
   while IFS= read -r r; do
@@ -1676,7 +1732,19 @@ record_status() { # ENV → its last deployment record sent (DEPLOY-12), and wha
   [[ $n -gt 0 ]] && printf '  outbox    %s record(s) waiting for menger on %s\n' "$n" "$TRACKER_NAME"
   n=$(ls -1 "$OUTBOX/refused" 2>/dev/null | grep -c '\.json$' || true)
   [[ $n -gt 0 ]] && printf '  refused   %s record(s) menger refused, in %s/refused\n' "$n" "$OUTBOX"
+  n=$(ls -1 "$OUTBOX/undeliverable" 2>/dev/null | grep -c '\.json$' || true)
+  [[ $n -gt 0 ]] && printf '  set aside %s record(s) no tracker can take (DEPLOY-62), in %s/undeliverable\n' "$n" "$OUTBOX"
   return 0
+}
+# DEPLOY-62: what waits in the outbox, and whether the tracker keeps records at all; a
+# tracker with no deployments.record has what waits set aside (tracker_keeps).
+cmd_outbox() {
+  [[ $# -eq 0 ]] || die "usage: deploy/pipeline outbox"
+  if tracker_keeps; then
+    say "outbox: the tracker ($TRACKER_NAME) keeps deployment records (or did not say); $(queued | wc -l) record(s) wait in $OUTBOX for the next run"
+  else
+    say "outbox: $(queued | wc -l) waiting; $(ls -1 "$OUTBOX/undeliverable" 2>/dev/null | grep -c '\.json$' || true) set aside in $OUTBOX/undeliverable"
+  fi
 }
 cmd_releases() {
   local t p
@@ -1777,6 +1845,7 @@ case $cmd in
   status)   cmd_status ;;
   releases) cmd_releases ;;
   backfill) cmd_backfill ;;
+  outbox)   cmd_outbox "$@" ;;
   landing)  cmd_landing "$@" ;;
   image)    cmd_image "$@" ;;
   local)    cmd_local "$@" ;;
