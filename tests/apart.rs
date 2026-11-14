@@ -1558,8 +1558,10 @@ const OWN_TIMERS: [&str; 6] = ["setTimeout(", "setInterval(", "requestAnimationF
 /// debounce — the editor sends `tickets.amend` 600 ms after the last key,
 /// which no `live` spec can keep (the registry debounces what is asked,
 /// never what is written). Named here, reviewed here; every other timer
-/// beside a `live(` is still the bus's.
-const WRITE_PAUSE: [&str; 1] = ["editor-body.svelte"];
+/// beside a `live(` is still the bus's. EDITOR-30 / FRAME-67 (the owner,
+/// 2026-11-14: "allow it by name"): image-pick sends `tickets.inputs.answer`
+/// once the arrow keys rest 500 ms — one answer for a run of keys.
+const WRITE_PAUSE: [&str; 2] = ["editor-body.svelte", "image-pick.svelte"];
 
 /// Whether `code` draws a `<svelte:element …>` that spreads attributes
 /// (`{...`) — elements and attributes taken from data, the copied

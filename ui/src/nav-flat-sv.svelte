@@ -4,7 +4,9 @@
      component in its own right too. SURFACE-10: a filter no ticket matches
      says so ([data-empty]), one the language refuses says its words
      ([data-refused]). SHELL.176-4: `current`, the ticket open beside the
-     nav — its row marked (`aria-current="page"`, `[data-nav-current]`). -->
+     nav — its row marked (`aria-current="page"`, `[data-nav-current]`); once
+     the page is read it tells the nav whether it holds it (FRAME-67,
+     `nav.flatRead`), which pins it when it does not. -->
 <script module>
   // PERF-15: a row is the four fields drawn, not the whole summary row.
   const FIELDS = ["id", "uid", "title", "kind", "status"];
@@ -12,6 +14,7 @@
 </script>
 
 <script>
+  import { getContext } from "svelte";
   import { live } from "plexus-ui/host";
   import { ticketHref } from "./ticket-links.svelte";
 
@@ -19,6 +22,11 @@
   const base = location.hash.startsWith("#/sv/") ? "#/sv/" : "#/";
   const flat = live({ snapshot: "tickets.list", params: () => ({ filter: filter ?? null, summary: true, limit: 200, fields: FIELDS }), key: "id" });
   const list = $derived($flat.rows);
+  // FRAME-67: the nav (nav-tree-sv) pins the open ticket when this page, read, does not hold it.
+  const nav = getContext("menger.nav");
+  $effect(() => {
+    if (current != null && $flat.status === "live" && nav?.flatRead) nav.flatRead(current, filter ?? null, list.some((t) => t.id === current));
+  });
 </script>
 
 <ul class="nav-flat" data-nav-flat>

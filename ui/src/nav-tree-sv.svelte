@@ -26,17 +26,20 @@
      `aria-current="page"`) in Tree and in Flat, and scrolled into the nav's
      column once per ticket and mode, a third of the way down — never when
      the person has wheeled, touched, clicked or pressed a key in the nav
-     since, never when it is in view already. When the nav has drawn nothing
-     new for 1.5 s and the ticket's row is not among its rows, it is pinned
-     above them (`[data-nav-pinned]`), marked, saying why
-     (`[data-nav-pinned-why]`): archived, outside the filter (Flat, asked by
-     `nav member`), past the first 200 (Flat's one page), or not in the
-     tree. -->
+     since, never when it is in view already (nor while the engine still
+     holds the section unlaid, FRAME-50). FRAME-67 (the owner, 2026-11-14:
+     "pin from the data"): the ticket is pinned above the rows
+     (`[data-nav-pinned]`), marked, saying why (`[data-nav-pinned-why]`), at
+     once from what was read, with no wait: in Flat once its page is read
+     without it — archived, past the first 200, or outside the filter (asked
+     by `nav member`); in Tree when it is archived or hidden, when the
+     shortcode the way begins in is not drawn or a node on the way is closed,
+     or when a node on the way has read every page it will ask without the
+     child it leads to (nav-children-sv's `nav.reached`) — not in the tree.
+     While a node still has a page outstanding nothing is pinned. -->
 <script module>
   export const uses = ["tickets.nav.groups", "tickets.watch", "tickets.nav.counts", "tickets.get", "tickets.nav.member"];
   const OPEN = "menger.nav.open";
-  /** SHELL.176-4: how long the nav must draw nothing new before a missing row is pinned. */
-  const SETTLE_MS = 1500;
   /** The nearest ancestor that scrolls (`full`: and is taller than its box now). */
   function scroller(el, full = true) {
     for (let p = el.parentElement; p; p = p.parentElement) {
@@ -81,7 +84,12 @@
   // SHELL.176-4: the open ticket, its ancestors (up[0] the ticket, then its parent, …) and the way to it.
   let up = $state([]);
   let wants = $state({});
-  let pin = $state(null);
+  // FRAME-67 (the owner, 2026-11-14: "pin from the data"): what was read on the way to the open ticket.
+  let path = $state([]); // the nodes the way opens, each a key of `open`
+  let head = $state(null); // the shortcode the way begins in
+  let reads = $state({}); // node → { child, found }: a node on the way that has read every page it will ask
+  let flatRead = $state(null); // { id, filter, found }: Flat's one page, read
+  let member = $state(null); // { id, filter, matched }: `nav member`, asked when Flat's page lacks it under a filter
   const here = $derived(up[0]?.id ?? current);
   const groupsIn = $derived(groups.status === "live" || groups.rows.length > 0);
 
@@ -93,6 +101,15 @@
     toggle: (k) => { open = open.includes(k) ? open.filter((x) => x !== k) : [...open, k]; keep(); },
     hosted: (id) => shown.filter((g) => g.host === id && codes.has(codeOf(g.host))),
     held: (sc) => (filter == null ? null : $counts.rows.filter((c) => c.shortcode === sc).reduce((a, c) => a + c.held, 0)),
+    // FRAME-67: a node on the way (nav-children-sv) says whether it holds the child the way leads to, once it
+    // asks no more pages; Flat (nav-flat-sv) whether its page holds the open ticket, once it is read.
+    reached: (node, child, found) => untrack(() => {
+      const r = reads[node];
+      if (wants[node] === child && (!r || r.child !== child || r.found !== found)) reads = { ...reads, [node]: { child, found } };
+    }),
+    flatRead: (id, f, found) => untrack(() => {
+      if (flatRead?.id !== id || flatRead.filter !== f || flatRead.found !== found) flatRead = { id, filter: f, found };
+    }),
   });
 
   // SHELL.176-4: the person's own moves in the nav; the nav never scrolls for a ticket after one.
@@ -101,24 +118,23 @@
   let since = ++ticks;
   let touched = 0;
   let last = null;
-  const moved = () => { touched = ++ticks; };
   let root;
   let body;
   // The person's moves are heard on the column that scrolls the nav (the page's, around this section), so a
-  // wheel over its empty foot counts too; on the nav itself when nothing around it scrolls.
+  // wheel over its empty foot counts too; on the nav itself when nothing around it scrolls. The column is
+  // looked up at each move: at mount the section may not be in the page yet (FRAME-50's turns).
+  const moved = (e) => { if ((scroller(root, false) ?? root)?.contains(e.target)) touched = ++ticks; };
   $effect(() => {
-    const at = scroller(root, false) ?? root;
-    for (const m of MOVES) at.addEventListener(m, moved, { capture: true, passive: true });
-    return () => { for (const m of MOVES) at.removeEventListener(m, moved, { capture: true }); };
+    for (const m of MOVES) document.addEventListener(m, moved, { capture: true, passive: true });
+    return () => { for (const m of MOVES) document.removeEventListener(m, moved, { capture: true }); };
   });
 
   $effect(() => {
     const id = current;
-    if (!id || !groupsIn) { up = []; wants = {}; pin = null; return; }
+    if (!id || !groupsIn) { up = []; wants = {}; reads = {}; path = []; head = null; return; }
     let stop = false;
     // The ticket's moment is when it changed, not when the shortcodes came: a wheel while they load counts.
     if (id !== last) { last = id; since = ++ticks; }
-    pin = null;
     up = [];
     (async () => {
       const chain = [];
@@ -143,37 +159,38 @@
       const own = gs.find((g) => g.root === high.id) ? null : gs.find((g) => g.shortcode === high.shortcode || (g.root == null && g.epic === high.epic));
       if (own) { keys.push(own.shortcode); way[own.epic] = high.id; }
       up = chain;
+      reads = {};
       wants = way;
+      path = keys;
+      head = gs.find((g) => g.root === high.id)?.shortcode ?? own?.shortcode ?? null;
       const add = keys.filter((k) => !untrack(() => open).includes(k));
       if (add.length) { open = [...untrack(() => open), ...add]; keep(); }
     })();
     return () => { stop = true; };
   });
 
-  // Watch the nav's rows for the open ticket's: scroll to it once, or pin it once the nav has settled without it.
+  // Watch the nav's rows for the open ticket's: scroll to it once. A section the engine still holds
+  // (FRAME-50: `content-visibility: hidden`) has no layout, so the row is not brought until it is drawn;
+  // its release is a resize of the nav.
   let scrolled = false;
   $effect(() => {
     const id = here;
-    const mode = flat;
     if (!id || !body || up.length === 0) return;
     scrolled = false;
-    let quiet = null;
     let gone = false;
     const look = () => {
-      if (gone) return;
+      if (gone || scrolled) return;
       const el = body.querySelector(`[data-nav-current="${CSS.escape(id)}"]`);
-      clearTimeout(quiet);
-      if (el) {
-        if (untrack(() => pin)) pin = null;
-        if (!scrolled) { scrolled = true; if (touched < since) bring(el); }
-        return;
-      }
-      quiet = setTimeout(() => { if (!gone) why(id, mode).then((w) => { if (!gone && !body.querySelector(`[data-nav-current="${CSS.escape(id)}"]`)) pin = { t: up[0], why: w }; }); }, SETTLE_MS);
+      if (!el || (el.checkVisibility && !el.checkVisibility())) return;
+      scrolled = true;
+      if (touched < since) bring(el);
     };
     const obs = new MutationObserver(look);
     obs.observe(body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-nav-current"] });
+    const sized = new ResizeObserver(look);
+    sized.observe(body);
     untrack(look);
-    return () => { gone = true; obs.disconnect(); clearTimeout(quiet); };
+    return () => { gone = true; obs.disconnect(); sized.disconnect(); };
   });
 
   /** The row in view in the nav's column, a third of the way down; nothing when it is in view already. */
@@ -186,16 +203,46 @@
     sc.scrollTop += r.top - box.top - box.height / 3;
   }
 
-  /** Why the open ticket is not among the rows. */
-  async function why(id, mode) {
+  // FRAME-67: under a filter, whether the ticket Flat's page lacks matches it at all.
+  $effect(() => {
     const t = up[0];
-    if (t?.archived != null) return "archived";
-    if (!mode) return t?.hidden ? "hidden" : "not in the tree";
-    if (filter == null) return "past the first 200";
-    const r = await b.call("tickets.nav.member", { ids: [id], filter });
-    const m = r.ok ? r.events.find((e) => e?.type === "member") : null;
-    return m && m.matched === false ? "outside the filter" : "past the first 200";
-  }
+    const f = filter ?? null;
+    if (!flat || !t || f == null || flatRead?.id !== t.id || flatRead.filter !== f || flatRead.found) return;
+    if (untrack(() => member?.id === t.id && member.filter === f)) return;
+    let stop = false;
+    b.call("tickets.nav.member", { ids: [t.id], filter: f }).then((r) => {
+      if (stop) return;
+      const m = r?.ok ? r.events.find((e) => e?.type === "member") : null;
+      member = { id: t.id, filter: f, matched: m?.matched !== false };
+    });
+    return () => { stop = true; };
+  });
+
+  // FRAME-67: the open ticket pinned above the rows, and why, from what was read — never from a wait: Flat once
+  // its page is read without it; Tree when the ticket is archived or hidden, when the way's shortcode is not
+  // drawn or a node on it is closed, or when a node on the way has asked every page it will without the child.
+  const pin = $derived.by(() => {
+    const t = up[0];
+    if (!t) return null;
+    const as = (why) => ({ t, why });
+    if (flat) {
+      const f = filter ?? null;
+      if (flatRead?.id !== t.id || flatRead.filter !== f || flatRead.found) return null;
+      if (t.archived != null) return as("archived");
+      if (f == null) return as("past the first 200");
+      if (member?.id !== t.id || member.filter !== f) return null;
+      return as(member.matched ? "past the first 200" : "outside the filter");
+    }
+    if (t.archived != null) return as("archived");
+    if (t.hidden) return as("hidden");
+    if (head == null || !shown.some((g) => g.shortcode === head)) return as("not in the tree");
+    if (path.some((k) => !open.includes(k))) return as("not in the tree");
+    for (const [node, child] of Object.entries(wants)) {
+      const r = reads[node];
+      if (r && r.child === child && !r.found) return as("not in the tree");
+    }
+    return null;
+  });
 
   function mode(to) {
     flat = to;

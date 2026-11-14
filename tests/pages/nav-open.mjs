@@ -4,7 +4,7 @@
 // ticket, marks its row and scrolls it into the nav's column — by a link, by
 // back and forward, past a node's first page — and leaves the scroll alone once
 // the person has moved the nav; a ticket the tree does not hold is pinned
-// above the rows, saying why.
+// above the rows, saying why — at once, from what was read (FRAME-67), never while a page on the way is out.
 //
 // Marks: `[data-surface=ticket-nav]` (the column, the scroller), in it the
 // nav's row `[data-nav-current=<id>]` (its link `[aria-current=page]`), the
@@ -120,8 +120,15 @@ export default async (ctx) => {
       const box = await nav.boundingBox();
       await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
       await page.mouse.wheel(0, 40);
-      await eventually(`${far} drawn and marked`, async () => (await marked(page, far).count()) === 1, 30_000);
+      // FRAME-67: the pin is decided from what was read — while the page that holds the row is out, nothing is pinned.
+      let pinned = 0;
+      await eventually(`${far} drawn and marked`, async () => {
+        pinned += await nav.locator("[data-nav-pinned]").count();
+        return (await marked(page, far).count()) === 1;
+      }, 30_000);
+      assert(pinned === 0, "nothing pinned while the node's next page was out");
       await sleep(500);
+      assert((await nav.locator("[data-nav-pinned]").count()) === 0, "nothing pinned once it is drawn");
       assert(!(await inView(page, far)), "the nav did not scroll to the row after the person wheeled it");
       assert((await nav.evaluate((e) => e.scrollTop)) < 1000, "the nav is where the person left it");
     } finally { await context.close(); }
@@ -143,6 +150,14 @@ export default async (ctx) => {
     const { page: p2, context: c2 } = await openTicket(c);
     try {
       await eventually(`${c} marked in Tree`, async () => (await marked(p2, c).count()) === 1, 20_000);
+      // FRAME-67: a node on the way closed by the person — the row goes, and the ticket is pinned from that, at once.
+      const toggle = navOf(p2).locator(`.nav-body [data-nav-toggle="${bb}"]`);
+      await toggle.click();
+      const closedPin = navOf(p2).locator(`[data-nav-pinned="${c}"]`);
+      await eventually(`${bb} closed: ${c} is pinned`, async () => (await closedPin.count()) === 1, 2_000);
+      assert((await closedPin.locator("[data-nav-pinned-why]").textContent()).trim() === "not in the tree", "it says why: not in the tree");
+      await toggle.click();
+      await eventually(`${bb} open again: the pin goes, the row is marked`, async () => (await closedPin.count()) === 0 && (await marked(p2, c).count()) === 1, 20_000);
       await navOf(p2).locator("[data-nav-mode=flat]").click();
       const pin = navOf(p2).locator(`[data-nav-pinned="${c}"]`);
       await eventually(`in Flat ${c} is pinned`, async () => (await pin.count()) === 1, 20_000);
