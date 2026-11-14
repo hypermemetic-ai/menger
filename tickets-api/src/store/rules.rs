@@ -127,6 +127,27 @@ pub(super) fn parent_refusal(cache: &Cache, child: &Row, parent: &str) -> Result
     frozen_refusal(cache, Some(parent), None)
 }
 
+/// TICKETS-40: whether `child` may be made a root — its parent removed. Only
+/// its shortcode's root may: inside a shortcode every other ticket hangs in
+/// the root's tree (MNG-14), and `create` never files one parentless. The
+/// root's shortcode then leaves its host for its organization's top
+/// namespace, which `set_parent`'s rehoming checks ([`Cache::namespaces`]).
+pub(super) fn root_refusal(cache: &Cache, child: &Row) -> Result<(), StoreError> {
+    let root = shortcode_root(cache, &child.shortcode);
+    if root.is_some_and(|r| r.id == child.id) {
+        return Ok(());
+    }
+    let code = cache.shortcodes.code(&child.shortcode);
+    Err(StoreError::Invalid(match root {
+        Some(r) => format!(
+            "{} is not {code}'s root: a ticket inside a shortcode hangs in its root's tree (MNG-14) — move it under a ticket of {code} (its root is {}), \
+             or reshortcode it into a shortcode of its own (nothing written)",
+            child.id, r.id
+        ),
+        None => format!("{} is not {code}'s root, and {code} has none: only a shortcode's root may be made a root (nothing written)", child.id),
+    }))
+}
+
 /// TICKETS-6: whether a ticket may come to hang under `parent` (a birth or
 /// a move) and — `numbered` — take a new number in that shortcode (a birth
 /// or a reshortcode into it, never a move inside it): refused when the

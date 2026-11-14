@@ -57,6 +57,18 @@ fn a_ticket_ref_takes_every_short_form_and_nothing_else() {
     assert!(e.contains("names a shortcode"), "{e}");
 }
 
+/// TICKETS-40: a parent is a ticket by any name a ticket takes, or `none`
+/// (any case), which names no ticket — no shortcode's word and no uid.
+#[test]
+fn a_parent_ref_is_a_ticket_or_none() {
+    holds::<ParentRef>(&["MNG-1", "hypermemetic:THEME-3", "7k3mq2xa", "none", "NONE", " None "], &["", "MNG", "nothing", "-3", "none-"]);
+    assert_eq!("NONE".parse::<ParentRef>().unwrap().as_str(), "none");
+    assert_eq!("NONE".parse::<ParentRef>().unwrap().ticket(), None);
+    assert_eq!("mng-1".parse::<ParentRef>().unwrap().ticket(), Some("MNG-1"));
+    assert!("none".parse::<TicketRef>().is_err(), "none is no ticket's name, so it shadows none");
+    assert!("MNG".parse::<ParentRef>().unwrap_err().contains("or none"));
+}
+
 /// TICKETS-35: a ticket's name takes its uid — bare, any case, in the app's
 /// path or the whole link — kept as the uid alone; a bare word that is no
 /// uid still names a shortcode, refused.

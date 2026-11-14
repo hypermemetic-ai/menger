@@ -134,21 +134,13 @@ pub(super) fn parenting(store: &Store, caller: &VerifiedUser, child: &TicketId, 
         };
     };
     let now = store.parent_of(child);
-    let root = store.is_root(child);
     let what = "tickets.set_parent";
-    let rehost = match root {
+    let rehost = match store.is_root(child) {
         false => None,
         true => {
-            // A host the caller cannot see is not named (ACCESS-3 #8).
-            let admin = |id: &str| -> Result<AdminOf, String> {
-                let hidden = || format!("{} needs admin on a host out of your reach", caller.principal().as_str());
-                let scope = store.shortcode_scope_of(id).ok_or_else(hidden)?;
-                let seen = matches!(caller.sight_filter(), Ok(None)) || sees_id(store, &caller.sight(), id);
-                caller.admin_of(&scope, store).map_err(|r| if seen { r.to_string() } else { hidden() })
-            };
             let moving = |m: String| format!("moving a shortcode's root takes admin on the host it leaves and on its new host: {m}");
-            let leaving = admin(now.as_ref().map_or(child.as_str(), |p| p.as_str())).map_err(moving)?;
-            let joining = admin(&to).map_err(moving)?;
+            let leaving = host_admin(store, caller, now.as_ref().map_or(child.as_str(), |p| p.as_str())).map_err(moving)?;
+            let joining = host_admin(store, caller, &to).map_err(moving)?;
             Some(Rehost { leaving, joining })
         }
     };
@@ -156,6 +148,46 @@ pub(super) fn parenting(store: &Store, caller: &VerifiedUser, child: &TicketId, 
     // ACCESS-21: the new parent as a parent — what is below it.
     let to = beside_as::<Editor>(store, caller, &to, what, true)?;
     Ok(Some(Parenting::new(from, to, rehost)))
+}
+
+/// TICKETS-40: what `set_parent` takes — [`parenting`] under `parent`, or
+/// [`rooting`] for none.
+pub(super) fn moving(store: &Store, caller: &VerifiedUser, child: &TicketId, parent: Option<&str>) -> Result<Option<Parenting>, String> {
+    match parent {
+        Some(p) => parenting(store, caller, child, p),
+        None => rooting(store, caller, child).map(Some),
+    }
+}
+
+/// ACCESS-11: admin on the shortcode the ticket `id` is in — the host a
+/// root's move leaves or joins. A host the caller cannot see is not named
+/// (ACCESS-3 #8).
+fn host_admin(store: &Store, caller: &VerifiedUser, id: &str) -> Result<AdminOf, String> {
+    let hidden = || format!("{} needs admin on a host out of your reach", caller.principal().as_str());
+    let scope = store.shortcode_scope_of(id).ok_or_else(hidden)?;
+    let seen = matches!(caller.sight_filter(), Ok(None)) || sees_id(store, &caller.sight(), id);
+    caller.admin_of(&scope, store).map_err(|r| if seen { r.to_string() } else { hidden() })
+}
+
+/// TICKETS-40 / ACCESS-11: what making the ticket `child` (a key) a root
+/// takes — editor on the parent it has now; and, for a shortcode's root,
+/// admin on the host it leaves and on its organization, whose top namespace
+/// it joins. Any other ticket is refused by the store (MNG-14), so asks no
+/// admin here.
+pub(super) fn rooting(store: &Store, caller: &VerifiedUser, child: &TicketId) -> Result<Parenting, String> {
+    let now = store.parent_of(child);
+    let rehost = match (store.is_root(child), &now) {
+        (true, Some(host)) => {
+            let rooting = |m: String| format!("making a shortcode's root a root takes admin on the host it leaves and on its organization: {m}");
+            let leaving = host_admin(store, caller, host.as_str()).map_err(rooting)?;
+            let org = store.org_scope_of(child).ok_or_else(|| rooting(format!("no ticket {child}")))?;
+            let joining = caller.admin_of(&org, store).map_err(|r| rooting(r.to_string()))?;
+            Some(Rehost { leaving, joining })
+        }
+        _ => None,
+    };
+    let from = now.map(|p| beside::<Editor>(store, caller, p.as_str(), "tickets.set_parent")).transpose()?;
+    Ok(Parenting::root(from, rehost))
 }
 
 /// MENGER-30 / ACCESS-11: the [`Updating`] an update of `id` (a key) takes
@@ -166,6 +198,8 @@ pub(super) fn updating(store: &Store, caller: &VerifiedUser, ticket: Permit<Edit
     let id = ticket.id().clone();
     let parent = match update.parent.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
         Some(p) => parenting(store, caller, &id, p)?,
+        // TICKETS-40: made a root.
+        None if update.unparent => Some(rooting(store, caller, &id)?),
         None => None,
     };
     let home = store.shortcode_of(&id);
