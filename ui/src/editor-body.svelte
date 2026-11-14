@@ -138,6 +138,10 @@
     return i;
   }
 
+  /** A drawn file's own controls — a player, a viewer, a download, a card's source — used where they are:
+   *  the caret stays out and the browser keeps the click (EDITOR-10, EDITOR-28). */
+  const FILE_OWN = "[data-media-live] :is(video, audio, iframe, a[download]), [data-media-live] a.mx-src";
+
   // EDITOR-26: undo and redo, whatever has focus. Every editor on the page registers here (a sheet may hold
   // more than one); each binds the keys with `only`, so one press runs one of these functions, which picks:
   // the editor whose text has the caret; else, with the focus in another field of the page (a title, an
@@ -490,7 +494,7 @@
       d.addEventListener("mousedown", (ev) => {
         if (ev.button !== 0) return;
         // A player, a viewer, a card's download: used where it is, the caret stays out.
-        if (ev.target?.closest?.("[data-media-live] :is(video, audio, iframe, a[download]), [data-media-live] a.mx-src")) return;
+        if (ev.target?.closest?.(FILE_OWN)) return;
         if (ev.target?.closest?.("button, input, select, textarea, summary")) return; // a control drawn in the block is its own (a code card's copy)
         const a = ev.target?.closest?.("a[href]");
         if (a && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); window.open(a.href, "_blank", "noopener"); return; }
@@ -499,8 +503,9 @@
         ev.preventDefault();
         enter(v, d, d.widget.text, ev);
       });
-      // A link in a block is not followed (the click enters the block) — but a ticket pill, plainly clicked, is (EDITOR-23).
-      d.addEventListener("click", (ev) => { const a = ev.target?.closest?.("a[href]"); if (a && !(a.classList.contains("tpill") && !ev.metaKey && !ev.ctrlKey)) ev.preventDefault(); });
+      // A link in a block is not followed (the click enters the block) — but a ticket pill, plainly clicked, is (EDITOR-23),
+      // and a file's own link is the browser's: its download downloads, a card's source opens (EDITOR-28).
+      d.addEventListener("click", (ev) => { if (ev.target?.closest?.(FILE_OWN)) return; const a = ev.target?.closest?.("a[href]"); if (a && !(a.classList.contains("tpill") && !ev.metaKey && !ev.ctrlKey)) ev.preventDefault(); });
       return d;
     }
     /** EDITOR-24: a tag's own save (`body.tag`) wrote this text — what is drawn made it, and stays as it
