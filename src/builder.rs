@@ -38,15 +38,37 @@ pub fn default_db_path() -> PathBuf {
     crate::first_run::default_data_dir().join(crate::first_run::DB_FILE)
 }
 
-/// UI-3: the ui service's file when `--ui-db-path` names none — `ui.db`
-/// beside the tickets file `db_path`, never the same file.
+/// SCRATCH-NAMES: the names menger gives a tickets file itself — `tickets.db`
+/// (prod's, test's and the image's) and `local.db` (the data directory's,
+/// DIST-14). Beside a tickets file of one of these names the other services'
+/// files keep their plain names (`ui.db`, `media.db`, `docs.db`, `quota.db`).
+pub const DATA_DIR_DB_FILES: [&str; 2] = ["tickets.db", crate::first_run::DB_FILE];
+
+/// SCRATCH-NAMES: where a service's file `plain` (`media.db`) goes when its
+/// flag names none. The rule: beside the tickets file `db_path`; under the
+/// plain name when the tickets file's name is a data directory's
+/// ([`DATA_DIR_DB_FILES`]: `tickets.db`, `local.db`), else under the tickets
+/// file's stem — `/tmp/menger-X.db` → `/tmp/menger-X.media.db`. So servers
+/// whose databases share a directory share no other file, and every file of
+/// a dev server carries its name (`scripts/cleanup-gate.sh X` takes them
+/// all), as its sessions do ([`sessions_file`]). Never the tickets file: a
+/// plain name sits beside `tickets.db` or `local.db`, a stemmed one is the
+/// tickets file's stem and more. A flag that names a file always wins.
+pub fn sibling_db_path(db_path: &Path, plain: &str) -> PathBuf {
+    let data_dirs = db_path.file_name().and_then(|n| n.to_str()).is_some_and(|n| DATA_DIR_DB_FILES.contains(&n));
+    let name = if data_dirs {
+        plain.to_string()
+    } else {
+        let stem = db_path.file_stem().map_or_else(|| "menger".into(), |s| s.to_string_lossy().into_owned());
+        format!("{stem}.{plain}")
+    };
+    db_path.parent().map_or_else(|| PathBuf::from(&name), |d| d.join(&name))
+}
+
+/// UI-3: the ui service's file when `--ui-db-path` names none — beside the
+/// tickets file, never it ([`sibling_db_path`]: `ui.db`, or `<stem>.ui.db`).
 pub fn default_ui_db_path(db_path: &Path) -> PathBuf {
-    let beside = |name: &str| db_path.parent().map_or_else(|| PathBuf::from(name), |d| d.join(name));
-    match beside(UI_DB_FILE) {
-        // A tickets file that is itself named ui.db: the ui file goes beside it under another name.
-        same if same == db_path => beside("ui-service.db"),
-        ui => ui,
-    }
+    sibling_db_path(db_path, UI_DB_FILE)
 }
 
 /// UI-15: the ui service's channel when `--ui-channel` names none — the
@@ -62,37 +84,24 @@ pub fn default_ui_channel(env: Option<&str>) -> &'static str {
 }
 
 /// V2-24: the media service's file when `--media-db-path` names none —
-/// `media.db` beside the tickets file `db_path`, never the same file (and
-/// never the ui file).
+/// beside the tickets file, never it nor the ui file ([`sibling_db_path`]:
+/// `media.db`, or `<stem>.media.db`).
 pub fn default_media_db_path(db_path: &Path) -> PathBuf {
-    let beside = |name: &str| db_path.parent().map_or_else(|| PathBuf::from(name), |d| d.join(name));
-    match beside(MEDIA_DB_FILE) {
-        // A tickets file that is itself named media.db: the media file goes beside it under another name.
-        same if same == db_path => beside("media-service.db"),
-        media => media,
-    }
+    sibling_db_path(db_path, MEDIA_DB_FILE)
 }
 
-/// V2-29: the docs service's file when `--docs-db-path` names none —
-/// `docs.db` beside the tickets file `db_path`, never the same file (nor
-/// the ui or media file).
+/// V2-29: the docs service's file when `--docs-db-path` names none — beside
+/// the tickets file, never it nor the ui or media file ([`sibling_db_path`]:
+/// `docs.db`, or `<stem>.docs.db`).
 pub fn default_docs_db_path(db_path: &Path) -> PathBuf {
-    let beside = |name: &str| db_path.parent().map_or_else(|| PathBuf::from(name), |d| d.join(name));
-    match beside(DOCS_DB_FILE) {
-        // A tickets file that is itself named docs.db: the docs file goes beside it under another name.
-        same if same == db_path => beside("docs-service.db"),
-        docs => docs,
-    }
+    sibling_db_path(db_path, DOCS_DB_FILE)
 }
 
 /// V2-31: the quota service's file when `--quota-db-path` names none —
-/// `quota.db` beside the tickets file `db_path`, never the same file.
+/// beside the tickets file, never it ([`sibling_db_path`]: `quota.db`, or
+/// `<stem>.quota.db`).
 pub fn default_quota_db_path(db_path: &Path) -> PathBuf {
-    let beside = |name: &str| db_path.parent().map_or_else(|| PathBuf::from(name), |d| d.join(name));
-    match beside(QUOTA_DB_FILE) {
-        same if same == db_path => beside("quota-service.db"),
-        quota => quota,
-    }
+    sibling_db_path(db_path, QUOTA_DB_FILE)
 }
 
 /// FRAME-21: the login's session journal's suffix — `<stem>.sessions.jsonl`
@@ -192,13 +201,30 @@ pub struct MediaSetup {
     pub allowance: Arc<dyn menger_media::Allowance>,
 }
 
+/// SCRATCH-NAMES: where the disk store keeps the bytes when
+/// `--media-blob-dir` names none — `<stem>.media.blobs/` beside a media file
+/// named after its tickets file (`/tmp/menger-X.media.db` →
+/// `/tmp/menger-X.media.blobs`, [`sibling_db_path`]), so it is that
+/// server's too; beside any other media file, `media/blobs` as before
+/// (`menger_media::default_blob_dir`).
+pub fn default_media_blob_dir(media_db: &Path) -> PathBuf {
+    let suffix = format!(".{MEDIA_DB_FILE}");
+    match media_db.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(&suffix)) {
+        Some(stem) if !stem.is_empty() => {
+            let name = format!("{stem}.media.blobs");
+            media_db.parent().map_or_else(|| PathBuf::from(&name), |d| d.join(&name))
+        }
+        _ => menger_media::default_blob_dir(media_db),
+    }
+}
+
 /// EDITOR-10: the blob store `--media-store` names — `disk` (at
-/// `--media-blob-dir`, or `media/blobs` beside the media file); `s3` is
-/// refused until it is built.
+/// `--media-blob-dir`, or [`default_media_blob_dir`]); `s3` is refused
+/// until it is built.
 pub fn media_blobs(kind: &str, dir: Option<&Path>, media_db: &Path) -> anyhow::Result<Arc<dyn menger_media::BlobStore>> {
     match kind.trim().to_ascii_lowercase().as_str() {
         "disk" => {
-            let root = dir.map(Path::to_path_buf).unwrap_or_else(|| menger_media::default_blob_dir(media_db));
+            let root = dir.map(Path::to_path_buf).unwrap_or_else(|| default_media_blob_dir(media_db));
             let disk = menger_media::DiskStore::open(&root).map_err(|e| anyhow::anyhow!("--media-blob-dir {}: {e}", root.display()))?;
             Ok(Arc::new(disk))
         }
@@ -702,7 +728,7 @@ mod tests {
     /// V2-24: the media file is beside the tickets file, never the same file.
     #[test]
     fn the_media_db_is_beside_the_tickets_file_never_it() {
-        for tickets in ["/var/lib/menger/tickets.db", "/tmp/x/local.db", "/tmp/x/media.db.d/t.db"] {
+        for tickets in ["/var/lib/menger/tickets.db", "/tmp/x/local.db", "/tmp/x/media.db.d/tickets.db"] {
             let tickets = Path::new(tickets);
             let media = default_media_db_path(tickets);
             assert_eq!(media, tickets.parent().unwrap().join("media.db"), "{}", tickets.display());
@@ -718,7 +744,7 @@ mod tests {
     /// V2-29: the docs file is beside the tickets file, never it, nor the ui or media file.
     #[test]
     fn the_docs_db_is_beside_the_tickets_file_never_it() {
-        for tickets in ["/var/lib/menger/tickets.db", "/tmp/x/local.db", "/tmp/x/docs.db.d/t.db"] {
+        for tickets in ["/var/lib/menger/tickets.db", "/tmp/x/local.db", "/tmp/x/docs.db.d/tickets.db"] {
             let tickets = Path::new(tickets);
             let docs = default_docs_db_path(tickets);
             assert_eq!(docs, tickets.parent().unwrap().join("docs.db"), "{}", tickets.display());
@@ -747,7 +773,7 @@ mod tests {
     /// UI-3: the ui file is beside the tickets file, never the same file.
     #[test]
     fn the_ui_db_is_beside_the_tickets_file_never_it() {
-        for tickets in ["/var/lib/menger/tickets.db", "/tmp/x/local.db", "/tmp/x/ui.db.d/t.db"] {
+        for tickets in ["/var/lib/menger/tickets.db", "/tmp/x/local.db", "/tmp/x/ui.db.d/tickets.db"] {
             let tickets = Path::new(tickets);
             let ui = default_ui_db_path(tickets);
             assert_eq!(ui, tickets.parent().unwrap().join("ui.db"), "{}", tickets.display());
@@ -758,6 +784,41 @@ mod tests {
         let ui = default_ui_db_path(tickets);
         assert_ne!(ui, tickets);
         assert_eq!(ui.parent(), tickets.parent(), "still beside it");
+    }
+
+    /// SCRATCH-NAMES: beside a tickets file a data directory's name does not
+    /// name (`/tmp/menger-X.db`), every other file is named after it, never
+    /// shared with a server whose database sits in the same directory, never
+    /// one another nor the tickets file; its media's blobs too. Beside
+    /// `tickets.db` and `local.db` (prod, test, the image, the local start)
+    /// the plain names, as before.
+    #[test]
+    fn a_scratch_database_names_its_siblings_after_its_stem() {
+        let names = |t: &Path| [default_ui_db_path(t), default_media_db_path(t), default_docs_db_path(t), default_quota_db_path(t)];
+        let mine = Path::new("/tmp/menger-X.db");
+        assert_eq!(names(mine).map(|p| p.display().to_string()), ["/tmp/menger-X.ui.db", "/tmp/menger-X.media.db", "/tmp/menger-X.docs.db", "/tmp/menger-X.quota.db"]);
+        assert_eq!(default_media_blob_dir(&default_media_db_path(mine)), Path::new("/tmp/menger-X.media.blobs"));
+        assert_eq!(sessions_file(mine), Path::new("/tmp/menger-X.sessions.jsonl"), "as its sessions are");
+        let theirs = names(Path::new("/tmp/menger-Y.db"));
+        assert!(names(mine).iter().all(|p| !theirs.contains(p)), "two servers in /tmp share no file");
+        for t in ["/tmp/x/ui.db", "/tmp/x/media.db", "/tmp/x/docs.db", "/tmp/x/quota.db", "/tmp/x/t", "rel.db", "/tmp/x/menger-X.media.db"] {
+            let t = Path::new(t);
+            let all = names(t);
+            assert!(all.iter().all(|p| p != t && p.parent() == t.parent()), "{}: beside it, never it", t.display());
+            assert!((1..4).all(|i| !all[..i].contains(&all[i])), "{}: never one another", t.display());
+        }
+        assert_eq!(default_media_db_path(Path::new("/tmp/x/t")), Path::new("/tmp/x/t.media.db"), "a file with no extension: its whole name");
+        // The data directory's names keep the plain layout, and its blobs.
+        for dir in ["/var/lib/menger", "/home/u/.local/share/menger"] {
+            for name in DATA_DIR_DB_FILES {
+                let t = Path::new(dir).join(name);
+                assert_eq!(names(&t).map(|p| p.file_name().unwrap().to_str().unwrap().to_string()), ["ui.db", "media.db", "docs.db", "quota.db"]);
+                assert_eq!(default_media_blob_dir(&default_media_db_path(&t)), Path::new(dir).join("media/blobs"));
+            }
+        }
+        // A media file the flag names keeps the blobs where they were.
+        assert_eq!(default_media_blob_dir(Path::new("/srv/images/media.db")), Path::new("/srv/images/media/blobs"));
+        assert_eq!(default_media_blob_dir(Path::new("/srv/images/pictures.db")), Path::new("/srv/images/media/blobs"));
     }
 
     /// UI-15: the channel follows the environment's name for test and prod,

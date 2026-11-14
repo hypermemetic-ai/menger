@@ -17,7 +17,7 @@ cargo test -p menger-tickets-api --test cut       # a selection: a crate and a f
 # a development server: its own ports and its own database, never prod's —
 # and a login provider: menger has no open mode (ACCESS-24)
 PLEXUS_NO_REGISTRY=1 cargo run -- --port 4460 --shell-port 4461 --db-path /tmp/menger-dev.db \
-  --ui-db-path /tmp/menger-dev-ui.db --auth-provider key --admin "$(synapse _key show builder)"
+  --auth-provider key --admin "$(synapse _key show builder)"   # its every file named after menger-dev (below)
 synapse -P 4460 _login menger --key builder --as builder   # once per server start
 synapse -P 4460 menger tickets health
 synapse -P 4460 menger ui versions
@@ -71,9 +71,14 @@ alone.
 Bare `cargo run` takes prod's ports (4455–4456, or the next free ones) and
 the default data directory, `~/.local/share/menger` — prod's directory on
 this machine; it writes `local.key`, `local.json` and `once/` beside prod's
-file. Never run it that way here. Give a dev server its own `--ui-db-path`
-too: the default is `ui.db` beside the database, and throwaways in `/tmp`
-would share one.
+file. Never run it that way here. A dev server's `--db-path` names all its
+files (SCRATCH-NAMES): beside a database not named `tickets.db` or
+`local.db`, the ui, media, docs and quota files carry its stem —
+`/tmp/menger-dev.db` → `/tmp/menger-dev.ui.db`, `.media.db`, `.docs.db`,
+`.quota.db`, `/tmp/menger-dev.media.blobs/` — so throwaways in `/tmp` share
+none, and `scripts/cleanup-gate.sh dev` takes every one; a flag that names a
+file still wins. A file in `/tmp` named plainly (`/tmp/ui.db`,
+`/tmp/media.db`) is no gate's, and the gate refuses it.
 
 **`scripts/agents-commands.sh PORT`** (V2-8) runs every `synapse` command
 in this file — each line of a fenced `sh` block, and each inline
@@ -162,7 +167,8 @@ whichever the live pointer names at `/app/`:
   the following. `../plexus-ui/CONTRACT.md` "A page composed from bundles"
   has the rules.
 - **Its flags**: `--ui-db-path` (`MENGER_UI_DB_PATH`; default `ui.db` beside
-  the database), `--ui-signer` (`MENGER_UI_SIGNERS`, `;`-separated 64-hex
+  the database, `<stem>.ui.db` beside one not named `tickets.db` or
+  `local.db`), `--ui-signer` (`MENGER_UI_SIGNERS`, `;`-separated 64-hex
   public keys; none: every push refused `no_signer`), `--ui-compiler`
   (`MENGER_UI_COMPILER`, `dist/ui-compiler.wasm`; without it a push stores
   the trees as given and says `compiled: false`).
@@ -835,6 +841,11 @@ question.
   scratch root — `~/.cache/menger-perf-scratch`, or one `MENGER_SCRATCH_DIRS`
   names in `~/.config/menger/sweep.env` — once idle an hour, at the next
   hourly sweep (below `/tmp/claude-UID/` the caller removes them by `--path`).
+  And a stopped dev server's files in `/tmp` (SCRATCH-NAMES; owner: "it
+  should remove everything") — `menger-NAME.db` and every sibling named
+  after it, `-shm`, `-wal`, `.sessions.jsonl(.lock)`, `.log`,
+  `.media.blobs/` — as one set: taken once every file of it is idle an hour
+  and nothing holds any of it open, else all of it kept and said.
   `deploy/pipeline build` refuses up front under 50 GB free or at 90% used.
   Before a long gate of your own, `scripts/disk-check.sh` (exit 3: low).
 

@@ -35,7 +35,10 @@
 #               a worktree removed takes its own with it (`cargo metadata`'s
 #               build_directory, read from each workspace in it before it goes)
 #   scratch-db  /tmp/menger-*.db, .db-shm, .db-wal, .sessions.jsonl(.lock),
-#               .log — a throwaway server's database, sessions and log
+#               .log — a throwaway server's database, sessions and log; and
+#               (SCRATCH-NAMES) its other services' files, named after it —
+#               menger-NAME.{ui,media,docs,quota}.db(-shm, -wal) and the
+#               directory menger-NAME.media.blobs
 #   pages-tmp   V2-38: /tmp/claude-UID/ui8-pages-… — a browser page-test run's work
 #               directory (tests/pages_browser.mjs, which removes its own since
 #               V2-38; these are what a killed run left). By --path at once, as a
@@ -71,7 +74,12 @@
 # every non-shared target and every target-part, each only when nothing in it
 # was modified for the idle threshold and nothing holds it — and RUN-34's
 # ui8-work directories in the scratch roots and V2-38's pages-tmp ones below
-# /tmp/claude-UID/, each idle an hour. The threshold
+# /tmp/claude-UID/, each idle an hour — and (SCRATCH-NAMES; owner: "it
+# should remove everything") a throwaway server's scratch-db files in /tmp,
+# as one set per gate NAME (menger-NAME.db and its siblings, -shm, -wal, its
+# sessions, its log, menger-NAME.media.blobs): the set goes only when every
+# file of it was idle an hour and nothing holds any of it open, else every
+# file of it is kept. The build-output threshold
 # drops as the disk fills: 6 h (--idle-hours), 1 h at 75% used, 15 min at
 # 90%. What it keeps is said (`kept`), not refused; a candidate of any other
 # shape (never expected: a symlink into a worktree, say) is refused and the
@@ -223,6 +231,38 @@ lock_held() { local f
 # the first thing in PATH (itself included) modified within MINUTES: empty when idle that long
 busy_since() { find "$1" -mmin "-$2" -print -quit 2>/dev/null; }
 
+# SCRATCH-NAMES: a throwaway server's files in /tmp — its database, its other
+# services' files named after it, its sessions, its log, its media's bytes
+scratch_file() { [[ -f $1 && ! -L $1 && $(dirname "$1") == "$TMPR" && $(basename "$1") =~ ^menger-.+\.(db|db-shm|db-wal|sessions\.jsonl|sessions\.jsonl\.lock|log)$ ]]; }
+scratch_blobs() { [[ -d $1 && ! -L $1 && $(dirname "$1") == "$TMPR" && $(basename "$1") =~ ^menger-.+\.media\.blobs$ ]]; }
+# the gate a scratch file is of: its name less `menger-`, the file's suffix and a service's
+scratch_name() { local b=${1#menger-}
+  case $b in
+    *.media.blobs) printf '%s\n' "${b%.media.blobs}"; return ;;
+    *.sessions.jsonl.lock) b=${b%.sessions.jsonl.lock} ;;
+    *.sessions.jsonl) b=${b%.sessions.jsonl} ;;
+    *.log) b=${b%.log} ;;
+    *.db-shm|*.db-wal) b=${b%.db-*} ;;
+    *.db) b=${b%.db} ;;
+  esac
+  case $b in *.ui|*.media|*.docs|*.quota) b=${b%.*} ;; esac
+  printf '%s\n' "$b"
+}
+# every scratch file in /tmp of the gate N — the set the sweep takes whole or not at all
+scratch_set() { local f
+  for f in "$TMPR/menger-$1".*; do
+    { scratch_file "$f" || scratch_blobs "$f"; } && [[ $(scratch_name "$(basename "$f")") == "$1" ]] && printf '%s\n' "$f"
+  done
+}
+# why the sweep keeps the set of gate N: a file of it modified within the hour, or held open; empty: it goes
+scratch_set_busy() { local f b pid
+  while IFS= read -r f; do
+    [[ -n $f ]] || continue
+    b=$(busy_since "$f" 60); [[ -n $b ]] && { printf 'its %s modified within 1h\n' "$(basename "$b")"; return; }
+    pid=$(in_use "$f"); [[ -n $pid ]] && { printf 'its %s in use by pid %s\n' "$(basename "$f")" "$pid"; return; }
+  done < <(scratch_set "$1")
+}
+
 # A worktree's build-dirs: each workspace in it, asked of cargo (it hashes the
 # canonical path), kept only when they have the cargo-build shape.
 CARGO=${CLEANUP_GATE_CARGO:-cargo}
@@ -271,6 +311,8 @@ remove_path() {
     shape=target
   elif [[ -f $r && $(dirname "$r") == "$TMPR" && $(basename "$r") =~ ^menger-.+\.(db|db-shm|db-wal|sessions\.jsonl|sessions\.jsonl\.lock|log)$ ]]; then
     shape=scratch-db
+  elif [[ -d $r && ! -L $p && $(dirname "$r") == "$TMPR" && $(basename "$r") =~ ^menger-.+\.media\.blobs$ ]]; then
+    shape=scratch-db
   elif [[ -d $r && ! -L $p && $(dirname "$r") == "$SCR" && $(basename "$r") =~ ^ui8-pages-[A-Za-z0-9._-]+$ ]]; then
     shape=pages-tmp
   elif under "$r" "$SCR"; then
@@ -288,12 +330,17 @@ remove_path() {
   fi
   # the sweep takes build output and work directories, nothing else, whatever named it
   if [[ $sweep == 1 ]]; then
-    case $shape in cargo-build|target|target-part|pipeline-log|ui8-work|pages-tmp) ;;
-      *) refuse "$shown" "a $shape, and the sweep takes only build output, pipeline logs, ui8-work and pages-tmp"; return ;;
+    case $shape in cargo-build|target|target-part|pipeline-log|ui8-work|pages-tmp|scratch-db) ;;
+      *) refuse "$shown" "a $shape, and the sweep takes only build output, pipeline logs, ui8-work, pages-tmp and scratch-db"; return ;;
     esac
+    # SCRATCH-NAMES: a server's files go together — each idle an hour, none held — or none goes
+    if [[ $shape == scratch-db ]]; then
+      local why; why=$(scratch_set_busy "$(scratch_name "$(basename "$r")")")
+      if [[ -n $why ]]; then say "kept     $(printf '%-11s' "$shape") $shown — $why"; return; fi
+    fi
   fi
   # what rm -r takes must not be, or cross, a mount
-  case $shape in target|target-part|cargo-build|session|ws-scratch|sweep|ui8-work|pages-tmp)
+  case $shape in target|target-part|cargo-build|session|ws-scratch|sweep|ui8-work|pages-tmp|scratch-db)
     if [[ -d $r ]] && { mountpoint -q -- "$r" 2>/dev/null || [[ $(stat -c %d -- "$r" 2>/dev/null) != "$(stat -c %d -- "$(dirname "$r")" 2>/dev/null)" ]]; }; then
       refuse "$shown" 'a mount point, never removed'; return
     fi ;;
@@ -303,6 +350,8 @@ remove_path() {
   [[ $shape == ui8-work ]] && idle=60
   # V2-38: a page-test run's, swept an hour after it was last written
   [[ $shape == pages-tmp && $sweep == 1 ]] && idle=60
+  # SCRATCH-NAMES: a server's files, swept an hour after the last was written (its set, above)
+  [[ $shape == scratch-db && $sweep == 1 ]] && idle=60
   if [[ $sweep == 1 || $shape == ui8-work ]] && busy=$(busy_since "$r" "$idle") && [[ -n $busy ]]; then
     [[ $busy == "$r" ]] && busy=itself || busy=${busy#"$r"/}
     if [[ $sweep == 1 ]]; then say "kept     $(printf '%-11s' "$shape") $shown — modified within $(mins "$idle") ($busy)"
@@ -344,11 +393,11 @@ remove_path() {
         if out=$(git -C "$main" branch -d -- "$br" 2>&1); then extra=", branch $br deleted"
         else extra=", branch $br kept (${out//$'\n'/ })"; fi
       fi ;;
-    target|target-part|cargo-build|session|ws-scratch|sweep|ui8-work|pages-tmp)
+    target|target-part|cargo-build|session|ws-scratch|sweep|ui8-work|pages-tmp|scratch-db)
       if [[ -d $r ]]; then out=$(rm -r --one-file-system -- "$r" 2>&1); rc=$?
       else out=$(rm -f -- "$r" 2>&1); rc=$?; fi
       [[ $rc == 0 ]] || { refuse "$shown" "rm: ${out//$'\n'/ }"; return; } ;;
-    scratch-db|pipeline-log)
+    pipeline-log)
       out=$(rm -f -- "$r" 2>&1) || { refuse "$shown" "rm: $out"; return; } ;;
   esac
   # a hash's XX/ parent goes when its last build-dir does (rmdir: only if empty)
@@ -367,12 +416,14 @@ mins() { if (( $1 > 0 && $1 % 60 == 0 )); then echo "$(( $1 / 60 ))h"; else echo
 
 # ── NAME → its leftovers ───────────────────────────────────────────────────
 paths_for_name() {
-  local n=$1 f repo
+  local n=$1 f repo s db=()
   if [[ ! $n =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ || $n == *..* ]]; then
     refuse "$n" 'not a gate name (letters, digits, . _ -; no ..)'; return
   fi
-  for f in "$WS/.$n" "$WS/$n" "$CT/$n" "$SCR/$n" \
-           "$TMPR/menger-$n.db" "$TMPR/menger-$n.db-shm" "$TMPR/menger-$n.db-wal" "$TMPR/menger-$n.sessions.jsonl" "$TMPR/menger-$n.sessions.jsonl.lock" "$TMPR/menger-$n.log"; do
+  # SCRATCH-NAMES: the server's database and its other services' files, named after it
+  for s in "" .ui .media .docs .quota; do db+=("$TMPR/menger-$n$s.db" "$TMPR/menger-$n$s.db-shm" "$TMPR/menger-$n$s.db-wal"); done
+  for f in "$WS/.$n" "$WS/$n" "$CT/$n" "$SCR/$n" "${db[@]}" "$TMPR/menger-$n.media.blobs" \
+           "$TMPR/menger-$n.sessions.jsonl" "$TMPR/menger-$n.sessions.jsonl.lock" "$TMPR/menger-$n.log"; do
     [[ -e $f || -L $f ]] && printf '%s\n' "$f"
   done
   for repo in "$WS"/*/; do
@@ -392,7 +443,7 @@ candidates() {
     done < <(git_q "${repo%/}" worktree list --porcelain | grep '^worktree ' | tail -n +2)
   done
   for f in "$WS"/.[!.]* "$CT"/* "$CB"/*/* "$TMPR"/menger-*.db "$TMPR"/menger-*.db-shm "$TMPR"/menger-*.db-wal "$TMPR"/menger-*.sessions.jsonl "$TMPR"/menger-*.sessions.jsonl.lock \
-           "$TMPR"/menger-*.log "$SCR"/* "$TMPR/theme-sweep"; do
+           "$TMPR"/menger-*.log "$TMPR"/menger-*.media.blobs "$SCR"/* "$TMPR/theme-sweep"; do
     [[ -e $f || -L $f ]] && printf '%s\n' "$f"
   done
   ui8_dirs all
@@ -430,6 +481,8 @@ sweep_candidates() {
   ui8_dirs marked
   # V2-38: a page-test run's work directory, left by a run that was killed
   for d in "$SCR"/ui8-pages-?*; do [[ -d $d && ! -L $d ]] && printf '%s\n' "$d"; done
+  # SCRATCH-NAMES: a throwaway server's files in /tmp, each judged with its set
+  for d in "$TMPR"/menger-*; do { scratch_file "$d" || scratch_blobs "$d"; } && printf '%s\n' "$d"; done
 }
 # the disk's use, in percent, where the build output lives
 used_pct() {
