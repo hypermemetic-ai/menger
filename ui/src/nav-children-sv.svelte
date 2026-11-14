@@ -15,7 +15,10 @@
      marked (`nav.current`), and a node the way to it runs through
      (`nav.want(node)`, the child it leads to) asks its next page while that
      child is not among its rows and the last page came back full — twice
-     as many each time, so a child 3,000 down costs five asks, not fifteen. -->
+     as many each time, so a child 3,000 down costs five asks, not fifteen.
+     FRAME-67: once its page is in and it asks no more, it tells the nav
+     (`nav.reached(node, child, found)`) whether it holds that child: the
+     nav pins the open ticket from that, never from a wait. -->
 <script module>
   // PERF-15: a row is the fields drawn, not the whole summary row.
   const FIELDS = ["id", "uid", "title", "kind", "status", "child_count", "parent"];
@@ -54,10 +57,30 @@
   const listed = $derived(new Set(list.map((c) => c.id)));
   const more = $derived(count != null ? Math.max(0, count - list.length) : 0);
   const expandable = (c) => (c.child_count ?? 0) > 0 || nav.hosted(c.id).length > 0;
+  // FRAME-67: a page asked is outstanding until its rows are in — the collection has left `live` and come
+  // back, or holds more rows than when it was asked; the rows before it are still `live` as it is asked.
+  let paging = $state(false);
+  let left = false;
+  let had = 0;
+  function ask(n) { paging = true; left = false; had = list.length; pages = n; }
+  $effect(() => {
+    const st = $kids.status;
+    const n = list.length;
+    if (!paging) return;
+    if (st !== "live") left = true;
+    else if (left || n > had) paging = false;
+  });
   // SHELL.176-4: the way to the open ticket runs through this node: page until its child is drawn.
   const wanted = $derived(nav.want?.(parent ?? epic) ?? null);
   $effect(() => {
-    if (wanted != null && $kids.status === "live" && !listed.has(wanted) && list.length >= PAGE * pages && pages < 64) pages *= 2;
+    if (wanted != null && !paging && $kids.status === "live" && !listed.has(wanted) && list.length >= PAGE * pages && pages < 64) ask(pages * 2);
+  });
+  // FRAME-67: the nav pins the open ticket from what was read — so this node says whether it holds the child
+  // the way leads to (a row, or a sub-shortcode's in its place), once its page is in and it asks no more.
+  $effect(() => {
+    if (wanted == null || !nav.reached || paging || $kids.status !== "live") return;
+    const found = listed.has(wanted) || hosted.some((g) => g.root === wanted);
+    if (found || list.length < PAGE * pages || pages >= 64) nav.reached(parent ?? epic, wanted, found);
   });
 </script>
 
@@ -81,7 +104,7 @@
     <NavGroup {g}/>
   {/each}
   {#if more > 0 && $kids.status === "live" && list.length >= PAGE * pages}
-    <li class="nav-item more"><button class="more-btn" onclick={() => (pages += 1)}>{more} more</button></li>
+    <li class="nav-item more"><button class="more-btn" onclick={() => ask(pages + 1)}>{more} more</button></li>
   {/if}
   {#if $kids.status === "live" && list.length === 0 && hosted.length === 0}<li class="nav-item empty">nothing under it</li>{/if}
 </ul>
