@@ -16,7 +16,10 @@
      pointer's history (`ui.history`, read again on every move) with undo and
      redo (`ui.undo`, `ui.redo`, by the seq shown), the service's rule said on a refusal
      and on a disabled button (FRAME-52b: `may`, "the admin's"); a tag made
-     elsewhere folded in from the watch's `tagged`. -->
+     elsewhere folded in from the watch's `tagged`. RELEASES-FAST: `ui.versions`
+     is read once at open (and again only for a version the list does not
+     hold); the newest 20 rows are drawn, with the live one wherever it is,
+     and "show all N" (`[data-action=show-all]`) draws the rest. -->
 <script module>
   export const uses = ["ui.versions", "ui.watch", "ui.contract", "ui.routes.list", "ui.slots.list", "ui.rollback", "ui.preview",
                        "ui.tag", "ui.history", "ui.undo", "ui.redo", "auth.whoami", "auth.requires"];
@@ -101,12 +104,16 @@
   // FRAME-52b: a tag made elsewhere (another session, an agent) — the
   // watch's `tagged { version, label, tags }`, the latest per version,
   // folded into the rows (a moved label is said for the version it left).
-  const tags = live({ snapshot: "ui.versions", params: {}, changes: "ui.watch", key: "version", on: { tagged: "upsert:." } });
+  // RELEASES-FAST: `ui.versions` is read once, by readVersions; this
+  // collection's snapshot is the history's newest move (one row, nothing
+  // folded from it), so only the watch's `tagged` rows — those with `tags` — are.
+  const tags = live({ snapshot: "ui.history", params: { limit: 1 }, changes: "ui.watch", key: "version", on: { tagged: "upsert:." } });
   $effect(() => {
     const rows = tags.rows;
     untrack(() => {
       if (!rows.length || list == null) return;
-      const by = new Map(rows.filter((r) => typeof r.version === "string").map((r) => [r.version, r]));
+      const by = new Map(rows.filter((r) => typeof r.version === "string" && Array.isArray(r.tags)).map((r) => [r.version, r]));
+      if (!by.size) return;
       list = list.map((v) => (by.has(v.hash) ? { ...v, label: by.get(v.hash).label ?? null, tags: by.get(v.hash).tags ?? [] } : v));
     });
   });
@@ -150,6 +157,12 @@
 
   const versions = $derived(list ?? []);
   const cur = $derived(pointer ?? "");
+  // RELEASES-FAST: the newest NEWEST rows are drawn, and the live one
+  // wherever it is, and any row holding an answer or a form; "show all"
+  // draws every kept version.
+  const NEWEST = 20;
+  let all = $state(false);
+  const shown = $derived(all ? versions : versions.filter((v, i) => i < NEWEST || v.hash === cur || confirm === v.hash || tagging?.hash === v.hash || Object.keys(answers[v.hash] ?? {}).length > 0));
   const app = $derived(versions.find((v) => v.hash === cur)?.name ?? null);
   // Who may act: the roles `auth.requires` names for ui.rollback, held anywhere
   // (the service decides where: a refusal is said on the row).
@@ -194,7 +207,7 @@
   <div class="rv">
     <div class="panel">
       <div class="th"><span>version</span><span>bundle</span><span>from</span><span>when</span><span></span><span></span></div>
-      {#each versions as v (v.hash)}
+      {#each shown as v (v.hash)}
         {@const ans = answers[v.hash] ?? {}}
         <div class="tr" class:flash={added.has(v.hash)} data-id={v.hash} data-live={v.hash === cur} data-matches={$stamped.rows.some((c) => c.contract === v.contract)}>
           <span class="ver"><span class="hash" data-field="version" title={v.hash}>{short(v.hash)}</span>{#if v.label}<b class="label" data-field="label">{v.label}</b>{/if}{#each v.tags ?? [] as tg (tg)}<span class="pill tag" data-tag={tg}>{tg}</span>{/each}</span>
@@ -232,6 +245,12 @@
           {#if ans.refused}<div class="ans"><p data-refused="">refused: {ans.refused}</p></div>{/if}
         </div>
       {/each}
+      {#if !all && shown.length < versions.length}
+        <div class="more"><button class="btn" data-action="show-all" onclick={() => (all = true)}>show all {versions.length}</button>
+          <span class="muted">the newest <span data-field="shown">{shown.length}</span> shown</span></div>
+      {:else if all && versions.length > NEWEST}
+        <div class="more"><button class="btn" data-action="show-newest" onclick={() => (all = false)}>show the newest {NEWEST}</button></div>
+      {/if}
       {#if sheet === "loading" || list == null}<div class="tr"><span data-loading="">00000000</span></div>{/if}
       {#if list != null && versions.length === 0}<p class="empty" data-empty="">No version is kept: nothing was pushed.</p>{/if}
     </div>
@@ -314,6 +333,7 @@
   .pv a { color: var(--accent); text-decoration: underline; }
   [data-refused] { margin: 4px 0 0; font-size: 11px; color: var(--warn); }
   [data-loading] { color: transparent; background: var(--skeleton); border-radius: var(--radius-sm); }
+  .more { display: flex; gap: 10px; align-items: center; padding: 8px 10px; font-size: 12px; border-top: var(--border) solid var(--line); }
   .pad { margin: 8px 10px; }
   .empty { margin: 8px 10px; color: var(--muted); }
   .side h2 { display: flex; gap: 8px; align-items: baseline; margin: 0; padding: 8px 10px; font-size: 11px; font-weight: var(--weight-medium); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; border-bottom: var(--border) solid var(--line); }

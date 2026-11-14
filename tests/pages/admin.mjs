@@ -16,7 +16,7 @@
 // made it.
 import path from "node:path";
 import { makeKey, sessionCookies, writeSession } from "../../scripts/throwaway-login.mjs";
-import { bundle, push, synapse } from "../../scripts/ui-throwaway.mjs";
+import { TOOL, bundle, push, run, sentCalls, synapse } from "../../scripts/ui-throwaway.mjs";
 
 export default async (ctx) => {
   const { test, assert, eventually, openPage, sy, server, session, v1, v2, fs } = ctx;
@@ -228,6 +228,58 @@ export default async (ctx) => {
       await context.close();
       sy("ui", "tag", "--version", v1.version, "--untag", "demo,s52", "--label", "");
       sy("ui", "tag", "--version", v2.version, "--untag", "s52b");
+      if (live() !== v2.version) sy("ui", "rollback", "--to", v2.version);
+    }
+  });
+
+  // RELEASES-FAST: past twenty kept versions the page draws the newest twenty and
+  // the live one, reads ui.versions once, and draws every one on "show all".
+  // Last of the group: it keeps twenty more versions (pushed not live), so v1 and
+  // v2 are no longer among the newest twenty for a case after it.
+  await test("releases_newest_twenty_then_all", async () => {
+    const live = () => sy("ui", "versions").find((e) => e.type === "version" && e.live)?.hash;
+    assert(live() === v2.version, "v2 is live as the runner left it");
+    const signer = path.join(work, "signer.key");
+    for (let i = 0; i < 20; i++) {
+      // v1's bundle with one file more: a version of its own, kept and made live by nothing.
+      const dir = path.join(work, `fast-${i}`);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, `fast-${i}.txt`), `kept ${i}\n`);
+      const tar = path.join(work, `fast-${i}.tar`);
+      fs.copyFileSync(v1.tar, tar);
+      run("tar", ["--append", "-f", tar, "-C", dir, `fast-${i}.txt`]);
+      fs.writeFileSync(`${tar}.b64`, fs.readFileSync(tar).toString("base64"));
+      fs.writeFileSync(`${tar}.sig`, run(TOOL, ["sign", signer, tar]).trim());
+      fs.writeFileSync(`${tar}.manifest.json`, v1.manifest);
+      const [a] = sy("ui", "push", "--bundle", `@${tar}.b64`, "--manifest", `@${tar}.manifest.json`, "--signature", `@${tar}.sig`, "--live", "false");
+      assert(a?.type === "pushed" && a.live === false, `kept, not live: ${JSON.stringify(a)}`);
+    }
+    const kept = sy("ui", "versions").filter((e) => e.type === "version");
+    assert(kept.length >= 22 && live() === v2.version, `${kept.length} kept, v2 still live`);
+    const newest = kept.slice(0, 20).map((v) => v.hash);
+    assert(!newest.includes(v2.version) && !newest.includes(v1.version), "v1 and v2 are past the newest twenty");
+
+    const { page, context } = await openPage("#/releases");
+    const root = page.locator("[data-surface=ui-versions]");
+    try {
+      await eventually("the count says every version", async () => (await text(root.locator("[data-field=count]"))) === String(kept.length));
+      await eventually("twenty-one rows: the newest and the live one", async () => (await root.locator(".tr[data-id]").count()) === 21);
+      const drawn = await root.locator(".tr[data-id]").evaluateAll((els) => els.map((e) => e.getAttribute("data-id")));
+      assert(JSON.stringify(drawn) === JSON.stringify([...newest, v2.version]), `the newest twenty, then the live one: ${JSON.stringify(drawn)}`);
+      assert((await root.locator(`[data-id="${v2.version}"][data-live=true]`).count()) === 1, "v2 drawn, marked live");
+      assert((await root.locator(`[data-id="${v1.version}"]`).count()) === 0, "v1 not drawn");
+      assert((await text(root.locator("[data-field=shown]"))) === "21", "the shown count said");
+      const versionsCalls = (await sentCalls(page)).filter((c) => c.method === "ui.versions");
+      assert(versionsCalls.length === 1, `ui.versions read once: ${JSON.stringify(versionsCalls)}`);
+
+      await root.locator("[data-action=show-all]").click();
+      await eventually("every version drawn", async () => (await root.locator(".tr[data-id]").count()) === kept.length);
+      assert((await root.locator(`[data-id="${v1.version}"]`).count()) === 1, "v1 drawn");
+      await root.locator("[data-action=show-newest]").click();
+      await eventually("back to twenty-one", async () => (await root.locator(".tr[data-id]").count()) === 21);
+      assert((await sentCalls(page)).filter((c) => c.method === "ui.versions").length === 1, "no read for either");
+    } finally {
+      await context.close();
       if (live() !== v2.version) sy("ui", "rollback", "--to", v2.version);
     }
   });
