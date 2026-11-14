@@ -190,8 +190,31 @@ hasnt "names: never another server's" "$out" "menger-other"
 cg "names: --list" 2 --list
 for p in "$TM/menger-names.media.db-wal" "$TM/menger-names.quota.db" "$TM/menger-names.media.blobs" "$TM/menger-other.media.blobs"; do has "--list: $p" "$out" "scratch-db $p"; done
 has "--list: a link is no blobs" "$out" "refused  $TM/menger-link.media.blobs → $T/elsewhere — not a leftover shape"
-out=$(CLEANUP_GATE_ROOT=$T "$CG" --sweep 2>&1)   # the sweep takes build output only: a server's files are its gate's
-hasnt "names: the sweep never names a server's files" "$out" "menger-names"
+# the sweep takes a server's set whole: every file idle an hour and none held, or none of it
+set_of() { local n=$1 s e; SET=()
+  for s in "" .ui .media .docs .quota; do for e in .db .db-shm .db-wal; do echo x >"$TM/menger-$n$s$e"; SET+=("$TM/menger-$n$s$e"); done; done
+  for e in .sessions.jsonl .sessions.jsonl.lock .log; do echo x >"$TM/menger-$n$e"; SET+=("$TM/menger-$n$e"); done
+  mkdir -p "$TM/menger-$n.media.blobs/cd"; echo png >"$TM/menger-$n.media.blobs/cd/cdef"; SET+=("$TM/menger-$n.media.blobs")
+  find "${SET[@]}" -depth -exec touch -h -d '2 hours ago' {} +; }
+set_of idle; IDLE=("${SET[@]}")
+set_of fresh; FRESH=("${SET[@]}"); echo y >>"$TM/menger-fresh.quota.db-wal"   # one file written now
+set_of held; HELD=("${SET[@]}")
+# shellcheck disable=SC2217  # the point: sleep holds the docs file open, as a running server does
+sleep 60 <"$TM/menger-held.docs.db" & holder=$!
+sleep 0.3
+cg "sweep: scratch sets" 0 --sweep --yes
+for p in "${IDLE[@]}"; do gone "sweep: idle and unheld, taken: $p" "$p"; done
+has "sweep: said and logged" "$(<"$LOG")" "removed scratch-db $TM/menger-idle.media.blobs"
+for p in "${FRESH[@]}"; do there "sweep: one file touched within the hour, all kept: $p" "$p"; done
+has "sweep: why fresh is kept" "$out" "kept     scratch-db  $TM/menger-fresh.db — its menger-fresh.quota.db-wal modified within 1h"
+for p in "${HELD[@]}"; do there "sweep: one file held open, all kept: $p" "$p"; done
+has "sweep: why held is kept" "$out" "kept     scratch-db  $TM/menger-held.db — its menger-held.docs.db in use by pid $holder"
+for p in "${NM[@]}"; do there "sweep: names (just written) kept: $p" "$p"; done
+kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+cg "sweep: let go, the held set goes" 0 --sweep --yes
+for p in "${HELD[@]}"; do gone "sweep: let go: $p" "$p"; done
+there "sweep: … fresh still kept" "$TM/menger-fresh.db"
+cg "fresh by name" 0 --yes fresh; for p in "${FRESH[@]}"; do gone "fresh by name" "$p"; done
 cg "names: removed" 0 --yes names
 for p in "${NM[@]}"; do gone "names" "$p"; done
 has "names: the blobs, whole" "$out" "removed  scratch-db $TM/menger-names.media.blobs"
@@ -469,7 +492,7 @@ cg "ui8: the sweep and the links" 0 --yes --sweep
 hasnt "ui8: the sweep never follows a ui8 link" "$out" "ui8-pages-to"
 there "ui8: \$HOME there" "$H/.local/share/menger/tickets.db"; there "ui8: the checkout there" "$M/f"; there "ui8: the marked dir there" "$T/linked-marked/tickets.db"
 
-# the sweep refuses any shape but build output, pipeline logs and ui8-work
+# the sweep refuses any shape but build output, pipeline logs, ui8-work, pages-tmp and scratch-db
 git -C "$M" worktree add -q -b gate-y "$WS/.gate-y"; ln -s "$WS/.gate-y" "$CT/link-to-wt"
 cg "ui8: the sweep meets a worktree" 2 --yes --sweep
 has "ui8: … refuses it" "$out" "refused  $CT/link-to-wt → $WS/.gate-y — a worktree, and the sweep takes only"

@@ -835,6 +835,11 @@ question.
   scratch root — `~/.cache/menger-perf-scratch`, or one `MENGER_SCRATCH_DIRS`
   names in `~/.config/menger/sweep.env` — once idle an hour, at the next
   hourly sweep (below `/tmp/claude-UID/` the caller removes them by `--path`).
+  And a stopped dev server's files in `/tmp` (SCRATCH-NAMES; owner: "it
+  should remove everything") — `menger-NAME.db` and every sibling named
+  after it, `-shm`, `-wal`, `.sessions.jsonl(.lock)`, `.log`,
+  `.media.blobs/` — as one set: taken once every file of it is idle an hour
+  and nothing holds any of it open, else all of it kept and said.
   `deploy/pipeline build` refuses up front under 50 GB free or at 90% used.
   Before a long gate of your own, `scripts/disk-check.sh` (exit 3: low).
 
