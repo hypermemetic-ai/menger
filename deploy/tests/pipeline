@@ -61,6 +61,12 @@ case " $* " in
     all=" $* "
     [[ $all == *" --principal "* ]] && { echo "key:$(printf "ab%.0s" {1..32})"; exit 0; }
     while [[ $# -gt 0 ]]; do [[ $1 == --params ]] && rec=$2; shift; done
+    # DEPLOY-62: auth.requires — does the tracker have deployments.record? STUB_RECORDS=absent: v2, none
+    if [[ $all == *" auth.requires "* ]]; then
+      echo "requires $rec" >>"$STUB_ARGV"
+      [[ ${STUB_RECORDS:-} == absent ]] && { echo "{\"type\":\"error\",\"message\":\"no method deployments.record here\"}"; exit 3; }
+      echo "{\"type\":\"requires\",\"method\":\"deployments.record\",\"grant\":\"deployments.record\",\"roles\":[\"deployer\",\"admin\"]}"; exit 0
+    fi
     if [[ $rec == "{}" ]]; then
       # STUB_HEALTH=anon: an anonymous socket reaches past the auth door (what the smoke must catch)
       [[ -z ${MENGER_DEPLOY_KEY_FILE:-}${MENGER_DEPLOY_KEY:-} && ${STUB_HEALTH:-up} != anon ]] && { echo "{\"error_kind\":\"unauthenticated\",\"message\":\"sign in first\",\"type\":\"error\"}"; exit 3; }
@@ -108,6 +114,11 @@ esac; exit 0'
 stub synapse 'args=" $* "
 echo "synapse $*" >>"${STUB_SYNAPSE_ARGV:-/dev/null}"
 [[ $args == *" health "* ]] && { [[ ${STUB_HEALTH:-up} == down ]] && exit 1; echo "ticket_count: 3"; exit 0; }
+if [[ $args == *" auth requires "* ]]; then
+  [[ ${STUB_RECORDS:-} == absent ]] && { echo "{\"type\":\"data\",\"content\":{\"type\":\"error\",\"message\":\"no method deployments.record here\"}}"; exit 1; }
+  echo "{\"type\":\"data\",\"content\":{\"type\":\"requires\",\"method\":\"deployments.record\"}}"; exit 0
+fi
+[[ ${STUB_RECORDS:-} == absent ]] && { echo "error: forbidden: needs deployments.record" >&2; exit 1; }
 case ${STUB_TRACKER:-up} in
   down) echo "Protocol handshake failed" >&2; exit 1 ;;
   hang) sleep 30; exit 1 ;;
@@ -283,6 +294,52 @@ has "the key refused: said" "$err" "refused the pipeline's key (forbidden: needs
 m=$(mark); rt "$R1"
 same "granted: the outbox first, then its own" "$(since "$m" '.state' | paste -sd' ')" '"started" "succeeded" "started" "succeeded"'
 has "the key: over the socket, as the pipeline" "$(<"$STUB_ARGV")" "--url ws://127.0.0.1:4769 --agent pipeline deployments.record"
+
+# ── DEPLOY-62: a tracker with no deployments.record (v2): nothing sent, nothing queued ──
+# v2's gate answers the absent method as a missing grant (STUB_TRACKER=gate); auth.requires
+# tells them apart (STUB_RECORDS=absent). What waited is set aside, never lost, never retried.
+U=$OUT/undeliverable
+STUB_TRACKER=down rt "$R1"; same "v2: two wait first" "$(ls "$OUT" | grep -c '\.json$')" 2
+: >"$STUB_ARGV"; m=$(mark); STUB_RECORDS=absent STUB_TRACKER=gate rt "$R1"
+same "v2: remote test exits 0" "$code" 0
+same "v2: nothing sent" "$(mark)" "$m"
+same "v2: asked the gate once" "$(grep -c '^requires ' "$STUB_ARGV")" 1
+[[ $(<"$STUB_ARGV") != *"--agent pipeline deployments.record"* ]] && ok || bad "v2: a record was sent to a tracker that keeps none"
+same "v2: nothing queued" "$(ls "$OUT" | grep -c '\.json$')" 0
+same "v2: what waited is set aside" "$(ls "$U" | grep -c '\.json$')" 2
+same "v2: said once" "$(grep -c 'keeps no deployment records; this deploy is in deployments.log' <<<"$err")" 1
+has "v2: said, the tracker named" "$err" "record: the tracker (:4769, v2) keeps no deployment records; this deploy is in deployments.log"
+[[ $err != *"deployer on MENGER"* ]] && ok || bad "v2: the grant hint was given for a method that is not there"
+same "v2: the README, a line" "$(wc -l <"$U/README")" 1
+has "v2: the README says why" "$(<"$U/README")" "2 record(s) set aside: the tracker :4769 has no deployments.record"
+[[ $(<"$U/README") =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T ]] && ok || bad "v2: the README says when: $(<"$U/README")"
+same "v2: the log line still written" "$(tail -n 1 "$D/deployments.log" | cut -f2,3,4)" $'test\trun\t'"$R1"
+STUB_RECORDS=absent STUB_TRACKER=gate rt "$R1"
+same "v2 again: nothing queued" "$(ls "$OUT" | grep -c '\.json$')" 0
+same "v2 again: the README unchanged (nothing new set aside)" "$(wc -l <"$U/README")" 1
+STUB_RECORDS=absent run status
+has "status: what was set aside" "$(<"$SCRATCH/out")" "set aside 2 record(s) no tracker can take"
+# the subcommand: what a down tracker left is set aside on asking
+STUB_TRACKER=down rt "$R1"
+STUB_RECORDS=absent run outbox
+same "outbox, v2: exits 0" "$code" 0
+same "outbox, v2: all set aside" "$(ls "$U" | grep -c '\.json$')" 4
+same "outbox, v2: a second README line" "$(wc -l <"$U/README")" 2
+STUB_RECORDS=absent run backfill
+same "backfill, v2: exits 0" "$code" 0
+has "backfill, v2: nothing sent" "$err" "backfill: nothing sent — deployments.log is the record"
+same "backfill, v2: nothing queued" "$(ls "$OUT" | grep -c '\.json$')" 0
+# through synapse (no key): the same
+SA=$SCRATCH/v2-synapse.argv; : >"$SA"; STUB_SYNAPSE_ARGV=$SA MENGER_DEPLOY_KEY_FILE=none STUB_RECORDS=absent rt "$R1"
+same "v2 via synapse: nothing queued" "$(ls "$OUT" | grep -c '\.json$')" 0
+has "v2 via synapse: said" "$err" "keeps no deployment records"
+[[ $(<"$SA") == *"auth requires"* && $(<"$SA") != *"deployments record"* ]] && ok || bad "v2 via synapse: a record was sent"
+# a tracker that has it again: the drain never reads undeliverable/
+m=$(mark); run outbox
+has "outbox, a tracker that keeps records: said" "$err" "keeps deployment records"
+rt "$R1"
+same "back to a tracker that keeps records: its own two only" "$(since "$m" '.state' | paste -sd' ')" '"started" "succeeded"'
+same "back: undeliverable/ untouched" "$(ls "$U" | grep -c '\.json$')" 4
 
 # ── remote prod: what test runs, only once its suite passed ────────────────
 # test last passed R1 (the runs above); its RELEASE says the gate was none
