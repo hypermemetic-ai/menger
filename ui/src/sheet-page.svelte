@@ -104,6 +104,7 @@
   import TicketCreate from "plexus-ui:ticket-create";
   import TicketEdit from "plexus-ui:ticket-edit";
   import TweetWriter from "plexus-ui:tweet-writer";
+  import ImagePick from "plexus-ui:image-pick";
   import SpecOutline from "plexus-ui:spec-outline";
   import SpecTasks from "plexus-ui:spec-tasks";
   import TagSource from "plexus-ui:tag-source";
@@ -259,6 +260,10 @@
       // COMPS-16: a thread as its own tag's content — two posts, one of two paragraphs and one over 280 — as the
       // sheet's ticket's first writer (a save there refuses: that body holds none); drawn only, with no ticket.
       ["tweet-writer", TweetWriter, (t) => ({ ticket: t, n: "0", source: `<tweet-writer>\n<tweet-post>The first post's words.\n\nA second paragraph.</tweet-post>\n<tweet-post>${"x".repeat(285)}</tweet-post>\n</tweet-writer>` }), ["hover", "focus"], { empty: { source: "<tweet-writer>\n</tweet-writer>" } }],
+      // EDITOR-30: a choice between images as a radio — three options, their images none here, drawn only (no ticket:
+      // nothing is saved, and it says so); checked held on an unpicked one.
+      ["image-pick", ImagePick, (t) => ({ source: "<image-pick>\n<m-decision id=\"study\">\n<m-question>Which study goes on to film?</m-question>\n<m-option name=\"A\">**Sunk.** A hairline and a shadow under the top edge.</m-option>\n<m-option name=\"B\">**Sunk all round.** A soft shadow inside all four edges.</m-option>\n<m-option name=\"C\">**Flat.** A hairline alone.</m-option>\n</m-decision>\n</image-pick>" }), ["hover", "focus", "checked"], { empty: { source: "<image-pick>\n</image-pick>" } }, false,
+        { hover: [".ip-opt[aria-checked=false]"], focus: [".ip-opt[aria-checked=false]"], checked: ["[role=radio][aria-checked=false]"] }],
       // An OpenSpec change held by its tag and drawn: its counts, a question, its sections as tabs, and (the
       // requirements chosen) one capability of two requirements, one with no scenario.
       ["spec-outline", SpecOutline, (t) => ({ source: "<spec-outline>\n# The kiln\n\n## Requirements\n\n### firing\n\n#### Requirement: A firing can be paused\n\nThe kiln SHALL hold its temperature.\n\n##### Scenario: paused at the hold\n- **WHEN** a firing is paused\n- **THEN** it holds\n\n#### Requirement: A firing is logged\n\n## Design\n\n### Open Questions\n\n1. **Gas or electric.** Which first?\n\n## Tasks\n\n- [x] 1. Wire the kiln\n- [ ] 2. Fire it\n</spec-outline>" }), ["hover", "focus", "selected"], {}, false, { selected: ["[role=tab][aria-selected=false]"] }],
