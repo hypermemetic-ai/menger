@@ -33,7 +33,8 @@
 //!   group of its own: never inside `or`, under `not`, or in parentheses
 //!   with other predicates — nor in a nested group, nor through a name.
 //! - **The display part** keeps `tree` (the default), `flat`, `columns a, b`
-//!   and `order code` (the store's order).
+//!   `order code` (the store's order) and SHELL.176-3: `order changed` (the
+//!   most recently changed first: a ticket's last touch, FILTER-30).
 //!
 //! What menger changes in manifest's grammar is **strictness** (FILTER-3
 //! §2): manifest drops a chunk it cannot read and shows "not understood";
@@ -606,10 +607,14 @@ pub enum Shape {
     Flat,
 }
 
-/// The order served — the store's, the only one (FILTER-3 §6.9).
+/// The order served — the store's (FILTER-3 §6.9), or SHELL.176-3: the most
+/// recently changed first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Order {
     Code,
+    /// SHELL.176-3: newest last touch first (FILTER-30's touch: the row's
+    /// last write or, if later, its last answer), ties in the store's order.
+    Changed,
 }
 
 /// The display part, after `·` (FILTER-3 §2): the nav's shape, the store's
@@ -629,8 +634,10 @@ impl Display {
         if self.shape == Shape::Flat {
             parts.push("flat".to_string());
         }
-        if self.order == Some(Order::Code) {
-            parts.push("order code".to_string());
+        match self.order {
+            Some(Order::Code) => parts.push("order code".to_string()),
+            Some(Order::Changed) => parts.push("order changed".to_string()),
+            None => {}
         }
         if !self.columns.is_empty() {
             parts.push(format!("columns {}", self.columns.join(", ")));
@@ -660,8 +667,9 @@ impl Display {
             }
             ["board", ..] => return Err("`board by …` (a kanban) is refused (FILTER-3 §6.9)".into()),
             ["order", "code"] => self.order = Some(Order::Code),
+            ["order", "changed"] => self.order = Some(Order::Changed),
             ["order", ..] => {
-                return Err("only `order code`, the store's order, is served (FILTER-3 §6.9)".into());
+                return Err("only `order code` (the store's order) and `order changed` (the most recently changed first) are served (FILTER-3 §6.9)".into());
             }
             ["columns", ..] => {
                 let mut columns = Vec::new();
@@ -679,7 +687,7 @@ impl Display {
                 self.columns = columns;
             }
             _ => {
-                return Err("not a display: after `·` come `tree`, `flat`, `columns a, b` and `order code`".into());
+                return Err("not a display: after `·` come `tree`, `flat`, `columns a, b`, `order code` and `order changed`".into());
             }
         }
         Ok(())

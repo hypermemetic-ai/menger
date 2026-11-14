@@ -5195,6 +5195,9 @@ mod tests_times;
 /// watch hears a touched ticket leave.
 #[cfg(test)]
 mod tests_touched;
+/// SHELL.176-3: `· order changed` — newest last touch first.
+#[cfg(test)]
+mod tests_order_changed;
 
 /// MNG-16: `amend` — every row of its table, byte-exact bodies through the
 /// file, and nothing else about the ticket moving.

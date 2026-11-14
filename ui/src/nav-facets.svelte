@@ -29,19 +29,26 @@
     const parts = now.split(" and ");
     return parts.every((p) => !p.includes('"') || p.startsWith('status "')) ? parts : null;
   }
-  /** The filter a chip's click leaves. */
+  /** SHELL.176-3: the filter's rules and its display part (from the first `·`), apart. */
+  function apart(now) {
+    const t = (now ?? "").trim();
+    const at = t.indexOf("·");
+    return at < 0 ? [t, ""] : [t.slice(0, at).trim(), t.slice(at).trim()];
+  }
+  /** The filter a chip's click leaves — its display part (`· order changed`) kept at the end. */
   export function narrowed(now, field, rule) {
-    now = (now ?? "").trim();
-    const parts = flatParts(now);
-    if (parts === null) return `(${now}) and ${rule}`;
+    const [rules, display] = apart(now);
+    const tail = display ? " " + display : "";
+    const parts = flatParts(rules);
+    if (parts === null) return `(${rules}) and ${rule}${tail}`;
     const had = parts.includes(rule);
     const same = (p) => p.startsWith(field + " ") || (FLAGS.has(field) && (p === field || p === "not " + field));
     const kept = parts.filter((p) => !same(p) && p !== rule);
     if (!had) kept.push(rule);
-    return kept.join(" and ");
+    return (kept.join(" and ") + tail).trim();
   }
   export function selected(now, rule) {
-    const parts = flatParts((now ?? "").trim());
+    const parts = flatParts(apart(now)[0]);
     return parts !== null && parts.includes(rule);
   }
 </script>
@@ -68,7 +75,7 @@
 
   function narrow(field, rule) {
     const t = narrowed(filter, field, rule).replaceAll("%", "%25").replaceAll("/", "%2F").replaceAll("#", "%23");
-    b.navigate(t === "" ? "#/" : "#/f/" + t);
+    b.navigate("#/f/" + (t === "" ? "· order code" : t));
   }
 </script>
 

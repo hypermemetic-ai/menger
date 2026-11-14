@@ -177,6 +177,12 @@ impl Times {
         Self::range(&self.touched, lo, hi, |_, _| true)
     }
 
+    /// SHELL.176-3: every ticket, newest last touch first (ties: the later
+    /// `(shortcode index, seq)` first) — what `order changed` walks.
+    pub(crate) fn newest_touched(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
+        self.touched.iter().rev().map(|&(_, e, s)| (e, s))
+    }
+
     /// FILTER-30: the earliest last touch at or after `from` — where a
     /// relative window over touches next moves.
     pub(crate) fn first_touched_from(&self, from: i64) -> Option<i64> {

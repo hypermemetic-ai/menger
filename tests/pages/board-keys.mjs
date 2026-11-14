@@ -46,7 +46,8 @@ export default async (ctx) => {
   };
 
   /** The board, with the spy in before the page's scripts, focus on the board's head (no input). */
-  async function board(route = "#/board") {
+  // SHELL.176-3: the unfiltered board (`#/board` is Recent now, its filter in the line).
+  async function board(route = `#/f/${encodeURIComponent("· order code")}`) {
     const { context, page, seen } = await openPage(route);
     await context.addInitScript(SPY);
     await page.reload();

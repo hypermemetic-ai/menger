@@ -388,6 +388,12 @@ impl Log {
         }
     }
 
+    /// SHELL.176-3: every ticket the times hold, newest last touch first —
+    /// `order changed`'s walk.
+    pub(super) fn newest_touched(&self) -> impl Iterator<Item = (&ShortcodeId, u32)> + '_ {
+        self.times.newest_touched().filter_map(|(e, s)| self.epics.get(e as usize).map(|sc| (sc, s)))
+    }
+
     /// FILTER-27: `(epic, seq)`'s times.
     pub(crate) fn timed(&self, epic: &ShortcodeId, seq: u32) -> Option<times::Timed> {
         self.epic_ix.get(epic).and_then(|e| self.times.get(*e, seq))
