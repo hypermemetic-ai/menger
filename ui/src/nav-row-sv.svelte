@@ -9,7 +9,12 @@
      A double-click on a row with children opens or closes it and opens
      nothing (AGS-29): a plain click on such a row waits out the double-click
      window before it follows the link; a leaf, a modified click, the toggle
-     and the keys are immediate. -->
+     and the keys are immediate.
+
+     SHELL.176-4 (the owner, 2026-11-14: "I want the nav to always show the
+     ticket i'm open on"): `current`, the row of the ticket open beside the
+     nav — `aria-current="page"` and `[data-nav-current]` on the row, the
+     selected background with the accent bar at its left. -->
 <script module>
   export const uses = [];
   /** AGS-13: a kind's glyph, one column of text. */
@@ -20,7 +25,7 @@
 
 <script>
   let { id, href, title = "", kind = null, status = null, frozen = false, expandable = false, open = false,
-        children = null, rollup = null, held = null, mark = "row", ontoggle = () => {} } = $props();
+        children = null, rollup = null, held = null, mark = "row", current = false, ontoggle = () => {} } = $props();
 
   let pending = null;
   const follow = (e) => {
@@ -38,7 +43,7 @@
   };
 </script>
 
-<div class="nav-row" data-kind={kind} data-status={status} ondblclick={flip}>
+<div class="nav-row" data-kind={kind} data-status={status} data-nav-current={current ? id : undefined} ondblclick={flip}>
   {#if expandable}
     <button class="toggle" data-nav-toggle={id} tabindex="-1" aria-label={open ? "close" : "open"} onclick={(e) => { if (e.detail < 2) ontoggle(); }}>{open ? "▾" : "▸"}</button>
   {:else}
@@ -46,7 +51,7 @@
   {/if}
   <span class="glyph" title={kind ?? ""} aria-hidden="true">{kind ? GLYPH[kind] ?? "•" : "▣"}</span>
   <a class="link" data-nav-focus data-nav-row={mark === "row" ? id : undefined} data-nav-code={mark === "group" ? id : undefined}
-     {href} title={title ? `${id} ${title}` : id} onclick={follow}>
+     {href} title={title ? `${id} ${title}` : id} aria-current={current ? "page" : undefined} onclick={follow}>
     <span class="id">{id}</span>{#if title}<span class="title">{title}</span>{/if}{#if frozen}<span class="frozen" title="frozen">❄</span>{/if}
   </a>
   {#if held != null}<span class="held" data-nav-held title="matching the filter">{held}</span>{/if}
@@ -61,6 +66,8 @@
 <style>
   .nav-row { display: grid; grid-template-columns: 16px 14px minmax(0, 1fr) auto auto auto; gap: 5px; align-items: center; height: var(--pitch); padding: 0 6px 0 2px; border-radius: var(--radius); user-select: none; transition: background-color var(--motion-fast) var(--ease); }
   .nav-row:hover, .nav-row:global([data-sheet~=hover]) { background: var(--hover); }
+  .nav-row[data-nav-current] { background: var(--row-sel); box-shadow: inset 3px 0 0 var(--accent); }
+  .nav-row[data-nav-current] .title { font-weight: var(--weight-bold); }
   .toggle { display: flex; align-items: center; justify-content: center; width: 16px; height: 100%; padding: 0; font-size: 10px; color: var(--muted); background: none; border: 0; cursor: pointer; }
   .toggle:hover, .toggle:global([data-sheet~=hover]) { color: var(--ink); }
   .glyph { text-align: center; font-size: 11px; line-height: 1; color: var(--muted); }

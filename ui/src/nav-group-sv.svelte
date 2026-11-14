@@ -5,7 +5,8 @@
      filter, how many of it match. Opened, it shows the root's children
      (nav-children-sv, `list { parent: root }`); a shortcode with no root
      lists its tickets (`list { epic }`). nav-tree-sv draws the top level
-     with it, and nav-children-sv a sub-shortcode under its host. -->
+     with it, and nav-children-sv a sub-shortcode under its host.
+     SHELL.176-4: a root that is the ticket open beside the nav is marked. -->
 <script module>
   export const uses = [];
 </script>
@@ -34,7 +35,8 @@
 <li class="nav-item nav-group" role="treeitem" aria-selected="false" aria-expanded={open ? "true" : "false"} data-nav-group={g.shortcode}>
   <Row id={g.root ?? g.epic} mark="group" href={g.root == null ? nav.board : ticketHref(r ? { id: g.root, title: r.title } : { id: g.root }, nav.base)}
        title={r?.title ?? ""} kind={r?.kind ?? null} status={r?.status ?? null} frozen={r?.frozen ?? false}
-       expandable={true} {open} rollup={{ done: g.done, total: g.total }} held={nav.held(g.shortcode)} ontoggle={() => nav.toggle(g.shortcode)}/>
+       expandable={true} {open} rollup={{ done: g.done, total: g.total }} held={nav.held(g.shortcode)}
+       current={g.root != null && nav.current?.() === g.root} ontoggle={() => nav.toggle(g.shortcode)}/>
   {#if open}
     {#if g.root != null}
       <NavChildren parent={g.root}/>

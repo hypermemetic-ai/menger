@@ -11,7 +11,10 @@
      A node of more than a page says how many more and asks for the next
      when told. nav-tree-sv imports it; it is a component in its own right
      too. What is open is the nav's (nav-tree-sv's context), kept across
-     reloads. -->
+     reloads. SHELL.176-4: the row of the ticket open beside the nav is
+     marked (`nav.current`), and a node the way to it runs through
+     (`nav.want(node)`, the child it leads to) asks its next page while that
+     child is not among its rows and the last page came back full. -->
 <script module>
   // PERF-15: a row is the fields drawn, not the whole summary row.
   const FIELDS = ["id", "uid", "title", "kind", "status", "child_count", "parent"];
@@ -50,6 +53,11 @@
   const listed = $derived(new Set(list.map((c) => c.id)));
   const more = $derived(count != null ? Math.max(0, count - list.length) : 0);
   const expandable = (c) => (c.child_count ?? 0) > 0 || nav.hosted(c.id).length > 0;
+  // SHELL.176-4: the way to the open ticket runs through this node: page until its child is drawn.
+  const wanted = $derived(nav.want?.(parent ?? epic) ?? null);
+  $effect(() => {
+    if (wanted != null && $kids.status === "live" && !listed.has(wanted) && list.length >= PAGE * pages && pages < 100) pages += 1;
+  });
 </script>
 
 <ul class="nav-children" role="group" data-nav-children={parent ?? epic}>
@@ -61,7 +69,7 @@
     {:else}
     <li class="nav-item" role="treeitem" aria-selected="false" aria-expanded={expandable(c) ? (open ? "true" : "false") : undefined}>
       <Row id={c.id} href={ticketHref(c, base)} title={c.title} kind={c.kind} status={c.status} frozen={c.frozen}
-           expandable={expandable(c)} {open} children={c.child_count || null} ontoggle={() => nav.toggle(c.id)}/>
+           expandable={expandable(c)} {open} children={c.child_count || null} current={nav.current?.() === c.id} ontoggle={() => nav.toggle(c.id)}/>
       {#if open && expandable(c)}
         <NavChildren parent={c.id} count={c.child_count}/>
       {/if}

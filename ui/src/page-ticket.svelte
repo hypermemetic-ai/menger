@@ -41,7 +41,9 @@
      column by itself when the window is under 1360px wide, before the nav goes (under 960px); its button
      shows it there, under the body on a narrow window, until the window next crosses 1360px, and that is not
      kept. The width is read in script, so a collapsed column's parts are not placed either. Marks:
-     `.tp[data-side=open|closed]` (closed, `data-side-why=hand|width`), `[data-side-hide]` (`[aria-expanded]`). -->
+     `.tp[data-side=open|closed]` (closed, `data-side-why=hand|width`), `[data-side-hide]` (`[aria-expanded]`).
+     SHELL.176-4: the nav section is handed the ticket open here (`data-current`), which the nav opens the
+     way to, marks and scrolls to (nav-tree-sv). -->
 <script module>
   export const uses = ["tickets.get", "tickets.watch", "tickets.revisions.list"];
 </script>
@@ -137,7 +139,7 @@
   <div class="tp-frame">
   <aside class="tp-nav" data-surface="ticket-nav" data-nav={nav ? "open" : "closed"} style:top={`${topH}px`} style:height={nav ? `calc(100dvh - ${topH}px)` : null}>
     <button type="button" class="tp-nav-toggle" data-nav-hide aria-expanded={nav} aria-label={nav ? "Hide the nav" : "Show the nav"} title={nav ? "Hide the nav" : "Show the nav"} onclick={toggleNav}>{nav ? "‹ hide" : "›"}</button>
-    {#if nav}<div class="tp-nav-slot" data-slot="nav"></div>{/if}
+    {#if nav}<div class="tp-nav-slot" data-slot="nav" data-current={id}></div>{/if}
   </aside>
   <article class="ticket-page" data-surface="ticket-page" data-ticket={id} data-edit-asked={knocked}>
     <nav class="crumbs" aria-hidden="true"><span class="keys" data-keys><kbd>e</kbd> edit<i class="sep"></i><kbd>esc</kbd> board<i class="sep"></i><kbd>[</kbd><kbd>]</kbd> siblings<i class="sep"></i><kbd>?</kbd> keys</span></nav>
