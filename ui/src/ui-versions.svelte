@@ -22,14 +22,15 @@
      and "show all N" (`[data-action=show-all]`) draws the rest. RELEASES-TENS:
      the first calls are the rows' — `ui.versions { limit: 20 }` and
      `{ live: true }` — drawn before anything else is asked; the whole list
-     (once) and the two `ui.contract`s follow that frame. -->
+     (once) and the two `ui.contract`s follow once they are drawn (Svelte's
+     `tick()`; FRAME-67: no timer beside a `live(`). -->
 <script module>
   export const uses = ["ui.versions", "ui.watch", "ui.contract", "ui.routes.list", "ui.slots.list", "ui.rollback", "ui.preview",
                        "ui.tag", "ui.history", "ui.undo", "ui.redo", "auth.whoami", "auth.requires"];
 </script>
 
 <script>
-  import { untrack } from "svelte";
+  import { tick, untrack } from "svelte";
   import { bus, live } from "plexus-ui/host";
   // SURFACE-10: the sheet holds the loading state by its mark (data-sheet="loading").
   let { sheet = null } = $props();
@@ -62,8 +63,8 @@
   // Each move sets the pointer, reads the history once, and the list again
   // only when it names a version the list does not hold (a push).
   // RELEASES-TENS: the page's first calls are the rows': the newest NEWEST
-  // (`limit`) and the live one (`live: true`), drawn; then, after that
-  // frame, the whole list once (the count, "show all") and the contracts.
+  // (`limit`) and the live one (`live: true`), drawn; then, once they are
+  // in the DOM (`tick()`), the whole list once (the count, "show all") and the contracts.
   // A service before `limit` (plexus-ui-service 0.2.3) refuses it, and the
   // whole list is the first read.
   let list = $state(null);
@@ -87,8 +88,8 @@
       for (const r of now.ok ? now.events.filter(isVersion) : []) if (!rows.some((v) => v.hash === r.hash)) rows.push(r);
       list = rows;
       pointer = rows.find((r) => r.live)?.hash ?? null;
-      // The rows' frame drawn before the rest is asked.
-      await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+      // The rows drawn (Svelte's tick: in the DOM) before the rest is asked.
+      await tick();
     }
     if (!whole) await readVersions(true);
     readContracts();

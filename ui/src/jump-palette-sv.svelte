@@ -65,7 +65,7 @@
   const readRecent = () => { try { const v = JSON.parse(localStorage.getItem(RECENT) || "[]"); return Array.isArray(v) ? v.filter((r) => r && typeof r.id === "string" && typeof r.uid === "string") : []; } catch { return []; } };
   /** The ticket `t` opened now: first in the record. */
   function remember(t) {
-    const next = [{ id: t.id, uid: t.uid, at: Date.now() }, ...readRecent().filter((r) => r.uid !== t.uid)].slice(0, RECENT_KEPT);
+    const next = [{ id: t.id, uid: t.uid }, ...readRecent().filter((r) => r.uid !== t.uid)].slice(0, RECENT_KEPT);
     try { localStorage.setItem(RECENT, JSON.stringify(next)); } catch { /* a private window */ }
   }
 

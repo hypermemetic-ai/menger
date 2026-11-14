@@ -96,10 +96,12 @@
   });
 
   // SHELL.176-4: the person's own moves in the nav; the nav never scrolls for a ticket after one.
-  let since = Date.now();
+  // Which came last is all that is asked of these, so a count orders them (no clock beside a live).
+  let ticks = 0;
+  let since = ++ticks;
   let touched = 0;
   let last = null;
-  const moved = () => { touched = Date.now(); };
+  const moved = () => { touched = ++ticks; };
   let root;
   let body;
   // The person's moves are heard on the column that scrolls the nav (the page's, around this section), so a
@@ -115,7 +117,7 @@
     if (!id || !groupsIn) { up = []; wants = {}; pin = null; return; }
     let stop = false;
     // The ticket's moment is when it changed, not when the shortcodes came: a wheel while they load counts.
-    if (id !== last) { last = id; since = Date.now(); }
+    if (id !== last) { last = id; since = ++ticks; }
     pin = null;
     up = [];
     (async () => {
@@ -197,7 +199,7 @@
 
   function mode(to) {
     flat = to;
-    since = Date.now();
+    since = ++ticks;
   }
 
   // AGS-18: the tree's keys, over the rows that are mounted (a closed node mounts nothing).
