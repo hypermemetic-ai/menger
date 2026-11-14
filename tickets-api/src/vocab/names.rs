@@ -87,6 +87,39 @@ impl TicketRef {
     }
 }
 
+/// TICKETS-40: the word for no parent — what `--parent none` writes.
+pub const NO_PARENT: &str = "none";
+
+fn parent_ref(text: &str) -> Result<String, String> {
+    match text.trim() {
+        t if t.eq_ignore_ascii_case(NO_PARENT) => Ok(NO_PARENT.to_string()),
+        t => ticket_ref(t).map_err(|e| format!("{e} — or none, to make it a root")),
+    }
+}
+
+text_type!(
+    /// TICKETS-40: a parent as `set_parent` and `update` take it — a ticket
+    /// by any name [`TicketRef`] takes, or `none` (any case): no parent, the
+    /// ticket made a root. `none` names no ticket — a ticket's name has a
+    /// number, a uid eight characters and no `o` — so it shadows none.
+    ParentRef,
+    parent_ref
+);
+
+/// A ticket is a parent (`update_many`'s, which takes no `none`).
+impl From<TicketRef> for ParentRef {
+    fn from(r: TicketRef) -> Self {
+        Self(r.0)
+    }
+}
+
+impl ParentRef {
+    /// The ticket it names — `None` for `none`.
+    pub fn ticket(&self) -> Option<&str> {
+        (self.0 != NO_PARENT).then_some(self.0.as_str())
+    }
+}
+
 fn shortcode_ref(text: &str) -> Result<String, String> {
     let t = bounded(text, "a shortcode's name")?;
     let shape = "letters and digits, as MENGER or SYNAPSE-CC — or its address, org:ROOT/…/SC";

@@ -154,6 +154,42 @@ async fn a_root_moves_only_with_admin_on_the_host_it_leaves_and_the_one_it_joins
     assert_eq!(s.get(SYS, "OPEN-1").await.unwrap().parent.unwrap(), "OTHER-2");
 }
 
+/// TICKETS-40: a root made a root takes admin on the host it leaves and on
+/// its organization, whose top namespace it joins — admin on another
+/// shortcode is no proof of either; an update's `unparent` is proved as
+/// `set_parent`'s.
+#[tokio::test]
+async fn a_root_is_made_a_root_only_with_admin_on_its_host_and_its_organization() {
+    let s = tracker().await;
+    let admin = holding(Role::Admin, &["OPEN", "OTHER"]);
+    let p = |id: &str| admin.permit::<Editor>(&t(id), &s).unwrap();
+    let org = Scope::Org(OrgId::new(OrgId::HYPERMEMETIC).unwrap());
+    assert!(admin.admin_of(&org, &s).is_err(), "admin on two shortcodes is not the organization's");
+    let bare = Move::new(p("OPEN-1"), Parenting::root(Some(SYS.permit("SECRET-1")), None));
+    assert!(s.set_parent(bare).await.unwrap_err().to_string().contains("re-hosts"));
+    // The parent it has now, asked as none: it moved since.
+    let stale = Move::new(p("OPEN-1"), Parenting::root(None, None));
+    assert!(s.set_parent(stale).await.unwrap_err().to_string().contains("moved since it was asked"));
+    // Admin on the host and on a shortcode, not on the organization: refused.
+    let wrong = Rehost { leaving: AdminOf::for_tests(scope(&s, "SECRET")), joining: AdminOf::for_tests(scope(&s, "OTHER")) };
+    let mv = Move::new(p("OPEN-1"), Parenting::root(Some(SYS.permit("SECRET-1")), Some(wrong)));
+    assert!(mismatched(&s.set_parent(mv).await.unwrap_err()));
+    // A proof for a parent where none is asked: refused.
+    let up = Update { unparent: true, ..Update::default() };
+    assert!(mismatched(&s.update(Updating::new(p("OPEN-1"), None, vec![]), up.clone()).await.unwrap_err()));
+    assert_eq!(s.get(SYS, "OPEN-1").await.unwrap().parent.unwrap(), "SECRET-1", "nothing written");
+    // Admin on the host it leaves and on the organization: it is a root.
+    let right = || Rehost { leaving: AdminOf::for_tests(scope(&s, "SECRET")), joining: AdminOf::for_tests(org.clone()) };
+    let proved = Updating::new(p("OPEN-1"), Some(Parenting::root(Some(SYS.permit("SECRET-1")), Some(right()))), vec![]);
+    assert_eq!(s.update(proved, up).await.unwrap().ticket.parent, None);
+    assert_eq!(s.get(SYS, "OPEN-3").await.unwrap().address, "hypermemetic:OPEN-3");
+    // Back under SECRET-1, then made a root by set_parent.
+    s.set_parent(SYS.moving("OPEN-1", "SECRET-1")).await.unwrap();
+    let mv = Move::new(p("OPEN-1"), Parenting::root(Some(SYS.permit("SECRET-1")), Some(right())));
+    s.set_parent(mv).await.unwrap();
+    assert_eq!(s.get(SYS, "OPEN-1").await.unwrap().address, "hypermemetic:OPEN-1");
+}
+
 /// An update's parent and blockers are proved as `set_parent`'s and
 /// `create`'s are.
 #[tokio::test]

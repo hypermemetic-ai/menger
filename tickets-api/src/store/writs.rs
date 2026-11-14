@@ -94,7 +94,8 @@ impl From<&System> for Filing {
 /// The admin a shortcode's root takes to move it, and so re-host the
 /// shortcode (whoever administers a host administers what hangs there):
 /// admin on the host it leaves (on itself, when it hangs nowhere) and on
-/// the host it goes to (ACCESS-3 #2).
+/// the host it goes to (ACCESS-3 #2) — TICKETS-40: made a root, on its
+/// organization (`org:ID`), whose top namespace it joins.
 #[derive(Debug)]
 pub struct Rehost {
     pub leaving: AdminOf,
@@ -103,22 +104,29 @@ pub struct Rehost {
 
 /// A new parent, as its caller may give it: editor on the parent it has
 /// now (`None` when it has none) and on the one it goes to — and, for a
-/// shortcode's root, [`Rehost`].
+/// shortcode's root, [`Rehost`]. TICKETS-40: or none — the ticket made a
+/// root ([`Parenting::root`]).
 #[derive(Debug)]
 pub struct Parenting {
     from: Option<Permit<Editor>>,
-    to: Permit<Editor>,
+    to: Option<Permit<Editor>>,
     rehost: Option<Rehost>,
 }
 
 impl Parenting {
     pub fn new(from: Option<Permit<Editor>>, to: Permit<Editor>, rehost: Option<Rehost>) -> Self {
-        Self { from, to, rehost }
+        Self { from, to: Some(to), rehost }
     }
 
-    /// The parent it goes to.
-    pub fn to(&self) -> &str {
-        self.to.id().as_str()
+    /// TICKETS-40: no parent — editor on the one it leaves, and a root's
+    /// [`Rehost`] (`joining` admin on its organization).
+    pub fn root(from: Option<Permit<Editor>>, rehost: Option<Rehost>) -> Self {
+        Self { from, to: None, rehost }
+    }
+
+    /// The parent it goes to — `None`: none, made a root.
+    pub fn to(&self) -> Option<&str> {
+        self.to.as_ref().map(|p| p.id().as_str())
     }
 }
 
@@ -132,7 +140,8 @@ pub struct Move {
 
 #[derive(Debug)]
 enum MoveBy {
-    System(Permit<Editor>),
+    /// TICKETS-40: `None`, made a root.
+    System(Option<Permit<Editor>>),
     User(Parenting),
 }
 
@@ -209,6 +218,13 @@ fn name_of(cache: &Cache, text: &str) -> Option<String> {
     }
 }
 
+/// TICKETS-40: the scope of the organization a shortcode is in — what
+/// making its root a root takes admin on.
+pub(super) fn org_scope_of(cache: &Cache, sc: &ShortcodeId) -> Scope {
+    let r = &cache.shortcodes;
+    Scope::Org(r.org(sc).cloned().unwrap_or_else(|| r.first_org()))
+}
+
 /// The scope a shortcode is — `org:ID`, as a grant on it is stored.
 pub(super) fn scope_of(cache: &Cache, sc: &ShortcodeId) -> Scope {
     let r = &cache.shortcodes;
@@ -253,11 +269,12 @@ impl Filing {
 
 impl Parenting {
     /// ACCESS-11: under the write lock, whether these proofs move `child`
-    /// (its row as it stands) under `parent` (resolved): `from` its parent
-    /// now, `to` the one named, and a root's [`Rehost`] the hosts it
-    /// leaves and joins. A parent that moved since it was asked refuses.
-    pub(super) fn check(&self, cache: &Cache, child: &Row, parent: &str) -> Result<(), StoreError> {
-        if key_of(cache, self.to.id()).as_deref() != Some(parent) {
+    /// (its row as it stands) under `parent` (resolved; TICKETS-40: `None`,
+    /// made a root): `from` its parent now, `to` the one named, and a
+    /// root's [`Rehost`] the hosts it leaves and joins — made a root, its
+    /// organization. A parent that moved since it was asked refuses.
+    pub(super) fn check(&self, cache: &Cache, child: &Row, parent: Option<&str>) -> Result<(), StoreError> {
+        if self.to.as_ref().map(|to| key_of(cache, to.id())) != parent.map(|p| Some(p.to_string())) {
             return Err(mismatch("set_parent: the parent it goes to"));
         }
         let now = child.parent.as_ref().map(|p| p.as_str().to_string());
@@ -265,8 +282,9 @@ impl Parenting {
         if now != asked {
             return Err(StoreError::Invalid(format!("{}'s parent moved since it was asked: ask again (nothing written)", child.id)));
         }
+        // TICKETS-40: a root already hanging nowhere, made one, moves nothing.
         let root = cache.rollups.root(&child.shortcode) == Some(child.id.as_str());
-        if !root {
+        if !root || (parent.is_none() && now.is_none()) {
             return Ok(());
         }
         let Some(Rehost { leaving, joining }) = &self.rehost else {
@@ -278,8 +296,11 @@ impl Parenting {
         };
         let host = |p: Option<&str>| p.and_then(|p| cache.get(p)).map(|r| r.shortcode.clone());
         let left = host(now.as_deref()).unwrap_or_else(|| child.shortcode.clone());
-        let joined = host(Some(parent)).ok_or_else(|| mismatch("set_parent: the host it joins"))?;
-        if leaving.scope() != &scope_of(cache, &left) || joining.scope() != &scope_of(cache, &joined) {
+        let joined = match parent {
+            Some(p) => scope_of(cache, &host(Some(p)).ok_or_else(|| mismatch("set_parent: the host it joins"))?),
+            None => org_scope_of(cache, &child.shortcode),
+        };
+        if leaving.scope() != &scope_of(cache, &left) || joining.scope() != &joined {
             return Err(mismatch("set_parent: the hosts a root moves between"));
         }
         Ok(())
@@ -287,17 +308,18 @@ impl Parenting {
 }
 
 impl Move {
-    /// The child, and the parent it goes to, as the proofs name them.
-    pub(super) fn ids(&self) -> (&str, &str) {
+    /// The child, and the parent it goes to, as the proofs name them —
+    /// TICKETS-40: `None`, made a root.
+    pub(super) fn ids(&self) -> (&str, Option<&str>) {
         let to = match &self.by {
-            MoveBy::System(to) => to.id().as_str(),
+            MoveBy::System(to) => to.as_ref().map(|p| p.id().as_str()),
             MoveBy::User(p) => p.to(),
         };
         (self.child.id().as_str(), to)
     }
 
     /// [`Parenting::check`], the system's move asking nothing.
-    pub(super) fn check(&self, cache: &Cache, child: &Row, parent: &str) -> Result<(), StoreError> {
+    pub(super) fn check(&self, cache: &Cache, child: &Row, parent: Option<&str>) -> Result<(), StoreError> {
         match &self.by {
             MoveBy::System(_) => Ok(()),
             MoveBy::User(p) => p.check(cache, child, parent),
@@ -318,9 +340,11 @@ impl Updating {
     pub(super) fn check(&self, cache: &Cache, row: &Row, update: &Update) -> Result<(), StoreError> {
         let Some((parenting, blockers)) = &self.by else { return Ok(()) };
         // A parent that names no ticket: the update's own refusal says so.
-        if let Some(parent) = update.parent.as_deref().map(str::trim).filter(|p| !p.is_empty()).and_then(|p| name_of(cache, p)) {
+        // TICKETS-40: made a root (`unparent`), a parenting to none.
+        let named = update.parent.as_deref().map(str::trim).filter(|p| !p.is_empty()).and_then(|p| name_of(cache, p));
+        if named.is_some() || (update.unparent && row.parent.is_some()) {
             match parenting {
-                Some(p) => p.check(cache, row, &parent)?,
+                Some(p) => p.check(cache, row, named.as_deref())?,
                 None => return Err(mismatch("update: the parent")),
             }
         }
@@ -393,7 +417,12 @@ pub(super) fn covers_exactly<'p, R: RoleMark>(cache: &Cache, permits: impl IntoI
 impl System {
     /// ACCESS-11: the system's move of `child` under `to`.
     pub fn moving(&self, child: impl AsRef<str>, to: impl AsRef<str>) -> Move {
-        Move { child: self.permit(child), by: MoveBy::System(self.permit(to)) }
+        Move { child: self.permit(child), by: MoveBy::System(Some(self.permit(to))) }
+    }
+
+    /// TICKETS-40: the system's making of `child` a root — its parent removed.
+    pub fn rooting(&self, child: impl AsRef<str>) -> Move {
+        Move { child: self.permit(child), by: MoveBy::System(None) }
     }
 
     /// ACCESS-11: the system's update of `id`.
@@ -419,6 +448,13 @@ impl Store {
     /// it is stored.
     pub(crate) fn scope_of_shortcode(&self, sc: &ShortcodeId) -> Scope {
         scope_of(&self.tickets.read().expect("store lock poisoned"), sc)
+    }
+
+    /// TICKETS-40: the scope of the organization the ticket `id` (a key) is
+    /// in — what making it a root asks admin on.
+    pub(crate) fn org_scope_of(&self, id: &str) -> Option<Scope> {
+        let cache = self.tickets.read().expect("store lock poisoned");
+        cache.get(id).map(|r| org_scope_of(&cache, &r.shortcode))
     }
 
     /// ACCESS-11: the scope of the shortcode the ticket `id` (a key) is in

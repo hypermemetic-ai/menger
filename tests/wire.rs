@@ -1359,6 +1359,17 @@ async fn scope_first_default_parent_and_set_parent_over_the_wire() {
     let evs = collect(call(&client, "tickets.set_parent",
         json!({"id": "SC-7", "parent": "SC-1"})).await).await;
     assert_eq!(evs[0]["type"], "not_found");
+
+    // TICKETS-40: `none` makes a shortcode's root a root of its
+    // organization — SD leaves SC-1, its address its own — and refuses
+    // anything else, naming the root.
+    let evs = collect(call(&client, "tickets.set_parent", json!({"id": "SC-2", "parent": "none"})).await).await;
+    assert_eq!(evs[0]["type"], "error");
+    assert!(evs[0]["message"].as_str().unwrap().contains("not SC's root"), "{}", evs[0]);
+    let evs = collect(call(&client, "tickets.set_parent", json!({"id": "SD-1", "parent": "none"})).await).await;
+    assert_eq!((evs.len(), evs[0]["type"].as_str()), (1, Some("parent_changed")), "{evs:?}");
+    assert!(evs[0]["ticket"]["parent"].is_null(), "{}", evs[0]);
+    assert_eq!((evs[0]["previous"].as_str(), evs[0]["ticket"]["address"].as_str()), (Some("SC-1"), Some("hypermemetic:SD-1")));
 }
 
 /// SDLC-11 over the wire, the ticket's "done when": a doc root, a doc child

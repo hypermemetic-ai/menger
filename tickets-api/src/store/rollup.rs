@@ -678,6 +678,47 @@ impl Rollups {
         }
     }
 
+    /// TICKETS-40: a `set_parent` to no parent, before the rows change — the
+    /// child made a root. Its tree (inside its shortcode) leaves the bucket
+    /// it is counted in for its shortcode's pool, where it is a top once
+    /// more. A child that is a top of the pool already (hanging from a
+    /// parent that names no ticket) moves nothing. Settling waits for the
+    /// rows, as [`Self::reparenting`]'s does.
+    pub(super) fn unparenting(&mut self, rows: Rows<'_>, child: &Row) -> Reparenting {
+        let before = self.snapshot();
+        if self.on_cycle.contains(child.id.as_str()) {
+            return Reparenting {
+                before,
+                rebuild: Some(format!("{} was moved off a parent cycle", child.id)),
+            };
+        }
+        let (top, exit) = self.top(rows, child);
+        if top.id == child.id && exit.is_none() {
+            return Reparenting { before, rebuild: None };
+        }
+        let from = Bucket::of(top, exit);
+        let to = Bucket::Base(child.shortcode.clone());
+        if from != to {
+            let tally = if top.id == child.id {
+                // A cross top's entry is exactly its tree.
+                self.cross
+                    .remove(child.id.as_str())
+                    .expect("a cross top has an entry")
+                    .tally
+            } else {
+                let tally = self.subtree(rows, child);
+                self.bucket(&from).shift(tally, false);
+                tally
+            };
+            self.bucket(&to).shift(tally, true);
+        }
+        self.shortcodes
+            .get_mut(&child.shortcode)
+            .expect("every epic has a shortcode")
+            .base_tops += 1;
+        Reparenting { before, rebuild: None }
+    }
+
     /// …and once the rows have changed: settle the shape and report
     /// every group whose row moved.
     pub(super) fn reparented(&mut self, rows: Rows<'_>, r: Reparenting) -> Vec<Group> {

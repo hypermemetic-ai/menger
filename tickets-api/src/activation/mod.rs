@@ -38,7 +38,7 @@ use crate::types::{InputState, InputValue, Kind, Row, Severity, Status, SummaryR
 // ACCESS-8: every parameter a type (MACRO-12's `typed_params` holds it).
 use crate::vocab::{
     Body, CallerSource, Cursor, DeleteChildren, FilterText, InputId, InputIds, Label, MengerPath, Message, Principal, Query, Question, Reason, SeverityChange, ShortcodeRef,
-    SummaryField, TicketRef, Title, Zone,
+    ParentRef, SummaryField, TicketRef, Title, Zone,
 };
 use crate::address::OrgId;
 // ACCESS-48: what `not_found` / `ambiguous` echo.
@@ -555,14 +555,21 @@ impl TicketsActivation {
     /// make the ticket its own ancestor. `watch` also carries the parents'
     /// side: `ChildrenChanged` for the new parent and `ChildRemoved` for
     /// the old one — each the parent's id and new `child_count` (SCALE-4).
-    #[plexus_macros::method(group = "write", target = "id")]
+    /// TICKETS-40: `parent` `none` makes a shortcode's root a root of its
+    /// organization (admin on the host it leaves and on the organization);
+    /// any other ticket is refused.
+    #[plexus_macros::method(
+        group = "write",
+        target = "id",
+        example(note = "make a shortcode's root a root of its organization", params = r#"{"id": "KAYOKEN-1", "parent": "none"}"#)
+    )]
     pub async fn set_parent(
         &self,
         #[from_auth(self.access.verify)] user: VerifiedUser,
         /// Ticket id to file, e.g. AGS-2.
         id: TicketRef,
-        /// Id of the ticket to file it under; any epic, must exist.
-        parent: TicketRef,
+        /// Id of the ticket to file it under; any epic, must exist — or none, to make a shortcode's root a root.
+        parent: ParentRef,
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         // IDENTITY-37 / ACCESS-11: editor on the child, its parent and the new
         // one; a root re-hosts, so admin on both hosts (activation/writes.rs);
@@ -570,10 +577,10 @@ impl TicketsActivation {
         // archived new parent's chain is restored after (`then`).
         answered_then!(store = self.store.clone(), user, Some(id.to_string()), then => {
             let child = permit::<Editor>(&store, &user, &id)?;
-            let Some(to) = parenting(&store, &user, child.id(), &parent)? else {
-                return Err(StoreError::ParentNotFound { id: child.id().to_string(), parent: parent.trim().to_ascii_uppercase() }.into());
+            let Some(to) = moving(&store, &user, child.id(), parent.ticket())? else {
+                return Err(StoreError::ParentNotFound { id: child.id().to_string(), parent: parent.as_str().trim().to_ascii_uppercase() }.into());
             };
-            let (chain, moved) = (chain_of(&store, &user, Some(&parent))?, child.id().to_string());
+            let (chain, moved) = (chain_of(&store, &user, parent.ticket())?, child.id().to_string());
             let answer = change_event(store.set_parent(crate::store::Move::new(child, to)).await?);
             then = restore_chain(&store, &user, chain, format!("{moved} was moved under it")).await;
             Ok(answer)
@@ -725,8 +732,8 @@ impl TicketsActivation {
         kind: Option<Kind>,
         /// New status (optional; with a new kind, its status as set_kind takes it; alone, as set_status takes it — Canceled cascades).
         status: Option<Status>,
-        /// Id of the ticket to file it under (optional; set_parent's rules).
-        parent: Option<TicketRef>,
+        /// Id of the ticket to file it under (optional; set_parent's rules) — or none, to make a shortcode's root a root.
+        parent: Option<ParentRef>,
         /// Critical | High | Medium | Low — or none, to clear it (optional).
         severity: Option<SeverityChange>,
         /// Ticket ids it waits on from now on (optional; never itself, a cycle or a doc; an id not born yet is a forward reference).
@@ -805,7 +812,7 @@ impl TicketsActivation {
     ) -> impl Stream<Item = TicketsEvent> + Send + 'static {
         // AUTH-7: the gate held the grant on each of `ids`; a filter's
         // tickets, and a parent or blocker beyond them, are asked there.
-        let mut ask = update_of(None, None, kind, status, parent, severity, block, unblock);
+        let mut ask = update_of(None, None, kind, status, parent.map(ParentRef::from), severity, block, unblock);
         (ask.label, ask.unlabel) = (label.unwrap_or_default(), unlabel.unwrap_or_default());
         dressing(self.store.clone(), update_many_stream(self.store.clone(), user, ids, filter, max, tz, ask, source, message))
     }

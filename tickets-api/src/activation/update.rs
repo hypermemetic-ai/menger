@@ -11,13 +11,14 @@ use crate::vocab::CommitRef;
 /// The call's fields as an [`Update`]. ACCESS-8: each one already a type
 /// — an unknown kind, status or severity was refused at dispatch, naming
 /// its parameter — so the store's collected refusal holds only the rules
-/// that need the cache; `severity` `none` clears it.
+/// that need the cache; `severity` `none` clears it, and TICKETS-40:
+/// `parent` `none` removes it.
 pub(super) fn update_of(
     title: Option<Title>,
     body: Option<Body>,
     kind: Option<Kind>,
     status: Option<Status>,
-    parent: Option<TicketRef>,
+    parent: Option<ParentRef>,
     severity: Option<SeverityChange>,
     block: Option<Vec<TicketRef>>,
     unblock: Option<Vec<TicketRef>>,
@@ -27,7 +28,8 @@ pub(super) fn update_of(
         body: body.map(String::from),
         kind,
         status,
-        parent: parent.map(String::from),
+        unparent: parent.as_ref().is_some_and(|p| p.ticket().is_none()),
+        parent: parent.as_ref().and_then(ParentRef::ticket).map(String::from),
         severity: severity.map(SeverityChange::severity),
         hidden: None,
         block: block.unwrap_or_default(),

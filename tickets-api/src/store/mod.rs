@@ -2627,19 +2627,25 @@ impl Cache {
     /// ORG-3: moving a shortcode's root rehomes the shortcode — its namespace
     /// moves with it, and a move into a namespace that holds its code is
     /// refused, naming the one there ([`Cache::namespaces`]).
+    ///
+    /// TICKETS-40: `child` with no parent is made a root — its tree a top of
+    /// its shortcode's pool ([`rollup::Rollups::unparenting`]), and a root's
+    /// shortcode its organization's top namespace.
     fn reparent(&self, child: &Row, previous: Option<&str>) -> Result<Derived, StoreError> {
-        let parent = child.parent.as_deref().expect("set_parent sets a parent");
+        let parent = child.parent.as_deref();
         let rows = self.rows();
         let mut rollups = self.rollups.clone();
-        let moving = rollups.reparenting(
-            rows,
-            rows.get(&child.id).expect("the child exists"),
-            rows.get(parent).expect("the parent exists"),
-        );
+        let was = rows.get(&child.id).expect("the child exists");
+        let moving = match parent {
+            Some(p) => rollups.reparenting(rows, was, rows.get(p).expect("the parent exists")),
+            None => rollups.unparenting(rows, was),
+        };
         let groups = rollups.reparented(rows.with(child), moving);
         let namespaces = self.namespaces(rows.with(child), &rollups, None, Some(&child.id))?;
         let mut derived = Derived::rolled(self, rollups, groups).namespaced(namespaces);
-        derived.stored.counts.push((parent.to_string(), self.children.count(parent) + 1));
+        if let Some(parent) = parent {
+            derived.stored.counts.push((parent.to_string(), self.children.count(parent) + 1));
+        }
         if let Some(p) = previous {
             derived.stored.counts.push((p.to_string(), self.children.count(p).saturating_sub(1)));
         }
@@ -2687,8 +2693,9 @@ impl Cache {
     /// the only row that changes. It leaves `previous`'s children and joins
     /// its new parent's, and each parent's count is set from the index;
     /// returns the groups, then the new parent's count and the old one's.
+    /// TICKETS-40: made a root, it joins no one (the new count `0`).
     fn reparented(&mut self, child: Row, previous: Option<&str>, moved: Moved) -> (Vec<Group>, u64, u64) {
-        let parent = child.parent.clone().expect("set_parent sets a parent");
+        let parent = child.parent.clone();
         let key = OrderKey::of(&child);
         self.insert(child);
         let left = previous.map_or(0, |p| {
@@ -2696,8 +2703,11 @@ impl Cache {
             self.set_child_count(p, count);
             count
         });
-        let joined = self.children.add(&parent, &key);
-        self.set_child_count(&parent, joined);
+        let joined = parent.map_or(0, |parent| {
+            let joined = self.children.add(&parent, &key);
+            self.set_child_count(&parent, joined);
+            joined
+        });
         (self.take(moved), joined, left)
     }
 
@@ -4009,17 +4019,26 @@ impl Store {
     /// its permits name — and, under the write-serial lock, the parent the
     /// child has now the one its caller was allowed to take it from (one
     /// that moved since refuses), a root's re-hosting admin on both hosts.
+    ///
+    /// TICKETS-40: a move to no parent ([`System::rooting`],
+    /// [`Parenting::root`]) makes the ticket a root — only its shortcode's
+    /// root may be ([`rules::root_refusal`]): its shortcode rehomes to its
+    /// organization's top namespace, by the same rules; `ChildrenChanged`
+    /// is not sent (nothing joins). One with no parent writes nothing.
     pub async fn set_parent(&self, mv: Move) -> Result<Change, StoreError> {
         let (id, parent) = mv.ids();
         // TICKETS-35 (TICKETS-32): both by the permits' keys, read as keys.
         let id = self.keyed(id)?;
-        let parent = {
-            let cache = self.tickets.read().expect("store lock poisoned");
-            match cache.keyed(parent) {
-                Ok(key) => key,
-                Err(e @ StoreError::Ambiguous { .. }) => return Err(e),
-                Err(_) => parent.trim().to_ascii_uppercase(),
-            }
+        let parent = match parent {
+            None => None,
+            Some(parent) => Some({
+                let cache = self.tickets.read().expect("store lock poisoned");
+                match cache.keyed(parent) {
+                    Ok(key) => key,
+                    Err(e @ StoreError::Ambiguous { .. }) => return Err(e),
+                    Err(_) => parent.trim().to_ascii_uppercase(),
+                }
+            }),
         };
         let serial = self.serial().await;
         // The parent it already has: no write. SCALE-14: the answer still
@@ -4030,17 +4049,17 @@ impl Store {
             let child = tickets
                 .get(&id)
                 .ok_or_else(|| StoreError::NotFound(id.clone()))?;
-            if tickets.get(&parent).is_none() {
-                return Err(StoreError::ParentNotFound { id, parent });
+            if let Some(parent) = parent.as_ref().filter(|p| tickets.get(p).is_none()) {
+                return Err(StoreError::ParentNotFound { id, parent: parent.clone() });
             }
-            mv.check(&tickets, child, &parent)?;
-            (child.parent.as_deref() == Some(parent.as_str()))
+            mv.check(&tickets, child, parent.as_deref())?;
+            (child.parent.as_deref() == parent.as_deref())
                 .then(|| (child.clone(), tickets.written))
         };
         if let Some((child, written)) = unchanged {
             return Ok(Change::ParentChanged {
                 ticket: self.full_one(child, written).await?,
-                previous: Some(parent),
+                previous: parent,
             });
         }
         let (child, new_epic, old_epic, previous) = {
@@ -4048,13 +4067,22 @@ impl Store {
             // Both checked above, under the write-serial lock: nothing has
             // changed them since.
             let mut child = tickets.get(&id).expect("the child exists").clone();
-            let parent_ticket = tickets.get(&parent).expect("the parent exists");
             // MNG-14: only the shortcode's scope root may hang under
             // another shortcode; everything else stays inside its own.
-            rules::parent_refusal(&tickets, &child, &parent)?;
+            // TICKETS-40: and only it may hang under nothing.
+            let new_epic = match &parent {
+                Some(p) => {
+                    rules::parent_refusal(&tickets, &child, p)?;
+                    Some(tickets.get(p).expect("the parent exists").shortcode.clone())
+                }
+                None => {
+                    rules::root_refusal(&tickets, &child)?;
+                    None
+                }
+            };
             let now = chrono::Utc::now().timestamp();
             let previous = child.parent.take();
-            child.parent = Some(crate::address::TicketId::new(parent.clone()));
+            child.parent = parent.clone().map(crate::address::TicketId::new);
             child.updated_unix = now;
 
             // A previous parent that names no ticket (a hand-edited
@@ -4063,7 +4091,7 @@ impl Store {
                 .as_deref()
                 .and_then(|p| tickets.get(p))
                 .map(|t| t.shortcode.clone());
-            (child, parent_ticket.shortcode.clone(), old_epic, previous)
+            (child, new_epic, old_epic, previous)
         };
 
         // SCALE-28: both parents' counts and the roll-ups it moves, stored
@@ -4105,12 +4133,9 @@ impl Store {
                     previous: previous.clone().map(String::from),
                 };
                 let _ = tx.send(change.clone());
-                let _ = tx.send(Change::ChildrenChanged {
-                    id: parent,
-                    shortcode: new_epic,
-                    added: id.clone(),
-                    child_count: joined,
-                });
+                if let (Some(parent), Some(shortcode)) = (parent, new_epic) {
+                    let _ = tx.send(Change::ChildrenChanged { id: parent, shortcode, added: id.clone(), child_count: joined });
+                }
                 if let (Some(old), Some(epic)) = (previous, old_epic) {
                     let _ = tx.send(Change::ChildRemoved {
                         id: String::from(old),
@@ -5385,3 +5410,6 @@ mod tests_child_scopes;
 /// ORG-9: a shortcode may hold hyphens — SYNAPSE-CC-1, end to end in the store.
 #[cfg(test)]
 mod tests_hyphens;
+/// TICKETS-40: a shortcode's root made a root of its organization.
+#[cfg(test)]
+mod tests_root;

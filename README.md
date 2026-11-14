@@ -589,7 +589,7 @@ whole. synapse `-j` prints the `rows` event as one line (SYNAPSE-36).
 | `update_many` | `[--ids] [--filter] [--max] [--kind] [--status] [--parent] [--severity] [--block] [--unblock] [--label] [--unlabel] [--message] [--source] [--tz]` | `update`'s change to many, all or none |
 | `set_status` | `--id --status [--message] [--source] [--restore-children]` | a status; `Canceled` cancels open descendants |
 | `set_kind` | `--id --kind [--status] [--message] [--source]` | a kind, and everything kept by kind |
-| `set_parent` | `--id --parent` | adopt or move a ticket |
+| `set_parent` | `--id --parent` | adopt or move a ticket; `--parent none` makes a shortcode's root a root of its organization |
 | `label` | `[--id] [--ids] [--add] [--remove]` | labels (`needs-you`, …) |
 | `rename` | `--id --to [--message] [--dry-run]` | into a subtask id under its own parent |
 | `reshortcode` | `--ids --to [--parent] [--new-scope] [--with-children] [--message] [--dry-run]` | move tickets into another shortcode, renumbered |
@@ -949,7 +949,18 @@ otherwise; a shortcode's root never becomes a kind that roots nothing.
 aspect by its own write's rules (`amend`, `set_kind`, `set_status`,
 `set_parent`, `create`'s for blockers), all asked before anything is
 written, a refusal naming every reason. `--severity none` clears the
-severity; `--block` / `--unblock` add and remove blockers. **`update_many`**
+severity; `--block` / `--unblock` add and remove blockers.
+
+**A root made a root** (TICKETS-40): `set_parent --parent none` (and
+`update --parent none`) removes the parent of a shortcode's root — admin on
+the host it leaves and on its organization, as a root's move takes. Its
+shortcode moves to the organization's top namespace: every ticket in it and
+every shortcode hosted under it takes its new address
+(`hypermemetic:PLEXUS/KAYOKEN-1` → `hypermemetic:KAYOKEN-1`), and a code
+already there is refused, naming the one there. Any other ticket is
+refused, naming its shortcode's root: inside a shortcode every ticket hangs
+in its root's tree (MNG-14). `none` names no ticket; `update_many --parent`
+takes a ticket only. **`update_many`**
 (ACT-2) is the same to many tickets (`--ids`, or a `--filter` at most
 `--max`, default 500), all or none; `label` and `commits link` take `--ids`
 too.

@@ -50,6 +50,9 @@ pub struct Update {
     pub kind: Option<Kind>,
     pub status: Option<Status>,
     pub parent: Option<String>,
+    /// TICKETS-40: remove its parent — the ticket made a root (`--parent
+    /// none` on the wire), by `set_parent`'s rules for a root.
+    pub unparent: bool,
     /// `Some(None)` clears it.
     pub severity: Option<Option<Severity>>,
     /// TICKETS-27: hide the ticket from the nav's views, or show it again.
@@ -87,7 +90,8 @@ pub(super) struct Plan {
     kind: Option<(Kind, Option<Status>)>,
     /// A change of status alone.
     status: Option<Status>,
-    parent: Option<String>,
+    /// TICKETS-40: `Some(None)`, made a root.
+    parent: Option<Option<String>>,
     severity: Option<Option<Severity>>,
     /// TICKETS-27: the new `hidden`, when it moves.
     hidden: Option<bool>,
@@ -355,9 +359,18 @@ pub(super) fn plan(
             shortcodes::Found::None => p.trim().to_ascii_uppercase(),
         })
         .filter(|p| !p.is_empty() && row.parent.as_deref() != Some(p.as_str()));
+    // TICKETS-40: made a root — a ticket with a parent, and a root alone.
+    let parent = match parent {
+        Some(p) => Some(Some(p)),
+        None => (u.unparent && row.parent.is_some()).then_some(None),
+    };
     if let Some(p) = &parent {
         changed.push("parent".into());
-        if let Err(e) = rules::parent_refusal(cache, &row, p) {
+        let refused = match p {
+            Some(p) => rules::parent_refusal(cache, &row, p),
+            None => rules::root_refusal(cache, &row),
+        };
+        if let Err(e) = refused {
             refusals.push(e);
         }
     }
@@ -566,21 +579,30 @@ fn kind_step(
 }
 
 /// `set_parent`'s write, as a step: the child's row, both parents' counts
-/// and children, the roll-ups and the kept tree.
+/// and children, the roll-ups and the kept tree. TICKETS-40: `parent`
+/// `None`, the ticket made a root.
 fn parent_step(
     txn: &rusqlite::Transaction<'_>,
     cache: &mut Cache,
     unders: &lineage::UnderWatches,
     id: &str,
-    parent: String,
+    parent: Option<String>,
     now: i64,
     out: &mut Gathered,
 ) -> Result<(), StoreError> {
     let mut child = cache.get(id).cloned().ok_or_else(|| StoreError::NotFound(id.to_string()))?;
-    rules::parent_refusal(cache, &child, &parent)?;
-    let new_epic = cache.get(&parent).map(|p| p.shortcode.clone()).expect("the parent exists");
+    let new_epic = match &parent {
+        Some(p) => {
+            rules::parent_refusal(cache, &child, p)?;
+            Some(cache.get(p).map(|p| p.shortcode.clone()).expect("the parent exists"))
+        }
+        None => {
+            rules::root_refusal(cache, &child)?;
+            None
+        }
+    };
     let previous = child.parent.take();
-    child.parent = Some(crate::address::TicketId::new(parent.clone()));
+    child.parent = parent.clone().map(crate::address::TicketId::new);
     child.updated_unix = now;
     let old_epic = previous.as_deref().and_then(|p| cache.get(p)).map(|t| t.shortcode.clone());
     let derived = cache.reparent(&child, previous.as_deref())?;
@@ -603,7 +625,9 @@ fn parent_step(
     let body = db::body(txn, id)?.ok_or_else(|| missing(id))?;
     let (groups, joined, left) = cache.reparented(child.clone(), previous.as_deref(), moved);
     out.tickets.push(Change::ParentChanged { ticket: whole(child, body), previous: previous.clone().map(String::from) });
-    out.tickets.push(Change::ChildrenChanged { id: parent, shortcode: new_epic, added: id.to_string(), child_count: joined });
+    if let (Some(parent), Some(shortcode)) = (parent, new_epic) {
+        out.tickets.push(Change::ChildrenChanged { id: parent, shortcode, added: id.to_string(), child_count: joined });
+    }
     if let (Some(old), Some(epic)) = (previous, old_epic) {
         out.tickets.push(Change::ChildRemoved { id: String::from(old), shortcode: epic, removed: id.to_string(), child_count: left });
     }

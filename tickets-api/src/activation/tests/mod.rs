@@ -933,6 +933,43 @@ async fn set_parent_yields_parent_changed_and_maps_errors_in_band() {
     }
 }
 
+/// TICKETS-40: `set_parent --parent none` over the activation — a hosted
+/// root made a root of its organization by its admin, its address losing the
+/// host; any other ticket refused in band, naming the root; an editor
+/// without the admin refused, saying what it takes. `update`'s `none` asks
+/// the store to remove the parent, and names no ticket.
+#[tokio::test]
+async fn set_parent_none_makes_a_shortcode_s_root_a_root() {
+    use crate::access::Held;
+    use crate::members::Role;
+    let service = service();
+    one(service.create(operator(), "HOST".into(), "host".into(), Some("scope".into()), None, None, None, None, None, None).await).await;
+    let hosted = |title: &str, kind: Option<&str>, parent: &str| service.create(operator(), "GUEST".into(), title.into(), kind.map(Into::into), None, None, None, Some(parent.into()), None, None);
+    one(hosted("guest", Some("scope"), "HOST-1").await).await;
+    one(hosted("a build", None, "GUEST-1").await).await;
+
+    let editor = VerifiedUser::for_tests(&Access::for_tests(), "idp:0b0e1d2c-60aa-4534-b2e3-83634591fee2".parse().unwrap(), vec![(Held::Everywhere, Role::Editor)]);
+    match one(service.set_parent(editor, "GUEST-1".into(), "none".parse().unwrap()).await).await {
+        TicketsEvent::Error { message } => assert!(message.contains("takes admin on the host it leaves and on its organization"), "{message}"),
+        other => panic!("expected Error, got {other:?}"),
+    }
+    match one(service.set_parent(operator(), "GUEST-2".into(), "none".parse().unwrap()).await).await {
+        TicketsEvent::Error { message } => assert!(message.contains("GUEST-2 is not GUEST's root") && message.contains("GUEST-1"), "{message}"),
+        other => panic!("expected Error, got {other:?}"),
+    }
+    match one(service.set_parent(operator(), "HOST/GUEST-1".into(), "NONE".parse().unwrap()).await).await {
+        TicketsEvent::ParentChanged { ticket, previous } => {
+            assert_eq!((ticket.id.as_str(), ticket.parent.as_deref(), previous.as_deref()), ("GUEST-1", None, Some("HOST-1")));
+            assert_eq!(ticket.address, "hypermemetic:GUEST-1");
+        }
+        other => panic!("expected ParentChanged, got {other:?}"),
+    }
+    let ask = update::update_of(None, None, None, None, Some("none".parse().unwrap()), None, None, None);
+    assert!(ask.unparent && ask.parent.is_none(), "{ask:?}");
+    let ask = update::update_of(None, None, None, None, Some("HOST-1".parse().unwrap()), None, None, None);
+    assert!(!ask.unparent && ask.parent.as_deref() == Some("HOST-1"), "{ask:?}");
+}
+
 /// MNG-12: the first ticket of a prefix must be a scope — over the
 /// activation the refusal is the in-band error naming the rule.
 #[tokio::test]
