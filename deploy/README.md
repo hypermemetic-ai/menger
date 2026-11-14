@@ -698,14 +698,14 @@ record sent and what waits; `backfill` replays `deployments.log` through the
 outbox, and the tracker answers what it kept already `duplicate`. A v2
 server keeps no records — the tracker does.
 
-**A tracker with no `deployments.record`** (DEPLOY-62): menger v2 cut the
-deployments service, and its gate answers a call to the absent method as it
-answers a missing grant (`forbidden`, `needs deployments.record`). So a run
-asks once, before its first record, `deploy/record --probe` — the gate's own
-`auth.requires` for `deployments.record`, which v2 answers `no method
-deployments.record here` (exit 4). Then nothing is sent and nothing queued,
-the run says once `the tracker (…, v2) keeps no deployment records; this
-deploy is in deployments.log`, and the deploy goes on: `deployments.log`,
+**A tracker without v1's record method** (DEPLOY-62): menger v2 cut the
+service that kept the records, and its gate answers a call to the absent
+method as it answers a missing grant (`forbidden`, naming the method). So a
+run asks once, before its first record, `deploy/record --probe` — the gate's
+own `auth.requires` for that method, which v2 answers `no method … here`
+(exit 4). Then nothing is sent and nothing queued, the run says once that
+the tracker (v2) keeps no records and the deploy is in deployments.log,
+and the deploy goes on: deployments.log,
 `status` and `releases` are the record. What waited in the outbox is set
 aside — moved, never deleted — into `outbox/undeliverable/`, whose `README`
 gains a line saying when, how many and why; the drain never reads that
@@ -870,8 +870,8 @@ Each runs on a throwaway root and touches nothing real; none runs under
 - `deploy/tests/pipeline` — the pipeline itself, `HOME` a scratch directory,
   infra, `synapse`, `docker`, `gh`, `node` and the tracker stand-ins: every
   record, the smoke (each check failing on its own), the push (signed,
-  refused, no key), a tracker down, hung, refusing or with no
-  `deployments.record` (DEPLOY-62: nothing sent or queued, what waited set
+  refused, no key), a tracker down, hung, refusing or without v1's
+  record method (DEPLOY-62: nothing sent or queued, what waited set
   aside), `remote prod`'s suite
   check and its promote (UI-15: no push to prod, one `ui.promote` as the
   pipeline key, the hash in the log line, a refusal failing it with nothing
@@ -890,8 +890,8 @@ Each runs on a throwaway root and touches nothing real; none runs under
 - the build's checkout: `../menger-build`; the suite's: `../menger-suite`
 - every build, image, remote run, suite and secret: `~/.local/share/menger-deploy/deployments.log`
 - records waiting for the tracker: `~/.local/share/menger-deploy/outbox/`
-  (refused: `outbox/refused/`; set aside for a tracker with no
-  `deployments.record`, DEPLOY-62: `outbox/undeliverable/` and its `README`);
+  (refused: `outbox/refused/`; set aside for a tracker without v1's
+  record method, DEPLOY-62: `outbox/undeliverable/` and its `README`);
   the last sent per environment: `…/menger-deploy/sent/`
 - logs: `~/.local/state/menger-deploy/logs/`; the runner's `~/.local/state/menger-deploy-runner/runs/`;
   the boxes': `../hypermemetic-infra/bin/infra status.yml`

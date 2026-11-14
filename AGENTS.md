@@ -375,10 +375,10 @@ deploy/pipeline releases                      # every release: its suite, tested
   (DEPLOY-12, DEPLOY-28) as the `pipeline` key, through `deploy/record`; a
   record the tracker does not take waits in
   `~/.local/share/menger-deploy/outbox/` and never fails a deploy. A
-  tracker with no `deployments.record` — v2, prod since 2026-11-05 — is
+  tracker without v1's record method — v2, prod since 2026-11-05 — is
   asked once a run (`deploy/record --probe`, exit 4; DEPLOY-62): nothing is
-  sent or queued, the run says once that the deploy is in
-  `deployments.log`, and what waited is set aside in
+  sent or queued, the run says once that the deploy is in the pipeline's
+  own log, and what waited is set aside in
   `outbox/undeliverable/` (its `README` says why and when), never retried;
   `deploy/pipeline outbox` does the same on asking.
 - **Production changes only through `remote prod`**, and only to a release
