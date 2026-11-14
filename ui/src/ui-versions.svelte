@@ -19,7 +19,10 @@
      elsewhere folded in from the watch's `tagged`. RELEASES-FAST: `ui.versions`
      is read once at open (and again only for a version the list does not
      hold); the newest 20 rows are drawn, with the live one wherever it is,
-     and "show all N" (`[data-action=show-all]`) draws the rest. -->
+     and "show all N" (`[data-action=show-all]`) draws the rest. RELEASES-TENS:
+     the first calls are the rows' — `ui.versions { limit: 20 }` and
+     `{ live: true }` — drawn before anything else is asked; the whole list
+     (once) and the two `ui.contract`s follow that frame. -->
 <script module>
   export const uses = ["ui.versions", "ui.watch", "ui.contract", "ui.routes.list", "ui.slots.list", "ui.rollback", "ui.preview",
                        "ui.tag", "ui.history", "ui.undo", "ui.redo", "auth.whoami", "auth.requires"];
@@ -48,14 +51,9 @@
     }
   }
 
-  const door = live({ snapshot: "auth.whoami", params: {}, key: "principal", on: {} });
-  const needs = live({ snapshot: "auth.requires", params: { method: "ui.rollback" }, key: "method", on: {} });
-  // FRAME-52: who names, tags and undoes — the roles holding ui.tag.
-  const tagNeeds = live({ snapshot: "auth.requires", params: { method: "ui.tag" }, key: "method", on: {} });
-  const stamped = live({ snapshot: "ui.contract", params: { uses: ["tickets.list"] }, key: "contract", on: {} });
-  const reached = live({ snapshot: "ui.contract", params: { uses: REACHED }, key: "contract", on: {} });
-  const routes = live({ snapshot: "ui.routes.list", params: {}, changes: "ui.watch", key: "pattern", on: { route_changed: "upsert:." } });
-  const slots = live({ snapshot: "ui.slots.list", params: {}, key: "slot", on: {} });
+  // RELEASES-FAST: the newest NEWEST rows are drawn (and the live one).
+  const NEWEST = 20;
+  const isVersion = (e) => e?.type === "version";
 
   // FRAME-52b: the live pointer is its own state, moved by the watch's
   // `live { version, seq }` alone — every move of the pointer is a row of
@@ -63,22 +61,61 @@
   // collection keyed by `seq` hears each (SURFACE-9's two listeners went).
   // Each move sets the pointer, reads the history once, and the list again
   // only when it names a version the list does not hold (a push).
+  // RELEASES-TENS: the page's first calls are the rows': the newest NEWEST
+  // (`limit`) and the live one (`live: true`), drawn; then, after that
+  // frame, the whole list once (the count, "show all") and the contracts.
+  // A service before `limit` (plexus-ui-service 0.2.3) refuses it, and the
+  // whole list is the first read.
   let list = $state(null);
+  let whole = $state(false);
   let pointer = $state(null);
   let added = $state(new Set());
-  async function readVersions() {
+  async function readVersions(quiet = false) {
     const a = await answer(b.call("ui.versions", {}));
     if (!a.ok) return;
-    const rows = a.events.filter((e) => e?.type === "version");
+    const rows = a.events.filter(isVersion);
     const before = new Set((list ?? []).map((v) => v.hash));
-    added = new Set(list == null ? [] : rows.filter((r) => !before.has(r.hash)).map((r) => r.hash));
+    added = new Set(list == null || quiet ? [] : rows.filter((r) => !before.has(r.hash)).map((r) => r.hash));
     list = rows;
+    whole = true;
     pointer = rows.find((r) => r.live)?.hash ?? null;
   }
-  readVersions();
+  async function readFirst() {
+    const [page, now] = await Promise.all([answer(b.call("ui.versions", { limit: NEWEST })), answer(b.call("ui.versions", { live: true }))]);
+    if (page.ok && list == null) {
+      const rows = page.events.filter(isVersion);
+      for (const r of now.ok ? now.events.filter(isVersion) : []) if (!rows.some((v) => v.hash === r.hash)) rows.push(r);
+      list = rows;
+      pointer = rows.find((r) => r.live)?.hash ?? null;
+      // The rows' frame drawn before the rest is asked.
+      await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+    }
+    if (!whole) await readVersions(true);
+    readContracts();
+  }
+  readFirst();
+
+  const door = live({ snapshot: "auth.whoami", params: {}, key: "principal", on: {} });
+  const needs = live({ snapshot: "auth.requires", params: { method: "ui.rollback" }, key: "method", on: {} });
+  // FRAME-52: who names, tags and undoes — the roles holding ui.tag.
+  const tagNeeds = live({ snapshot: "auth.requires", params: { method: "ui.tag" }, key: "method", on: {} });
+  const routes = live({ snapshot: "ui.routes.list", params: {}, changes: "ui.watch", key: "pattern", on: { route_changed: "upsert:." } });
+  const slots = live({ snapshot: "ui.slots.list", params: {}, key: "slot", on: {} });
+  // RELEASES-TENS: the contracts read after the rows (each reads every named
+  // service's schema, about 20 ms on the service) — `{ status, rows, message }`.
+  let stamped = $state({ status: "pending", rows: [], message: "" });
+  let reached = $state({ status: "pending", rows: [], message: "" });
+  async function readContracts() {
+    const read = async (uses) => {
+      const a = await answer(b.call("ui.contract", { uses }));
+      return a.ok ? { status: "live", rows: a.events.filter((e) => e?.type === "contract"), message: "" } : { status: "refused", rows: [], message: a.message };
+    };
+    [stamped, reached] = await Promise.all([read(["tickets.list"]), read(REACHED)]);
+  }
+
   function moved(version) {
     pointer = version;
-    if (list != null && !list.some((v) => v.hash === version)) readVersions();
+    if (list != null && whole && !list.some((v) => v.hash === version)) readVersions();
     readHistory();
   }
 
@@ -160,7 +197,6 @@
   // RELEASES-FAST: the newest NEWEST rows are drawn, and the live one
   // wherever it is, and any row holding an answer or a form; "show all"
   // draws every kept version.
-  const NEWEST = 20;
   let all = $state(false);
   const shown = $derived(all ? versions : versions.filter((v, i) => i < NEWEST || v.hash === cur || confirm === v.hash || tagging?.hash === v.hash || Object.keys(answers[v.hash] ?? {}).length > 0));
   const app = $derived(versions.find((v) => v.hash === cur)?.name ?? null);
@@ -197,7 +233,7 @@
 
 <section class="ui-versions" data-surface="ui-versions">
   <div class="page-head">
-    <span class="sub"><span data-field="count">{versions.length}</span> versions of the app</span>
+    <span class="sub">{#if whole}<span data-field="count">{versions.length}</span>{:else}<span data-loading="">000</span>{/if} versions of the app</span>
     <span class="head-live">live <b class="hash" data-field="live">{cur ? short(cur) : "none"}</b></span>
     {#if list == null}<span class="state" data-loading="pending">pending</span>{/if}
   </div>
@@ -209,7 +245,7 @@
       <div class="th"><span>version</span><span>bundle</span><span>from</span><span>when</span><span></span><span></span></div>
       {#each shown as v (v.hash)}
         {@const ans = answers[v.hash] ?? {}}
-        <div class="tr" class:flash={added.has(v.hash)} data-id={v.hash} data-live={v.hash === cur} data-matches={$stamped.rows.some((c) => c.contract === v.contract)}>
+        <div class="tr" class:flash={added.has(v.hash)} data-id={v.hash} data-live={v.hash === cur} data-matches={stamped.rows.some((c) => c.contract === v.contract)}>
           <span class="ver"><span class="hash" data-field="version" title={v.hash}>{short(v.hash)}</span>{#if v.label}<b class="label" data-field="label">{v.label}</b>{/if}{#each v.tags ?? [] as tg (tg)}<span class="pill tag" data-tag={tg}>{tg}</span>{/each}</span>
           <span data-field="name">{v.name ?? "the app"}{#if kept(v)}<span class="pill" data-field="kept" title="a bundle kept by name: never the app">kept</span>{/if}</span>
           <span class="who">{#if v.authored}<span class="pill" data-field="authored">authored</span> by <b>{v.pushed_by}</b> in the studio{:else}pushed by <b>{v.pushed_by}</b>{/if}</span>
@@ -256,10 +292,10 @@
     </div>
     <div class="side">
       <section class="panel" data-method="ui.contract">
-        <h2>contract <span class="m hash" data-field="reached">{$reached.rows[0]?.contract ?? ""}</span></h2>
-        <div class="st"><span>tickets</span><span class="hash" data-field="contract">{#if $stamped.status === "pending"}<span data-loading="">0000000000000000</span>{:else}{$stamped.rows[0]?.contract ?? ""}{/if}</span><span class="src">what a deploy stamps</span></div>
-        <div class="st"><span>every service</span><span class="hash">{#if $reached.status === "pending"}<span data-loading="">0000000000000000</span>{:else}{$reached.rows[0]?.contract ?? ""}{/if}</span><span class="src">the services the app names</span></div>
-        {#if $stamped.status === "error" || $stamped.status === "refused"}<p class="pad" data-refused="">refused: {$stamped.message}</p>{/if}
+        <h2>contract <span class="m hash" data-field="reached">{reached.rows[0]?.contract ?? ""}</span></h2>
+        <div class="st"><span>tickets</span><span class="hash" data-field="contract">{#if stamped.status === "pending"}<span data-loading="">0000000000000000</span>{:else}{stamped.rows[0]?.contract ?? ""}{/if}</span><span class="src">what a deploy stamps</span></div>
+        <div class="st"><span>every service</span><span class="hash">{#if reached.status === "pending"}<span data-loading="">0000000000000000</span>{:else}{reached.rows[0]?.contract ?? ""}{/if}</span><span class="src">the services the app names</span></div>
+        {#if stamped.status === "error" || stamped.status === "refused"}<p class="pad" data-refused="">refused: {stamped.message}</p>{/if}
       </section>
       <section class="panel" data-method="ui.history" data-field="history">
         <h2>history <span class="m">

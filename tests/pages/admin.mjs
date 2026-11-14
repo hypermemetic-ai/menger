@@ -233,7 +233,8 @@ export default async (ctx) => {
   });
 
   // RELEASES-FAST: past twenty kept versions the page draws the newest twenty and
-  // the live one, reads ui.versions once, and draws every one on "show all".
+  // the live one, reads the whole list once (RELEASES-TENS: after the newest page
+  // and the live one, `limit` and `live`), and draws every one on "show all".
   // Last of the group: it keeps twenty more versions (pushed not live), so v1 and
   // v2 are no longer among the newest twenty for a case after it.
   await test("releases_newest_twenty_then_all", async () => {
@@ -269,15 +270,22 @@ export default async (ctx) => {
       assert((await root.locator(`[data-id="${v2.version}"][data-live=true]`).count()) === 1, "v2 drawn, marked live");
       assert((await root.locator(`[data-id="${v1.version}"]`).count()) === 0, "v1 not drawn");
       assert((await text(root.locator("[data-field=shown]"))) === "21", "the shown count said");
-      const versionsCalls = (await sentCalls(page)).filter((c) => c.method === "ui.versions");
-      assert(versionsCalls.length === 1, `ui.versions read once: ${JSON.stringify(versionsCalls)}`);
+      const versionsCalls = await eventually("the whole list read", async () => {
+        const sent = (await sentCalls(page)).filter((c) => c.method === "ui.versions");
+        return sent.some((c) => Object.keys(c.params).length === 0) ? sent : null;
+      });
+      const kinds = versionsCalls.map((c) => JSON.stringify(c.params));
+      assert(kinds.filter((k) => k === "{}").length === 1, `the whole list read once: ${JSON.stringify(kinds)}`);
+      assert(kinds[0] !== "{}" && kinds.every((k) => ["{}", '{"limit":20}', '{"live":true}'].includes(k)), `the rows' reads first, then the whole: ${JSON.stringify(kinds)}`);
+      const contracts = (await sentCalls(page)).filter((c) => c.method === "ui.contract" || c.method === "ui.versions");
+      assert(contracts.findIndex((c) => c.method === "ui.contract") > contracts.findIndex((c) => c.method === "ui.versions" && Object.keys(c.params).length > 0), "the contracts asked after the rows' reads");
 
       await root.locator("[data-action=show-all]").click();
       await eventually("every version drawn", async () => (await root.locator(".tr[data-id]").count()) === kept.length);
       assert((await root.locator(`[data-id="${v1.version}"]`).count()) === 1, "v1 drawn");
       await root.locator("[data-action=show-newest]").click();
       await eventually("back to twenty-one", async () => (await root.locator(".tr[data-id]").count()) === 21);
-      assert((await sentCalls(page)).filter((c) => c.method === "ui.versions").length === 1, "no read for either");
+      assert((await sentCalls(page)).filter((c) => c.method === "ui.versions").length === versionsCalls.length, "no read for either");
     } finally {
       await context.close();
       if (live() !== v2.version) sy("ui", "rollback", "--to", v2.version);
