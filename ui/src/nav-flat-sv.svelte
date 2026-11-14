@@ -3,7 +3,8 @@
      nav-tree-sv imports it (bundled into that module, on its bus); it is a
      component in its own right too. SURFACE-10: a filter no ticket matches
      says so ([data-empty]), one the language refuses says its words
-     ([data-refused]). -->
+     ([data-refused]). SHELL.176-4: `current`, the ticket open beside the
+     nav — its row marked (`aria-current="page"`, `[data-nav-current]`). -->
 <script module>
   // PERF-15: a row is the four fields drawn, not the whole summary row.
   const FIELDS = ["id", "uid", "title", "kind", "status"];
@@ -14,7 +15,7 @@
   import { live } from "plexus-ui/host";
   import { ticketHref } from "./ticket-links.svelte";
 
-  let { filter = null } = $props();
+  let { filter = null, current = null } = $props();
   const base = location.hash.startsWith("#/sv/") ? "#/sv/" : "#/";
   const flat = live({ snapshot: "tickets.list", params: () => ({ filter: filter ?? null, summary: true, limit: 200, fields: FIELDS }), key: "id" });
   const list = $derived($flat.rows);
@@ -22,7 +23,7 @@
 
 <ul class="nav-flat" data-nav-flat>
   {#each list as t (t.id)}
-    <li><a class="nav-row" data-nav-flat-row={t.id} data-status={t.status} href={ticketHref(t, base)}><span class="row-id">{t.id}</span> <span class="row-title">{t.title}</span></a></li>
+    <li><a class="nav-row" data-nav-flat-row={t.id} data-status={t.status} data-nav-current={t.id === current ? t.id : undefined} aria-current={t.id === current ? "page" : undefined} href={ticketHref(t, base)}><span class="row-id">{t.id}</span> <span class="row-title">{t.title}</span></a></li>
   {/each}
 </ul>
 {#if $flat.status === "live" && list.length === 0}<p class="empty" data-empty>No ticket matches this filter.</p>{/if}
@@ -44,6 +45,8 @@
   .nav-row[data-status="Epic"]::before { background: var(--st-epic-fg); }
   .nav-row[data-status="Doc"]::before { background: var(--st-doc-fg); }
   .nav-row:hover, .nav-row:global([data-sheet~=hover]) { background: var(--hover); }
+  .nav-row[data-nav-current] { background: var(--row-sel); box-shadow: inset 3px 0 0 var(--accent); }
+  .nav-row[data-nav-current] .row-title { font-weight: var(--weight-bold); }
   .nav-row:focus-visible, .nav-row:global([data-sheet~=focus]) { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
   .row-id { flex: none; color: var(--accent); font-variant-numeric: tabular-nums; }
   .row-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
