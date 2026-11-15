@@ -11,7 +11,11 @@
      both), so `before` does not move and nothing is asked again — the newest
      row takes the fields `revised` said, and its moment is "just now".
      Restoring is SURFACE-4's: "pick" says `ticket.revision_picked
-     { id, rev }` on the bus for `ticket-actions`. `escape` closes the diff. -->
+     { id, rev }` on the bus for `ticket-actions`. `escape` closes the diff.
+     SURFACE-24: every revision, the newest page live and "older"
+     (`[data-action=older-revisions]`) asking each page below it; each row
+     names its title as it stood and its message (revision-label), as the
+     restore picker's do. -->
 <script module>
   export const uses = ["tickets.revisions.list", "tickets.watch", "tickets.revisions.diff", "tickets.revisions.get"];
 </script>
@@ -23,6 +27,7 @@
   import TicketView from "./ticket-view.svelte";
   // EDITOR-20: the bodies drawn below give their ticket ids as pills (ticket-pills).
   import PillTable, { providePills } from "./ticket-pills.svelte";
+  import RevisionLabel, { REV_PAGE, revisionRows, olderPage, revWhen, revWho } from "./revision-label.svelte";
   providePills();
 
   let { id, sheet = null } = $props();
@@ -36,17 +41,25 @@
   const latest = live({ snapshot: "tickets.revisions.list", params: () => ({ id, limit: 1 }), changes: "tickets.watch", changes_params: { revisions: true },
                         key: "ticket", on: { revised: "upsert:." } });
   const newest = $derived(latest.rows.filter((r) => r.ticket === id).reduce((m, r) => Math.max(m, r.rev ?? 0), 0));
-  const revs = live({ snapshot: "tickets.revisions.list", params: () => (newest ? { id, limit: 50, before: newest + 1 } : { id, limit: 50 }), key: "rev" });
+  const revs = live({ snapshot: "tickets.revisions.list", params: () => (newest ? { id, limit: REV_PAGE, before: newest + 1 } : { id, limit: REV_PAGE }), key: "rev" });
   const diff = live({ snapshot: "tickets.revisions.diff", params: () => ({ id, from: a, to: z, text: true }), key: "to", when: () => open && a !== z });
   const opened = live({ snapshot: "tickets.revisions.get", params: () => ({ id, rev: z }), key: "ticket", when: () => open && view === "was", on: { revision_at: "upsert:." } });
 
   const told = $derived(latest.rows.find((r) => r.ticket === id));
-  const rows = $derived(revs.rows.map((r) => (told && r.rev === told.rev && String(r.fields ?? []) !== String(told.fields ?? []) ? { ...r, fields: told.fields, at_unix: null } : r)));
+  let older = $state({ id: null, rows: [], asking: false, message: null });
+  const all = $derived(revisionRows(revs.rows, older.id === id ? older.rows : [], told));
+  const rows = $derived(all.rows);
+  async function more() {
+    const at = id, before = rows.at(-1)?.rev;
+    if (!before || older.asking) return;
+    const kept = older.id === at ? older.rows : [];
+    older = { id: at, rows: kept, asking: true, message: null };
+    const got = await olderPage(b, at, before);
+    if (id === at) older = { id: at, rows: [...kept, ...got.rows], asking: false, message: got.message };
+  }
   const d = $derived(diff.rows.find((x) => x.from === a && x.to === z));
   const was = $derived(opened.rows.find((o) => o.ticket && o.revision?.rev === z));
   const changed = $derived(d ? [...d.fields, ...d.frontmatter] : []);
-  const two = (n) => String(n).padStart(2, "0");
-  const when = (s) => { if (s == null) return "just now"; const t = new Date(s * 1000); return `${two(t.getUTCMonth() + 1)}-${two(t.getUTCDate())} ${two(t.getUTCHours())}:${two(t.getUTCMinutes())}`; };
   const lines = (keep) => (d?.body?.hunks ?? []).flatMap((h) => h.lines.filter((l) => l.op !== keep));
 
   function show(rev) {
@@ -69,7 +82,7 @@
 
 <section class="ticket-revisions" data-surface="ticket-revisions" data-open={open ? "true" : "false"}>
   <header class="head">
-    <h2 class="sec">Revisions <span class="n">{rows.length}</span></h2>
+    <h2 class="sec">Revisions <span class="n">{all.newest || rows.length}</span></h2>
     {#if open}
       <span class="range" data-field="range"><b>rev {a}</b> → <b>rev {z}</b></span>
       <span class="tools">
@@ -92,8 +105,8 @@
             data-selected={open && (r.rev === a || r.rev === z) ? "true" : "false"}
             onclick={() => show(r.rev)} onkeydown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), show(r.rev))}>
           <span class="rev-n">rev {r.rev}</span>
-          <span class="rev-at">{when(r.at_unix)}</span>
-          <span class="rev-by">{r.name ?? (r.actor ? r.actor.slice(0, 10) + "…" : "")}</span>
+          <span class="rev-at">{revWhen(r.at_unix)}</span>
+          <span class="rev-by">{revWho(r)}</span>
           <span class="rev-f" data-field="fields">{#each r.fields?.length ? r.fields : [r.source === "baseline" ? "baseline" : "—"] as f (f)}<span>{f}</span>{/each}</span>
           {#if open}
             <span class="ab">
@@ -103,8 +116,13 @@
           {:else}
             <span class="rev-go">diff ›</span>
           {/if}
+          <span class="rev-l"><RevisionLabel {r}/></span>
         </li>
       {/each}
+      {#if all.more}
+        <li class="older-li"><button type="button" class="older" data-action="older-revisions" disabled={older.asking} onclick={more}>{older.asking ? "asking…" : `older (${rows.at(-1).rev - 1} more)`}</button></li>
+      {/if}
+      {#if older.message}<li class="refused" data-refused data-for="older-revisions">{older.message}</li>{/if}
       {#if revs.status === "live" && rows.length === 0}<li class="empty" data-empty>no revisions kept</li>{/if}
     </ul>
     {#if open}
@@ -172,14 +190,19 @@
   .ticket-revisions .btn.ghost:hover, .ticket-revisions .btn.ghost:global([data-sheet~=hover]) { color: var(--ink); background: var(--hover); }
   .ticket-revisions kbd { display: inline-block; min-width: 16px; padding: 0 4px; font-family: var(--font-text); font-size: 10px; line-height: 15px; text-align: center; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-bottom-width: 2px; border-radius: var(--radius-sm); }
   .ticket-revisions[data-open=true] .grid { display: grid; grid-template-columns: 330px minmax(0, 1fr); }
-  .ticket-revisions .revs { list-style: none; margin: 0; padding: 0; border-top: var(--border) solid var(--line); }
+  .ticket-revisions .revs { max-height: min(560px, 70vh); overflow-y: auto; overscroll-behavior: contain; list-style: none; margin: 0; padding: 0; border-top: var(--border) solid var(--line); }
   .ticket-revisions[data-open=true] .revs { border-top: 0; border-right: var(--border) solid var(--line); }
-  .ticket-revisions .rev-row { position: relative; display: grid; grid-template-columns: 44px 82px 58px minmax(0, 1fr) auto; gap: 6px; align-items: center; height: var(--pitch); padding: 0 6px; font-size: 12px; border-bottom: var(--border) solid var(--line); cursor: pointer; transition: background-color var(--motion-fast) var(--ease); }
+  .ticket-revisions .rev-row { position: relative; display: grid; grid-template-columns: 44px 82px 58px minmax(0, 1fr) auto; gap: 0 6px; align-items: center; min-height: var(--pitch); padding: 3px 6px; font-size: 12px; border-bottom: var(--border) solid var(--line); cursor: pointer; transition: background-color var(--motion-fast) var(--ease); }
   .ticket-revisions .rev-row:hover, .ticket-revisions .rev-row:global([data-sheet~=hover]) { background: var(--hover); }
   .ticket-revisions .rev-row:focus-visible, .ticket-revisions .rev-row:global([data-sheet~=focus]) { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
   .ticket-revisions .rev-row[data-selected=true], .ticket-revisions .rev-row:global([data-sheet~=selected]) { background: var(--row-sel); }
   .ticket-revisions .rev-row[data-selected=true]::before, .ticket-revisions .rev-row:global([data-sheet~=selected])::before { content: ""; position: absolute; left: 0; top: 3px; bottom: 3px; width: 3px; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; background: var(--accent); }
   .ticket-revisions .rev-n { color: var(--accent); font-weight: var(--weight-medium); }
+  .ticket-revisions .rev-l { grid-column: 1 / -1; min-width: 0; }
+  .ticket-revisions .older { width: 100%; padding: 4px 6px; font: inherit; font-size: 11px; text-align: left; color: var(--accent); background: none; border: 0; cursor: pointer; }
+  .ticket-revisions .older:hover, .ticket-revisions .older:global([data-sheet~=hover]) { background: var(--hover); }
+  .ticket-revisions .older:focus-visible, .ticket-revisions .older:global([data-sheet~=focus]) { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
+  .ticket-revisions .older:disabled, .ticket-revisions .older:global([data-sheet~=disabled]) { color: var(--muted); cursor: default; }
   .ticket-revisions .rev-at { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .ticket-revisions .rev-by { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--weight-medium); }
   .ticket-revisions .rev-f { display: flex; gap: 4px; overflow: hidden; }

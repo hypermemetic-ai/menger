@@ -99,11 +99,15 @@ impl From<crate::types::TransitionSource> for RevisionSource {
 /// a `baseline`), and its body: its content's hash (`body_hash`, SHA-256
 /// hex — equal bodies, equal hashes: a body is stored once however many
 /// revisions share it), its size in bytes, and the lines it added and
-/// removed against the revision before.
+/// removed against the revision before. SURFACE-24: and `title`, the
+/// ticket's title as it stood at that revision, so a list says which version
+/// each one is without a `get` per row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Revision {
     pub ticket: TicketId,
     pub rev: u32,
+    #[serde(default)]
+    pub title: String,
     pub at_unix: i64,
     pub actor: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

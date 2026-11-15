@@ -193,7 +193,7 @@ pub(super) fn wire_event(change: Change) -> Option<TicketsEvent> {
         // way here; the wire carries the transition.
         Change::Transition { transition, .. } => TicketsEvent::Transition { transition },
         // TICKETS-7: a revision a write kept.
-        Change::Revised { ticket, rev, fields, .. } => TicketsEvent::Revised { ticket, rev, fields },
+        Change::Revised { ticket, rev, fields, title, .. } => TicketsEvent::Revised { ticket, rev, fields, title },
         Change::CellsMoved { .. } => return None,
         // FILTER-13: each `watch { filter }` asking `under` takes its own.
         Change::UnderMoved { .. } => return None,

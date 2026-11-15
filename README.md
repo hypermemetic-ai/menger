@@ -999,7 +999,9 @@ with `--restore-children true` puts back what that cancel canceled.
 
 **Revisions** (TICKETS-7). Every write that changes a ticket's own fields
 keeps a revision in its transaction; `revisions list | get | diff |
-restore`; a restore is an `update` and itself a revision. `watch
+restore`; a restore is an `update` and itself a revision. Each row of
+`revisions list` carries the ticket's `title` as it stood at that revision
+(SURFACE-24), and so does `revised`. `watch
 --revisions true` adds `revised`. A new write path goes through the store's
 `upsert` / `update_row` / `set_body` inside a write runner, or it keeps no
 revision (`tickets-api/src/store/revisions.rs`). **Coalesced** (V2-37): a

@@ -880,8 +880,9 @@ pub enum Change {
     /// what `watch { epic }` filters by; it does not cross the wire.
     InputChanged { shortcode: ShortcodeId, input: Input },
     Queue { shortcode: ShortcodeId, change: queue::QueueChange },
-    /// TICKETS-7: a revision a write kept — after the write's other events.
-    Revised { shortcode: ShortcodeId, ticket: TicketId, rev: u32, fields: Vec<String> },
+    /// TICKETS-7: a revision a write kept — after the write's other events;
+    /// SURFACE-24: with the title it keeps.
+    Revised { shortcode: ShortcodeId, ticket: TicketId, rev: u32, fields: Vec<String>, title: String },
 }
 
 impl Change {

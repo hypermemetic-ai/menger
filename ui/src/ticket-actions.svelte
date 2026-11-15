@@ -4,8 +4,11 @@
      first, every other move the store allows under "more…"; Canceled and
      Superseded ask why; leaving Canceled may restore what it canceled),
      labels (a chip with ×, a field to add), archive (a dry run first) and
-     restore, rename (a dry run first), a revision put back (SURFACE-22: its
-     five newest listed in the group, `[data-pick-rev=N]`, a row picks one;
+     restore, rename (a dry run first), a revision put back (SURFACE-22: the
+     revisions listed in the group, `[data-pick-rev=N]`, a row picks one —
+     SURFACE-24: every one, the list scrolling, `[data-action=older-revisions]`
+     asking each older page, each row naming its title as it stood and its
+     message (revision-label);
      or the rev from `ticket.revision_picked` on the bus, or typed; live as
      ticket-revisions is — `watch { revisions: true }` says `revised`, and
      the list is asked again past it), and the admin's
@@ -42,6 +45,7 @@
 <script>
   import { bus, live } from "plexus-ui/host";
   import { ticketHref, permalink, copyText } from "./ticket-links.svelte";
+  import RevisionLabel, { REV_PAGE, revisionRows, olderPage, revWhen, revWho } from "./revision-label.svelte";
 
   let { id, sheet = null } = $props();
   const b = bus();
@@ -132,17 +136,26 @@
   let dlUnblock = $state(true);
   let rev = $state("");
   let revFields = $state([]);
-  // SURFACE-22: the newest revisions, in the group that restores one (the owner: "it should be right
+  // SURFACE-22: the revisions, in the group that restores one (the owner: "it should be right
   // there"). Held live as ticket-revisions holds its list: `revised` names the newest rev, and the
-  // list's `before` moves past it, so it is asked again.
-  const REVS = 5;
+  // list's `before` moves past it, so it is asked again. SURFACE-24: every one of them, each named
+  // (revision-label) — the newest page live, "older" asking each page below it; the list scrolls.
   const revLatest = live({ snapshot: "tickets.revisions.list", params: () => ({ id, limit: 1 }), changes: "tickets.watch", changes_params: { revisions: true },
                            key: "ticket", on: { revised: "upsert:." } });
+  const revTold = $derived(revLatest.rows.find((r) => r.ticket === id));
   const revNewest = $derived(revLatest.rows.filter((r) => r.ticket === id).reduce((m, r) => Math.max(m, r.rev ?? 0), 0));
-  const revList = live({ snapshot: "tickets.revisions.list", params: () => (revNewest ? { id, limit: REVS, before: revNewest + 1 } : { id, limit: REVS }), key: "rev" });
-  const revRows = $derived([...revList.rows].filter((r) => r.rev != null).sort((x, y) => y.rev - x.rev).slice(0, REVS));
-  const two = (n) => String(n).padStart(2, "0");
-  const revWhen = (u) => { if (u == null) return "just now"; const d = new Date(u * 1000); return `${two(d.getUTCMonth() + 1)}-${two(d.getUTCDate())} ${two(d.getUTCHours())}:${two(d.getUTCMinutes())}`; };
+  const revList = live({ snapshot: "tickets.revisions.list", params: () => (revNewest ? { id, limit: REV_PAGE, before: revNewest + 1 } : { id, limit: REV_PAGE }), key: "rev" });
+  let revOlder = $state({ id: null, rows: [], asking: false, message: null });
+  const revs = $derived(revisionRows(revList.rows, revOlder.id === id ? revOlder.rows : [], revTold));
+  const revRows = $derived(revs.rows);
+  async function olderRevs() {
+    const at = id, before = revRows.at(-1)?.rev;
+    if (!before || revOlder.asking) return;
+    const kept = revOlder.id === at ? revOlder.rows : [];
+    revOlder = { id: at, rows: kept, asking: true, message: null };
+    const got = await olderPage(b, at, before);
+    if (id === at) revOlder = { id: at, rows: [...kept, ...got.rows], asking: false, message: got.message };
+  }
   function pickRev(n) {
     rev = String(n);
     answers["tickets.revisions.restore"] = undefined;
@@ -422,26 +435,31 @@
     </div>
 
     <div data-group="revision">
-      <h2 class="sec">Restore a revision</h2>
+      <h2 class="sec">Restore a revision{#if revs.newest}<span class="n" data-field="revisions-kept">{revs.newest} kept</span>{/if}</h2>
       {#if revRows.length}
         <ul class="ta-revs" data-field="revisions">
           {#each revRows as r (r.rev)}
             <li><button type="button" class="ta-rev-row" data-pick-rev={r.rev} aria-pressed={String(r.rev) === rev} onclick={() => pickRev(r.rev)}>
               <span class="rev-n">rev {r.rev}</span>
               <span class="rev-at">{revWhen(r.at_unix)}</span>
-              <span class="rev-by">{r.name ?? (r.actor ? r.actor.slice(0, 10) + "…" : "")}</span>
+              <span class="rev-by">{revWho(r)}</span>
               <span class="rev-f">{#each r.fields?.length ? r.fields : [r.source === "baseline" ? "baseline" : "—"] as f (f)}<span>{f}</span>{/each}</span>
+              <span class="rev-l"><RevisionLabel {r}/></span>
             </button></li>
           {/each}
+          {#if revs.more}
+            <li><button type="button" class="ta-older" data-action="older-revisions" disabled={revOlder.asking} onclick={olderRevs}>{revOlder.asking ? "asking…" : `older (${revRows.at(-1).rev - 1} more)`}</button></li>
+          {/if}
         </ul>
+        {#if revOlder.message}<p class="refused" data-refused data-for="older-revisions">{revOlder.message}</p>{/if}
       {/if}
       {#if !rev}
         <div class="ta-line">
-          <span class="hint" data-empty>{revRows.length ? "an older one, or its diff, is in Revisions; or" : "pick one in Revisions, or"}</span>
+          <span class="hint" data-empty>{revRows.length ? "its diff is in Revisions; or" : "pick one in Revisions, or"}</span>
           <input class="in rev" data-field="rev" placeholder="rev" inputmode="numeric" autocomplete="off" onchange={(ev) => (rev = ev.currentTarget.value.trim())}/>
         </div>
       {:else}
-        <div class="ta-rev" data-field="revision"><span class="rev-n">rev {rev}</span><button type="button" class="x" data-action="unpick" aria-label="clear" onclick={() => (rev = "")}>×</button></div>
+        <div class="ta-rev" data-field="revision"><span class="rev-n">rev {rev}</span>{#if revRows.find((r) => String(r.rev) === rev)}<span class="rev-l"><RevisionLabel r={revRows.find((r) => String(r.rev) === rev)}/></span>{/if}<button type="button" class="x" data-action="unpick" aria-label="clear" onclick={() => (rev = "")}>×</button></div>
         <div class="ta-checks" data-field="fields">
           {#each FIELDS as f (f)}
             <label><input type="checkbox" data-rf={f} checked={revFields.includes(f)} onchange={(ev) => toggleField(f, ev.currentTarget.checked)}/> {f}</label>
@@ -530,6 +548,7 @@
   .ticket-actions { display: block; margin-top: 2px; color: var(--ink); font-family: var(--font-text); font-size: var(--text-size); }
   .sec { display: flex; gap: 7px; align-items: baseline; margin: 22px 0 6px; font-size: 11px; font-weight: var(--weight-medium); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
   [data-group]:first-child > .sec { margin-top: 0; }
+  .sec .n { margin-left: auto; color: var(--ink); font-variant-numeric: tabular-nums; text-transform: none; letter-spacing: 0; }
   .aside { margin-left: auto; text-transform: none; letter-spacing: 0; }
   .ta-who { display: flex; gap: 6px; align-items: center; font-size: 11px; color: var(--muted); }
   .ta-who b { color: var(--ink); font-weight: var(--weight-medium); }
@@ -548,13 +567,19 @@
   .ta-opts label { display: flex; gap: 4px; align-items: center; }
   .ta-rev { display: flex; gap: 8px; align-items: center; font-size: 12px; }
   .rev-n { color: var(--accent); }
-  .ta-revs { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+  .ta-revs { max-height: min(360px, 50vh); margin: 0; padding: 0; overflow-y: auto; overscroll-behavior: contain; list-style: none; border-top: 1px solid var(--line); }
   .ta-revs + .ta-rev { margin-top: 8px; }
-  .ta-rev-row { display: grid; grid-template-columns: 44px 82px 58px minmax(0, 1fr); gap: 6px; align-items: center; width: 100%; height: var(--pitch); padding: 0 6px; font: inherit; font-size: 12px; text-align: left; color: var(--ink); background: none; border: 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .ta-rev-row { display: grid; grid-template-columns: 44px 82px 58px minmax(0, 1fr); gap: 0 6px; align-items: center; width: 100%; min-height: var(--pitch); padding: 3px 6px; font: inherit; font-size: 12px; text-align: left; color: var(--ink); background: none; border: 0; border-bottom: 1px solid var(--line); cursor: pointer; }
   .ta-rev-row:hover { background: var(--hover); }
   .ta-rev-row:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
   .ta-rev-row[aria-pressed="true"] { background: var(--row-sel); }
   .ta-rev-row .rev-n { font-weight: var(--weight-medium); }
+  .ta-rev-row .rev-l { grid-column: 1 / -1; min-width: 0; }
+  .ta-rev .rev-l { flex: 1 1 auto; min-width: 0; }
+  .ta-older { width: 100%; padding: 4px 6px; font: inherit; font-size: 11px; text-align: left; color: var(--accent); background: none; border: 0; cursor: pointer; }
+  .ta-older:hover { background: var(--hover); }
+  .ta-older:focus-visible { outline: none; box-shadow: inset 0 0 0 2px var(--focus); }
+  .ta-older:disabled, .ta-older:global([data-sheet~=disabled]) { color: var(--muted); cursor: default; }
   .ta-rev-row .rev-at { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .ta-rev-row .rev-by { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--weight-medium); }
   .ta-rev-row .rev-f { display: flex; gap: 4px; overflow: hidden; }

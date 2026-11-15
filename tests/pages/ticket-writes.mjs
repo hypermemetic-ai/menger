@@ -438,7 +438,7 @@ export default async (ctx) => {
     const { context, page } = await openPage(`#/actions/${id}`);
     try {
       const group = page.locator("[data-surface=ticket-actions] [data-group=revision]");
-      await eventually(`every revision listed (${revs})`, async () => (await group.locator("[data-pick-rev]").count()) === Math.min(revs.length, 5));
+      await eventually(`every revision listed (${revs})`, async () => (await group.locator("[data-pick-rev]").count()) === revs.length);
       const order = await group.locator("[data-pick-rev]").evaluateAll((els) => els.map((e) => Number(e.dataset.pickRev)));
       assert(JSON.stringify(order) === JSON.stringify([...order].sort((a, b) => b - a)), `newest first: ${order}`);
       assert((await group.locator("[data-field=rev]").count()) === 1, "a rev can still be typed");
@@ -457,6 +457,61 @@ export default async (ctx) => {
       await eventually("the title is back", async () => get(id).title === "the listed title");
       const p = (await sent(page, "tickets.revisions.restore")).at(-1).params;
       assert(p.rev === first && JSON.stringify(p.fields) === '["title"]', `the rev its row named: ${JSON.stringify(p)}`);
+    } finally {
+      await context.close();
+    }
+  });
+
+  // SURFACE-24: the owner, 2026-11-15, of a ticket whose iterations are its revisions: "why can't I see every
+  // iteration anymore?" — "I can't see them in the revision picker". Every revision is listed, each named by the
+  // title it was made under and its message, the list scrolling inside the group; the Revisions section agrees.
+  await test("the_picker_lists_every_revision_by_its_title", async () => {
+    const id = child("iteration 1");
+    for (let i = 2; i <= 10; i++) sy("tickets", "update", "--id", id, "--title", `iteration ${i}`, "--message", `pass ${i}`);
+    sy("tickets", "revisions", "restore", "--id", id, "--rev", "5", "--fields", "title");
+    const revs = sy("tickets", "revisions", "list", "--id", id).filter((e) => e.type === "revision").map((e) => e.revision);
+    assert(revs.length === 11, `eleven revisions kept: ${revs.map((r) => r.rev)}`);
+    const { context, page } = await openPage(`#/ticket/${id}`);
+    try {
+      const group = page.locator("[data-surface=ticket-actions] [data-group=revision]");
+      await eventually("all eleven listed in the picker", async () => (await group.locator("[data-pick-rev]").count()) === 11, 5_000);
+      for (const r of revs) {
+        const row = group.locator(`[data-pick-rev="${r.rev}"]`);
+        const title = await text(row.locator("[data-field=rev-title]"));
+        assert(title === r.title, `rev ${r.rev} says the title it was made under: "${title}", not "${r.title}"`);
+      }
+      assert((await text(group.locator('[data-pick-rev="11"] [data-field=rev-message]'))) === "restored title from revision 5", "the restore's row says what it put back");
+      assert((await text(group.locator('[data-pick-rev="3"] [data-field=rev-message]'))) === "pass 3", "a revision's message is said");
+      const box = await group.locator("[data-field=revisions]").evaluate((e) => ({ h: e.clientHeight, sh: e.scrollHeight, o: getComputedStyle(e).overflowY }));
+      assert(box.h <= 360 && box.o === "auto", `the list is bounded and scrolls: ${JSON.stringify(box)}`);
+      await group.locator('[data-pick-rev="1"]').scrollIntoViewIfNeeded();
+      await group.locator('[data-pick-rev="1"]').click();
+      await eventually("the oldest picked, named", async () => (await text(group.locator("[data-field=revision]"))).includes("iteration 1"));
+      // The Revisions section says the same of every row.
+      const section = page.locator("[data-surface=ticket-revisions]");
+      await eventually("the section lists all eleven", async () => (await section.locator("li[data-rev]").count()) === 11, 5_000);
+      for (const r of revs) assert((await text(section.locator(`li[data-rev="${r.rev}"] [data-field=rev-title]`))) === r.title, `the section's rev ${r.rev} agrees`);
+      if (process.env.PAGES_SHOTS) await page.screenshot({ path: path.join(process.env.PAGES_SHOTS, "ticket-actions-every-revision.png"), fullPage: true });
+    } finally {
+      await context.close();
+    }
+  });
+
+  // SURFACE-24: past a page (50) nothing is left out unsaid — "older" asks the next page, until rev 1 is listed.
+  await test("older_revisions_are_asked_page_by_page", async () => {
+    const id = child("paged 1");
+    for (let i = 2; i <= 55; i++) sy("tickets", "update", "--id", id, "--title", `paged ${i}`, "--message", `p${i}`);
+    const { context, page } = await openPage(`#/actions/${id}`);
+    try {
+      const group = page.locator("[data-surface=ticket-actions] [data-group=revision]");
+      await eventually("the newest page listed", async () => (await group.locator("[data-pick-rev]").count()) === 50, 5_000);
+      assert((await text(group.locator("[data-field=revisions-kept]"))) === "55 kept", "the head says how many are kept");
+      await group.locator("[data-action=older-revisions]").click();
+      await eventually("every one listed", async () => (await group.locator("[data-pick-rev]").count()) === 55, 5_000);
+      assert((await group.locator("[data-action=older-revisions]").count()) === 0, "nothing older to ask");
+      assert((await text(group.locator('[data-pick-rev="1"] [data-field=rev-title]'))) === "paged 1", "the oldest named");
+      const p = (await sent(page, "tickets.revisions.list")).filter((c) => c.params.before === 6);
+      assert(p.length === 1 && p[0].params.limit === 50, `the page below rev 6 asked once: ${JSON.stringify(p)}`);
     } finally {
       await context.close();
     }

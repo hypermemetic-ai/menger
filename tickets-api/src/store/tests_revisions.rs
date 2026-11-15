@@ -382,3 +382,22 @@ async fn autosaves_within_the_window_coalesce_into_one_revision() {
     let (_, problems) = revisions::check(&store.db.lock().unwrap()).unwrap().unwrap();
     assert!(problems.is_empty(), "{problems:?}");
 }
+
+/// SURFACE-24: each row of a list says the title its ticket had at that
+/// revision, and `revised` says it too — so a coalesced rename is told.
+#[tokio::test]
+async fn a_revision_says_the_title_it_was_made_under() {
+    let store = store().await;
+    let mut rx = store.subscribe_revisions();
+    for t in ["two, first pass", "two, the grid", "two, the space"] {
+        store.amend(SYS.permit("R-2"), Some(t.into()), Some(format!("{t}\n"))).await.unwrap();
+        later(&store);
+    }
+    store.set_status(SYS.permit("R-2"), Status::Ready).await.unwrap();
+    let titles: Vec<String> = revs(&store, "R-2").await.into_iter().map(|r| r.title).collect();
+    assert_eq!(titles, ["two", "two, first pass", "two, the grid", "two, the space", "two, the space"]);
+    let said: Vec<String> = std::iter::from_fn(|| rx.try_recv().ok())
+        .filter_map(|c| if let Change::Revised { title, .. } = c { Some(title) } else { None })
+        .collect();
+    assert_eq!(said, ["two, first pass", "two, the grid", "two, the space", "two, the space"]);
+}
