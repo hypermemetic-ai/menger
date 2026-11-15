@@ -36,6 +36,7 @@
   import HelloList from "plexus-ui:hello-list";
   import JumpPaletteSv from "plexus-ui:jump-palette-sv";
   import KeysGlobal from "plexus-ui:keys-global";
+  import ImageZoom from "plexus-ui:image-zoom";
   import KeysHelp from "plexus-ui:keys-help";
   import NoteQuick from "plexus-ui:note-quick";
   import NavChildrenSv from "plexus-ui:nav-children-sv";
@@ -197,6 +198,8 @@
       ["keys-help", KeysHelp, F, [], {}],
       // The global keys, drawn as their list: every page-wide chord and the action it emits.
       ["keys-global", KeysGlobal, (t) => ({ sheet: "list" }), [], {}],
+      // EDITOR-31: an image in a body, opened large — the modal as a click on one draws it.
+      ["image-zoom", ImageZoom, (t) => ({ sheet: "open" }), ["hover", "focus"], {}],
       ["ticket-chip-sv", TicketChipSv, ID, ["hover", "focus"], gone],
       // V2-42: a ticket's link, from the one helper (by name here: the sheet's id has no uid in hand).
       ["ticket-links", TicketLinks, ID, [], {}],

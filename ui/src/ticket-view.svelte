@@ -463,6 +463,7 @@
   .md :global(th) { font-weight: var(--weight-strong); }
   .md :global(blockquote) { margin: 6px 0; padding-left: 14px; color: var(--muted); border-left: 2px solid var(--line); }
   .md :global(img) { max-width: 100%; height: auto; }
+  .md :global(img:not(a img, button img, label img, [role=radio] img, [data-no-zoom] img)) { cursor: zoom-in; } /* EDITOR-31: image-zoom opens it large */
   .md :global(hr) { margin: 12px 0; border: 0; border-top: var(--border) solid var(--line); }
   /* The house's marks as typography in the flow. Every mark is a plain block or a run of text; what it says
      beside its words (a label, a kicker, a status, who and when) is small muted text. */
