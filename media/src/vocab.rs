@@ -160,6 +160,30 @@ text_type!(
     web_url
 );
 
+/// EDITOR-32: how a kept file is drawn, as `media.list --kind` names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaKind {
+    Image,
+    Video,
+    Audio,
+    Pdf,
+    File,
+}
+
+impl MediaKind {
+    /// The wire's word, as the store keeps it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MediaKind::Image => "image",
+            MediaKind::Video => "video",
+            MediaKind::Audio => "audio",
+            MediaKind::Pdf => "pdf",
+            MediaKind::File => "file",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

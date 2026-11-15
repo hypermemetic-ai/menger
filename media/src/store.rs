@@ -140,6 +140,16 @@ pub struct Kept {
     pub owners: Vec<Owner>,
 }
 
+/// EDITOR-32: one row of [`MediaStore::list`] — a kept file, when it was
+/// first kept (unix seconds), and the tickets and documents it is kept for
+/// (never a putter's or anyone's: those are no place it is used).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listed {
+    pub info: MediaInfo,
+    pub at: i64,
+    pub owners: Vec<Owner>,
+}
+
 /// What `put` answers: the file as kept, whether its bytes were kept
 /// already, and (V2-69) whether the putter keeps it now and did not before
 /// — what their allowance is charged for.
@@ -599,6 +609,39 @@ impl MediaStore {
             let mut stmt = conn.prepare("SELECT ticket, principal FROM media_owners WHERE hash = ?1 ORDER BY at, rowid")?;
             let owners = stmt.query_map([&h], |r| Ok(Owner::of(r.get(0)?, r.get(1)?)))?.collect::<Result<Vec<_>, _>>()?;
             Ok(Kept { info, owners })
+        })
+        .await
+    }
+
+    /// EDITOR-32: at most `limit` files kept for a ticket or a document,
+    /// newest first (`at`, then the row's age), of `kind` when one is named,
+    /// after the file `after` names — [`StoreError::NotFound`] for a hash
+    /// that names none. Each with its ticket and document owners, in the
+    /// order they were added. Who may see which is the caller's to decide
+    /// ([`crate::listing`]); this reads rows.
+    pub async fn list(self: &Arc<Self>, kind: Option<&str>, after: Option<&str>, limit: usize) -> Result<Vec<Listed>, StoreError> {
+        let (kind, after) = (kind.map(str::to_string), after.map(str::to_string));
+        self.blocking(move |conn| {
+            let from = match &after {
+                Some(h) => Some(conn.query_row("SELECT at, rowid FROM media WHERE hash = ?1", [h], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))).optional()?.ok_or_else(|| StoreError::NotFound(h.clone()))?),
+                None => None,
+            };
+            let mut stmt = conn.prepare(&format!(
+                "SELECT {INFO_COLUMNS}, at FROM media m
+                 WHERE EXISTS (SELECT 1 FROM media_owners o WHERE o.hash = m.hash AND o.ticket != '')
+                   AND (?1 IS NULL OR kind = ?1)
+                   AND (?2 IS NULL OR at < ?2 OR (at = ?2 AND rowid < ?3))
+                 ORDER BY at DESC, rowid DESC LIMIT ?4"
+            ))?;
+            let (at, rowid) = (from.map(|f| f.0), from.map(|f| f.1));
+            let rows = stmt.query_map(params![kind, at, rowid, limit as i64], |r| Ok((info_row(r)?, r.get::<_, i64>(7)?)))?.collect::<Result<Vec<_>, _>>()?;
+            let mut owned = conn.prepare("SELECT ticket, principal FROM media_owners WHERE hash = ?1 AND ticket != '' ORDER BY at, rowid")?;
+            rows.into_iter()
+                .map(|(info, at)| {
+                    let owners = owned.query_map([&info.hash], |r| Ok(Owner::of(r.get(0)?, r.get(1)?)))?.collect::<Result<Vec<_>, _>>()?;
+                    Ok(Listed { info, at, owners })
+                })
+                .collect()
         })
         .await
     }
