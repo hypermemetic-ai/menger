@@ -9,7 +9,7 @@
        </tweet-writer>
      — its open line and its close line each alone (block form, tag-source), each `tweet-post` child a post:
      its words the child's text, its video the child's `video` (`media:<hash>`) and `name`. It is drawn by its
-     tag (tag-components hands a native tag its `source`, its `children` as structure, the `ticket` or `doc`
+     tag (tag-components hands a native tag its `source`, its `children` as structure, the `ticket` or `note`
      it sits in, `editor` when it is in the editor, and `n`, its place among the body's `tweet-writer`s) as
      the composer: each post's words in a box that grows, its count against 280 by code points (amber from
      260, red past 280: over is allowed and saved, the limit is the site's), its video playable from this
@@ -19,12 +19,12 @@
      when that is still the source it was drawn from — replaces that tag alone and writes the body back
      (`tickets.amend`), every other byte kept; when it is gone or someone changed it, it refuses and says
      so, overwriting nothing. Words are written escaped (`&` and `<`), so a word never closes the tag.
-     EDITOR-24: in the editor — `…/edit`, a document (EDITOR-29: never a ticket's page, which draws its body) — the body is the editor's to save, so
+     EDITOR-24: in the editor — `…/edit`, a note (EDITOR-29: never a ticket's page, which draws its body) — the body is the editor's to save, so
      the writer hands it the tag (`body.tag` on the bus: the tag's name, place, the source it was drawn from
      and the new one) and the editor replaces that tag alone in its text and saves the body its own way (a
-     ticket's amend, a document's CRDT), answering `body.tag.done`; changed or gone, it refuses the same way.
-     Drawn only: with no ticket or document known, or its place in the body unknown.
-     Marks: `[data-surface=tweet-writer]` (`data-ticket`, `data-n`, `data-where=ticket|editor|doc|none|loose`),
+     ticket's amend, a note's CRDT), answering `body.tag.done`; changed or gone, it refuses the same way.
+     Drawn only: with no ticket or note known, or its place in the body unknown.
+     Marks: `[data-surface=tweet-writer]` (`data-ticket`, `data-n`, `data-where=ticket|editor|note|none|loose`),
      `[data-post=<n>]` (1-based; `[data-over]` past 280), `[data-field=text|count|video|over|state|note]`,
      `[data-action=add|remove|up|down|save]`, `[data-state=saved|dirty|saving|refused|changed|readonly]`. -->
 <script module>
@@ -72,13 +72,13 @@
   import { tick, untrack } from "svelte";
   import { bus } from "plexus-ui/host";
 
-  let { source = "", children = null, ticket = "", doc = "", n = "", editor = "" } = $props();
+  let { source = "", children = null, ticket = "", note = "", n = "", editor = "" } = $props();
   const b = bus();
 
   const placed = $derived(n !== "" && n != null && !!source);
-  const where = $derived(doc ? (editor && placed ? "doc" : "none") : !ticket ? "none" : !placed ? "loose" : editor ? "editor" : "ticket");
+  const where = $derived(note ? (editor && placed ? "note" : "none") : !ticket ? "none" : !placed ? "loose" : editor ? "editor" : "ticket");
   // What it can save into: the body it reads and writes itself (a ticket's read-only drawing), or the editor's.
-  const saves = $derived(where === "ticket" || where === "editor" || where === "doc");
+  const saves = $derived(where === "ticket" || where === "editor" || where === "note");
   const notes = {
     none: "drawn only: no ticket known here, so it cannot save",
     loose: "drawn only: its place in the body is not known — write its open and close tags each on a line of their own to save it",
@@ -124,7 +124,7 @@
       const end = (r) => { clearTimeout(late); off?.(); resolve(r); };
       const late = setTimeout(() => end({ ok: false, message: "the editor did not answer: nothing saved" }), 15000);
       off = b.on("body.tag.done", (d) => { if (d?.token === token) end(d); });
-      b.emit("body.tag", { kind: doc ? "doc" : "ticket", id: doc || ticket, name: TAG, n: Number(n), was: drawnFrom, next, token });
+      b.emit("body.tag", { kind: note ? "note" : "ticket", id: note || ticket, name: TAG, n: Number(n), was: drawnFrom, next, token });
     });
   }
 

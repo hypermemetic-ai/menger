@@ -1,19 +1,19 @@
-//! **Who is on a document** (V2-29, the owner: *"we should see that they
+//! **Who is on a note** (V2-29, the owner: *"we should see that they
 //! have a connection open on that document too"*). Each open connection on
-//! a document is a presence entry — its principal, its name, person or
+//! a note is a presence entry — its principal, its name, person or
 //! agent, a colour, and its caret and selection as the browser's Yjs
-//! awareness says them — relayed to everyone on that document through
+//! awareness says them — relayed to everyone on that note through
 //! `watch` (`present`, `left`).
 //!
-//! An entry is **held** by an open `docs.watch { id, session }`: it comes
+//! An entry is **held** by an open `notes.watch { id, session }`: it comes
 //! with the watch and goes when the watch does (the connection closed, the
-//! page left). `docs.here` moves its caret. A writer with no watch open —
-//! an agent's `docs.save` over synapse — is present while it writes, and
+//! page left). `notes.here` moves its caret. A writer with no watch open —
+//! an agent's `notes.save` over synapse — is present while it writes, and
 //! **idles out** [`IDLE_MS`] after its last word; a held entry idles out
 //! after [`HELD_IDLE_MS`] of silence and comes back with its next.
 
 use crate::events::Present;
-use crate::store::{now_ms, Change, DocsStore};
+use crate::store::{now_ms, Change, NotesStore};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -23,7 +23,7 @@ pub const IDLE_MS: i64 = 30_000;
 pub const HELD_IDLE_MS: i64 = 10 * 60_000;
 
 /// The colours a presence is drawn in — chosen by its principal, so a
-/// person keeps theirs across documents (the carets' own, as y-codemirror
+/// person keeps theirs across notes (the carets' own, as y-codemirror
 /// draws them).
 pub const COLOURS: [&str; 8] = ["#d9480f", "#2b8a3e", "#1971c2", "#9c36b5", "#e8590c", "#0c8599", "#c2255c", "#5f3dc4"];
 
@@ -35,7 +35,7 @@ struct Entry {
     last: i64,
 }
 
-/// Every presence entry, by document and session.
+/// Every presence entry, by note and session.
 #[derive(Debug, Default)]
 pub struct Presence {
     entries: Mutex<HashMap<(String, String), Entry>>,
@@ -55,7 +55,7 @@ pub fn colour_of(principal: &str) -> &'static str {
     COLOURS[(h as usize) % COLOURS.len()]
 }
 
-impl DocsStore {
+impl NotesStore {
     fn entries(&self) -> std::sync::MutexGuard<'_, HashMap<(String, String), Entry>> {
         self.presence.entries.lock().unwrap_or_else(|p| p.into_inner())
     }
@@ -139,7 +139,7 @@ impl DocsStore {
 /// Holds a watch's presence: the entry goes when this does (the stream
 /// dropped — its connection closed).
 pub struct Held {
-    pub(crate) store: Arc<DocsStore>,
+    pub(crate) store: Arc<NotesStore>,
     pub(crate) id: String,
     pub(crate) session: String,
 }

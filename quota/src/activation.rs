@@ -145,7 +145,7 @@ impl QuotaActivation {
     /// now), carried over days nothing moved; a day's counter (fetches,
     /// served) its day's total. `estimate` marks a day before the ledger
     /// counted it, backfilled by the recount from the stores (media's files
-    /// by when each was kept, documents' changes, tickets' revisions: what
+    /// by when each was kept, notes' changes, tickets' revisions: what
     /// they keep now, laid back along when it was written). Then `end {
     /// principal, everyone, from, to, days }`. Anyone signed in, for
     /// themselves.
@@ -197,7 +197,7 @@ impl QuotaActivation {
     #[plexus_rpc::macros::method(
         group = "admin",
         example(note = "raise one person's media", params = r#"{"principal": "idp:c952", "source": "media.bytes", "cap": "20 GB"}"#),
-        example(note = "the default for docs", params = r#"{"default": true, "source": "docs.bytes", "cap": "200 MB"}"#)
+        example(note = "the default for notes", params = r#"{"default": true, "source": "notes.bytes", "cap": "200 MB"}"#)
     )]
     pub async fn set(
         &self,
@@ -221,8 +221,8 @@ impl QuotaActivation {
     ///
     /// Asks, through the seam, `tickets.revisions.usage` (bodies and
     /// revisions by author: tickets.count, tickets.bytes), `media.usage`
-    /// (blobs by uploader: media.bytes) and `docs.usage` (docs.count,
-    /// docs.bytes), and sets each principal's total of each source the store
+    /// (blobs by uploader: media.bytes) and `notes.usage` (notes.count,
+    /// notes.bytes), and sets each principal's total of each source the store
     /// answered to what it counts: one `drift { principal, source, was,
     /// counted }` per one that moved, then `recounted { principals,
     /// drifted, sources, not_counted }` — a store that has no such method

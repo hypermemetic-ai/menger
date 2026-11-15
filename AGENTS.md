@@ -2,9 +2,9 @@
 
 A plan is a program whose leaves are prose. menger is a Plexus RPC
 ticketing service and the seed of a Plexus-native reactive web framework.
-This is **v2**: the tickets service, the ui service, the media service, the docs service and the quota service, nothing else.
+This is **v2**: the tickets service, the ui service, the media service, the notes service and the quota service, nothing else.
 
-v1 is tag `v0.0.1`; v2 cut its chats, comments, deployments, themes, notes, assignees and components, the Leptos app (trunk) and the frames' SDK (sdk-codegen), mockups and the diagrams service — read v1 there, never here. Media came back as a service of its own (V2-24, `media/`), and a body's pages as sandboxed frames (EDITOR-14, COMPS-3: `ui/src/m-mockup.svelte`, `m-live.svelte` and `m-page.svelte`, real Svelte: `svelte/1`, on plexus-ui's frames, COMPS-2).
+v1 is tag `v0.0.1`; v2 cut its chats, comments, deployments, themes, v1's notes, assignees and components, the Leptos app (trunk) and the frames' SDK (sdk-codegen), mockups and the diagrams service — read v1 there, never here. Media came back as a service of its own (V2-24, `media/`), and a body's pages as sandboxed frames (EDITOR-14, COMPS-3: `ui/src/m-mockup.svelte`, `m-live.svelte` and `m-page.svelte`, real Svelte: `svelte/1`, on plexus-ui's frames, COMPS-2).
 
 README.md is the reference: the services and their methods ("Surface"),
 the flags ("Run" → Every flag), the rules each ticket set down. This file is
@@ -73,8 +73,8 @@ the default data directory, `~/.local/share/menger` — prod's directory on
 this machine; it writes `local.key`, `local.json` and `once/` beside prod's
 file. Never run it that way here. A dev server's `--db-path` names all its
 files (SCRATCH-NAMES): beside a database not named `tickets.db` or
-`local.db`, the ui, media, docs and quota files carry its stem —
-`/tmp/menger-dev.db` → `/tmp/menger-dev.ui.db`, `.media.db`, `.docs.db`,
+`local.db`, the ui, media, notes and quota files carry its stem —
+`/tmp/menger-dev.db` → `/tmp/menger-dev.ui.db`, `.media.db`, `.notes.db`,
 `.quota.db`, `/tmp/menger-dev.media.blobs/` — so throwaways in `/tmp` share
 none, and `scripts/cleanup-gate.sh dev` takes every one; a flag that names a
 file still wins. A file in `/tmp` named plainly (`/tmp/ui.db`,
@@ -116,10 +116,12 @@ VERSION --ui DIR` — publish, tag, and menger's bump, one step.
 (children `commits`, `filters`, `inputs`, `nav`, `revisions`, `subtasks`, `work`),
 `members` (child `teams`), `orgs`, `session`, `auth`, `ui`
 (child `slots`), `media` (V2-24: `media/`, `menger-media` — images by
-sha256 in `media.db`, `--media-db-path`), `docs` (V2-29: `docs/`,
-`menger-docs` — documents as Yjs CRDTs in `docs.db`, `--docs-db-path`;
-who may is the gate's word on the document's organization, asked through
-its seam; the editor writes it at `#/doc/:id`), and `quota` (V2-31: `quota/`, `menger-quota` —
+sha256 in `media.db`, `--media-db-path`), `notes` (V2-29, NOTES-3: `notes/`,
+`menger-notes` — notes as Yjs CRDTs in `notes.db`, `--notes-db-path`;
+who may is the gate's word on the note's organization, asked through
+its seam; the editor writes it at `#/note/:id`, and `#/doc/:id` opens the
+same note; the docs service renamed, what it kept moved at the first start
+by `src/notes_move.rs`), and `quota` (V2-31: `quota/`, `menger-quota` —
 every principal's allowance per source in `quota.db`, `--quota-db-path`;
 every storing write reserved through its seam; V2-70: a point a day per
 principal and source kept as history, `quota.history`, backfilled by the
@@ -717,7 +719,7 @@ question.
   plexus-login being the one substrate names — still the 0.7 line, since
   plexus-substrate has no 0.8 revision yet (V2-58). Every activation is `impl FooActivation` (MACRO-13,
   MACRO-21): the stem names the namespace, the trait and the client.
-- **Workspace members** (`Cargo.toml`): `.`, `tickets-api`, `media`, `quota`;
+- **Workspace members** (`Cargo.toml`): `.`, `tickets-api`, `media`, `notes`, `quota`;
   `tether/` is its own workspace. Three repositories
   hold what menger lifted out: `plexus-webapp` (FRAME-4; published),
   `plexus-login` (FRAME-4; published) and plexus-ui,

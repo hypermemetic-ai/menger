@@ -102,12 +102,12 @@ pub enum Owner {
     App(Option<String>),
     /// EDITOR-10: anyone signed in — a public page's preview image.
     Anyone,
-    /// V2-29: the document it was put for, by its id — kept in the
+    /// V2-29: the note it was put for, by its id — kept in the
     /// `ticket` column as `doc:<id>` (a ticket's id never begins so).
-    Doc(String),
+    Note(String),
 }
 
-/// V2-29: how a document's id is kept in `media_owners.ticket`.
+/// V2-29: how a note's id is kept in `media_owners.ticket`.
 pub const DOC_PREFIX: &str = "doc:";
 
 impl Owner {
@@ -115,7 +115,7 @@ impl Owner {
     fn columns(&self) -> (String, String) {
         match self {
             Owner::Ticket(t) => (t.clone(), String::new()),
-            Owner::Doc(d) => (format!("{DOC_PREFIX}{d}"), String::new()),
+            Owner::Note(d) => (format!("{DOC_PREFIX}{d}"), String::new()),
             Owner::App(p) => (String::new(), p.clone().unwrap_or_default()),
             Owner::Anyone => (String::new(), ANYONE.into()),
         }
@@ -123,7 +123,7 @@ impl Owner {
 
     fn of(ticket: String, principal: String) -> Self {
         if let Some(doc) = ticket.strip_prefix(DOC_PREFIX) {
-            return Owner::Doc(doc.to_string());
+            return Owner::Note(doc.to_string());
         }
         match (ticket.is_empty(), principal.as_str()) {
             (false, _) => Owner::Ticket(ticket),
@@ -141,7 +141,7 @@ pub struct Kept {
 }
 
 /// EDITOR-32: one row of [`MediaStore::list`] — a kept file, when it was
-/// first kept (unix seconds), and the tickets and documents it is kept for
+/// first kept (unix seconds), and the tickets and notes it is kept for
 /// (never a putter's or anyone's: those are no place it is used).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Listed {
@@ -613,10 +613,10 @@ impl MediaStore {
         .await
     }
 
-    /// EDITOR-32: at most `limit` files kept for a ticket or a document,
+    /// EDITOR-32: at most `limit` files kept for a ticket or a note,
     /// newest first (`at`, then the row's age), of `kind` when one is named,
     /// after the file `after` names — [`StoreError::NotFound`] for a hash
-    /// that names none. Each with its ticket and document owners, in the
+    /// that names none. Each with its ticket and note owners, in the
     /// order they were added. Who may see which is the caller's to decide
     /// ([`crate::listing`]); this reads rows.
     pub async fn list(self: &Arc<Self>, kind: Option<&str>, after: Option<&str>, limit: usize) -> Result<Vec<Listed>, StoreError> {

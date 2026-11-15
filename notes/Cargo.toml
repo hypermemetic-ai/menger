@@ -1,17 +1,17 @@
-# V2-29: menger's docs service — documents on their own API and in a file
-# of their own (`docs.db`), as a service of v2's own beside `tickets`, `ui`
+# V2-29: menger's notes service — notes on their own API and in a file
+# of their own (`notes.db`), as a service of v2's own beside `tickets`, `ui`
 # and `media` (V2-1: services that coexist, each reaching the others as a
 # client through the seam). The owner, 2026-11-02: "I would like us to move
-# the docs onto a new docs api. same fe though." A document is writing, not
+# the docs onto a new docs api. same fe though." A note is writing, not
 # work: an id, a title, a markdown body, who and when, every write kept as a
-# revision. Who may is the gate's word on the document's organization
+# revision. Who may is the gate's word on the note's organization
 # (`acme:`), asked of the running service — never of the tickets file.
 [package]
-name = "menger-docs"
+name = "menger-notes"
 version = "0.8.0"
 edition = "2021"
 license = "MIT"
-description = "menger's docs service — documents on their own API and file, every write a revision, the organization's roles held by the gate"
+description = "menger's notes service — notes on their own API and file, every write a revision, the organization's roles held by the gate"
 repository = "https://github.com/hypermemetic-ai/menger"
 
 [dependencies]
@@ -34,7 +34,7 @@ tokio = { version = "1", features = ["full"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 anyhow = "1"
 tracing = "0.1"
-# V2-29 (`pairing`, the owner: "live co editting"): a document's body is a
+# V2-29 (`pairing`, the owner: "live co editting"): a note's body is a
 # Yjs CRDT — yrs, Yjs' Rust port, its v1 updates the browser's (yjs,
 # y-codemirror.next) byte for byte; the markdown is derived from it.
 yrs = "0.28.0"

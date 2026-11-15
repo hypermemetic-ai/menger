@@ -1,7 +1,7 @@
 // EDITOR-32: the media page, #/media (page-media) — every kept file the reader may see, as a grid:
 // an image a thumbnail from /media/<hash> (in a `data-zoomable` grid, never inside a link or a
 // control, so EDITOR-31's zoom opens it), any other kind its card; under each, its tickets (by
-// ticket-links) and documents (#/doc/<id>); chips by kind; more pages on "more" or on scroll.
+// ticket-links) and notes (#/note/<id>); chips by kind; more pages on "more" or on scroll.
 // Run alone by `node tests/pages_browser.mjs --group media-page`. Who may see which is the
 // wire's (tests/wire_media.rs: media_list_answers_each_reader_what_it_may_see_and_where_it_is_used).
 //
@@ -63,8 +63,8 @@ export default async (ctx) => {
   const img = put("--ticket", one.id, "kiln.png", IMG);
   assert(put("--ticket", two.id, "kiln.png", IMG) === img, "the same bytes: one file");
   const video = put("--ticket", one.id, "firing.mp4", mp4(64));
-  const docId = sy("docs", "create", "--title", "a deck", "--body", file("doc.md", "a deck\n")).find((e) => e.type === "created").doc.id;
-  const pdf = put("--doc", docId, "deck.pdf", Buffer.from("%PDF-1.4 the deck").toString("base64"));
+  const docId = sy("notes", "create", "--title", "a deck", "--body", file("doc.md", "a deck\n")).find((e) => e.type === "created").note.id;
+  const pdf = put("--note", docId, "deck.pdf", Buffer.from("%PDF-1.4 the deck").toString("base64"));
 
   await test("media_page_an_image_on_two_tickets_drawn_once", async () => {
     const { context, page, seen } = await openPage("#/media");
@@ -88,7 +88,7 @@ export default async (ctx) => {
       const card = root.locator(`[data-hash="${pdf}"]`);
       await eventually("the pdf's card", async () => (await card.count()) === 1);
       assert((await card.getAttribute("data-kind")) === "pdf" && (await card.locator("img").count()) === 0, "a card, no thumbnail");
-      assert((await card.locator(`[data-owner=doc][data-id="${docId}"]`).getAttribute("href")) === `#/doc/${docId}`, "the document by #/doc/<id>");
+      assert((await card.locator(`[data-owner=note][data-id="${docId}"]`).getAttribute("href")) === `#/note/${docId}`, "the note by #/note/<id>");
       // A ticket's link goes to its page.
       await tile.locator(`[data-owner=ticket][data-id="${one.id}"]`).click();
       await eventually("the ticket's page", async () => /^#\/(t\/|ticket\/)/.test(await page.evaluate(() => location.hash)));

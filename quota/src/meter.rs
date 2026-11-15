@@ -76,7 +76,7 @@ mod tests {
         assert_eq!(amount("media.bytes", 603), "603 B");
         assert_eq!(amount("media.bytes", 1000), "1 KB");
         assert_eq!(amount("media.bytes", 1_900_000_000), "1.9 GB");
-        assert_eq!(amount("docs.bytes", 200_000_000), "200 MB");
+        assert_eq!(amount("notes.bytes", 200_000_000), "200 MB");
         assert_eq!(amount("media.fetch.calls", 300), "300");
         let r = Refusal::OverAllowance { source: "media.bytes".into(), used: 1_900_000_000, cap: 2_000_000_000, asked: 300_000_000 };
         assert!(r.to_string().contains("1.9 GB used of 2 GB, and this asks 300 MB more"), "{r}");

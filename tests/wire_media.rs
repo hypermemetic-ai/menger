@@ -366,7 +366,7 @@ async fn all(client: &WsClient, method: &str, params: Value) -> Vec<Value> {
     out
 }
 
-/// `media.list`'s rows as `(hash, tickets, docs)`, and its `page { next }`.
+/// `media.list`'s rows as `(hash, tickets, notes)`, and its `page { next }`.
 async fn listed(client: &WsClient, params: Value) -> (Vec<(String, Value, Value)>, Value) {
     let mut events = all(client, "media.list", params).await;
     let page = events.pop().expect("a page");
@@ -375,17 +375,17 @@ async fn listed(client: &WsClient, params: Value) -> (Vec<(String, Value, Value)
         .into_iter()
         .map(|e| {
             assert_eq!(e["type"], "listed", "{e}");
-            (e["hash"].as_str().unwrap().to_string(), e["tickets"].clone(), e["docs"].clone())
+            (e["hash"].as_str().unwrap().to_string(), e["tickets"].clone(), e["notes"].clone())
         })
         .collect();
     (rows, page["next"].clone())
 }
 
 /// EDITOR-32: `media.list` answers the files each reader may see, newest
-/// first, each with the tickets and documents it is kept for **among those
-/// the reader reads** — asked of `tickets.may` and `docs.may` as the reader:
+/// first, each with the tickets and notes it is kept for **among those
+/// the reader reads** — asked of `tickets.may` and `notes.may` as the reader:
 /// A's viewer sees the image A-2 and B-2 share with A-2 alone, and none of
-/// B's own file or the admin's document; B's editor sees its own; the admin
+/// B's own file or the admin's note; B's editor sees its own; the admin
 /// all of it. By kind, paged by `after`; a viewer's read, a bad kind refused
 /// naming the parameter.
 #[tokio::test]
@@ -400,13 +400,13 @@ async fn media_list_answers_each_reader_what_it_may_see_and_where_it_is_used() {
     grant(&admin, &VIEWER_A, "viewer", "A").await;
     let (editor, stranger, viewer) = (connect_key(&EDITOR_A, port).await, connect_key(&STRANGER, port).await, connect_key(&VIEWER_A, port).await);
 
-    // One PNG on A-2 and B-2; a GIF on B-2 alone; a PDF on the admin's document; one with no ticket.
+    // One PNG on A-2 and B-2; a GIF on B-2 alone; a PDF on the admin's note; one with no ticket.
     let png = one(&editor, "media.put", json!({"ticket": "A-2", "data": PNG_2X1, "name": "dot.png"})).await["hash"].as_str().unwrap().to_string();
     assert_eq!(one(&stranger, "media.put", json!({"ticket": "B-2", "data": PNG_2X1})).await["duplicate"], true);
     let gif = one(&stranger, "media.put", json!({"ticket": "B-2", "data": GIF})).await["hash"].as_str().unwrap().to_string();
-    let made = one(&admin, "docs.create", json!({"title": "a deck"})).await;
-    let doc = made["doc"]["id"].as_str().unwrap_or_else(|| panic!("{made}")).to_string();
-    let pdf = one(&admin, "media.put", json!({"doc": doc, "data": b64(b"%PDF-1.4 deck"), "name": "deck.pdf"})).await;
+    let made = one(&admin, "notes.create", json!({"title": "a deck"})).await;
+    let doc = made["note"]["id"].as_str().unwrap_or_else(|| panic!("{made}")).to_string();
+    let pdf = one(&admin, "media.put", json!({"note": doc, "data": b64(b"%PDF-1.4 deck"), "name": "deck.pdf"})).await;
     assert_eq!(pdf["kind"], "pdf", "{pdf}");
     let pdf = pdf["hash"].as_str().unwrap().to_string();
     assert_eq!(one(&editor, "media.put", json!({"data": GIF.replace("AQAB", "AgAC")})).await["type"], "stored", "the editor's own");
@@ -420,9 +420,9 @@ async fn media_list_answers_each_reader_what_it_may_see_and_where_it_is_used() {
     assert_eq!((first[0]["kind"].as_str(), first[0]["width"].as_u64(), first[0]["mime"].as_str()), (Some("image"), Some(1), Some("image/gif")), "{first:?}");
     assert!(first[0]["at"].as_i64().unwrap() > 0);
 
-    // A's viewer: the shared PNG with A-2 alone — B-2 is out of its reach, so is the GIF and the document.
+    // A's viewer: the shared PNG with A-2 alone — B-2 is out of its reach, so is the GIF and the note.
     let (rows, _) = listed(&viewer, json!({})).await;
-    assert_eq!(rows, vec![(png.clone(), json!(["A-2"]), json!([]))], "a reader without reach sees none of B's or the document's");
+    assert_eq!(rows, vec![(png.clone(), json!(["A-2"]), json!([]))], "a reader without reach sees none of B's or the note's");
     // B's editor: its GIF, and the PNG as B-2's.
     let (rows, _) = listed(&stranger, json!({})).await;
     assert_eq!(rows, vec![(gif.clone(), json!(["B-2"]), json!([])), (png.clone(), json!(["B-2"]), json!([]))]);

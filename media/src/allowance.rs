@@ -7,7 +7,7 @@
 //! trait whose answer the service obeys:
 //!
 //! - before a file is taken — `put`, `begin` — `reserve(principal,
-//!   "media.bytes", size)` for whoever uploads it (a ticket's or a doc's
+//!   "media.bytes", size)` for whoever uploads it (a ticket's or a note's
 //!   file counts against its uploader, never the ticket);
 //! - before a link is read — `unfurl`, `fetch` — `media.fetch.calls` (one)
 //!   and, once the bytes are in hand, `media.fetch.bytes`;

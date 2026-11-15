@@ -4,7 +4,7 @@
 //! somewhere, within the session's ceiling — so this service's resolver
 //! ([`Callers::verify`]) takes the identity the upgrade proved and the
 //! reach the gate answered (`current_reach()`), and refuses only what the
-//! gate cannot have admitted. Where a document is — its organization — is
+//! gate cannot have admitted. Where a note is — its organization — is
 //! asked of the gate again by the methods ([`crate::seam::Seam::holds`]).
 
 use crate::events::WatchEnd;
@@ -14,7 +14,7 @@ use plexus_rpc::macros::PlexusRequest;
 /// The per-call context every method of the service reads: the identity the
 /// connection's upgrade proved, when one did.
 #[derive(PlexusRequest)]
-pub struct DocsRequest {
+pub struct NotesRequest {
     /// The identity the connection's upgrade proved (none: anonymous).
     #[from_auth_context]
     pub auth: Option<AuthContext>,

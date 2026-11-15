@@ -9,7 +9,7 @@
 //! file: plexus-wire's `conformance/expect/menger.txt` is main's.
 //!
 //! V2-44: main's test, on v2. The service under test is every one v2 runs in
-//! its one process — `tickets`, `ui`, `media`, `docs`, `quota` beside
+//! its one process — `tickets`, `ui`, `media`, `notes`, `quota` beside
 //! `orgs`, `members`, `session` and `auth` — each on its own file in the
 //! test's directory; the kit's schema walk reads the whole tree, and the test
 //! holds that tree to v2's services, so the kit is never green on less.
@@ -58,7 +58,7 @@ fn key_file(dir: &std::path::Path) -> PathBuf {
 }
 
 /// v2's services: what the kit's service must be (V2-1, V2-24, V2-29, V2-31).
-const V2_SERVICES: &[&str] = &["tickets", "ui", "media", "docs", "quota", "orgs", "members", "session"];
+const V2_SERVICES: &[&str] = &["tickets", "ui", "media", "notes", "quota", "orgs", "members", "session"];
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn kit_green_on_menger() {

@@ -2227,8 +2227,8 @@ dependencies = [
  "hyper-util",
  "jsonrpsee",
  "jsonwebtoken",
- "menger-docs",
  "menger-media",
+ "menger-notes",
  "menger-quota",
  "menger-tickets-api",
  "nostr",
@@ -2257,7 +2257,31 @@ dependencies = [
 ]
 
 [[package]]
-name = "menger-docs"
+name = "menger-media"
+version = "0.8.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "futures",
+ "menger-notes",
+ "menger-tickets-api",
+ "plexus-rpc",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "menger-notes"
 version = "0.8.0"
 dependencies = [
  "anyhow",
@@ -2276,30 +2300,6 @@ dependencies = [
  "tracing",
  "uuid",
  "yrs",
-]
-
-[[package]]
-name = "menger-media"
-version = "0.8.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64 0.22.1",
- "futures",
- "menger-docs",
- "menger-tickets-api",
- "plexus-rpc",
- "reqwest 0.12.28",
- "rusqlite",
- "schemars",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "tokio",
- "tracing",
- "url",
- "uuid",
 ]
 
 [[package]]

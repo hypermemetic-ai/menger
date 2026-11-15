@@ -6,7 +6,7 @@
 // The spy is board-keys's: a window capture listener the test adds before the
 // page's scripts records each press and reads `defaultPrevented` once the
 // host had it; a document listener says whether the press reached the page.
-// On each route — `#/`, `#/edit/:id`, `#/doc/:id`, `#/ticket/:id`, `#/board` —
+// On each route — `#/`, `#/edit/:id`, `#/note/:id`, `#/ticket/:id`, `#/board` —
 // each page-wide and editor chord is pressed with focus in the editor (where
 // there is one), in an input, on a button and on the body, and must be the
 // host's: prevented, never heard by the page, and its fold run where it shows.
@@ -35,7 +35,7 @@ export default async (ctx) => {
   const created = (out, what) => {
     const c = out.find((e) => e.type === "created");
     if (!c) throw new Error(`create ${what}: ${JSON.stringify(out)}`);
-    return c.ticket?.id ?? c.doc?.id;
+    return c.ticket?.id ?? c.note?.id;
   };
   const bodyFile = (name, text) => { const f = path.join(path.dirname(session), `keys-${name}.md`); fs.writeFileSync(f, text); return `@${f}`; };
   const root = created(sy("tickets", "create", "--epic", EPIC, "--kind", "scope", "--title", "the keys' tickets"), "root");
@@ -139,10 +139,10 @@ export default async (ctx) => {
 
   await test("the_editors_commands_are_the_hosts_in_every_focus", async () => {
     const id = make("keys in the editor", "first line\n\nsecond line\n");
-    const doc = sy("docs", "create", "--title", "Keys doc", "--body", bodyFile("doc", "a doc's line\n")).find((e) => e.type === "created").doc.id;
+    const doc = sy("notes", "create", "--title", "Keys doc", "--body", bodyFile("doc", "a doc's line\n")).find((e) => e.type === "created").note.id;
     const reds = [
       ...(await sweep(`#/edit/${id}`, editorUp, EDITOR, ["editor", "input", "button", "body"], editorRan)),
-      ...(await sweep(`#/doc/${doc}`, editorUp, EDITOR, ["editor", "input", "button", "body"], editorRan)),
+      ...(await sweep(`#/note/${doc}`, editorUp, EDITOR, ["editor", "input", "button", "body"], editorRan)),
       // `#/` in a fresh browser: the screen, with no ticket remembered — the page-wide chords and the editor's.
       ...(await sweep("#/", async (page) => (await topUp(page)) && (await page.locator("[data-surface=editor-screen]").count()) === 1,
         PAGE, ["input", "button", "body"], editorRan)),

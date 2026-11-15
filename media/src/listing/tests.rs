@@ -1,5 +1,5 @@
 //! EDITOR-32: `media.list`'s read — the store's rows (only files kept for a
-//! ticket or a document, newest first, by kind, paged by `after`) and the
+//! ticket or a note, newest first, by kind, paged by `after`) and the
 //! reach (an owner the caller does not read left off its row, a row left
 //! with none left out, a ticket named by its id now). Over the wire, as
 //! the caller the seam asks: tests/wire_media.rs.
@@ -35,7 +35,7 @@ async fn keep(s: &Arc<MediaStore>, owner: Owner, bytes: Vec<u8>, name: &str) -> 
 /// Every owner read, each by its own id.
 async fn all(o: Owner) -> Option<String> {
     match o {
-        Owner::Ticket(id) | Owner::Doc(id) => Some(id),
+        Owner::Ticket(id) | Owner::Note(id) => Some(id),
         _ => None,
     }
 }
@@ -49,7 +49,7 @@ async fn the_list_is_newest_first_by_kind_paged_and_only_what_is_used() {
     let dir = tempfile::tempdir().unwrap();
     let s = Arc::new(MediaStore::open(&dir.path().join("media.db")).unwrap());
     let a = keep(&s, t("KILN-1"), png(4, 3, 1), "a.png").await;
-    let b = keep(&s, Owner::Doc("7k3mq2xa".into()), pdf(1), "b.pdf").await;
+    let b = keep(&s, Owner::Note("7k3mq2xa".into()), pdf(1), "b.pdf").await;
     // Kept with no ticket (the putter's) and a link's preview: used nowhere.
     let _own = keep(&s, Owner::App(Some("key:aa".into())), png(1, 1, 2), "own.png").await;
     let _any = keep(&s, Owner::Anyone, png(1, 1, 3), "card.png").await;
@@ -61,10 +61,10 @@ async fn the_list_is_newest_first_by_kind_paged_and_only_what_is_used() {
     assert_eq!(hashes(&p), [c.as_str(), b.as_str(), a.as_str()], "newest first; the putter's and anyone's are not listed");
     assert_eq!(p.next, None);
     let first = &p.rows[2];
-    assert_eq!((first.tickets.clone(), first.docs.clone()), (vec!["KILN-1".to_string(), "KILN-3".to_string()], vec![]));
+    assert_eq!((first.tickets.clone(), first.notes.clone()), (vec!["KILN-1".to_string(), "KILN-3".to_string()], vec![]));
     assert_eq!((first.file.info.kind.as_str(), first.file.info.width, first.file.info.name.as_deref()), ("image", 4, Some("a.png")));
     assert!(first.file.at > 0);
-    assert_eq!(p.rows[1].docs, ["7k3mq2xa"]);
+    assert_eq!(p.rows[1].notes, ["7k3mq2xa"]);
 
     // By kind.
     let pdfs = page(&s, Some(MediaKind::Pdf), None, 10, all).await.unwrap();
@@ -87,11 +87,11 @@ async fn an_owner_out_of_reach_is_left_off_and_a_file_with_none_left_out() {
     let both = keep(&s, t("KILN-1"), png(2, 2, 1), "both.png").await;
     keep(&s, t("SECRET-1"), png(2, 2, 1), "both.png").await;
     let hidden = keep(&s, t("SECRET-2"), png(3, 3, 2), "hidden.png").await;
-    let doc = keep(&s, Owner::Doc("secretdc".into()), pdf(3), "d.pdf").await;
+    let note = keep(&s, Owner::Note("secretdc".into()), pdf(3), "d.pdf").await;
     let moved = keep(&s, t("OLD-4"), png(5, 5, 3), "moved.png").await;
 
     let asked = std::sync::Mutex::new(Vec::new());
-    // A reader of KILN, and of OLD-4 (now NEW-9); nothing of SECRET or the doc.
+    // A reader of KILN, and of OLD-4 (now NEW-9); nothing of SECRET or the note.
     let reader = |o: Owner| {
         asked.lock().unwrap().push(o.clone());
         async move {
@@ -103,7 +103,7 @@ async fn an_owner_out_of_reach_is_left_off_and_a_file_with_none_left_out() {
         }
     };
     let p = page(&s, None, None, 10, reader).await.unwrap();
-    assert_eq!(hashes(&p), [moved.as_str(), both.as_str()], "{hidden} and {doc} are out of reach: not listed");
+    assert_eq!(hashes(&p), [moved.as_str(), both.as_str()], "{hidden} and {note} are out of reach: not listed");
     assert_eq!(p.rows[0].tickets, ["NEW-9"], "a ticket by its id now");
     assert_eq!(p.rows[1].tickets, ["KILN-1"], "SECRET-1 is left off the row it shares");
     let mut asked = asked.into_inner().unwrap();

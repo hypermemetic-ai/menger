@@ -4,7 +4,7 @@
 // stuffed with every wide thing — a 200-character code line, a 12-column
 // table, a 300-character URL, a 2000 px image, a YouTube embed, a mermaid
 // diagram, a long title, three open questions — drawn at 320, 375, 390 and
-// 430 px on the editor (`#/doc/:id`, `#/edit/:id`) and the read-only ticket
+// 430 px on the editor (`#/note/:id`, `#/edit/:id`) and the read-only ticket
 // page (`#/ticket/:id`), with the caret outside every block and then inside
 // each wide one. At each: `document.scrollingElement.scrollWidth` is the
 // viewport's width, no element of the surface has `scrollWidth >
@@ -17,8 +17,8 @@
 //
 // Marks: `[data-surface=editor-screen]`, `[data-surface=editor-body]`,
 // `[data-surface=ticket-page]`, `[data-surface=code-card]` (`[data-action=copy]`),
-// `td[data-label]`, `[data-field=margin] [data-thread]`, `[data-field=documents]`,
-// `[data-action=docs]`, `[data-surface=mermaid-diagram][data-state=drawn]`, `.mx-embed`.
+// `td[data-label]`, `[data-field=margin] [data-thread]`, `[data-field=notes]`,
+// `[data-action=notes]`, `[data-surface=mermaid-diagram][data-state=drawn]`, `.mx-embed`.
 import zlib from "node:zlib";
 
 const EPIC = "PHON";
@@ -93,9 +93,9 @@ export default async (ctx) => {
   };
 
   // The doc: its body, the picture its own, three open questions on its text.
-  const docId = sy("docs", "create", "--title", TITLE, "--body", file("doc.md", "placeholder\n")).find((e) => e.type === "created").doc.id;
-  const docBody = body(put("doc", docId));
-  sy("docs", "save", "--id", docId, "--body", file("doc2.md", docBody));
+  const docId = sy("notes", "create", "--title", TITLE, "--body", file("doc.md", "placeholder\n")).find((e) => e.type === "created").note.id;
+  const docBody = body(put("note", docId));
+  sy("notes", "save", "--id", docId, "--body", file("doc2.md", docBody));
   // The ticket: the same, its picture its own, three open questions.
   const root = sy("tickets", "create", "--epic", EPIC, "--kind", "scope", "--title", "the phone's tickets").find((e) => e.type === "created").ticket.id;
   const tid = sy("tickets", "create", "--epic", EPIC, "--parent", root, "--title", TITLE, "--body", file("t0.md", "placeholder\n")).find((e) => e.type === "created").ticket.id;
@@ -112,7 +112,7 @@ export default async (ctx) => {
     const vw = document.documentElement.clientWidth;
     const root = document.querySelector(scope);
     const name = (e) => `${e.localName}${e.className && typeof e.className === "string" ? "." + e.className.trim().split(/\s+/).join(".") : ""}${e.dataset?.field ? `[${e.dataset.field}]` : ""}`;
-    const drawer = document.querySelector("[data-surface=editor-screen]:not([data-drawer=open]) [data-field=documents]");
+    const drawer = document.querySelector("[data-surface=editor-screen]:not([data-drawer=open]) [data-field=notes]");
     const out = { vw, page: document.scrollingElement.scrollWidth, wide: [], past: [] };
     if (!root) return { ...out, missing: true };
     for (const e of [root, ...root.querySelectorAll("*")]) {
@@ -233,13 +233,13 @@ export default async (ctx) => {
 
   for (const w of WIDTHS) {
     await test(`the_doc_never_scrolls_sideways_at_${w}`, async () => {
-      const { context, page } = await phone(`#/doc/${docId}`, w);
+      const { context, page } = await phone(`#/note/${docId}`, w);
       try {
         const S = "[data-surface=editor-screen]";
         await eventually("the doc is drawn", async () => (await page.locator(`${BODY} .cm-content`).count()) === 1, 10_000);
         // Three questions on the doc's text, asked as the owner, live in the margin.
         if (w === WIDTHS[0]) for (const [on, q] of [["A paragraph", "Is it the kiln?"], ["column 3", `Which ${URL300}?`], ["The last", `${WORD}?`]])
-          sy("docs", "ask", "--id", docId, "--from", String(docBody.indexOf(on)), "--to", String(docBody.indexOf(on) + on.length), "--text", q);
+          sy("notes", "ask", "--id", docId, "--from", String(docBody.indexOf(on)), "--to", String(docBody.indexOf(on) + on.length), "--text", q);
         await drawnAll(page, S);
         await eventually("three open questions in the margin", async () => (await page.locator(`${S} [data-field=margin] [data-thread][data-state=open]`).count()) === 3, 8_000);
         await blur(page);
@@ -255,7 +255,7 @@ export default async (ctx) => {
         const title = await page.locator(`${S} [data-field=title]`).evaluate((e) => ({ h: e.getBoundingClientRect().height, lh: parseFloat(getComputedStyle(e).lineHeight) }));
         assert(title.h > title.lh * 1.5, `the title wraps (${title.h})`);
         // The list is a drawer: off the screen, then over it when asked for, inside the width.
-        await page.locator(`${S} [data-action=docs]`).click();
+        await page.locator(`${S} [data-action=notes]`).click();
         await eventually("the drawer opens", async () => (await page.locator(`${S}[data-drawer=open]`).count()) === 1, 3_000);
         await sleep(300);
         await fits(page, S, `the doc at ${w}, the drawer open`);
@@ -370,11 +370,11 @@ export default async (ctx) => {
   });
 
   await test("at_1440_code_keeps_its_own_sideways_scroll", async () => {
-    for (const [route, S] of [[`#/doc/${docId}`, "[data-surface=editor-screen]"], [`#/ticket/${tid}`, "[data-surface=ticket-page]"]]) {
+    for (const [route, S] of [[`#/note/${docId}`, "[data-surface=editor-screen]"], [`#/ticket/${tid}`, "[data-surface=ticket-page]"]]) {
       const { context, page } = await openPage(route);
       try {
         await drawnAll(page, S);
-        if (route.startsWith("#/doc/")) await blur(page);
+        if (route.startsWith("#/note/")) await blur(page);
         await sleep(200);
         const c = await page.locator(`${S} [data-surface=code-card]`).first().evaluate((card) => {
           const sc = card.querySelector(".scroll"), pre = card.querySelector("pre:not([hidden])");

@@ -224,14 +224,14 @@ export default async (ctx) => {
   });
 
   // COMPS-5, the owner (2026-11-05): "all tickets are the same surface. doc or not. they all need the exact same
-  // rendering capabilites". One body, opened as a doc (the docs service's, `#/doc/<id>`, drawn by the editor)
+  // rendering capabilites". One body, opened as a note (the notes service's, `#/note/<id>`, drawn by the editor)
   // and as a ticket (`#/ticket/<id>`): both draw the same things — the house's card, a code card, a definition's
   // line (v1's element), the tag drawn framed by plexus-ui, raw HTML — through the one renderer, ticket-view.
   await test("a_body_draws_the_same_as_a_doc_and_as_a_ticket", async () => {
     const SAME = "Intro.\n\n<m-summary>\n\n<m-answer data-field=\"answer\">**One surface.**</m-answer>\n\n</m-summary>\n\n"
       + "```rust\nfn main() {}\n```\n\n```component x-film\n" + FILM + "```\n\n<x-film label=\"Same\"></x-film>\n\nA line with <b>raw HTML</b> the sanitizer keeps.\n";
     const t = make("one body, as a ticket", SAME);
-    const docId = sy("docs", "create", "--title", "one body, as a doc", "--body", bodyFile("same-doc", SAME)).find((e) => e.type === "created")?.doc.id;
+    const docId = sy("notes", "create", "--title", "one body, as a doc", "--body", bodyFile("same-doc", SAME)).find((e) => e.type === "created")?.note.id;
     assert(docId, "the doc made");
     const drawn = async (page) => page.evaluate(() => ({
       card: document.querySelectorAll("m-summary").length > 0,
@@ -249,7 +249,7 @@ export default async (ctx) => {
     const asTicket = await ticketPage(t);
     const ticketDrew = await settled(asTicket.page, "the ticket");
     noLoop(asTicket.seen, "the ticket");
-    const asDoc = await openPage(`#/doc/${docId}`);
+    const asDoc = await openPage(`#/note/${docId}`);
     await eventually("the doc's editor is drawn", async () => (await asDoc.page.locator(`${BODY} .cm-content`).count()) === 1, 15_000);
     const docDrew = await settled(asDoc.page, "the doc");
     noLoop(asDoc.seen, "the doc");
@@ -265,7 +265,7 @@ export default async (ctx) => {
   await test("a_definitions_source_is_hidden_until_asked", async () => {
     const BODY8 = "Before.\n\n```rust\nfn main() {}\n```\n\n```component x-film\n" + FILM + "```\n\n<x-film label=\"Hidden\"></x-film>\n\nAfter.\n";
     const t = make("a definition, hidden", BODY8);
-    const docId = sy("docs", "create", "--title", "a definition, hidden, as a doc", "--body", bodyFile("hidden-doc", BODY8)).find((e) => e.type === "created")?.doc.id;
+    const docId = sy("notes", "create", "--title", "a definition, hidden, as a doc", "--body", bodyFile("hidden-doc", BODY8)).find((e) => e.type === "created")?.note.id;
     assert(docId, "the doc made");
     const SRC = "[data-surface=component-def][data-name=x-film] [data-field=source]";
     const sourceShown = (page) => page.evaluate(() => [...document.querySelectorAll(".code.def-src")].some((c) => c.offsetParent !== null));
@@ -287,7 +287,7 @@ export default async (ctx) => {
     noLoop(asTicket.seen, "the ticket");
     await shoot(asTicket.page, "comps8-hidden");
     await asTicket.context.close();
-    const asDoc = await openPage(`#/doc/${docId}`);
+    const asDoc = await openPage(`#/note/${docId}`);
     await eventually("the doc's editor is drawn", async () => (await asDoc.page.locator(`${BODY} .cm-content`).count()) === 1, 15_000);
     await check(asDoc.page, "the doc");
     await asDoc.context.close();

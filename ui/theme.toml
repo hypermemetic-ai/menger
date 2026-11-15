@@ -104,7 +104,7 @@
                  # the tooltip and the table view), dark #191b1e all pass; adjacent and all-pairs alike
 "--chart-1" = ['#3b5bdb', '#3987e5', "a chart's first series (files kept; fetched)"]
 "--chart-2" = ['#eb6834', '#d95926', "a chart's second series (tickets; served)"]
-"--chart-3" = ['#1baf7a', '#199e70', "a chart's third series (documents)"]
+"--chart-3" = ['#1baf7a', '#199e70', "a chart's third series (notes)"]
 
 [type]
 "--font-text"     = ['"Geist Mono", ui-monospace, monospace', '"Geist Mono", ui-monospace, monospace', 'the app']

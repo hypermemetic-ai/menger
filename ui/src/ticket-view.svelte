@@ -36,7 +36,7 @@
      around the raw HTML, a page block in it a nested sandboxed frame).
      EDITOR-20: every block's drawn text is given its ticket ids as pills, after the markdown and its
      sanitizer, by the pass ticket-pills provides through a context (`providePills`) — so the ticket page,
-     the editor's drawn blocks, a document, a revision and a preview draw them, and this file still calls
+     the editor's drawn blocks, a note, a revision and a preview draw them, and this file still calls
      nothing; a framed page does not. -->
 <script module>
   import { PAGE_TAG, WHOLE, fencePage, pageEnd, pageSpec, holdsRaw } from "./m-mockup.svelte";
@@ -301,7 +301,7 @@
   // with no card of its own (an unknown `m-*`, a custom tag kept as `m-el`, a known inline mark used as
   // a box) is marked `any`: its words drawn in a neutral box, captioned by its label, name, title or
   // field — the tag's own name when it holds no words at all; inline among words, a caption beside them.
-  // COMPS-16: the body this draws sits in — `{ kind: ticket | doc, id, editor }`, from the context ticket-body
+  // COMPS-16: the body this draws sits in — `{ kind: ticket | note, id, editor }`, from the context ticket-body
   // and editor-body give (none elsewhere: a preview, a revision); handed to a drawn tag with its own source.
   const bodyOf = getContext("menger:body-of") ?? null;
   function enhance(node, given) {

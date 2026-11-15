@@ -386,7 +386,7 @@ async fn everything_else_works_for_a_doc() {
 #[tokio::test]
 async fn a_file_with_docs_verifies_and_reopens_as_it_was() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("docs.db");
+    let path = dir.path().join("tickets.db");
     let store = Store::open(&path).unwrap();
     store.create(SYS, new("HOST", Kind::Scope, None, &[])).await.unwrap(); // HOST-1
     store.create(SYS, work("HOST", None)).await.unwrap(); // HOST-2

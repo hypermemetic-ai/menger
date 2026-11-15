@@ -19,7 +19,7 @@
   const me = $derived(usage.rows.find((r) => r.type === "usage" || r.sources) ?? null);
   const NAMES = {
     "media.bytes": "files kept", "media.fetch.bytes": "fetched today", "media.fetch.calls": "fetches today",
-    "media.egress.bytes": "served today", "docs.bytes": "documents", "docs.count": "documents made",
+    "media.egress.bytes": "served today", "notes.bytes": "notes", "notes.count": "notes made",
     "tickets.bytes": "tickets", "tickets.count": "tickets made", "questions.count": "questions asked",
   };
   /** An amount in words: bytes as 1.9 GB (powers of 1000, as the caps are set), counts as the number. */

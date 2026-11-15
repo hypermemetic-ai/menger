@@ -18,9 +18,9 @@ repository = "https://github.com/hypermemetic-ai/menger"
 # The tickets service's client and vocabulary: `TicketsClient::may` is the
 # permit question, `TicketRef` names the ticket, `Role` the role asked.
 menger-tickets-api = { path = "../tickets-api", version = "0.8.0" }
-# V2-29: the docs service's client — `docs.may` is the permit question for an
-# image put for a document, asked through the seam as the caller.
-menger-docs = { path = "../docs", version = "0.8.0" }
+# V2-29: the notes service's client — `notes.may` is the permit question for an
+# image put for a note, asked through the seam as the caller.
+menger-notes = { path = "../notes", version = "0.8.0" }
 # The 0.8 line, by published version (PLEXUS-16), as the server takes it,
 # through the umbrella (PLEXUS-44): plexus-core, plexus-macros, plexus-client,
 # plexus-auth-core and every crate the activation macro's expansion names.

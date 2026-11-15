@@ -112,7 +112,7 @@
   import SpecTasks from "plexus-ui:spec-tasks";
   import TagSource from "plexus-ui:tag-source";
   import EditorBody from "plexus-ui:editor-body";
-  import DocMargin from "plexus-ui:doc-margin";
+  import NoteMargin from "plexus-ui:note-margin";
   import MediaDraw from "plexus-ui:media-draw";
   import MediaIngest from "plexus-ui:media-ingest";
   import EditorScreen from "plexus-ui:editor-screen";
@@ -278,15 +278,15 @@
       // A task list drawn as tasks: one done of two, the boxes shown only (nothing is told of a tick here).
       ["spec-tasks", SpecTasks, (t) => ({ text: "- [x] 1. Wire the kiln\n- [ ] 2. Fire it" }), ["hover", "focus", "checked", "disabled"], {}, false, { hover: [".tasks-box"], focus: [".tasks-box"], checked: ["[role=checkbox][aria-checked=false]"] }],
       ["tag-source", TagSource, (t) => ({}), [], {}],
-      // V2-30: a doc's margin, alone — its threads as a list (a ticket's id: none).
-      ["doc-margin", DocMargin, ID, [], {}],
+      // V2-30: a note's margin, alone — its threads as a list (a ticket's id: none).
+      ["note-margin", NoteMargin, ID, [], {}],
       // EDITOR-8: the rendering as the editor; hover and focus held on its revisions link (EDITOR-9: a block has no highlight).
       ["editor-body", EditorBody, ID, ["hover", "focus"], { loading: { sheet: "loading" }, ...gone }, false, { hover: [".revs"], focus: [".revs"] }],
       // EDITOR-10: what a doc absorbed, drawn — a file that is none here stays its link; the ingest draws nothing of its own.
       ["media-draw", MediaDraw, () => ({ body: `[deck.pdf](media:${"0".repeat(64)})\n\nA doc absorbs anything from outside.` }), [], {}],
       ["media-ingest", MediaIngest, F, [], {}],
-      // EDITOR-8: the writing screen, small; selected held on a document of the list, disabled on *new*.
-      ["editor-screen", EditorScreen, ID, ["hover", "focus", "selected", "disabled"], { loading: { sheet: "loading" }, empty: { id: NONE } }, true, { hover: [".doc"], focus: [".id"], selected: [".doc"], disabled: ["[data-action=new]"] }],
+      // EDITOR-8: the writing screen, small; selected held on a note of the list, disabled on *new*.
+      ["editor-screen", EditorScreen, ID, ["hover", "focus", "selected", "disabled"], { loading: { sheet: "loading" }, empty: { id: NONE } }, true, { hover: [".note"], focus: [".id"], selected: [".note"], disabled: ["[data-action=new]"] }],
       ["ticket-actions", TicketActions, ID, ["hover", "focus", "disabled", "checked"], { loading: { sheet: "loading" } }],
       ["work-blockers", WorkBlockers, ID, [], { loading: { sheet: "loading" } }],
       ["work-blocker", WorkBlocker, (t) => ({ id: t, side: "blocker" }), ["hover", "focus"], { loading: { sheet: "loading" } }],

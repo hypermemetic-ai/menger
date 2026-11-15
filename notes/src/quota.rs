@@ -1,10 +1,10 @@
-//! **The meter's seam** — every byte a document's body grows by is
+//! **The meter's seam** — every byte a note's body grows by is
 //! reserved before it is written and committed once it is (V2-31: the
-//! quota service will meter `docs.bytes` per author; EDITOR-10 does the
+//! quota service will meter `notes.bytes` per author; EDITOR-10 does the
 //! same for images). Until that service lands, [`AllowAll`] allows every
 //! write; the call sites are [`crate::crdt`]'s create and append.
 //! V2-31: the quota service answers it (`src/quota_allowance.rs`'s
-//! `DocsMetered`): `docs.bytes` per change, `docs.count` per document made.
+//! `NotesMetered`): `notes.bytes` per change, `notes.count` per note made.
 
 /// A reservation the meter made, handed back at commit.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,14 +25,14 @@ pub struct Refused {
     pub message: String,
 }
 
-/// What meters the docs service's writes.
+/// What meters the notes service's writes.
 pub trait Quota: Send + Sync {
-    /// Reserve `bytes` of `docs.bytes` for `author`; `Err` refuses the
+    /// Reserve `bytes` of `notes.bytes` for `author`; `Err` refuses the
     /// write, in words, and nothing is written.
     fn reserve(&self, author: &str, bytes: u64) -> Result<Reserved, String>;
     /// The write the reservation was for is in the file.
     fn commit(&self, reserved: Reserved);
-    /// V2-31: one document made (`docs.count`) for `author`; refused like
+    /// V2-31: one note made (`notes.count`) for `author`; refused like
     /// `reserve`. Every one allowed unless the meter says.
     fn reserve_count(&self, author: &str) -> Result<Reserved, String> {
         Ok(Reserved { author: author.to_string(), bytes: 0, hold: None })

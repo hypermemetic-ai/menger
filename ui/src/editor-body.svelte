@@ -27,36 +27,36 @@
      mod+z / mod+shift+z (and ctrl+y) undo and redo in every focus on the page (EDITOR-26), mod+s saves now, mod+enter asks an
      agent. CodeMirror comes from ../plexus-ui/package.json (the node_modules
      the svelte/1 build reads), bundled into this module by the tool.
-     V2-29: the same surface writes a document of the docs service (`kind:
-     "doc"`, `#/doc/:id`) — one component, the store behind a small adapter
-     (`isDoc` below), never a fork. A doc's body is a Yjs CRDT (the owner's
+     V2-29, NOTES-3: the same surface writes a note of the notes service (`kind:
+     "note"`, `#/note/:note`) — one component, the store behind a small adapter
+     (`isNote` below), never a fork. A note's body is a Yjs CRDT (the owner's
      `pairing`: live co-editing): the page holds a `Y.Doc` synced by
-     `docs.state`, the editor bound to its text by y-codemirror.next's
+     `notes.state`, the editor bound to its text by y-codemirror.next's
      `yCollab` (its own undo), every local change sent as it happens (batched
-     every 50 ms, `docs.update` with this page's session) and every other
-     hand's arriving on `docs.watch { id, session }` (a gap in the `seq`s asks
-     `docs.state` with this copy's state vector). Carets by Yjs awareness
-     (`docs.here`), and who is here drawn above the canvas
-     (`[data-field=present]`). The title saves by `docs.rename`, an image by
-     `media.put { doc }`; a `history` scrubber replays the doc at any change
-     (`docs.history`, `docs.replay`). The write-in (EDITOR-6) is a ticket's.
-     V2-30: on a doc, a selection and `ask` (mod+enter, or the button) keep a
-     question on that range (`docs.ask`, to anyone or to an agent); the
-     margin beside the text (doc-margin, a sibling) holds each thread at its
+     every 50 ms, `notes.update` with this page's session) and every other
+     hand's arriving on `notes.watch { id, session }` (a gap in the `seq`s asks
+     `notes.state` with this copy's state vector). Carets by Yjs awareness
+     (`notes.here`), and who is here drawn above the canvas
+     (`[data-field=present]`). The title saves by `notes.rename`, an image by
+     `media.put { note }`; a `history` scrubber replays the note at any change
+     (`notes.history`, `notes.replay`). The write-in (EDITOR-6) is a ticket's.
+     V2-30: on a note, a selection and `ask` (mod+enter, or the button) keep a
+     question on that range (`notes.ask`, to anyone or to an agent); the
+     margin beside the text (note-margin, a sibling) holds each thread at its
      range's height, the range underlined in the caret's block, and follows
      the text as it changes (`marginTick`).
      EDITOR-24: the ticket's page placed this too until EDITOR-29 (page-ticket, `head={false}`: the page's head has the
      title, so none is drawn here) — one component wherever a body is written, so what it gains a
-     ticket's page, `…/edit` and a document gain together. A tag that keeps its own state (tweet-writer)
+     ticket's page, `…/edit` and a note gain together. A tag that keeps its own state (tweet-writer)
      saves through it: it says `body.tag { kind, id, name, n, was, next, token }` on the bus; the editor
      of that body replaces its `n`th tag of that name alone — only while it is still `was` — and saves
-     the body its own way (a ticket's amend, a doc's CRDT), answering `body.tag.done { token, ok,
+     the body its own way (a ticket's amend, a note's CRDT), answering `body.tag.done { token, ok,
      message }`. The block is not drawn again (`Drawn.updateDOM`: the tag wrote this text, COMPS-23). -->
 <script module>
   export const uses = ["tickets.get", "tickets.watch", "tickets.amend", "tickets.revisions.list", "tickets.inputs.ask", "tickets.queue", "tickets.inputs.close",
-                       "docs.get", "docs.watch", "docs.state", "docs.update", "docs.rename", "docs.present", "docs.here", "docs.history", "docs.replay", "docs.ask"];
+                       "notes.get", "notes.watch", "notes.state", "notes.update", "notes.rename", "notes.present", "notes.here", "notes.history", "notes.replay", "notes.ask"];
 
-  /** V2-29: bytes ↔ standard base64, as the docs service carries a Yjs update. */
+  /** V2-29: bytes ↔ standard base64, as the notes service carries a Yjs update. */
   export const toB64 = (bytes) => { let s = ""; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)); return btoa(s); };
   export const fromB64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
 
@@ -178,7 +178,7 @@
   import { bus, live } from "plexus-ui/host";
   import { ticketHref } from "./ticket-links.svelte";
   import TicketView, { blocks, pageTag, pieceClass, refDefs } from "./ticket-view.svelte";
-  import Margin, { threadMarks } from "./doc-margin.svelte";
+  import Margin, { threadMarks } from "./note-margin.svelte";
   import PillTable, { providePills } from "./ticket-pills.svelte";
   import { ingest } from "./media-ingest.svelte";
   import { drawAll } from "./media-draw.svelte";
@@ -201,20 +201,20 @@
   // The document this instance edits: fixed at mount (editor-screen keys the editor by it), so a
   // write still in hand when the screen moves to another document lands on its own ticket.
   const doc_id = untrack(() => id);
-  // V2-29: the adapter — a ticket (`tickets.*`, a whole body after a pause) or a doc (`docs.*`, a
+  // V2-29: the adapter — a ticket (`tickets.*`, a whole body after a pause) or a note (`notes.*`, a
   // Yjs CRDT, live). Fixed at mount, as the document is.
-  const isDoc = untrack(() => kind === "doc");
+  const isNote = untrack(() => kind === "note");
   const b = bus();
   // COMPS-2: the blocks it mounts draw their pages through the bus (page-frame), so they get its context.
   // EDITOR-20: every block drawn here gives its ticket ids as pills (ticket-pills), the blocks it mounts too.
   providePills();
-  // COMPS-16: the drawn blocks' tags are told what they sit in — this ticket or doc, in the editor (a
+  // COMPS-16: the drawn blocks' tags are told what they sit in — this ticket or note, in the editor (a
   // tweet-writer here is drawn only: the caret's block is its source, and this editor saves the body).
-  setContext("menger:body-of", () => ({ kind: isDoc ? "doc" : "ticket", id: doc_id, editor: true }));
+  setContext("menger:body-of", () => ({ kind: isNote ? "note" : "ticket", id: doc_id, editor: true }));
   const contexts = getAllContexts();
   const PAUSE = 600;
 
-  const ticket = live({ snapshot: "tickets.get", params: () => ({ id: doc_id }), changes: "tickets.watch", key: "id", when: () => !isDoc,
+  const ticket = live({ snapshot: "tickets.get", params: () => ({ id: doc_id }), changes: "tickets.watch", key: "id", when: () => !isNote,
                         on: { amended: "upsert:ticket", status_changed: "upsert:ticket", kind_changed: "upsert:ticket", updated: "upsert:ticket",
                               labels_changed: "upsert:ticket", severity_changed: "upsert:ticket", frozen_changed: "upsert:ticket", hidden_changed: "upsert:ticket",
                               blockers_changed: "upsert:ticket", unlocks_changed: "upsert:ticket", unlocks_removed: "upsert:ticket", parent_changed: "upsert:ticket",
@@ -222,22 +222,22 @@
   // ticket-head's spec word for word: the page holds one `get` and one `watch` of the ticket, shared.
   const tk = $derived(ticket.rows.find((r) => r.title != null && !ticket.rows.some((x) => Array.isArray(x.tombstones))));
 
-  // ── V2-29: a doc — its title and who wrote it (`docs.get`, renames and the delete on its watch),
-  // its CRDT's sync (`docs.state`, then each other hand's update), and who is here ──────────────
+  // ── V2-29: a note — its title and who wrote it (`notes.get`, renames and the delete on its watch),
+  // its CRDT's sync (`notes.state`, then each other hand's update), and who is here ──────────────
   const SESSION = "s-" + Math.random().toString(36).slice(2, 10);
-  const meta = live({ snapshot: "docs.get", params: () => ({ id: doc_id }), changes: "docs.watch", changes_params: () => ({ id: doc_id }), key: "id", when: () => isDoc,
-                      on: { renamed: "upsert:doc", deleted: "upsert:." } });
-  const sync = live({ snapshot: "docs.state", params: () => ({ id: doc_id }), changes: "docs.watch", changes_params: () => ({ id: doc_id, session: SESSION }), key: "id", when: () => isDoc,
+  const meta = live({ snapshot: "notes.get", params: () => ({ id: doc_id }), changes: "notes.watch", changes_params: () => ({ id: doc_id }), key: "id", when: () => isNote,
+                      on: { renamed: "upsert:note", deleted: "upsert:." } });
+  const sync = live({ snapshot: "notes.state", params: () => ({ id: doc_id }), changes: "notes.watch", changes_params: () => ({ id: doc_id, session: SESSION }), key: "id", when: () => isNote,
                       on: { updated: "upsert:.", squashed: "upsert:." } });
-  const here = live({ snapshot: "docs.present", params: () => ({ id: doc_id }), changes: "docs.watch", changes_params: () => ({ id: doc_id }), key: "session", when: () => isDoc,
+  const here = live({ snapshot: "notes.present", params: () => ({ id: doc_id }), changes: "notes.watch", changes_params: () => ({ id: doc_id }), key: "session", when: () => isNote,
                       on: { present: "upsert:present", left: "remove:session" } });
   const dk = $derived(meta.rows.find((r) => r.id === doc_id && r.title != null));
-  // The document as the surface reads it, whichever store: its title, status and body (a doc's body is its CRDT's).
-  const t = $derived(isDoc ? (dk ? { id: dk.id, title: dk.title, status: null, body: null, kind: "doc", by: dk.by } : undefined) : tk);
-  const present = $derived(isDoc ? here.rows.filter((p) => p.session && p.name) : []);
+  // The document as the surface reads it, whichever store: its title, status and body (a note's body is its CRDT's).
+  const t = $derived(isNote ? (dk ? { id: dk.id, title: dk.title, status: null, body: null, kind: "note", by: dk.by } : undefined) : tk);
+  const present = $derived(isNote ? here.rows.filter((p) => p.session && p.name) : []);
 
   // The CRDT, the awareness of carets on it, and what this page has sent and heard.
-  const ydoc = isDoc ? new Y.Doc() : null;
+  const ydoc = isNote ? new Y.Doc() : null;
   const ytext = ydoc?.getText("body") ?? null;
   const aware = ydoc ? new Awareness(ydoc) : null;
   const REMOTE = "remote";
@@ -263,7 +263,7 @@
     }
   }
   async function resync() {
-    const r = await b.call("docs.state", { id: doc_id, vector: toB64(Y.encodeStateVector(ydoc)) });
+    const r = await b.call("notes.state", { id: doc_id, vector: toB64(Y.encodeStateVector(ydoc)) });
     const st = r.events?.find((e) => e.type === "state");
     if (st) took(st);
   }
@@ -275,14 +275,14 @@
     outbox = [];
     sending = true;
     state = { kind: "saving", text: "saving…" };
-    const r = await b.call("docs.update", { id: doc_id, update: toB64(update), session: SESSION });
+    const r = await b.call("notes.update", { id: doc_id, update: toB64(update), session: SESSION });
     sending = false;
     const ok = r.events?.find((e) => e.type === "applied");
     if (r.ok && ok) { known.add(ok.revision); state = { kind: "saved", text: `saved ${hhmm()}` }; docSaved(); }
     else { outbox.unshift(update); state = { kind: "refused", text: said(r.ok ? { message: r.events?.[0]?.message ?? r.events?.[0]?.type } : r) }; }
     if (outbox.length) sendSoon();
   }
-  // COMPS-4: a doc's save is continuous, so its definitions are authored at a pause after it (PAUSE),
+  // COMPS-4: a note's save is continuous, so its definitions are authored at a pause after it (PAUSE),
   // each against the text last authored (the doc as it was first synced).
   let docAuthored = null, docTimer = null;
   function docSaved() {
@@ -296,9 +296,9 @@
   }
   $effect(() => { if (synced && docAuthored === null) untrack(() => { docAuthored = ytext?.toString() ?? ""; }); });
   if (ydoc) ydoc.on("update", (u, origin) => { if (origin !== REMOTE && synced) { outbox.push(u); sendSoon(); } });
-  // Carets: this page's awareness said by `docs.here`; everyone else's applied from their presence.
+  // Carets: this page's awareness said by `notes.here`; everyone else's applied from their presence.
   let hereTimer = null;
-  const sayHere = () => { hereTimer = null; if (aware) b.call("docs.here", { id: doc_id, session: SESSION, client: ydoc.clientID, awareness: toB64(encodeAwarenessUpdate(aware, [ydoc.clientID])) }); };
+  const sayHere = () => { hereTimer = null; if (aware) b.call("notes.here", { id: doc_id, session: SESSION, client: ydoc.clientID, awareness: toB64(encodeAwarenessUpdate(aware, [ydoc.clientID])) }); };
   if (aware) aware.on("update", (_c, origin) => { if (origin !== REMOTE && !hereTimer) hereTimer = setTimeout(sayHere, 100); });
   let clients = new Map(); // session → its Yjs client id, to take its caret off when it leaves
   $effect(() => {
@@ -316,16 +316,16 @@
     });
   });
   $effect(() => {
-    if (!isDoc) return;
+    if (!isNote) return;
     const r = sync.rows.find((x) => x.id === doc_id);
     if (r) untrack(() => took(r));
   });
 
-  // The scrubber: the doc as it stood at any change kept.
+  // The scrubber: the note as it stood at any change kept.
   let replaying = $state(null); // { seqs, at, doc, said } while open
   async function openHistory() {
     if (replaying) { replaying = null; return; }
-    const r = await b.call("docs.history", { id: doc_id, limit: 1000 });
+    const r = await b.call("notes.history", { id: doc_id, limit: 1000 });
     const seqs = (r.events ?? []).filter((e) => e.type === "change" && e.change.kind !== "delete").map((e) => e.change).reverse();
     replaying = { seqs, at: seqs.length - 1, doc: null, said: "" };
     await scrub(seqs.length - 1);
@@ -335,8 +335,8 @@
     const c = replaying.seqs[i];
     replaying.at = i;
     if (!c) return;
-    const r = await b.call("docs.replay", { id: doc_id, seq: c.seq });
-    const d = r.events?.find((e) => e.type === "doc")?.doc;
+    const r = await b.call("notes.replay", { id: doc_id, seq: c.seq });
+    const d = r.events?.find((e) => e.type === "note")?.note;
     if (replaying && replaying.at === i) { replaying.doc = d ?? null; replaying.said = d ? "" : said(r); }
   }
 
@@ -361,7 +361,7 @@
   // ── the write model ──────────────────────────────────────────────────────
   function edited() {
     view.dispatch({ effects: media.fade() }); // a refused upload goes with the next key
-    if (isDoc) return; // a doc's changes go as the CRDT makes them
+    if (isNote) return; // a note's changes go as the CRDT makes them
     dirty = doc() !== acked;
     if (timer) clearTimeout(timer);
     if (dirty || pending !== null) timer = setTimeout(flush, PAUSE);
@@ -449,7 +449,7 @@
     if (!titleDirty) return;
     const title = titleDraft.trim();
     if (!title) return;
-    const r = isDoc ? await b.call("docs.rename", { id: doc_id, title }) : await b.call("tickets.amend", { id: doc_id, title });
+    const r = isNote ? await b.call("notes.rename", { id: doc_id, title }) : await b.call("tickets.amend", { id: doc_id, title });
     if (r.ok) { titleDirty = false; state = { kind: "saved", text: `saved ${hhmm()}` }; }
     else state = { kind: "refused", text: said(r) };
   }
@@ -841,15 +841,15 @@
   }
   commands["ctrl+y"] = { to: () => undoKey(true), label: "redo", only: true };
   b.keys(commands);
-  // A doc's undo is its CRDT's (Yjs's UndoManager, y-codemirror.next's commands); a ticket's CodeMirror's history.
+  // A note's undo is its CRDT's (Yjs's UndoManager, y-codemirror.next's commands); a ticket's CodeMirror's history.
   const yUndo = yUndoManagerKeymap.find((k) => k.key === "Mod-z").run, yRedo = yUndoManagerKeymap.find((k) => k.key === "Mod-Shift-z").run;
-  const undoHere = editorHere({ view: () => view, step: (redo) => { if (view) (isDoc ? (redo ? yRedo : yUndo) : (redo ? cmRedo : cmUndo))(view); } });
+  const undoHere = editorHere({ view: () => view, step: (redo) => { if (view) (isNote ? (redo ? yRedo : yUndo) : (redo ? cmRedo : cmUndo))(view); } });
   $effect(() => () => undoHere.gone());
 
   // ── EDITOR-5, EDITOR-10: anything from outside ───────────────────────────
   // A file of any kind and size, a URL alone, pasted HTML, an image from another tab: media-ingest's,
   // kept for the doc (V2-29) or the ticket this surface writes.
-  const media = ingest({ bus: b, owner: isDoc ? { doc: doc_id } : { ticket: doc_id } });
+  const media = ingest({ bus: b, owner: isNote ? { note: doc_id } : { ticket: doc_id } });
 
   // ── EDITOR-6: write in at the owner's request ────────────────────────────
   // A selection and one line become a question on the ticket, queued now. An outside amend while a
@@ -859,7 +859,7 @@
   let hand = $state(null);
   let hasSelection = $state(false);
   let asking = $state(null); // { a, b, text, top } while the line is open
-  let askTo = $state(""); // V2-30: a doc's question to anyone (""), or to an agent ("agent")
+  let askTo = $state(""); // V2-30: a note's question to anyone (""), or to an agent ("agent")
   let marginTick = $state(0); // V2-30: bumped when the text or its layout moved, for the margin
   let marginFrame = null;
   const moved = () => { if (!marginFrame) marginFrame = requestAnimationFrame(() => { marginFrame = null; marginTick++; }); };
@@ -903,10 +903,10 @@
     const { a, b: z, text } = asking;
     const quoted = text.replace(/\s+/g, " ").trim();
     const where = a === z ? `line ${a}` : `lines ${a}–${z}`;
-    if (isDoc) {
-      // V2-30: kept on the doc's range, in characters of its text.
+    if (isNote) {
+      // V2-30: kept on the note's range, in characters of its text.
       const chars = (pos) => [...view.state.sliceDoc(0, pos)].length;
-      const r = await b.call("docs.ask", { id: doc_id, from: chars(asking.from), to: chars(asking.to), text: what, to_whom: askTo || undefined });
+      const r = await b.call("notes.ask", { id: doc_id, from: chars(asking.from), to: chars(asking.to), text: what, to_whom: askTo || undefined });
       if (r.ok && r.events?.some((e) => e.type === "asked")) { asking = null; view?.focus(); }
       else askRefused = said(r.ok ? { message: r.events?.[0]?.message ?? r.events?.[0]?.type } : r);
       return;
@@ -945,7 +945,7 @@
 
   // ── EDITOR-24: a tag's own state, saved through this editor ──────────────
   b.on("body.tag", async (d) => {
-    if (!d || d.kind !== (isDoc ? "doc" : "ticket") || String(d.id) !== String(doc_id) || !view) return;
+    if (!d || d.kind !== (isNote ? "note" : "ticket") || String(d.id) !== String(doc_id) || !view) return;
     const done = (ok, message = "") => b.emit("body.tag.done", { token: d.token, ok, message });
     const s = tagSpans(doc()).filter((x) => x.name === d.name)[Number(d.n)];
     if (!s) return done(false, `the body no longer holds this <${d.name}>: nothing saved`);
@@ -953,7 +953,7 @@
     wroteOwn(d.next);
     undoHere.used(); // EDITOR-26: an undo off the text takes this save back
     view.dispatch({ changes: { from: s.from, to: s.to, insert: d.next }, scrollIntoView: false });
-    if (isDoc) return done(true); // the CRDT has it
+    if (isNote) return done(true); // the CRDT has it
     await flush();
     if (state.kind === "refused") done(false, state.text); else done(true);
   });
@@ -974,22 +974,22 @@
   }
 
   function init(tk) {
-    acked = isDoc ? null : tk.body;
+    acked = isNote ? null : tk.body;
     view = new EditorView({
       parent: host,
       dispatchTransactions: dispatched,
       state: EditorState.create({
-        doc: isDoc ? ytext.toString() : tk.body,
+        doc: isNote ? ytext.toString() : tk.body,
         extensions: [
-          isDoc ? yCollab(ytext, aware, { undoManager: new Y.UndoManager(ytext) }) : history(),
-          isDoc ? keymap.of(yUndoManagerKeymap) : [],
-          isDoc ? threadMarks : [],
+          isNote ? yCollab(ytext, aware, { undoManager: new Y.UndoManager(ytext) }) : history(),
+          isNote ? keymap.of(yUndoManagerKeymap) : [],
+          isNote ? threadMarks : [],
           keymap.of([
             // EDITOR-13: no modified key here — save, bold, italic, a link and ask are the engine's (`commands`).
             { key: "ArrowDown", run: (v) => vertical(v, true) },
             { key: "ArrowUp", run: (v) => vertical(v, false) },
             { key: "Escape", run: (v) => { v.contentDOM.blur(); return true; } },
-            ...markdownKeymap, indentWithTab, ...defaultKeymap, ...(isDoc ? [] : historyKeymap),
+            ...markdownKeymap, indentWithTab, ...defaultKeymap, ...(isNote ? [] : historyKeymap),
           ]),
           markdownSupport({ base: markdownLanguage }),
           EditorView.lineWrapping,
@@ -1004,7 +1004,7 @@
             if (u.focusChanged && u.view.hasFocus !== u.state.field(focused)) queueMicrotask(() => view?.dispatch({ effects: focusFx.of(view.hasFocus) }));
             if (u.focusChanged && u.view.hasFocus) undoHere.used(); // EDITOR-26: the editor an undo off the text is for
             if (u.docChanged && !u.transactions.some((tr) => tr.annotation(Outside))) edited();
-            if (isDoc && (u.docChanged || u.geometryChanged || u.viewportChanged)) moved();
+            if (isNote && (u.docChanged || u.geometryChanged || u.viewportChanged)) moved();
           }),
           EditorView.domEventHandlers({
             blur: () => { if (dirty || pending !== null) flush(); return false; },
@@ -1016,10 +1016,10 @@
     });
     host.editorView = view; // the page tests read the document and the caret through it
     drawWhole(view);
-    if (isDoc) moved();
+    if (isNote) moved();
   }
-  /** Whether the surface can be drawn: the document read — and, for a doc, its CRDT synced. */
-  const ready = () => t && (!isDoc || synced);
+  /** Whether the surface can be drawn: the document read — and, for a note, its CRDT synced. */
+  const ready = () => t && (!isNote || synced);
   // EDITOR-9: a fence's source painted as its drawn card paints it: the language's module (code-paint)
   // keeps its painting on globalThis.mengerCodeLanguages; when one arrives, the surface is drawn again.
   const repaint = StateEffect.define();
@@ -1046,7 +1046,7 @@
   }
 
   $effect(() => {
-    if (!t || (isDoc && !synced) || view || !host) return;
+    if (!t || (isNote && !synced) || view || !host) return;
     untrack(() => init(t));
   });
   $effect(() => {
@@ -1061,49 +1061,49 @@
   });
   $effect(() => () => {
     if (timer) clearTimeout(timer);
-    if (titleTimer) { clearTimeout(titleTimer); if (titleDirty && titleDraft.trim()) { if (isDoc) b.call("docs.rename", { id: doc_id, title: titleDraft.trim() }); else b.call("tickets.amend", { id: doc_id, title: titleDraft.trim() }); } }
-    if (isDoc) {
-      // What this page typed and has not sent goes now, to its own doc; its caret goes with it.
+    if (titleTimer) { clearTimeout(titleTimer); if (titleDirty && titleDraft.trim()) { if (isNote) b.call("notes.rename", { id: doc_id, title: titleDraft.trim() }); else b.call("tickets.amend", { id: doc_id, title: titleDraft.trim() }); } }
+    if (isNote) {
+      // What this page typed and has not sent goes now, to its own note; its caret goes with it.
       if (sendTimer) clearTimeout(sendTimer);
-      if (outbox.length) b.call("docs.update", { id: doc_id, update: toB64(Y.mergeUpdates(outbox)), session: SESSION });
+      if (outbox.length) b.call("notes.update", { id: doc_id, update: toB64(Y.mergeUpdates(outbox)), session: SESSION });
       if (hereTimer) clearTimeout(hereTimer);
       aware?.destroy();
       if (marginFrame) cancelAnimationFrame(marginFrame);
     }
-    if (view) { if (!isDoc && dirty && pending === null) { const text = doc(); if (text !== acked) b.call("tickets.amend", { id: doc_id, body: text }); } view.destroy(); view = null; }
+    if (view) { if (!isNote && dirty && pending === null) { const text = doc(); if (text !== acked) b.call("tickets.amend", { id: doc_id, body: text }); } view.destroy(); view = null; }
     ydoc?.destroy();
   });
 </script>
 
-<PillTable/><section class="editor-body" data-surface="editor-body" data-ticket={doc_id} data-kind={isDoc ? "doc" : "ticket"} bind:this={wrap}>
-  {#if isDoc && present.length}
+<PillTable/><section class="editor-body" data-surface="editor-body" data-ticket={doc_id} data-kind={isNote ? "note" : "ticket"} bind:this={wrap}>
+  {#if isNote && present.length}
     <p class="here" data-field="present" aria-label="who is here">
       {#each present as p (p.session)}<span class="who" data-present={p.session} data-me={p.session === SESSION ? "" : undefined} data-agent={p.agent ? "" : undefined}><i class="dot" style={`background-color: ${p.colour}`} aria-hidden="true"></i>{p.name}{p.session === SESSION ? " (you)" : ""}</span>{/each}
     </p>
   {/if}
   {#if replaying}
     <div class="replay" data-field="replay">
-      <input class="scrub" type="range" min="0" max={Math.max(0, replaying.seqs.length - 1)} value={replaying.at} aria-label="the document's changes" data-field="scrubber" oninput={(ev) => scrub(Number(ev.currentTarget.value))}/>
+      <input class="scrub" type="range" min="0" max={Math.max(0, replaying.seqs.length - 1)} value={replaying.at} aria-label="the note's changes" data-field="scrubber" oninput={(ev) => scrub(Number(ev.currentTarget.value))}/>
       <span class="when" data-field="replay-at">{#if replaying.seqs[replaying.at]}change {replaying.seqs[replaying.at].seq} of {replaying.seqs[replaying.seqs.length - 1].seq} · {replaying.seqs[replaying.at].kind} · {replaying.seqs[replaying.at].by} · {new Date(replaying.seqs[replaying.at].at).toLocaleString()}{/if}</span>
       <button type="button" class="pick" data-action="live" onclick={() => (replaying = null)}>back to live</button>
       {#if replaying.said}<span class="no" data-refused>{replaying.said}</span>{/if}
       {#if replaying.doc}<div class="then" data-field="replayed"><TicketView body={replaying.doc.body} title={replaying.doc.title}/></div>{/if}
     </div>
   {/if}
-  {#if sheet === "loading" || (!t && (isDoc ? meta.status === "pending" : ticket.status === "pending")) || (isDoc && t && !synced)}
+  {#if sheet === "loading" || (!t && (isNote ? meta.status === "pending" : ticket.status === "pending")) || (isNote && t && !synced)}
     <div class="skel" data-loading aria-busy="true"><i class="bone title"></i><i class="bone"></i><i class="bone half"></i></div>
   {:else if !t}
-    <p class="empty" data-empty data-not-found>No {isDoc ? "document" : "ticket"} {doc_id} here{(isDoc ? meta.message : ticket.message) ? ` — ${isDoc ? meta.message : ticket.message}` : ""}.</p>
+    <p class="empty" data-empty data-not-found>No {isNote ? "note" : "ticket"} {doc_id} here{(isNote ? meta.message : ticket.message) ? ` — ${isNote ? meta.message : ticket.message}` : ""}.</p>
   {:else}
     {#if bare}<TicketView edit={bodyMount}/>{:else}<TicketView status={t.status} edit={bodyMount} titleEdit={titleMount}/>{/if}
   {/if}
-  {#if isDoc && t && synced}<Margin id={doc_id} {ydoc} view={() => view} tick={marginTick}/>{/if}
+  {#if isNote && t && synced}<Margin id={doc_id} {ydoc} view={() => view} tick={marginTick}/>{/if}
   {#if asking}
     <form class="ask" data-ask data-state="open" style={`top: ${asking.top}px`} onsubmit={(ev) => { ev.preventDefault(); sendAsk(); }}>
       <span class="where">{asking.a === asking.b ? `line ${asking.a}` : `lines ${asking.a}–${asking.b}`}</span>
-      <input class="say" data-field="instruction" aria-label={isDoc ? "your question" : "what an agent should do"} placeholder={isDoc ? "ask a question about it…" : "what should an agent do with it?"} autocomplete="off" bind:this={askBox} bind:value={instruction}/>
-      {#if isDoc}<select class="pick" data-field="to-whom" aria-label="asked of" bind:value={askTo}><option value="">anyone</option><option value="agent">an agent</option></select>{/if}
-      <button class="pick" data-action="ask" disabled={!instruction.trim()}>{isDoc ? "ask" : "ask an agent"}</button>
+      <input class="say" data-field="instruction" aria-label={isNote ? "your question" : "what an agent should do"} placeholder={isNote ? "ask a question about it…" : "what should an agent do with it?"} autocomplete="off" bind:this={askBox} bind:value={instruction}/>
+      {#if isNote}<select class="pick" data-field="to-whom" aria-label="asked of" bind:value={askTo}><option value="">anyone</option><option value="agent">an agent</option></select>{/if}
+      <button class="pick" data-action="ask" disabled={!instruction.trim()}>{isNote ? "ask" : "ask an agent"}</button>
       {#if askRefused}<span class="no" data-refused>{askRefused}</span>{/if}
     </form>
   {/if}
@@ -1118,10 +1118,10 @@
   {#if t}
     <p class="state" data-field="write-state" data-state={state.kind} data-refused={state.kind === "refused" ? "" : undefined} data-hand={state.who ?? undefined}>
       {#if state.kind === "idle"}<span class="muted">saves as you type</span>{:else}{state.text}{/if}
-      <button type="button" class="pick" data-action="ask-open" disabled={!hasSelection} onmousedown={(ev) => ev.preventDefault()} onclick={openAsk}>{isDoc ? "ask" : "ask an agent"} <kbd>ctrl</kbd><kbd>enter</kbd></button>
+      <button type="button" class="pick" data-action="ask-open" disabled={!hasSelection} onmousedown={(ev) => ev.preventDefault()} onclick={openAsk}>{isNote ? "ask" : "ask an agent"} <kbd>ctrl</kbd><kbd>enter</kbd></button>
       <button type="button" class="pick image" data-action="image" onmousedown={(ev) => ev.preventDefault()} onclick={() => picker?.click()}>image</button>
       <input class="file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple aria-label="an image" bind:this={picker} onchange={picked}/>
-      {#if isDoc}<button type="button" class="pick" data-action="history" aria-pressed={!!replaying} onmousedown={(ev) => ev.preventDefault()} onclick={openHistory}>history</button>
+      {#if isNote}<button type="button" class="pick" data-action="history" aria-pressed={!!replaying} onmousedown={(ev) => ev.preventDefault()} onclick={openHistory}>history</button>
       {:else}<a class="revs" href={ticketHref({ id: doc_id })} data-action="revisions">revisions</a>{/if}
     </p>
   {/if}

@@ -21,7 +21,7 @@ use crate::seam::Seam;
 use crate::store::MediaStore;
 use crate::vocab::{FileName, MediaData, MediaHash, MediaKind, MediaType, UploadId, WebUrl};
 use futures::Stream;
-use menger_docs::DocId;
+use menger_notes::NoteId;
 use menger_tickets_api::vocab::TicketRef;
 use std::sync::Arc;
 
@@ -91,7 +91,7 @@ impl MediaActivation {
     }
 }
 
-/// Files for tickets and docs — any file kept by its hash (one message, or in chunks for any size), and links read into cards.
+/// Files for tickets and notes — any file kept by its hash (one message, or in chunks for any size), and links read into cards.
 #[plexus_rpc::macros::activation(
     auth = "required",
     request = MediaRequest,
@@ -118,10 +118,10 @@ impl MediaActivation {
     /// `refused { reason, message, bytes?, max? }` (`too_large`,
     /// `truncated`, `bad_data`, `over_allowance`), with nothing kept;
     /// `not_found { ticket }` for a ticket that is none, or that the tickets
-    /// service says you may not edit. V2-29: with `doc` instead (a document
-    /// of the docs service), your editor permit on it is asked of `docs.may`
-    /// as you, the file answered to whoever reads that document, and
-    /// `not_found { doc }` for one you may not write. The bytes count against your
+    /// service says you may not edit. V2-29: with `note` instead (a note
+    /// of the notes service), your editor permit on it is asked of `notes.may`
+    /// as you, the file answered to whoever reads that note, and
+    /// `not_found { note }` for one you may not write. The bytes count against your
     /// allowance. Through synapse the data is a file (`--data @shot.b64`)
     /// or stdin, never `"$(base64 …)"`. Editor.
     #[plexus_rpc::macros::method(
@@ -131,10 +131,10 @@ impl MediaActivation {
     pub async fn put(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
-        /// The ticket it is for, e.g. KILN-4 (optional: with none and no doc, the file is yours).
+        /// The ticket it is for, e.g. KILN-4 (optional: with none and no note, the file is yours).
         ticket: Option<TicketRef>,
-        /// V2-29: the document it is for, e.g. 7k3mq2xa — instead of a ticket (optional).
-        doc: Option<DocId>,
+        /// V2-29: the note it is for, e.g. 7k3mq2xa — instead of a ticket (optional).
+        note: Option<NoteId>,
         /// What the client says it is (optional, a hint only: the bytes decide).
         mime: Option<MediaType>,
         /// The bytes, standard base64 (`base64 -w0 shot.png`); a `data:image/png;base64,` prefix is read past.
@@ -143,7 +143,7 @@ impl MediaActivation {
         name: Option<FileName>,
     ) -> impl Stream<Item = MediaEvent> + Send + 'static {
         let _ = mime;
-        futures::stream::once(crate::streams::put(self.clone(), user, ticket, doc, data, name))
+        futures::stream::once(crate::streams::put(self.clone(), user, ticket, note, data, name))
     }
 
     /// A file's bytes by its hash, up to 7 MiB; yields media { hash, mime, kind, name, bytes, width, height, data } (data base64), or not_found.
@@ -186,13 +186,13 @@ impl MediaActivation {
         futures::stream::once(crate::streams::info(self.clone(), user, hash))
     }
 
-    /// Every kept file you may see, newest first; yields listed { hash, mime, kind, name, bytes, width, height, at, tickets, docs } per file, then page { next }.
+    /// Every kept file you may see, newest first; yields listed { hash, mime, kind, name, bytes, width, height, at, tickets, notes } per file, then page { next }.
     ///
-    /// EDITOR-32: the files kept for a ticket or a document, each with the
-    /// tickets (`tickets`, by their ids now) and documents (`docs`) it is
+    /// EDITOR-32: the files kept for a ticket or a note, each with the
+    /// tickets (`tickets`, by their ids now) and notes (`notes`) it is
     /// kept for among those you read — asked of `tickets.may` and
-    /// `docs.may` as you. A file kept only for tickets and documents you
-    /// cannot read is not listed; a file kept with no ticket or document
+    /// `notes.may` as you. A file kept only for tickets and notes you
+    /// cannot read is not listed; a file kept with no ticket or note
     /// (yours before a ticket existed, a link's preview) is used nowhere
     /// and not listed either. `at` is when it was first kept (unix
     /// seconds). A page holds `limit` files (60; at most 500), and the last
@@ -267,10 +267,10 @@ impl MediaActivation {
     pub async fn begin(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
-        /// The ticket it is for (optional: with none and no doc, the file is yours).
+        /// The ticket it is for (optional: with none and no note, the file is yours).
         ticket: Option<TicketRef>,
-        /// V2-29: the document it is for, e.g. 7k3mq2xa — instead of a ticket (optional).
-        doc: Option<DocId>,
+        /// V2-29: the note it is for, e.g. 7k3mq2xa — instead of a ticket (optional).
+        note: Option<NoteId>,
         /// Its name as it came, e.g. walkthrough.mp4 (optional).
         name: Option<FileName>,
         /// What the client says it is (optional, a hint only: the bytes decide).
@@ -281,7 +281,7 @@ impl MediaActivation {
         upload: Option<UploadId>,
     ) -> impl Stream<Item = MediaEvent> + Send + 'static {
         let _ = mime;
-        futures::stream::once(crate::streams::begin(self.clone(), user, ticket, doc, name, size, upload))
+        futures::stream::once(crate::streams::begin(self.clone(), user, ticket, note, name, size, upload))
     }
 
     /// One chunk of an upload, at its byte offset; yields chunked { upload, received, size, duplicate }.
@@ -359,13 +359,13 @@ impl MediaActivation {
         #[from_auth(self.callers.verify)] user: Caller,
         /// The file's address, http:// or https://.
         url: WebUrl,
-        /// The ticket it is for (optional: with none and no doc, the file is yours).
+        /// The ticket it is for (optional: with none and no note, the file is yours).
         ticket: Option<TicketRef>,
-        /// V2-29: the document it is for, e.g. 7k3mq2xa — instead of a ticket (optional).
-        doc: Option<DocId>,
+        /// V2-29: the note it is for, e.g. 7k3mq2xa — instead of a ticket (optional).
+        note: Option<NoteId>,
         /// Its name (optional: the address's last segment).
         name: Option<FileName>,
     ) -> impl Stream<Item = MediaEvent> + Send + 'static {
-        futures::stream::once(crate::streams::fetch(self.clone(), user, url, ticket, doc, name))
+        futures::stream::once(crate::streams::fetch(self.clone(), user, url, ticket, note, name))
     }
 }

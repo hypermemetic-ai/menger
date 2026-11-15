@@ -1,43 +1,43 @@
-//! The `docs` activation — **the one declaration**, as `tickets`, `ui` and
+//! The `notes` activation — **the one declaration**, as `tickets`, `ui` and
 //! `media` are: the `Activation` impl, dispatch, the schema and the
-//! methods' bodies from this `impl`, and `DocsClient<T>` for a client of it
-//! (the media service's `docs.may`, a test).
+//! methods' bodies from this `impl`, and `NotesClient<T>` for a client of it
+//! (the media service's `notes.may`, a test).
 //!
 //! **Under login**: a viewer reads (`get`, `list`, `state`, `history`,
 //! `replay`, `present`, `watch`, `may`, `threads`, `waiting`) and is present
 //! (`here`), an editor writes (`create`, `update`, `save`, `rename`,
 //! `restore`) and asks and answers on a range (`ask`, `reply`, `resolve`), an admin
 //! deletes and squashes (`delete`, `squash`: unlisted — admin holds every
-//! grant; `docs.squash` is grantable to another role by the role table). The gate
+//! grant; `notes.squash` is grantable to another role by the role table). The gate
 //! admits a call when its grant is held somewhere; the method asks it again
-//! on the document's organization (`acme:`) through the seam — a document
+//! on the note's organization (`acme:`) through the seam — a note
 //! in an organization the caller does not read is `not_found`, one it
 //! reads and may not write `refused { forbidden }`.
 
-use crate::caller::{Caller, Callers, DocsRequest};
-use crate::events::DocsEvent;
+use crate::caller::{Caller, Callers, NotesRequest};
+use crate::events::NotesEvent;
 use crate::seam::Seam;
-use crate::store::DocsStore;
+use crate::store::NotesStore;
 use crate::streams::{many, once};
-use crate::vocab::{AgentName, ThreadId, ThreadText, DocAwareness, DocBody, DocId, DocQuery, DocSession, DocTitle, DocUpdate, DocVector};
+use crate::vocab::{AgentName, ThreadId, ThreadText, NoteAwareness, NoteBody, NoteId, NoteQuery, NoteSession, NoteTitle, NoteUpdate, NoteVector};
 use futures::Stream;
 use menger_tickets_api::address::OrgId;
 use menger_tickets_api::members::Role;
 use std::sync::Arc;
 
-/// The activation: the store over `docs.db`, the seam to the running
+/// The activation: the store over `notes.db`, the seam to the running
 /// service, and the resolver every caller is verified by.
 #[derive(Clone)]
-pub struct DocsActivation {
-    store: Arc<DocsStore>,
+pub struct NotesActivation {
+    store: Arc<NotesStore>,
     seam: Seam,
     callers: Callers,
 }
 
-impl DocsActivation {
+impl NotesActivation {
     /// Over `store`. Inside a runtime, presence that idled out is swept
     /// every few seconds for as long as the store lives (and said `left`).
-    pub fn new(store: Arc<DocsStore>) -> Self {
+    pub fn new(store: Arc<NotesStore>) -> Self {
         if let Ok(rt) = tokio::runtime::Handle::try_current() {
             let weak = Arc::downgrade(&store);
             rt.spawn(async move {
@@ -60,146 +60,146 @@ impl DocsActivation {
     }
 
     /// The store it keeps.
-    pub fn store(&self) -> &Arc<DocsStore> {
+    pub fn store(&self) -> &Arc<NotesStore> {
         &self.store
     }
 }
 
-/// Documents: writing on its own, written by many hands at once — make one, read it, write it live (a Yjs CRDT), see who is on it, replay how it was built.
+/// Notes: writing on its own, written by many hands at once — make one, read it, write it live (a Yjs CRDT), see who is on it, replay how it was built.
 #[plexus_rpc::macros::activation(
     auth = "required",
-    request = DocsRequest,
+    request = NotesRequest,
     typed_params,
     roles(
         viewer = ["get", "list", "state", "history", "replay", "present", "here", "watch", "may", "threads", "waiting"],
         editor = [viewer, "create", "update", "save", "rename", "restore", "ask", "reply", "resolve"],
     )
 )]
-impl DocsActivation {
-    /// Make a document in an organization you write in; yields created { doc } (revision 1, its id 8 characters, opened at #/doc/<id>).
+impl NotesActivation {
+    /// Make a note in an organization you write in; yields created { note } (revision 1, its id 8 characters, opened at #/note/<id>).
     ///
     /// `org` names the organization (`acme`); without it, the first one you
-    /// write documents in. Who may read and write the document is the roles
+    /// write notes in. Who may read and write the note is the roles
     /// held on its organization (`acme:`) or on `*`. Refused in band:
     /// `not_found { org }` for an organization you are not in, `refused {
     /// forbidden }` for one you only read. Editor.
     #[plexus_rpc::macros::method(
         group = "write",
-        example(note = "a document, titled", params = r#"{"title": "The kiln, in practice", "body": "Fire twice a week."}"#)
+        example(note = "a note, titled", params = r#"{"title": "The kiln, in practice", "body": "Fire twice a week."}"#)
     )]
     pub async fn create(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
         /// Its title, one line, e.g. The kiln, in practice.
-        title: DocTitle,
+        title: NoteTitle,
         /// Its markdown (optional: empty).
-        body: Option<DocBody>,
-        /// The organization it is in, e.g. acme (optional: the first you write documents in).
+        body: Option<NoteBody>,
+        /// The organization it is in, e.g. acme (optional: the first you write notes in).
         org: Option<OrgId>,
-    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let (store, seam) = (self.store.clone(), self.seam.clone());
-        once(crate::streams::create(store, seam, user, title.into_string(), body.map(DocBody::into_string).unwrap_or_default(), org.map(|o| o.as_str().to_string())))
+        once(crate::streams::create(store, seam, user, title.into_string(), body.map(NoteBody::into_string).unwrap_or_default(), org.map(|o| o.as_str().to_string())))
     }
 
-    /// A document whole; yields doc { doc } — its title, its body (the markdown its CRDT holds now), its revision, who made it and who wrote it last — or not_found.
+    /// A note whole; yields note { note } — its title, its body (the markdown its CRDT holds now), its revision, who made it and who wrote it last — or not_found.
     ///
-    /// A document in an organization you do not read is `not_found`, as one
+    /// A note in an organization you do not read is `not_found`, as one
     /// there is not. `replay` reads it as it stood at a moment. Viewer.
-    #[plexus_rpc::macros::method(group = "read", example(note = "a document by its id", params = r#"{"id": "7k3mq2xa"}"#))]
+    #[plexus_rpc::macros::method(group = "read", example(note = "a note by its id", params = r#"{"id": "7k3mq2xa"}"#))]
     pub async fn get(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
         /// Its id, e.g. 7k3mq2xa.
-        id: DocId,
-    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
+        id: NoteId,
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let (store, seam) = (self.store.clone(), self.seam.clone());
         once(crate::streams::get(store, seam, user, id.into_string()))
     }
 
-    /// The documents you read, newest made first, without their bodies; yields rows { items: [doc { doc }] } then page { next, remaining }.
+    /// The notes you read, newest made first, without their bodies; yields rows { items: [note { note }] } then page { next, remaining }.
     ///
     /// `query` keeps those whose title holds every word of it, case-blind.
     /// A page is 50 rows unless `limit` says (at most 1,000); `after` is the
     /// last row's id of the page before (`page.next`). Viewer.
-    #[plexus_rpc::macros::method(group = "read", example(note = "the documents about the kiln", params = r#"{"query": "kiln", "limit": 20}"#))]
+    #[plexus_rpc::macros::method(group = "read", example(note = "the notes about the kiln", params = r#"{"query": "kiln", "limit": 20}"#))]
     pub async fn list(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
-        /// Words the title holds, e.g. kiln glaze (optional: every document).
-        query: Option<DocQuery>,
+        /// Words the title holds, e.g. kiln glaze (optional: every note).
+        query: Option<NoteQuery>,
         /// The page's size, e.g. 50 (optional: 50; at most 1000).
         limit: Option<u32>,
         /// The id the page before ended at, as its page.next said (optional: the first page).
-        after: Option<DocId>,
-    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
+        after: Option<NoteId>,
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let (store, seam) = (self.store.clone(), self.seam.clone());
-        many(crate::streams::list(store, seam, user, query.map(DocQuery::into_string).filter(|q| !q.is_empty()), limit, after.map(DocId::into_string)))
+        many(crate::streams::list(store, seam, user, query.map(NoteQuery::into_string).filter(|q| !q.is_empty()), limit, after.map(NoteId::into_string)))
     }
 
-    /// Write a document's body whole — merged with whatever else is being written; yields saved { id, revision, at, by } (stale: true when base was not the revision it found).
+    /// Write a note's body whole — merged with whatever else is being written; yields saved { id, revision, at, by } (stale: true when base was not the revision it found).
     ///
     /// For an agent or a script over synapse: the body given is diffed
     /// against the text now and made into the CRDT's own inserts and deletes,
     /// so it merges with live typing instead of overwriting it (a hand typing
     /// in a paragraph the body did not change keeps its words). `base` is the
-    /// revision you read (`doc.revision`). A body equal to the text writes
+    /// revision you read (`note.revision`). A body equal to the text writes
     /// nothing. The editor sends `update`s instead. Editor.
     #[plexus_rpc::macros::method(group = "write", example(note = "a body, read at revision 3", params = r##"{"id": "7k3mq2xa", "body": "# The kiln\n\nFire twice a week.\n", "base": 3}"##))]
     pub async fn save(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
         /// Its id, e.g. 7k3mq2xa.
-        id: DocId,
+        id: NoteId,
         /// The markdown, whole.
-        body: DocBody,
+        body: NoteBody,
         /// The revision you read, e.g. 3 (optional: none said, never stale).
         base: Option<u32>,
-    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let (store, seam) = (self.store.clone(), self.seam.clone());
         once(crate::streams::save(store, seam, user, id.into_string(), body.into_string(), base))
     }
 
-    /// Apply a Yjs update to a document's body — the editor's live typing; yields applied { id, revision }.
+    /// Apply a Yjs update to a note's body — the editor's live typing; yields applied { id, revision }.
     ///
-    /// `update` is a Yjs v1 update of the document's `body` text (base64),
-    /// as the page's `ydoc` made it; it is merged into the document's CRDT,
+    /// `update` is a Yjs v1 update of the note's `body` text (base64),
+    /// as the page's `ydoc` made it; it is merged into the note's CRDT,
     /// kept as a change with you and the moment, and said to everyone on the
-    /// document (`watch`'s `updated`) — not back to `session`, when you name
+    /// note (`watch`'s `updated`) — not back to `session`, when you name
     /// the presence it came from. Editor.
     #[plexus_rpc::macros::method(group = "write")]
     pub async fn update(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
         /// Its id, e.g. 7k3mq2xa.
-        id: DocId,
+        id: NoteId,
         /// The Yjs v1 update, base64.
-        update: DocUpdate,
+        update: NoteUpdate,
         /// Your page's session on it, as your watch named it (optional).
-        session: Option<DocSession>,
-    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
+        session: Option<NoteSession>,
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let (store, seam) = (self.store.clone(), self.seam.clone());
-        once(crate::streams::update(store, seam, user, id.into_string(), update.into_string(), session.map(DocSession::into_string)))
+        once(crate::streams::update(store, seam, user, id.into_string(), update.into_string(), session.map(NoteSession::into_string)))
     }
 
-    /// What your copy of a document's CRDT lacks; yields state { id, update, vector, revision } — the Yjs update to apply, and the document's own state vector.
+    /// What your copy of a note's CRDT lacks; yields state { id, update, vector, revision } — the Yjs update to apply, and the note's own state vector.
     ///
     /// `vector` is your state vector (`Y.encodeStateVector`, base64); with
-    /// none, the whole document. Send back what the document lacks of yours
+    /// none, the whole note. Send back what the note lacks of yours
     /// (`Y.encodeStateAsUpdate(ydoc, vector)`) as an `update`. Viewer.
-    #[plexus_rpc::macros::method(group = "read", example(note = "the whole document", params = r#"{"id": "7k3mq2xa"}"#))]
+    #[plexus_rpc::macros::method(group = "read", example(note = "the whole note", params = r#"{"id": "7k3mq2xa"}"#))]
     pub async fn state(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
         /// Its id, e.g. 7k3mq2xa.
-        id: DocId,
+        id: NoteId,
         /// Your state vector, base64 (optional: you hold nothing).
-        vector: Option<DocVector>,
-    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
+        vector: Option<NoteVector>,
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let (store, seam) = (self.store.clone(), self.seam.clone());
-        once(crate::streams::state(store, seam, user, id.into_string(), vector.map(DocVector::into_string)))
+        once(crate::streams::state(store, seam, user, id.into_string(), vector.map(NoteVector::into_string)))
     }
 
-    /// Every change of a document, newest first; yields change { change: { seq, kind, at, by, principal, bytes, title?, authors? } } each.
+    /// Every change of a note, newest first; yields change { change: { seq, kind, at, by, principal, bytes, title?, authors? } } each.
     ///
     /// Every change is kept with who and when until squashed: `create`,
     /// `update` (live typing), `save` (a whole body, merged), `rename`,
@@ -210,17 +210,17 @@ impl DocsActivation {
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
         /// Its id, e.g. 7k3mq2xa.
-        id: DocId,
+        id: NoteId,
         /// How many, e.g. 20 (optional: up to 1000).
         limit: Option<u32>,
         /// Only changes before this seq, e.g. 120 (optional: from the newest).
         before: Option<u32>,
-    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let (store, seam) = (self.store.clone(), self.seam.clone());
         many(crate::streams::history(store, seam, user, id.into_string(), limit, before))
     }
 
-    /// A document as it stood at a moment; yields doc { doc } — its title and body then, revision the change it stood at — or not_found { revision }.
+    /// A note as it stood at a moment; yields note { note } — its title and body then, revision the change it stood at — or not_found { revision }.
     ///
     /// `seq` stands it after that change (`history`'s); `at` (unix
     /// milliseconds) after the last change made by then. A moment before the
@@ -231,22 +231,22 @@ impl DocsActivation {
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
         /// Its id, e.g. 7k3mq2xa.
-        id: DocId,
+        id: NoteId,
         /// After this change, e.g. 10 (optional).
         seq: Option<u32>,
         /// At this moment, unix milliseconds, e.g. 1793608333000 (optional).
         at: Option<i64>,
-    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let (store, seam) = (self.store.clone(), self.seam.clone());
         once(crate::streams::replay(store, seam, user, id.into_string(), seq, at))
     }
 
-    /// Collapse a document's changes up to a moment into one snapshot, keeping who wrote what; yields squashed { id, until, removed, at, by }, said on watch.
+    /// Collapse a note's changes up to a moment into one snapshot, keeping who wrote what; yields squashed { id, until, removed, at, by }, said on watch.
     ///
     /// The changes up to `until` (a `seq`) become one `snapshot` change whose
     /// `authors` say each writer's changes and bytes; later changes stay as
     /// they are. A replay before `until` is `not_found` after. Needs its own
-    /// grant, `docs.squash`, on the document's organization — admin's by
+    /// grant, `notes.squash`, on the note's organization — admin's by
     /// default, grantable to a role by the role table; refused typed
     /// without it. Admin.
     #[plexus_rpc::macros::method(group = "admin", example(note = "everything before change 200", params = r#"{"id": "7k3mq2xa", "until": 200}"#))]
@@ -254,15 +254,15 @@ impl DocsActivation {
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
         /// Its id, e.g. 7k3mq2xa.
-        id: DocId,
+        id: NoteId,
         /// The last change to fold in, e.g. 200.
         until: u32,
-    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let (store, seam) = (self.store.clone(), self.seam.clone());
         once(crate::streams::squash(store, seam, user, id.into_string(), until))
     }
 
-    /// Who is on a document now; yields present { present: { session, principal, name, agent, colour, client?, awareness?, at } } each.
+    /// Who is on a note now; yields present { present: { session, principal, name, agent, colour, client?, awareness?, at } } each.
     ///
     /// A connection is on it while its `watch { id, session }` is open; a
     /// writer without one (an agent's `save`) while it writes, idling out
@@ -272,13 +272,13 @@ impl DocsActivation {
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
         /// Its id, e.g. 7k3mq2xa.
-        id: DocId,
-    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
+        id: NoteId,
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let (store, seam) = (self.store.clone(), self.seam.clone());
         many(crate::streams::present(store, seam, user, id.into_string()))
     }
 
-    /// Say where your caret is on a document; yields present { present }, said to everyone on it.
+    /// Say where your caret is on a note; yields present { present }, said to everyone on it.
     ///
     /// `awareness` is your page's Yjs awareness update (base64) — your
     /// caret, your selection — and `client` your Yjs client id; `session`
@@ -289,94 +289,94 @@ impl DocsActivation {
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
         /// Its id, e.g. 7k3mq2xa.
-        id: DocId,
+        id: NoteId,
         /// Your page's session on it, e.g. s-3f9a1c.
-        session: DocSession,
+        session: NoteSession,
         /// Your Yjs client id (optional).
         client: Option<u64>,
         /// Your Yjs awareness update, base64 (optional).
-        awareness: Option<DocAwareness>,
-    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
+        awareness: Option<NoteAwareness>,
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let (store, seam) = (self.store.clone(), self.seam.clone());
-        once(crate::streams::here(store, seam, user, id.into_string(), session.into_string(), client, awareness.map(DocAwareness::into_string)))
+        once(crate::streams::here(store, seam, user, id.into_string(), session.into_string(), client, awareness.map(NoteAwareness::into_string)))
     }
 
-    /// Retitle a document; yields renamed { id, title, revision, at, by }. Editor.
+    /// Retitle a note; yields renamed { id, title, revision, at, by }. Editor.
     #[plexus_rpc::macros::method(group = "write", example(note = "a new title", params = r#"{"id": "7k3mq2xa", "title": "The kiln, weekly"}"#))]
     pub async fn rename(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
         /// Its id, e.g. 7k3mq2xa.
-        id: DocId,
+        id: NoteId,
         /// The new title, one line.
-        title: DocTitle,
-    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
+        title: NoteTitle,
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let (store, seam) = (self.store.clone(), self.seam.clone());
         once(crate::streams::rename(store, seam, user, id.into_string(), title.into_string()))
     }
 
-    /// Delete a document; yields deleted { id, at, by }. Its changes stay in the service's file. Admin.
+    /// Delete a note; yields deleted { id, at, by }. Its changes stay in the service's file. Admin.
     #[plexus_rpc::macros::method(group = "admin", example(note = "gone", params = r#"{"id": "7k3mq2xa"}"#))]
     pub async fn delete(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
         /// Its id, e.g. 7k3mq2xa.
-        id: DocId,
-    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
+        id: NoteId,
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let (store, seam) = (self.store.clone(), self.seam.clone());
         once(crate::streams::delete(store, seam, user, id.into_string()))
     }
 
-    /// Put a document's body back as it stood after a change; yields saved { id, revision, at, by } — the restore is a change more, merged like a save. Editor.
+    /// Put a note's body back as it stood after a change; yields saved { id, revision, at, by } — the restore is a change more, merged like a save. Editor.
     #[plexus_rpc::macros::method(group = "write", example(note = "back to change 2", params = r#"{"id": "7k3mq2xa", "seq": 2}"#))]
     pub async fn restore(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
         /// Its id, e.g. 7k3mq2xa.
-        id: DocId,
+        id: NoteId,
         /// The change to stand it at, e.g. 2 (`history`'s seq).
         seq: u32,
-    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let (store, seam) = (self.store.clone(), self.seam.clone());
         once(crate::streams::restore(store, seam, user, id.into_string(), seq))
     }
 
-    /// Whether you hold a role on a document — viewer | editor | admin — as the gate says on its organization now; yields may { id, role, held }, or not_found for one you do not read.
+    /// Whether you hold a role on a note — viewer | editor | admin — as the gate says on its organization now; yields may { id, role, held }, or not_found for one you do not read.
     ///
     /// The question another service asks through the seam before it keeps
-    /// something of a document's, as the caller (the service that keeps
-    /// images asks `editor` before it keeps one for a document, `viewer`
+    /// something of a note's, as the caller (the service that keeps
+    /// images asks `editor` before it keeps one for a note, `viewer`
     /// before it answers one). Nothing is written. Viewer.
     #[plexus_rpc::macros::method(group = "read", values(role = ["viewer", "editor", "admin"]), example(note = "may I write it?", params = r#"{"id": "7k3mq2xa", "role": "editor"}"#))]
     pub async fn may(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
         /// Its id, e.g. 7k3mq2xa.
-        id: DocId,
+        id: NoteId,
         /// The role asked: viewer | editor | admin.
         role: Role,
-    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let (store, seam) = (self.store.clone(), self.seam.clone());
         once(crate::streams::may(store, seam, user, id.into_string(), role))
     }
 
-    /// Ask a question on a range of a document — it stays beside that text as the text changes; yields asked { thread }, said on watch.
+    /// Ask a question on a range of a note — it stays beside that text as the text changes; yields asked { thread }, said on watch.
     ///
     /// `from` and `to` are the range in characters of the text now (as
-    /// `get`'s body counts them). The range is anchored in the document's
+    /// `get`'s body counts them). The range is anchored in the note's
     /// CRDT, so it follows the text through every edit (`thread.from`,
     /// `thread.to` where it stands now; deleted whole, the thread is
     /// `detached`). `text` is the question (markdown: links, images).
     /// `to_whom` asks it of an agent (`builder`, or `agent` for any); such
     /// a question is listed by `waiting` and said to every watch of the
-    /// organization's documents, so an agent picks it up, and may answer
-    /// with `reply` or edit the document itself. Editor.
+    /// organization's notes, so an agent picks it up, and may answer
+    /// with `reply` or edit the note itself. Editor.
     #[plexus_rpc::macros::method(group = "write", example(note = "a question on characters 10 to 42", params = r#"{"id": "7k3mq2xa", "from": 10, "to": 42, "text": "Is this still true after the move?", "to_whom": "agent"}"#))]
     pub async fn ask(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
         /// Its id, e.g. 7k3mq2xa.
-        id: DocId,
+        id: NoteId,
         /// Where the range starts, in characters, e.g. 10.
         from: u32,
         /// Where it ends, e.g. 42.
@@ -385,7 +385,7 @@ impl DocsActivation {
         text: ThreadText,
         /// Whom it is asked of: an agent's name, or agent for any (optional: anyone reading).
         to_whom: Option<AgentName>,
-    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let (store, seam) = (self.store.clone(), self.seam.clone());
         once(crate::streams::ask(store, seam, user, id.into_string(), from, to, text.into_string(), to_whom.map(AgentName::into_string)))
     }
@@ -395,13 +395,13 @@ impl DocsActivation {
     pub async fn reply(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
-        /// The document's id, e.g. 7k3mq2xa.
-        id: DocId,
+        /// The note's id, e.g. 7k3mq2xa.
+        id: NoteId,
         /// The thread's id, as ask answered it.
         thread: ThreadId,
         /// The answer, markdown.
         body: ThreadText,
-    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let (store, seam) = (self.store.clone(), self.seam.clone());
         once(crate::streams::reply(store, seam, user, id.into_string(), thread.into_string(), body.into_string()))
     }
@@ -411,18 +411,18 @@ impl DocsActivation {
     pub async fn resolve(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
-        /// The document's id, e.g. 7k3mq2xa.
-        id: DocId,
+        /// The note's id, e.g. 7k3mq2xa.
+        id: NoteId,
         /// The thread's id.
         thread: ThreadId,
         /// Open it again instead (optional: false).
         open: Option<bool>,
-    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let (store, seam) = (self.store.clone(), self.seam.clone());
         once(crate::streams::resolve(store, seam, user, id.into_string(), thread.into_string(), open.unwrap_or(false)))
     }
 
-    /// A document's threads, in the order their ranges stand in the text, the detached ones last; yields thread { thread } each.
+    /// A note's threads, in the order their ranges stand in the text, the detached ones last; yields thread { thread } each.
     ///
     /// Each thread is whole: its anchor (two Yjs relative positions, for a
     /// page to resolve in its own copy), its range now in characters, the
@@ -433,13 +433,13 @@ impl DocsActivation {
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
         /// Its id, e.g. 7k3mq2xa.
-        id: DocId,
-    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
+        id: NoteId,
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let (store, seam) = (self.store.clone(), self.seam.clone());
         many(crate::streams::threads(store, seam, user, id.into_string()))
     }
 
-    /// The open questions asked of someone, in the documents you read, oldest first; yields thread { thread } each — an agent's queue.
+    /// The open questions asked of someone, in the notes you read, oldest first; yields thread { thread } each — an agent's queue.
     ///
     /// `to` keeps those asked of that name (`builder`, or `agent` for the
     /// ones asked of any agent). Viewer.
@@ -449,19 +449,19 @@ impl DocsActivation {
         #[from_auth(self.callers.verify)] user: Caller,
         /// Asked of this name only, e.g. agent (optional: of anyone named).
         to: Option<AgentName>,
-    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let (store, seam) = (self.store.clone(), self.seam.clone());
         many(crate::streams::waiting(store, seam, user, to.map(AgentName::into_string)))
     }
 
-    /// Follow documents: watching { id? } first, then created, updated { id, seq, update, by }, renamed, deleted, squashed, asked, replied, resolved — and, on one document, present and left — as they happen; open-ended, ends with watch_closed { reason, message }.
+    /// Follow notes: watching { id? } first, then created, updated { id, seq, update, by }, renamed, deleted, squashed, asked, replied, resolved — and, on one note, present and left — as they happen; open-ended, ends with watch_closed { reason, message }.
     ///
-    /// With `id`, one document's: each `updated` carries the Yjs update to
+    /// With `id`, one note's: each `updated` carries the Yjs update to
     /// apply (the stream ends after its `deleted`), and who comes and goes
     /// (`present { present }`, `left { session, client? }`); with `session`
     /// as well, this watch is your presence on it while it is open, and your
     /// own updates (sent with that session) are not said back. Without `id`,
-    /// every document's you read, `doc` without its body. Held to you by the
+    /// every note's you read, `note` without its body. Held to you by the
     /// gate: asked again when the grants move, a sign-out or the expiry comes,
     /// and closed with a typed reason (`signed_out`, `expired`, `revoked`,
     /// `refused`); each write is asked of the gate on its organization as it
@@ -471,17 +471,17 @@ impl DocsActivation {
     pub async fn watch(
         &self,
         #[from_auth(self.callers.verify)] user: Caller,
-        /// One document's id, e.g. 7k3mq2xa (optional: every document you read).
-        id: Option<DocId>,
+        /// One note's id, e.g. 7k3mq2xa (optional: every note you read).
+        id: Option<NoteId>,
         /// Your page's session on it, e.g. s-3f9a1c — you are present while the watch is open (optional; with id only).
-        session: Option<DocSession>,
-    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
-        crate::watch::watch(self.store.clone(), self.seam.clone(), user, id.map(DocId::into_string), session.map(DocSession::into_string))
+        session: Option<NoteSession>,
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
+        crate::watch::watch(self.store.clone(), self.seam.clone(), user, id.map(NoteId::into_string), session.map(NoteSession::into_string))
     }
 
-    /// Every principal's documents made and bytes written (admin of *): yields usage { principal, count, bytes } each — what quota.recount reads.
+    /// Every principal's notes made and bytes written (admin of *): yields usage { principal, count, bytes } each — what quota.recount reads.
     ///
-    /// V2-31: from the changes kept — `count` the documents a principal
+    /// V2-31: from the changes kept — `count` the notes a principal
     /// made, `bytes` every change they wrote (a squash's snapshot is
     /// nobody's). Admin of `*`.
     #[plexus_rpc::macros::method(group = "read", example(note = "every author", params = r#"{"everyone": true}"#))]
@@ -492,7 +492,7 @@ impl DocsActivation {
         everyone: Option<bool>,
         /// V2-70: by the day each change was kept — usage_day { principal, day, count, bytes } (what quota history is backfilled from).
         daily: Option<bool>,
-    ) -> impl Stream<Item = DocsEvent> + Send + 'static {
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let _ = everyone;
         let (store, seam) = (self.store.clone(), self.seam.clone());
         many(crate::streams::usage(store, seam, user, daily.unwrap_or(false)))

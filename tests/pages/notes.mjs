@@ -2,9 +2,12 @@
 // ctrl+shift+l opens a small window on any page with the top bar — the global
 // keys' chord (keys-global emits `note.open`), ctrl+alt+n too, and the bar's
 // `note` button; in a field and in the editor as well. ctrl+enter keeps it
-// as a doc (`docs.create { title, body }`, the first line its title when
+// as a note (`notes.create { title, body }`, the first line its title when
 // none is typed), escape closes it and keeps nothing. Run alone by
 // `node tests/pages_browser.mjs --group notes`.
+// NOTES-3: a note's link is `#/note/<id>`; the link it had before,
+// `#/doc/<id>`, opens the same note, and no word on the writing screen calls
+// it a document.
 //
 // Marks: `[data-surface=note-quick]`, `[data-note-open]` (the window),
 // `[data-field=note-title]`, `[data-field=note-body]`, `[data-action="note.keep"]`,
@@ -14,7 +17,7 @@ import { sentCalls } from "../../scripts/ui-throwaway.mjs";
 
 export default async (ctx) => {
   const { test, assert, eventually, sleep, openPage, sy } = ctx;
-  const doc = (id) => sy("docs", "get", "--id", id).find((e) => e.type === "doc")?.doc;
+  const doc = (id) => sy("notes", "get", "--id", id).find((e) => e.type === "note")?.note;
   const win = (page) => page.locator("[data-surface=note-quick] [data-note-open]");
 
   await test("a_note_is_written_from_any_page", async () => {
@@ -46,7 +49,7 @@ export default async (ctx) => {
       await body.fill("thrown away");
       await page.keyboard.press("Escape");
       await eventually(`${route}: escape closes it`, async () => (await win(page).count()) === 0, 2_000);
-      assert(!(await sentCalls(page)).some((c) => c.method === "docs.create"), `${route}: escape keeps nothing`);
+      assert(!(await sentCalls(page)).some((c) => c.method === "notes.create"), `${route}: escape keeps nothing`);
 
       // Opened again it is empty; the first line is the title; ctrl+enter keeps it.
       await page.keyboard.press("Control+Shift+L");
@@ -62,7 +65,7 @@ export default async (ctx) => {
       const d = doc(id);
       assert(d && d.title === `kiln note ${route}`, `${route}: kept under its first line: ${JSON.stringify(d?.title)}`);
       assert(d.body === text, `${route}: its body is the note as typed: ${JSON.stringify(d.body)}`);
-      assert((await kept.locator("a").getAttribute("href")) === `#/doc/${id}`, `${route}: the word links the note`);
+      assert((await kept.locator("a").getAttribute("href")) === `#/note/${id}`, `${route}: the word links the note`);
       await context.close();
     }
   });
@@ -96,8 +99,8 @@ export default async (ctx) => {
   });
 
   await test("a_note_opens_from_a_field_and_from_the_editor", async () => {
-    const id = sy("docs", "create", "--title", "Kiln log").find((e) => e.type === "created").doc.id;
-    const { page, context } = await openPage(`#/doc/${id}`);
+    const id = sy("notes", "create", "--title", "Kiln log").find((e) => e.type === "created").note.id;
+    const { page, context } = await openPage(`#/note/${id}`);
     const text = page.locator(".cm-content[data-field=body-source]");
     await text.waitFor({ timeout: 15_000 });
     await sleep(300);
@@ -110,7 +113,23 @@ export default async (ctx) => {
       await page.keyboard.press("Escape");
       await eventually(`escape closes it (${where})`, async () => (await win(page).count()) === 0, 2_000);
     }
-    assert(!(await sentCalls(page)).some((c) => c.method === "docs.create"), "nothing was kept");
+    assert(!(await sentCalls(page)).some((c) => c.method === "notes.create"), "nothing was kept");
     await context.close();
+  });
+
+  // NOTES-3: documents became notes — an old link opens the note, and the surface says note.
+  await test("an_old_link_opens_the_note_and_the_surface_says_note", async () => {
+    const id = sy("notes", "create", "--title", "Glaze trials", "--body", "cone 6\n").find((e) => e.type === "created").note.id;
+    for (const route of [`#/doc/${id}`, `#/note/${id}`]) {
+      const { page, context } = await openPage(route);
+      const ed = page.locator(`[data-surface=editor-body][data-kind=note][data-ticket="${id}"]`);
+      await ed.waitFor({ timeout: 15_000 });
+      await eventually(`${route}: the note's title`, async () => (await ed.locator("[data-field=title]").textContent())?.includes("Glaze trials"), 5_000);
+      await eventually(`${route}: the note in the list`, async () => (await page.locator(`[data-field=notes] [data-note="${id}"]`).count()) >= 1, 5_000);
+      const words = await page.locator("[data-surface=editor-screen]").evaluate((e) => e.innerText);
+      assert(!/\bdocuments?\b/i.test(words), `${route}: no word calls a note a document: ${words.match(/.{0,30}\bdocuments?\b.{0,30}/i)?.[0]}`);
+      assert(!(await sentCalls(page)).some((c) => c.method.startsWith("docs.")), `${route}: nothing asks the docs service`);
+      await context.close();
+    }
   });
 };

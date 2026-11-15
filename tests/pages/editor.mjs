@@ -5,9 +5,9 @@
 // one amend 600 ms after the last key; a refusal on the line under the canvas;
 // an outside amend landing without moving the caret; a dirty draft merged with
 // an outside write at the pause; house marks drawn as cards, kept byte for
-// byte; the documents beside it with + new. V2-29: the documents are the
-// docs service's — + new makes a doc, typing reaches it as Yjs updates
-// (`docs.update`), `#/doc/:id` reloads it, two pages on one doc type together
+// byte; the notes beside it with + new. V2-29, NOTES-3: the notes are the
+// notes service's — + new makes a note, typing reaches it as Yjs updates
+// (`notes.update`), `#/note/:id` reloads it, two pages on one note type together
 // and see each other here, and a ticket still edits at `#/edit/:id`. Run alone by
 // `node tests/pages_browser.mjs --group editor`.
 //
@@ -16,8 +16,8 @@
 // holding the editor; `.editorView` its view), `.cm-content[data-field=body-source]`,
 // `.blk[data-block]` (a drawn block), `[data-field=write-state][data-state=idle|saving|saved|
 // refused|merged|outside]`, `[data-refused]`, `[data-hand=NAME]`, `[data-action=revisions]`,
-// `[data-loading]`, `[data-empty]`; the screen's `[data-field=documents]`, `[data-doc=ID]`,
-// `[data-action=new]`, `[data-field=find]`, `[data-action=docs]`.
+// `[data-loading]`, `[data-empty]`; the screen's `[data-field=notes]`, `[data-note=ID]`,
+// `[data-action=new]`, `[data-field=find]`, `[data-action=notes]`.
 import { spawn } from "node:child_process";
 import { makeKey, writeSession } from "../../scripts/throwaway-login.mjs";
 import { sentCalls, synapse } from "../../scripts/ui-throwaway.mjs";
@@ -377,7 +377,7 @@ graph TD
   // ── the screen: one surface, the documents beside it ─────────────────────
   const hash = (page) => page.evaluate(() => location.hash);
 
-  await test("one_surface_and_the_documents_beside_it", async () => {
+  await test("one_surface_and_the_notes_beside_it", async () => {
     const id = make("the first screen", "# One surface\n\nwritten where it is read\n");
     const { context, page } = await openPage(`#/edit/${id}`);
     try {
@@ -386,7 +386,7 @@ graph TD
       assert((await screen.locator("[data-surface=ticket-body], [data-surface=ticket-head], [data-half]").count()) === 0, "nothing drawn twice: no second pane");
       assert((await screen.locator("[data-surface=ticket-questions]").count()) === 1, "the questions under it");
       assert((await page.locator("[data-layout=page-editor][data-slot=top] [data-surface=app-top]").count()) === 1, "the app's top on the page");
-      await eventually("the document in the list, recent", async () => (await screen.locator(`[data-field=documents] [data-doc=${id}][data-recent][data-current]`).count()) === 1, 5_000);
+      await eventually("the document in the list, recent", async () => (await screen.locator(`[data-field=notes] [data-note=${id}][data-recent][data-current]`).count()) === 1, 5_000);
       await page.evaluate(() => (location.hash = "#/"));
       await eventually("#/ opens the last document", async () => (await screen.getAttribute("data-ticket")) === id, 5_000);
       await shoot(page, "editor-screen");
@@ -395,29 +395,29 @@ graph TD
     }
   });
 
-  // ── V2-29: documents of the docs service, on the same surface ─────────────
-  const docOf = (id) => sy("docs", "get", "--id", id).find((e) => e.type === "doc")?.doc;
-  const docUpdates = async (page) => (await sentCalls(page)).filter((c) => c.method === "docs.update");
+  // ── V2-29, NOTES-3: notes of the notes service, on the same surface ──────
+  const docOf = (id) => sy("notes", "get", "--id", id).find((e) => e.type === "note")?.note;
+  const docUpdates = async (page) => (await sentCalls(page)).filter((c) => c.method === "notes.update");
   const openDoc = async (id, page0) => {
-    const { context, page } = page0 ?? (await openPage(`#/doc/${id}`));
-    const ed = page.locator(`[data-surface=editor-body][data-kind=doc][data-ticket="${id}"]`);
+    const { context, page } = page0 ?? (await openPage(`#/note/${id}`));
+    const ed = page.locator(`[data-surface=editor-body][data-kind=note][data-ticket="${id}"]`);
     await eventually("the doc is drawn", async () => (await ed.locator(".cm-content[data-field=body-source]").count()) === 1, 8_000);
     return { context, page, ed };
   };
 
-  await test("new_makes_a_doc_and_typing_reaches_the_docs_service", async () => {
+  await test("new_makes_a_note_and_typing_reaches_the_notes_service", async () => {
     const first = make("switch from here", "start\n");
     const { context, page } = await open(first);
     try {
       const screen = page.locator("[data-surface=editor-screen]");
-      await eventually("new is ready", async () => !(await screen.locator("[data-field=documents] [data-action=new]").isDisabled()), 5_000);
-      await screen.locator("[data-field=documents] [data-action=new]").click();
-      await eventually("the new doc opens at #/doc/<id>", async () => /^#\/doc\/[0-9a-z]{8}$/.test(await hash(page)), 5_000);
-      const made = (await hash(page)).replace("#/doc/", "");
+      await eventually("new is ready", async () => !(await screen.locator("[data-field=notes] [data-action=new]").isDisabled()), 5_000);
+      await screen.locator("[data-field=notes] [data-action=new]").click();
+      await eventually("the new doc opens at #/note/<id>", async () => /^#\/note\/[0-9a-z]{8}$/.test(await hash(page)), 5_000);
+      const made = (await hash(page)).replace("#/note/", "");
       const d = docOf(made);
       assert(d && d.title === "Untitled" && d.revision === 1, `a doc called Untitled: ${JSON.stringify(d)}`);
       assert(!sy("tickets", "list", "--filter", "kind doc", "--summary", "true").some((e) => e.summary?.title === "Untitled" && e.summary?.created_unix > Date.now() / 1000 - 60), "no ticket was made");
-      await eventually("in the documents", async () => (await screen.locator(`[data-field=documents] [data-doc="${made}"]`).count()) >= 1, 5_000);
+      await eventually("in the documents", async () => (await screen.locator(`[data-field=notes] [data-note="${made}"]`).count()) >= 1, 5_000);
       const { ed } = await openDoc(made, { context, page });
       assert((await screen.locator("[data-surface=ticket-questions]").count()) === 0, "a doc has no questions");
       await caretAt(page, 0);
@@ -430,23 +430,23 @@ graph TD
       // Straight to the ticket, inside a batch: what was typed lands on its own doc.
       await caretAt(page, "a new page".length);
       await page.keyboard.type(" more");
-      await screen.locator(`[data-field=documents] [data-doc=${first}]`).first().click();
+      await screen.locator(`[data-field=notes] [data-note=${first}]`).first().click();
       // V2-42: by its uid, `#/t/<uid>/<ID>-<slug>/edit` (the recent row carries the uid), else by its id.
       await eventually("the ticket again, in the editor", async () => { const h = await hash(page); return h === `#/edit/${first}` || new RegExp(`^#/t/[0-9a-z]{8}/${first}(-[a-z0-9-]*)?/edit$`).test(h); }, 5_000);
       await eventually("the doc kept what was typed", async () => docOf(made).body === "a new page more", 5_000);
       assert(get(first).body === "start\n", "and the ticket is untouched");
       // The search finds docs by title.
-      sy("docs", "rename", "--id", made, "--title", "The kiln, weekly");
+      sy("notes", "rename", "--id", made, "--title", "The kiln, weekly");
       await screen.locator("[data-field=find]").fill("kiln week");
-      await eventually("found", async () => (await screen.locator(`[data-field=documents] [data-doc="${made}"]`).count()) === 1, 5_000);
-      await shoot(page, "editor-docs");
+      await eventually("found", async () => (await screen.locator(`[data-field=notes] [data-note="${made}"]`).count()) === 1, 5_000);
+      await shoot(page, "editor-notes");
     } finally {
       await context.close();
     }
   });
 
-  await test("a_doc_reloads_at_its_route", async () => {
-    const id = sy("docs", "create", "--title", "Reloaded", "--body", bodyFile("reloaded", "# Kept\n\nas written\n")).find((e) => e.type === "created").doc.id;
+  await test("a_note_reloads_at_its_route", async () => {
+    const id = sy("notes", "create", "--title", "Reloaded", "--body", bodyFile("reloaded", "# Kept\n\nas written\n")).find((e) => e.type === "created").note.id;
     const { context, page, ed } = await openDoc(id);
     try {
       await eventually("drawn as the view draws it", async () => (await ed.locator(".blk h1").count()) === 1, 5_000);
@@ -457,7 +457,7 @@ graph TD
       await openDoc(id, { context, page });
       await eventually("the same after a reload", async () => (await src(page)) === "# Kept\n\nas written\nmore", 5_000);
       // An agent's whole-body save over synapse arrives on the open page, merged.
-      sy("docs", "save", "--id", id, "--body", bodyFile("reloaded-2", "# Kept\n\nas written by an agent\nmore"));
+      sy("notes", "save", "--id", id, "--body", bodyFile("reloaded-2", "# Kept\n\nas written by an agent\nmore"));
       await eventually("the agent's words arrive live", async () => (await src(page)).includes("by an agent"), 5_000);
       // The history scrubber replays it at its first change.
       await ed.locator("[data-action=history]").click();
@@ -470,8 +470,8 @@ graph TD
     }
   });
 
-  await test("two_pages_on_one_doc_type_together_and_see_each_other", async () => {
-    const id = sy("docs", "create", "--title", "Paired", "--body", bodyFile("paired", "left right\n")).find((e) => e.type === "created").doc.id;
+  await test("two_pages_on_one_note_type_together_and_see_each_other", async () => {
+    const id = sy("notes", "create", "--title", "Paired", "--body", bodyFile("paired", "left right\n")).find((e) => e.type === "created").note.id;
     const one = await openDoc(id);
     const two = await openDoc(id);
     try {
@@ -493,7 +493,7 @@ graph TD
     }
   });
 
-  await test("a_phone_has_the_documents_in_a_drawer", async () => {
+  await test("a_phone_has_the_notes_in_a_drawer", async () => {
     const id = make("on a phone", "# Phone\n\none surface\n");
     const { context, page } = await openPage(`#/edit/${id}`);
     try {
@@ -502,9 +502,9 @@ graph TD
       await eventually("the surface", async () => await screen.locator("[data-surface=editor-body] .cm-content").isVisible());
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
       assert(overflow <= 0, `no page scroll sideways: ${overflow}`);
-      assert(!(await screen.locator("[data-field=documents]").isVisible()) || (await screen.locator("[data-field=documents]").boundingBox()).x < -100, "the list is away");
-      await screen.locator("[data-action=docs]").click();
-      await eventually("the drawer", async () => (await screen.getAttribute("data-drawer")) === "open" && (await screen.locator("[data-field=documents]").boundingBox()).x >= 0, 3_000);
+      assert(!(await screen.locator("[data-field=notes]").isVisible()) || (await screen.locator("[data-field=notes]").boundingBox()).x < -100, "the list is away");
+      await screen.locator("[data-action=notes]").click();
+      await eventually("the drawer", async () => (await screen.getAttribute("data-drawer")) === "open" && (await screen.locator("[data-field=notes]").boundingBox()).x >= 0, 3_000);
       if (shots) await page.screenshot({ path: path.join(shots, "editor-screen-390-drawer.png") });
     } finally {
       await context.close();
@@ -571,8 +571,8 @@ graph TD
     }
   });
 
-  await test("a_selection_on_a_doc_is_asked_in_the_margin_and_answered_live", async () => {
-    const id = sy("docs", "create", "--title", "Asked", "--body", bodyFile("asked", "The kiln fires twice a week.\n\nAnother paragraph.\n")).find((e) => e.type === "created").doc.id;
+  await test("a_selection_on_a_note_is_asked_in_the_margin_and_answered_live", async () => {
+    const id = sy("notes", "create", "--title", "Asked", "--body", bodyFile("asked", "The kiln fires twice a week.\n\nAnother paragraph.\n")).find((e) => e.type === "created").note.id;
     const { context, page, ed } = await openDoc(id);
     try {
       // Select "twice a week" and ask an agent about it.
@@ -584,7 +584,7 @@ graph TD
       const card = ed.locator("[data-field=margin] [data-thread]");
       await eventually("a card in the margin", async () => (await card.count()) === 1 && (await card.innerText()).includes("twice a week"), 5_000);
       const thread = await card.getAttribute("data-thread");
-      const waiting = sy("docs", "waiting", "--to", "agent").filter((e) => e.type === "thread");
+      const waiting = sy("notes", "waiting", "--to", "agent").filter((e) => e.type === "thread");
       assert(waiting.some((e) => e.thread.thread === thread && e.thread.quote === "twice a week"), "in the agents' queue");
       // The card stands beside its range.
       const [cardTop, rangeTop] = await page.evaluate(({ s, t }) => {
@@ -593,13 +593,13 @@ graph TD
       }, { s: BODY, t: thread });
       assert(Math.abs(cardTop - rangeTop) < 40, `beside its text: card ${cardTop}, range ${rangeTop}`);
       // An agent answers over synapse: it arrives live.
-      sy("docs", "reply", "--id", id, "--thread", thread, "--body", "Yes, until the spring.");
+      sy("notes", "reply", "--id", id, "--thread", thread, "--body", "Yes, until the spring.");
       await eventually("the answer, live", async () => (await card.innerText()).includes("until the spring"), 5_000);
       // Someone types before the range: the range follows the words.
       await caretAt(page, 0);
       await page.keyboard.type("Note: ");
       await eventually("the range moved with the text", async () => {
-        const t = sy("docs", "threads", "--id", id).find((e) => e.type === "thread")?.thread;
+        const t = sy("notes", "threads", "--id", id).find((e) => e.type === "thread")?.thread;
         return t && t.from === 21 && t.to === 33;
       }, 5_000);
       await caretAt(page, 25);
@@ -608,7 +608,7 @@ graph TD
       await card.locator("[data-field=reply]").fill("Thanks.");
       await card.locator("[data-action=reply]").click();
       await eventually("two answers", async () => (await card.locator("[data-reply]").count()) === 2, 5_000);
-      await shoot(page, "editor-doc-margin");
+      await shoot(page, "editor-note-margin");
       await card.locator("[data-action=resolve]").click();
       await eventually("folded and counted", async () => (await ed.locator("[data-field=margin] [data-thread]").count()) === 0 && (await ed.locator("[data-field=resolved-count]").innerText()).includes("1 resolved"), 5_000);
     } finally {
@@ -616,15 +616,15 @@ graph TD
     }
   });
 
-  await test("a_pasted_image_in_a_doc_is_the_docs", async () => {
-    const id = sy("docs", "create", "--title", "With a picture", "--body", bodyFile("picture", "above\n")).find((e) => e.type === "created").doc.id;
+  await test("a_pasted_image_in_a_note_is_the_notes", async () => {
+    const id = sy("notes", "create", "--title", "With a picture", "--body", bodyFile("picture", "above\n")).find((e) => e.type === "created").note.id;
     const { context, page, ed } = await openDoc(id);
     try {
       await caretAt(page, "above".length);
       await pasteFile(page, PNG_2X1, "image/png", "the curve.png");
       await eventually("the doc names the image", async () => /!\[the curve\]\(media:[0-9a-f]{64}\)/.test(docOf(id).body), 8_000);
       const put = (await sentCalls(page)).find((c) => c.method === "media.put");
-      assert(put.params.doc === id && put.params.ticket === undefined, `put for the doc: ${JSON.stringify(Object.keys(put.params))}`);
+      assert(put.params.note === id && put.params.ticket === undefined, `put for the doc: ${JSON.stringify(Object.keys(put.params))}`);
       await caretAt(page, 0);
       await eventually("drawn from the shell", async () => (await ed.locator(".blk img").count()) === 1, 5_000);
     } finally {
@@ -1242,7 +1242,7 @@ graph TD
   });
   await test("a_long_code_line_stays_inside_the_body", async () => {
     const tid = make("a long code line", LONGCODE);
-    const did = sy("docs", "create", "--title", "A long code line", "--body", bodyFile("long-code-doc", LONGCODE)).find((e) => e.type === "created").doc.id;
+    const did = sy("notes", "create", "--title", "A long code line", "--body", bodyFile("long-code-doc", LONGCODE)).find((e) => e.type === "created").note.id;
     // EDITOR-29: a ticket's page draws its body (no editor): both cards drawn, the page never wider than its window.
     {
       const { context, page } = await openPage(`#/ticket/${tid}`);
@@ -1257,7 +1257,7 @@ graph TD
         await context.close();
       }
     }
-    for (const route of [`#/edit/${tid}`, `#/doc/${did}`]) {
+    for (const route of [`#/edit/${tid}`, `#/note/${did}`]) {
       const { context, page } = await openPage(route);
       try {
         await page.setViewportSize({ width: 1280, height: 2000 });
@@ -1304,8 +1304,8 @@ graph TD
         const where = `${os} ${kind}`;
         // A body of its own each time: what one run leaves is not the next's start.
         const ticketId = kind === "ticket" ? make(`undo everywhere ${os}`, BODY0) : null;
-        const docId = kind === "doc" ? sy("docs", "create", "--title", "Undone", "--body", bodyFile(`undone-${os}`, BODY0)).find((e) => e.type === "created").doc.id : null;
-        const route = kind === "doc" ? `#/doc/${docId}` : `#/edit/${ticketId}`; // EDITOR-29: a ticket is written at …/edit, its page draws it
+        const docId = kind === "doc" ? sy("notes", "create", "--title", "Undone", "--body", bodyFile(`undone-${os}`, BODY0)).find((e) => e.type === "created").note.id : null;
+        const route = kind === "doc" ? `#/note/${docId}` : `#/edit/${ticketId}`; // EDITOR-29: a ticket is written at …/edit, its page draws it
         const { context, page } = await openPage(route);
         try {
           // The browser's own undo, said as a `historyUndo` / `historyRedo` beforeinput: none, when the press is the engine's.

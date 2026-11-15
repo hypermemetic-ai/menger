@@ -297,9 +297,38 @@ by hand, never by a test; prod names none (UI-15: it takes no push).
 V2-24: the media service keeps its file beside the database in the data
 volume by default (`media.db`; `--media-db-path`, `MENGER_MEDIA_DB_PATH`
 to name another) — nothing in the env files or `run-menger` for it.
-V2-29: the docs service alike — `docs.db` beside the database
-(`--docs-db-path`, `MENGER_DOCS_DB_PATH`); a release carries it, so the
-first deploy after it opens an empty `docs.db` in the data volume.
+V2-29: the notes service alike — `notes.db` beside the database
+(`--notes-db-path`, `MENGER_NOTES_DB_PATH`; the docs service's `docs.db`
+until NOTES-3); a release carries it, so the first deploy after it opens an
+empty file in the data volume.
+
+### Notes, once documents (NOTES-3)
+
+The docs service is the notes service from the release that carries
+NOTES-3: every method `notes.<name>`, the route `#/note/:note` (`#/doc/:doc`
+still opens the note), the quota sources `notes.bytes` and `notes.count`.
+What a deploy of it does, and what going back needs:
+
+- **The first start moves what was kept** (`src/notes_move.rs`): `docs.db`
+  in the data volume becomes `notes.db` (its `-wal`, `-shm` with it) before
+  anything opens it, a relative link `docs.db → notes.db` left beside it;
+  the quota ledger's `docs.*` rows become `notes.*` in one transaction; a
+  role an admin edited that grants `docs.<method>` gains `notes.<method>`
+  beside it. The log says each once. Every later start does nothing.
+- **The window.** Nothing answers to both names. Between the restart and
+  the bundle's push — minutes, on test and prod alike — the pages still open
+  call `docs.*`, which the server no longer has: the editor says it cannot
+  reach the service, and recovers on the hot-swap the push brings.
+- **A rollback** to the release before: it opens `docs.db` — the link — and
+  reads the same notes as its documents (the tables kept their names), and
+  its stored roles still grant it `docs.*` (the old grants were left beside
+  the new). Its quota counts documents from zero, its rows under `docs.*`
+  being gone: run `quota recount` (admin of `*`) on it to count them again.
+  The caps moved too, the default's among them, so on it documents are
+  uncapped until `quota set --default true --source docs.bytes --cap …`
+  (and a principal's or a team's cap set again by hand).
+  Rolled forward again, the rows it wrote under `docs.*` fold into `notes.*`
+  (usage added, the later cap kept).
 
 After a deploy is healthy — `remote test`, and `local` — the pipeline
 pushes the release's bundle: `ui.push { bundle, manifest, signature,

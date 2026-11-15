@@ -1,13 +1,13 @@
-//! **The docs store** — the documents, in a SQLite file of the service's
-//! own, `docs.db`: never the tickets file (V2-1: the file is opened by the
+//! **The notes store** — the notes, in a SQLite file of the service's
+//! own, `notes.db`: never the tickets file (V2-1: the file is opened by the
 //! tickets service alone).
 //!
-//! A document's body is a **Yjs CRDT** (V2-29's `pairing`, the owner: *"live
+//! A note's body is a **Yjs CRDT** (V2-29's `pairing`, the owner: *"live
 //! co editting … we should keep all changes over time too, so we could
 //! replay how it got built. with the ability to squash, permission
 //! gated"*). **Stored** in two tables:
 //!
-//! - `docs` — a row per document as it is now: its organization and title,
+//! - `docs` — a row per note as it is now: its organization and title,
 //!   the markdown derived from its CRDT (`text`, what `get`, `list`, search,
 //!   agents and image references read), its revision (the last change's
 //!   `seq`), who made it and who wrote it last, and a snapshot of its CRDT
@@ -16,26 +16,27 @@
 //! - `doc_log` — **every change, forever until squashed**: a row per CRDT
 //!   update (`update`, the Yjs v1 bytes as the writer sent or the service
 //!   made them), per rename, per delete, with who (`by`, `principal`) and
-//!   when (`at`, unix milliseconds); `seq` counts them per document. A squash
+//!   when (`at`, unix milliseconds); `seq` counts them per note. A squash
 //!   ([`crate::crdt`]) replaces the rows up to a moment with one `snapshot`
 //!   row holding who wrote what as its `authors`.
 //!
 //! How the body is written, replayed and squashed is [`crate::crdt`]'s; who
-//! is on a document is [`crate::presence`]'s. Whether a caller may read or
-//! write a document is the gate's word on its organization, asked by the
+//! is on a note is [`crate::presence`]'s. Whether a caller may read or
+//! write a note is the gate's word on its organization, asked by the
 //! activation ([`crate::seam`]). Every write is said on the channel
-//! ([`DocsStore::subscribe`]) for `watch`.
+//! ([`NotesStore::subscribe`]) for `watch`.
 //!
 //! One connection behind a mutex; every read and write off the runtime.
 
-use crate::events::{Doc, Present, Thread};
+use crate::events::{Note, Present, Thread};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 
-/// The tables. `docs.seq` orders the list (newest made first) and is a
+/// The tables — their names kept from before NOTES-3, so the release before
+/// reads the same file. The table `docs`'s `seq` orders the list (newest made first) and is a
 /// page's cursor through its id.
 pub const TABLES: &str = "
         CREATE TABLE IF NOT EXISTS docs (
@@ -74,19 +75,19 @@ pub const CHANNEL: usize = 4096;
 /// A write, as the channel says it to every open watch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Change {
-    /// A document made (body included).
-    Created(Doc),
-    /// A CRDT update applied: the document after it (body included), the
+    /// A note made (body included).
+    Created(Note),
+    /// A CRDT update applied: the note after it (body included), the
     /// update's bytes (base64), its `seq`, and the presence session it came
     /// from, when it said.
-    Updated { doc: Doc, update: String, seq: u32, session: Option<String> },
-    Renamed(Doc),
+    Updated { doc: Note, update: String, seq: u32, session: Option<String> },
+    Renamed(Note),
     Deleted { id: String, org: String, at: i64, by: String },
     /// The changes up to `until` collapsed into one snapshot.
     Squashed { id: String, org: String, until: u32, removed: u32, at: i64, by: String },
-    /// Someone is on a document, or moved their caret.
+    /// Someone is on a note, or moved their caret.
     Present { org: String, present: Present },
-    /// Someone left a document.
+    /// Someone left a note.
     Left { id: String, org: String, session: String, client: Option<u64> },
     /// V2-30: a question asked on a range, a reply under it, a thread resolved (or opened again).
     Asked { org: String, thread: Thread },
@@ -95,7 +96,7 @@ pub enum Change {
 }
 
 impl Change {
-    /// The document it is of.
+    /// The note it is of.
     pub fn id(&self) -> &str {
         match self {
             Change::Created(d) | Change::Renamed(d) | Change::Updated { doc: d, .. } => &d.id,
@@ -105,7 +106,7 @@ impl Change {
         }
     }
 
-    /// The organization that document is in.
+    /// The organization that note is in.
     pub fn org(&self) -> &str {
         match self {
             Change::Created(d) | Change::Renamed(d) | Change::Updated { doc: d, .. } => &d.org,
@@ -118,11 +119,11 @@ impl Change {
 /// Why the store did not.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoreError {
-    /// No document of that id (or a deleted one).
+    /// No note of that id (or a deleted one).
     NotFound(String),
-    /// The document has no change at that `seq` (or it was squashed).
+    /// The note has no change at that `seq` (or it was squashed).
     NoRevision(String, u32),
-    /// V2-30: no thread of that id on the document.
+    /// V2-30: no thread of that id on the note.
     NoThread(String),
     /// V2-30: a range that is not one of the text.
     BadRange(String),
@@ -139,14 +140,14 @@ pub enum StoreError {
 impl std::fmt::Display for StoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            StoreError::NotFound(id) => write!(f, "no document {id}"),
-            StoreError::NoRevision(id, r) => write!(f, "document {id} has no change {r}"),
+            StoreError::NotFound(id) => write!(f, "no note {id}"),
+            StoreError::NoRevision(id, r) => write!(f, "note {id} has no change {r}"),
             StoreError::NoThread(t) => write!(f, "no thread {t}"),
             StoreError::BadRange(e) => write!(f, "not a range of the text: {e}"),
             StoreError::BadUpdate(e) => write!(f, "not a Yjs v1 update: {e}"),
             StoreError::Quota(e) => write!(f, "{e}"),
             StoreError::Allowance(r) => write!(f, "{}", r.message),
-            StoreError::Db(e) => write!(f, "the docs file: {e}"),
+            StoreError::Db(e) => write!(f, "the notes file: {e}"),
         }
     }
 }
@@ -162,7 +163,7 @@ impl From<rusqlite::Error> for StoreError {
 /// What a page of `list` asks.
 #[derive(Debug, Clone, Default)]
 pub struct Listing {
-    /// The organizations whose documents may be listed (`None`: every one).
+    /// The organizations whose notes may be listed (`None`: every one).
     pub orgs: Option<Vec<String>>,
     /// Words the title holds, case-blind.
     pub query: Option<String>,
@@ -175,27 +176,27 @@ pub struct Listing {
 /// A page of `list`: its rows, the cursor past it, how many more match.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Page {
-    pub rows: Vec<Doc>,
+    pub rows: Vec<Note>,
     pub next: Option<String>,
     pub remaining: u64,
 }
 
 /// The file, open, with the CRDTs it has loaded and who is on them.
-pub struct DocsStore {
+pub struct NotesStore {
     conn: Mutex<Connection>,
     path: PathBuf,
     changes: broadcast::Sender<Change>,
-    /// Each loaded document's CRDT — loaded on its first write or sync, kept.
+    /// Each loaded note's CRDT — loaded on its first write or sync, kept.
     pub(crate) loaded: Mutex<HashMap<String, Arc<Mutex<yrs::Doc>>>>,
-    /// Who is on which document ([`crate::presence`]).
+    /// Who is on which note ([`crate::presence`]).
     pub(crate) presence: crate::presence::Presence,
     /// The meter every byte written is reserved against (V2-31's).
     pub(crate) quota: std::sync::RwLock<Arc<dyn crate::quota::Quota>>,
 }
 
-impl std::fmt::Debug for DocsStore {
+impl std::fmt::Debug for NotesStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DocsStore").field("path", &self.path).finish()
+        f.debug_struct("NotesStore").field("path", &self.path).finish()
     }
 }
 
@@ -209,12 +210,12 @@ pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
 }
 
-/// The columns a [`Doc`] is read from, in [`doc_of`]'s order.
+/// The columns a [`Note`] is read from, in [`doc_of`]'s order.
 pub(crate) const DOC_COLUMNS: &str = "id, org, title, text, revision, created_at, created_by, at, by";
 
-pub(crate) fn doc_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<Doc> {
+pub(crate) fn doc_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<Note> {
     let body: String = r.get(3)?;
-    Ok(Doc {
+    Ok(Note {
         id: r.get(0)?,
         org: r.get(1)?,
         title: r.get(2)?,
@@ -228,8 +229,8 @@ pub(crate) fn doc_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<Doc> {
     })
 }
 
-/// The live document `id`, body and all, in `conn`.
-pub(crate) fn live_doc(conn: &Connection, id: &str) -> Result<Doc, StoreError> {
+/// The live note `id`, body and all, in `conn`.
+pub(crate) fn live_doc(conn: &Connection, id: &str) -> Result<Note, StoreError> {
     conn.query_row(&format!("SELECT {DOC_COLUMNS} FROM docs WHERE id = ?1 AND deleted_at IS NULL"), [id], doc_of)
         .optional()?
         .ok_or_else(|| StoreError::NotFound(id.to_string()))
@@ -257,7 +258,7 @@ pub(crate) fn log(tx: &Connection, row: LogRow<'_>) -> Result<(), StoreError> {
     Ok(())
 }
 
-impl DocsStore {
+impl NotesStore {
     /// The store on `path`, made if missing; a file without the tables
     /// gains them, empty — once; on every later open a no-op. Every write
     /// allowed ([`crate::quota::AllowAll`]) until a meter is set.
@@ -300,7 +301,7 @@ impl DocsStore {
     /// **the update log as stored**: every change's bytes its writer's, and
     /// a squash's snapshot shared among its authors by what each wrote
     /// ([`crate::events::shares`]) — so a squash shrinks it; `count` the
-    /// documents they made (a `create` change, or, folded into a snapshot,
+    /// notes they made (a `create` change, or, folded into a snapshot,
     /// its earliest author's). (principal, count, bytes), by principal.
     pub async fn usage_by_principal(self: &Arc<Self>) -> Result<Vec<(String, u64, u64)>, StoreError> {
         let rows = self.usage_rows(false).await?;
@@ -358,9 +359,9 @@ impl DocsStore {
     }
 
     /// Off the runtime, with the store.
-    pub(crate) async fn blocking<T: Send + 'static>(self: &Arc<Self>, work: impl FnOnce(&Arc<DocsStore>) -> Result<T, StoreError> + Send + 'static) -> Result<T, StoreError> {
+    pub(crate) async fn blocking<T: Send + 'static>(self: &Arc<Self>, work: impl FnOnce(&Arc<NotesStore>) -> Result<T, StoreError> + Send + 'static) -> Result<T, StoreError> {
         let store = Arc::clone(self);
-        tokio::task::spawn_blocking(move || work(&store)).await.map_err(|e| StoreError::Db(format!("docs task failed: {e}")))?
+        tokio::task::spawn_blocking(move || work(&store)).await.map_err(|e| StoreError::Db(format!("notes task failed: {e}")))?
     }
 
     /// Every write from now on, as it is committed.
@@ -373,14 +374,14 @@ impl DocsStore {
         let _ = self.changes.send(change);
     }
 
-    /// The document `id` as it is now, body and all; [`StoreError::NotFound`]
+    /// The note `id` as it is now, body and all; [`StoreError::NotFound`]
     /// for none (or a deleted one).
-    pub async fn get(self: &Arc<Self>, id: &str) -> Result<Doc, StoreError> {
+    pub async fn get(self: &Arc<Self>, id: &str) -> Result<Note, StoreError> {
         let id = id.to_string();
         self.blocking(move |s| live_doc(&s.lock(), &id)).await
     }
 
-    /// A page of the documents `ask` admits, newest made first, without
+    /// A page of the notes `ask` admits, newest made first, without
     /// their bodies.
     pub async fn list(self: &Arc<Self>, ask: Listing) -> Result<Page, StoreError> {
         self.blocking(move |s| {
@@ -408,7 +409,7 @@ impl DocsStore {
             let all = stmt.query_map(rusqlite::params_from_iter(args.iter()), doc_of)?.collect::<Result<Vec<_>, _>>()?;
             let limit = ask.limit.max(1);
             let remaining = all.len().saturating_sub(limit) as u64;
-            let rows: Vec<Doc> = all.into_iter().take(limit).map(|d| d.summary()).collect();
+            let rows: Vec<Note> = all.into_iter().take(limit).map(|d| d.summary()).collect();
             let next = (remaining > 0).then(|| rows.last().map(|d| d.id.clone())).flatten();
             Ok(Page { rows, next, remaining })
         })
@@ -416,14 +417,14 @@ impl DocsStore {
     }
 
     /// Retitles `id` to `title`, by `by` (`principal`): a change more in the log.
-    pub async fn rename(self: &Arc<Self>, id: &str, title: &str, by: &str, principal: &str) -> Result<Doc, StoreError> {
+    pub async fn rename(self: &Arc<Self>, id: &str, title: &str, by: &str, principal: &str) -> Result<Note, StoreError> {
         let (id, title, by, principal) = (id.to_string(), title.to_string(), by.to_string(), principal.to_string());
         let doc = self
             .blocking(move |s| {
                 let conn = s.lock();
                 let tx = conn.unchecked_transaction()?;
                 let was = live_doc(&tx, &id)?;
-                let doc = Doc { title, revision: was.revision + 1, at: now(), by, ..was };
+                let doc = Note { title, revision: was.revision + 1, at: now(), by, ..was };
                 tx.execute("UPDATE docs SET title = ?2, revision = ?3, at = ?4, by = ?5 WHERE id = ?1", params![doc.id, doc.title, doc.revision, doc.at, doc.by])?;
                 log(&tx, LogRow { id: &doc.id, seq: doc.revision, kind: "rename", update: None, title: Some(&doc.title), at: now_ms(), by: &doc.by, principal: &principal, authors: None })?;
                 tx.commit()?;
@@ -444,7 +445,7 @@ impl DocsStore {
                 let conn = s.lock();
                 let tx = conn.unchecked_transaction()?;
                 let was = live_doc(&tx, &id)?;
-                let doc = Doc { revision: was.revision + 1, at: now(), by, ..was };
+                let doc = Note { revision: was.revision + 1, at: now(), by, ..was };
                 tx.execute("UPDATE docs SET deleted_at = ?2, revision = ?3, at = ?2, by = ?4 WHERE id = ?1", params![doc.id, doc.at, doc.revision, doc.by])?;
                 log(&tx, LogRow { id: &doc.id, seq: doc.revision, kind: "delete", update: None, title: None, at: now_ms(), by: &doc.by, principal: &principal, authors: None })?;
                 tx.commit()?;
@@ -456,12 +457,12 @@ impl DocsStore {
         Ok((org, at))
     }
 
-    /// The organization the live document `id` is in.
+    /// The organization the live note `id` is in.
     pub async fn org_of(self: &Arc<Self>, id: &str) -> Result<String, StoreError> {
         Ok(self.get(id).await?.org)
     }
 
-    /// How many documents the store keeps — for a log line.
+    /// How many notes the store keeps — for a log line.
     pub fn count(&self) -> usize {
         self.lock().query_row("SELECT count(*) FROM docs WHERE deleted_at IS NULL", [], |r| r.get::<_, i64>(0)).unwrap_or(0) as usize
     }

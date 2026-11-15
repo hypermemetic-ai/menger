@@ -1,23 +1,23 @@
-<!-- V2-30: the margin of a doc on the writing surface (svelte/1, a sibling
-     editor-body imports for a doc alone). Each question asked on a range of
-     the doc (`docs.ask`) is a card beside its text, at the height the range
+<!-- V2-30: the margin of a note on the writing surface (svelte/1, a sibling
+     editor-body imports for a note alone). Each question asked on a range of
+     the note (`notes.ask`) is a card beside its text, at the height the range
      stands, the range underlined faintly in the text (`threadMarks`, a
      CodeMirror field editor-body adds); its answers below it, a box to
-     answer (`docs.reply`: words, links, an image pasted goes through
-     `media.put { doc }`), and resolve (`docs.resolve`), which folds it — the
+     answer (`notes.reply`: words, links, an image pasted goes through
+     `media.put { note }`), and resolve (`notes.resolve`), which folds it — the
      margin then counts the resolved, a click shows them. The ranges are the
-     doc's CRDT's own: each thread's anchor is two Yjs relative positions,
+     note's CRDT's own: each thread's anchor is two Yjs relative positions,
      resolved here in the page's copy (`Y.createAbsolutePositionFromRelativePosition`),
      so the cards and the underlines follow the text through every hand's
      edit as it happens. A thread whose text was deleted whole is detached
-     and listed at the end. Live by `docs.threads` and `docs.watch` (`asked`,
+     and listed at the end. Live by `notes.threads` and `notes.watch` (`asked`,
      `replied`, `resolved`). Under 1400 px the margin is a list under the
      text. -->
 <script module>
   import { StateEffect, StateField } from "@codemirror/state";
   import { Decoration, EditorView } from "@codemirror/view";
 
-  export const uses = ["docs.threads", "docs.watch", "docs.reply", "docs.resolve", "media.put"];
+  export const uses = ["notes.threads", "notes.watch", "notes.reply", "notes.resolve", "media.put"];
 
   /** The underlines of the open threads' ranges: set whole by the margin, mapped through every change between. */
   export const setThreadMarks = StateEffect.define();
@@ -41,12 +41,12 @@
   import PillTable, { drawPills } from "./ticket-pills.svelte";
 
   let { id, ydoc = null, view = () => null, tick = 0 } = $props();
-  // Beside a surface (editor-body hands its view and the doc's CRDT) the cards stand at their ranges;
+  // Beside a surface (editor-body hands its view and the note's CRDT) the cards stand at their ranges;
   // alone (the sheet) they are a list, each range as the service resolved it.
   const placedBeside = untrack(() => ydoc != null);
   const b = bus();
   const doc_id = untrack(() => id);
-  const threads = live({ snapshot: "docs.threads", params: () => ({ id: doc_id }), changes: "docs.watch", changes_params: () => ({ id: doc_id }), key: "thread",
+  const threads = live({ snapshot: "notes.threads", params: () => ({ id: doc_id }), changes: "notes.watch", changes_params: () => ({ id: doc_id }), key: "thread",
                          on: { asked: "upsert:thread", replied: "upsert:thread", resolved: "upsert:thread" } });
   const fromB64 = (t) => Uint8Array.from(atob(t), (c) => c.charCodeAt(0));
   /** Where a relative position stands in the page's copy now (a UTF-16 index), or null. */
@@ -108,21 +108,21 @@
   async function reply(t) {
     const body = (drafts[t.thread] ?? "").trim();
     if (!body) return;
-    const r = await b.call("docs.reply", { id: doc_id, thread: t.thread, body });
+    const r = await b.call("notes.reply", { id: doc_id, thread: t.thread, body });
     if (r.ok && r.events?.some((e) => e.type === "replied")) { drafts[t.thread] = ""; refused[t.thread] = ""; }
     else refused[t.thread] = String(r.message ?? r.events?.[0]?.message ?? r.events?.[0]?.type ?? "refused");
   }
   async function resolve(t, again) {
-    const r = await b.call("docs.resolve", { id: doc_id, thread: t.thread, open: again || undefined });
+    const r = await b.call("notes.resolve", { id: doc_id, thread: t.thread, open: again || undefined });
     if (!r.ok) refused[t.thread] = String(r.message ?? "refused");
   }
-  /** An image pasted into an answer goes to the doc's media, and its link into the answer. */
+  /** An image pasted into an answer goes to the note's media, and its link into the answer. */
   async function pasted(ev, t) {
     const file = [...(ev.clipboardData?.files ?? [])][0];
     if (!file) return;
     ev.preventDefault();
     const data = await new Promise((done) => { const r = new FileReader(); r.onload = () => done(String(r.result).replace(/^data:[^,]*,/, "")); r.readAsDataURL(file); });
-    const r = await b.call("media.put", { doc: doc_id, data, name: file.name || "image", mime: file.type || undefined });
+    const r = await b.call("media.put", { note: doc_id, data, name: file.name || "image", mime: file.type || undefined });
     const stored = r.events?.find((e) => e.type === "stored");
     if (!stored) { refused[t.thread] = String(r.message ?? r.events?.[0]?.message ?? "refused"); return; }
     const name = (file.name || "image").replace(/\.[a-z0-9]+$/i, "").replace(/[[\]\n]/g, " ");
@@ -134,7 +134,7 @@
   const when = (ms) => new Date(ms).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 </script>
 
-<PillTable/><aside class="doc-margin" data-field="margin" data-beside={placedBeside ? "" : undefined} aria-label="questions on the text" bind:this={wrap}>
+<PillTable/><aside class="note-margin" data-field="margin" data-beside={placedBeside ? "" : undefined} aria-label="questions on the text" bind:this={wrap}>
   {#each shown as t (t.thread)}
     <article class="card" data-thread={t.thread} data-state={t.resolved ? "resolved" : t.gone ? "detached" : "open"}>
       <p class="quote" title={t.quote}>{#if t.gone}<span class="tag" data-detached>detached</span>{/if}«{t.quote.length > 80 ? t.quote.slice(0, 80) + "…" : t.quote}»</p>
@@ -161,9 +161,9 @@
 </aside>
 
 <style>
-  .doc-margin { font-size: 12px; color: var(--ink); }
-  .doc-margin[data-beside] { position: absolute; top: 0; left: calc(100% + 16px); width: 220px; }
-  .doc-margin[data-beside] .card { position: absolute; margin: 0; left: 0; right: 0; }
+  .note-margin { font-size: 12px; color: var(--ink); }
+  .note-margin[data-beside] { position: absolute; top: 0; left: calc(100% + 16px); width: 220px; }
+  .note-margin[data-beside] .card { position: absolute; margin: 0; left: 0; right: 0; }
   .card { margin-bottom: 8px; padding: 8px 10px; background: var(--card); border: var(--border) solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--radius); box-shadow: 0 2px 8px var(--shadow); }
   .card[data-state=resolved] { border-left-color: var(--line); opacity: .75; }
   .card[data-state=detached] { border-left-color: var(--warn); }
@@ -205,11 +205,11 @@
   .count { position: static; left: 0; padding: 2px 8px; font: inherit; font-size: 11px; color: var(--muted); background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; }
   .count:focus-visible, .count:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
   .no { margin: 4px 0 0; color: var(--warn); }
-  .doc-margin[data-beside] .count { position: absolute; bottom: -28px; }
+  .note-margin[data-beside] .count { position: absolute; bottom: -28px; }
   @media (max-width: 1399px) {
-    .doc-margin[data-beside] { position: static; width: auto; margin-top: 16px; }
-    .doc-margin[data-beside] .card { position: static; margin-bottom: 8px; }
-    .doc-margin[data-beside] .count { position: static; }
+    .note-margin[data-beside] { position: static; width: auto; margin-top: 16px; }
+    .note-margin[data-beside] .card { position: static; margin-bottom: 8px; }
+    .note-margin[data-beside] .count { position: static; }
   }
   /* EDITOR-12: on a phone a card is the column's width and its words break: the quote wraps to two lines. */
   @media (max-width: 640px) {

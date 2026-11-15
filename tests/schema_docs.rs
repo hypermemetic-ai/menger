@@ -67,10 +67,16 @@ const UI_WORDS: &[&str] = &["components", "component"];
 /// of its own; the tickets service's docs still name no media.
 const MEDIA_WORDS: &[&str] = &["media"];
 
+/// NOTES-3: the words the `notes` service may say — v1's notes went, and the
+/// name came back as the docs service renamed; the media service (which keeps
+/// a note's files) and the quota service (whose sources name it) say it too.
+/// The tickets service's docs still name no notes.
+const NOTES_WORDS: &[&str] = &["notes", "note's"];
+
 /// Every service a v2 server registers, and their children, by path.
 const PATHS: &[&str] = &[
     "auth", "members", "members.teams", "orgs", "session", "tickets", "tickets.commits", "tickets.filters",
-    "tickets.inputs", "tickets.nav", "tickets.revisions", "tickets.subtasks", "tickets.work", "ui", "ui.routes", "ui.slots", "media", "docs",
+    "tickets.inputs", "tickets.nav", "tickets.revisions", "tickets.subtasks", "tickets.work", "ui", "ui.routes", "ui.slots", "media", "notes",
     // V2-31: the quota service.
     "quota",
 ];
@@ -95,7 +101,14 @@ fn gone_in(path: &str, text: &str) -> Vec<&'static str> {
     let ui = path == "ui" || path.starts_with("ui.");
     // V2-31: and the quota service, whose sources name it (`media.bytes`).
     let media = path == "media" || path.starts_with("media.") || path == "quota";
-    GONE_WORDS.iter().chain(SCHEMA_WORDS).filter(|w| !(ui && UI_WORDS.contains(w)) && !(media && MEDIA_WORDS.contains(w))).filter(|w| says(text, w)).copied().collect()
+    let notes = path == "notes" || path.starts_with("notes.") || media;
+    GONE_WORDS
+        .iter()
+        .chain(SCHEMA_WORDS)
+        .filter(|w| !(ui && UI_WORDS.contains(w)) && !(media && MEDIA_WORDS.contains(w)) && !(notes && NOTES_WORDS.contains(w)))
+        .filter(|w| says(text, w))
+        .copied()
+        .collect()
 }
 
 /// What a walk of a schema finds: each description by its name, and (under
@@ -506,6 +519,9 @@ fn a_word_is_found_only_as_a_word_of_its_own() {
     assert_eq!(gone_in("uikit", "a component"), ["component"], "the allowance is the ui service, not a prefix");
     assert_eq!(gone_in("ui", "a component's comment on the chat"), ["chat", "comment"], "only `component` is allowed in ui");
     assert_eq!(gone_in("ui", "a ComponentChanged"), ["ComponentChanged"], "v1's event is not the UI's component");
+    // NOTES-3: `notes` is the notes service's word (and media's and quota's), not the tickets service's.
+    assert_eq!(gone_in("notes", "a note's title, the notes you read"), Vec::<&str>::new());
+    assert_eq!(gone_in("tickets", "a ticket's notes"), ["notes"]);
 
     // Everything a method carries is held, each by its path: its own
     // description, a parameter's, a type's in `$defs` (once, with how many

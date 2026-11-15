@@ -6,8 +6,8 @@
     "media.fetch.bytes": "200 MB",
     "media.fetch.calls": 300,
     "media.egress.bytes": "2 GB",
-    "docs.bytes": "200 MB",
-    "docs.count": "unlimited",
+    "notes.bytes": "200 MB",
+    "notes.count": "unlimited",
     "tickets.bytes": "50 MB",
     "tickets.count": "unlimited",
     "questions.count": "unlimited"

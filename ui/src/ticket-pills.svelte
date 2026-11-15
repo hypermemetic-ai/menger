@@ -16,13 +16,13 @@
        sits in any bundle), so it does not import this file. A component that draws a body and may read
        tickets provides the pass — `providePills()` while it initialises (a context, `PILLS`, which ticket-view
        reads and the editor hands to each block it mounts) and `<PillTable/>` placed once: ticket-body,
-       editor-body (a ticket, a doc, its history), doc-margin, ticket-revisions, ticket-edit, ticket-create.
+       editor-body (a ticket, a note, its history), note-margin, ticket-revisions, ticket-edit, ticket-create.
      - **A pill is live**: the same collection folds `tickets.watch` — one stream a collection, shared by
        every body the bundle draws, never one a pill — so a status, a title or a delete it hears moves every
        pill of that ticket (a deleted one goes back to its words).
      - **It is drawn as an element made here, never as HTML**: an `<a>` whose href is the one link helper's
        (`ticketHref`), its text the id as written, its stage the pill's colour (`data-stage`, painted with the `--st-*` tokens) and its
-       title on hover. Its look is the sheet's that draws the body (ticket-view's `.md`, doc-margin's): a
+       title on hover. Its look is the sheet's that draws the body (ticket-view's `.md`, note-margin's): a
        component's sheet styles only its own (FRAME-30). The stored body is never touched. -->
 <script module>
   import { setContext, tick } from "svelte";

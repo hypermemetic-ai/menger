@@ -1,30 +1,30 @@
-//! **The body's write** — a document's body is a Yjs CRDT (V2-29's
+//! **The body's write** — a note's body is a Yjs CRDT (V2-29's
 //! `pairing`): every writer's change is an update, merged by the CRDT, so
 //! two hands in one paragraph lose nothing. This module is the one that
 //! writes a body, replays it and squashes it.
 //!
-//! - **An update** (`docs.update`, the editor's): the Yjs v1 bytes the
-//!   browser's `yjs` made, applied to the document's CRDT, appended to the
+//! - **An update** (`notes.update`, the editor's): the Yjs v1 bytes the
+//!   browser's `yjs` made, applied to the note's CRDT, appended to the
 //!   log with who and when, said on the channel for every open watch.
-//! - **A whole body** (`docs.save`, an agent's over synapse or the API): a
+//! - **A whole body** (`notes.save`, an agent's over synapse or the API): a
 //!   diff of the text now against the body given, made into the CRDT's own
 //!   inserts and deletes — an update like any other, so it merges with live
 //!   typing instead of overwriting it.
-//! - **Sync** (`docs.state`): what a client lacks, by its state vector.
-//! - **Replay** (`docs.replay`): the log applied up to a moment, to a fresh
-//!   CRDT — the document as it stood then.
-//! - **Squash** (`docs.squash`): the log up to a moment collapsed into one
+//! - **Sync** (`notes.state`): what a client lacks, by its state vector.
+//! - **Replay** (`notes.replay`): the log applied up to a moment, to a fresh
+//!   CRDT — the note as it stood then.
+//! - **Squash** (`notes.squash`): the log up to a moment collapsed into one
 //!   snapshot row, who wrote what kept as its `authors`.
 //!
-//! The markdown is derived from the CRDT on every write (`docs.text`), so a
+//! The markdown is derived from the CRDT on every write (the table `docs`, `text`), so a
 //! read never touches the CRDT. A loaded CRDT is kept in memory; a
 //! snapshot of it is written every [`SNAPSHOT_EVERY`] changes so a load
 //! applies only what came after. A write that fails after the CRDT took it
 //! drops the loaded copy, so the next one loads the file's.
 
-use crate::events::{Author, Doc, HistoryRow};
+use crate::events::{Author, Note, HistoryRow};
 use crate::quota::Reserved;
-use crate::store::{live_doc, log, now, now_ms, Change, DocsStore, LogRow, StoreError};
+use crate::store::{live_doc, log, now, now_ms, Change, NotesStore, LogRow, StoreError};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::sync::{Arc, Mutex};
 use yrs::updates::decoder::Decode;
@@ -96,20 +96,20 @@ fn rewrite(body: &yrs::TextRef, txn: &mut yrs::TransactionMut, old: &str, new: &
 /// What a write of the body did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Written {
-    /// The document after it.
-    pub doc: Doc,
+    /// The note after it.
+    pub doc: Note,
     /// The change's `seq` — `None` when the write changed nothing (no row).
     pub seq: Option<u32>,
     /// Whether the writer's `base` was not the revision it wrote over.
     pub stale: bool,
 }
 
-/// What a client lacks, and where the document stands.
+/// What a client lacks, and where the note stands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Synced {
     /// The Yjs v1 update holding what the client's state vector lacks (base64).
     pub update: String,
-    /// The document's state vector (base64), for the client's own diff back.
+    /// The note's state vector (base64), for the client's own diff back.
     pub vector: String,
     pub revision: u32,
 }
@@ -149,7 +149,7 @@ fn replayed(conn: &Connection, id: &str, title_now: &str, seq: Option<u32>, at: 
     Ok((crdt, title, n, when, by))
 }
 
-impl DocsStore {
+impl NotesStore {
     /// The loaded CRDT of `id`, loading it from the file when it is not:
     /// its snapshot, then every change after it.
     pub(crate) fn crdt(&self, conn: &Connection, id: &str) -> Result<Arc<Mutex<yrs::Doc>>, StoreError> {
@@ -175,9 +175,9 @@ impl DocsStore {
         self.loaded.lock().unwrap_or_else(|p| p.into_inner()).remove(id);
     }
 
-    /// Makes a document in `org`, titled `title`, its body `body`, by `by`
+    /// Makes a note in `org`, titled `title`, its body `body`, by `by`
     /// (`principal`): change 1, its id fresh ([`crate::vocab::mint`]).
-    pub async fn create(self: &Arc<Self>, org: &str, title: &str, body: &str, by: &str, principal: &str) -> Result<Doc, StoreError> {
+    pub async fn create(self: &Arc<Self>, org: &str, title: &str, body: &str, by: &str, principal: &str) -> Result<Note, StoreError> {
         let (org, title, body, by, principal) = (org.to_string(), title.to_string(), body.to_string(), by.to_string(), principal.to_string());
         let doc = self
             .blocking(move |s| {
@@ -197,7 +197,7 @@ impl DocsStore {
                 let tx = conn.unchecked_transaction()?;
                 let id = crate::vocab::mint(|id| tx.query_row("SELECT 1 FROM docs WHERE id = ?1", [id], |_| Ok(())).optional().ok().flatten().is_some());
                 let at = now();
-                let doc = Doc { id, org, title, bytes: body.len() as u64, body: Some(body), revision: 1, created_at: at, created_by: by.clone(), at, by };
+                let doc = Note { id, org, title, bytes: body.len() as u64, body: Some(body), revision: 1, created_at: at, created_by: by.clone(), at, by };
                 tx.execute(
                     "INSERT INTO docs (id, org, title, text, revision, created_at, created_by, at, by, state, state_seq) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?5, ?6, ?7, 1)",
                     params![doc.id, doc.org, doc.title, doc.body.as_deref().unwrap_or_default(), doc.at, doc.by, state],
@@ -219,14 +219,14 @@ impl DocsStore {
     /// text, and a snapshot every [`SNAPSHOT_EVERY`]. The quota's one call
     /// site: the update's size reserved for `principal` before, committed
     /// after.
-    fn append(&self, conn: &Connection, id: &str, crdt: &yrs::Doc, bytes: &[u8], kind: &str, by: &str, principal: &str) -> Result<(Doc, u32), StoreError> {
+    fn append(&self, conn: &Connection, id: &str, crdt: &yrs::Doc, bytes: &[u8], kind: &str, by: &str, principal: &str) -> Result<(Note, u32), StoreError> {
         let quota = self.quota();
         let reserved: Reserved = quota.reserve(principal, bytes.len() as u64).map_err(StoreError::Quota)?;
         let tx = conn.unchecked_transaction()?;
         let was = live_doc(&tx, id)?;
         let text = text_of(crdt);
         let seq = was.revision + 1;
-        let doc = Doc { bytes: text.len() as u64, body: Some(text), revision: seq, at: now(), by: by.to_string(), ..was };
+        let doc = Note { bytes: text.len() as u64, body: Some(text), revision: seq, at: now(), by: by.to_string(), ..was };
         tx.execute("UPDATE docs SET text = ?2, revision = ?3, at = ?4, by = ?5 WHERE id = ?1", params![doc.id, doc.body.as_deref().unwrap_or_default(), seq, doc.at, doc.by])?;
         log(&tx, LogRow { id, seq, kind, update: Some(bytes), title: None, at: now_ms(), by, principal, authors: None })?;
         let state_seq: u32 = tx.query_row("SELECT state_seq FROM docs WHERE id = ?1", [id], |r| r.get(0))?;
@@ -239,7 +239,7 @@ impl DocsStore {
         Ok((doc, seq))
     }
 
-    /// `docs.update`: a writer's Yjs v1 update (`update`, base64) applied to
+    /// `notes.update`: a writer's Yjs v1 update (`update`, base64) applied to
     /// `id`'s CRDT and kept, by `by` (`principal`), from the presence
     /// `session` when it says.
     pub async fn update(self: &Arc<Self>, id: &str, update: &str, by: &str, principal: &str, session: Option<String>) -> Result<Written, StoreError> {
@@ -266,7 +266,7 @@ impl DocsStore {
         Ok(w)
     }
 
-    /// `docs.save`: `body` whole, by `by` — made into the CRDT's own edits by
+    /// `notes.save`: `body` whole, by `by` — made into the CRDT's own edits by
     /// a diff of the text its writer read (`base`, the revision it read)
     /// against `body`, made on the CRDT as it stood then and merged into it
     /// now: what others wrote since stays. With no `base` (or one squashed
@@ -319,8 +319,8 @@ impl DocsStore {
         Ok(w)
     }
 
-    /// `docs.state`: what a client whose state vector is `vector` (base64;
-    /// none: it holds nothing) lacks of `id`, and the document's own vector.
+    /// `notes.state`: what a client whose state vector is `vector` (base64;
+    /// none: it holds nothing) lacks of `id`, and the note's own vector.
     pub async fn state(self: &Arc<Self>, id: &str, vector: Option<String>) -> Result<Synced, StoreError> {
         let id = id.to_string();
         self.blocking(move |s| {
@@ -338,32 +338,32 @@ impl DocsStore {
         .await
     }
 
-    /// `docs.replay`: `id` as it stood after change `seq` — or, with `at`
+    /// `notes.replay`: `id` as it stood after change `seq` — or, with `at`
     /// (unix milliseconds), after the last change made by then: the log to
     /// there applied to a fresh CRDT, the title as it was. A moment before
     /// the first change kept (or before a squash's snapshot) is
     /// [`StoreError::NoRevision`].
-    pub async fn replay(self: &Arc<Self>, id: &str, seq: Option<u32>, at: Option<i64>) -> Result<Doc, StoreError> {
+    pub async fn replay(self: &Arc<Self>, id: &str, seq: Option<u32>, at: Option<i64>) -> Result<Note, StoreError> {
         let id = id.to_string();
         self.blocking(move |s| {
             let conn = s.lock();
             let now = live_doc(&conn, &id)?;
             let (crdt, title, n, when, by) = replayed(&conn, &id, &now.title, seq, at)?;
             let text = text_of(&crdt);
-            Ok(Doc { title, bytes: text.len() as u64, body: Some(text), revision: n, at: when / 1000, by, ..now })
+            Ok(Note { title, bytes: text.len() as u64, body: Some(text), revision: n, at: when / 1000, by, ..now })
         })
         .await
     }
 
-    /// `docs.restore`: `id`'s body put back as it stood after change `seq`,
-    /// by `by` — a whole-body write over the CRDT ([`DocsStore::save`]), so a
+    /// `notes.restore`: `id`'s body put back as it stood after change `seq`,
+    /// by `by` — a whole-body write over the CRDT ([`NotesStore::save`]), so a
     /// restore is a change like any other, merged with live typing.
     pub async fn restore(self: &Arc<Self>, id: &str, seq: u32, by: &str, principal: &str) -> Result<Written, StoreError> {
         let then = self.replay(id, Some(seq), None).await?;
         self.save(id, then.body.as_deref().unwrap_or_default(), None, by, principal).await
     }
 
-    /// `docs.history`: `id`'s changes, newest first, at most `limit`, those
+    /// `notes.history`: `id`'s changes, newest first, at most `limit`, those
     /// before `before` (a `seq`) when it says.
     pub async fn history(self: &Arc<Self>, id: &str, limit: usize, before: Option<u32>) -> Result<Vec<HistoryRow>, StoreError> {
         let id = id.to_string();
@@ -392,7 +392,7 @@ impl DocsStore {
         .await
     }
 
-    /// `docs.squash`: `id`'s changes up to `until` (a `seq`) collapsed into
+    /// `notes.squash`: `id`'s changes up to `until` (a `seq`) collapsed into
     /// one `snapshot` row at `until` — the CRDT as it stood then — its
     /// `authors` saying who wrote what in them (an earlier snapshot's authors
     /// folded in). Answers how many rows went. Nothing after `until` moves.

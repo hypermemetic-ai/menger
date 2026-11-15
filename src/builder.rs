@@ -7,8 +7,8 @@ use plexus_ui_service::{Compiler, Signers, UiActivation, UiStore, DEFAULT_CHANNE
 // V2-24: the media service — a service of v2's own, its file its own, the
 // ticket's permit asked of `tickets` through the seam.
 use menger_media::{MediaActivation, MediaStore, MEDIA_DB_FILE};
-// V2-29: the docs service — documents on their own API and file.
-use menger_docs::{DocsActivation, DocsStore, DOCS_DB_FILE};
+// V2-29, NOTES-3: the notes service — notes on their own API and file.
+use menger_notes::{NotesActivation, NotesStore, NOTES_DB_FILE};
 // V2-31: the quota service — allowances per principal and source, its
 // ledger its own file; every write reserved against the cap through the seam.
 use menger_quota::{DiskUsage, Ledger, Plan, QuotaActivation, QuotaSeam, Statvfs, QUOTA_DB_FILE};
@@ -41,7 +41,7 @@ pub fn default_db_path() -> PathBuf {
 /// SCRATCH-NAMES: the names menger gives a tickets file itself — `tickets.db`
 /// (prod's, test's and the image's) and `local.db` (the data directory's,
 /// DIST-14). Beside a tickets file of one of these names the other services'
-/// files keep their plain names (`ui.db`, `media.db`, `docs.db`, `quota.db`).
+/// files keep their plain names (`ui.db`, `media.db`, `notes.db`, `quota.db`).
 pub const DATA_DIR_DB_FILES: [&str; 2] = ["tickets.db", crate::first_run::DB_FILE];
 
 /// SCRATCH-NAMES: where a service's file `plain` (`media.db`) goes when its
@@ -90,11 +90,11 @@ pub fn default_media_db_path(db_path: &Path) -> PathBuf {
     sibling_db_path(db_path, MEDIA_DB_FILE)
 }
 
-/// V2-29: the docs service's file when `--docs-db-path` names none — beside
+/// V2-29, NOTES-3: the notes service's file when `--notes-db-path` names none — beside
 /// the tickets file, never it nor the ui or media file ([`sibling_db_path`]:
-/// `docs.db`, or `<stem>.docs.db`).
-pub fn default_docs_db_path(db_path: &Path) -> PathBuf {
-    sibling_db_path(db_path, DOCS_DB_FILE)
+/// `notes.db`, or `<stem>.notes.db`).
+pub fn default_notes_db_path(db_path: &Path) -> PathBuf {
+    sibling_db_path(db_path, NOTES_DB_FILE)
 }
 
 /// V2-31: the quota service's file when `--quota-db-path` names none —
@@ -276,24 +276,25 @@ impl MediaSetup {
     }
 }
 
-/// V2-29: what the `docs` activation is built over — the store on its own
+/// V2-29: what the `notes` activation is built over — the store on its own
 /// file.
 #[derive(Clone)]
-pub struct DocsSetup {
-    pub store: Arc<DocsStore>,
+pub struct NotesSetup {
+    pub store: Arc<NotesStore>,
 }
 
-impl DocsSetup {
-    /// The store at `path` (`--docs-db-path`); the directory made if missing.
+impl NotesSetup {
+    /// The store at `path` (`--notes-db-path`); the directory made if missing.
     pub fn open(path: &Path) -> anyhow::Result<Self> {
-        let store = DocsStore::open(path).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
-        tracing::info!("docs:      {} ({} documents)", path.display(), store.count());
+        let store = NotesStore::open(path).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
+        tracing::info!("notes:     {} ({} notes)", path.display(), store.count());
         Ok(Self { store: Arc::new(store) })
     }
 
-    /// The store beside the tickets file ([`default_docs_db_path`]).
+    /// The store beside the tickets file ([`default_notes_db_path`]) — NOTES-3:
+    /// its `docs` twin moved to it first ([`crate::notes_move::beside`]).
     pub fn beside(db_path: &Path) -> anyhow::Result<Self> {
-        Self::open(&default_docs_db_path(db_path))
+        Self::open(&crate::notes_move::beside(db_path)?)
     }
 }
 
@@ -475,9 +476,9 @@ where
     F: FnOnce(Arc<Store>, Access) -> T,
 {
     let media = MediaSetup::beside(db_path)?;
-    let docs = DocsSetup::beside(db_path)?;
+    let notes = NotesSetup::beside(db_path)?;
     let quota = QuotaSetup::beside(db_path)?;
-    build_rpc_services(db_path, seed, shape, offers, access, backend, resource_metadata, body_max, ui, media, docs, quota, Vec::new(), tickets).await
+    build_rpc_services(db_path, seed, shape, offers, access, backend, resource_metadata, body_max, ui, media, notes, quota, Vec::new(), tickets).await
 }
 
 /// V2-24: [`build_rpc_ui_over`] with the media service over `media` (main's
@@ -485,8 +486,8 @@ where
 /// `--quota-db-path`, `--quota-plan`) — registered beside `tickets` and `ui` — every service
 /// of v2's, in one process (V2-1): the media service's seam is attached to
 /// the service built here, so a put asks `tickets.may` through it as the caller.
-/// V2-29: and the docs service over `docs` (`--docs-db-path`), its seam
-/// attached the same way (the gate on a document's organization,
+/// V2-29: and the notes service over `notes` (`--notes-db-path`), its seam
+/// attached the same way (the gate on a note's organization,
 /// `orgs.list` as the caller). POLYGLOT-5 (V2-44): each of `children` — a
 /// `--child`, an activation in another process — mounted beside them, behind
 /// the same gate; one named like a service of menger's own is refused.
@@ -502,7 +503,7 @@ pub async fn build_rpc_services<T, F>(
     body_max: usize,
     ui: UiSetup,
     media: MediaSetup,
-    docs: DocsSetup,
+    notes: NotesSetup,
     quota: QuotaSetup,
     children: Vec<plexus_rpc::core::plexus::RemoteChild>,
     tickets: F,
@@ -577,6 +578,8 @@ where
     // COMPS-5: every definition the bodies hold registered in plexus-ui before anything is served —
     // idempotent, so only the first start of a release that carries it writes.
     crate::backfill::backfill(&store, &system, &ui.store, ui.author.as_ref()).await?;
+    // NOTES-3: a stored role that grants `docs.<method>` grants `notes.<method>` too — once.
+    crate::notes_move::roles(&store, &system).await?;
     // IDENTITY-21: the members that decide, from the same store.
     access.attach_with(Arc::clone(&store), system);
     // UI-7: the activation registered as `tickets` is the caller's to make
@@ -601,12 +604,12 @@ where
     let media = media.metered(access.meter());
     let media = MediaActivation::new(media.store).with_max_upload(media.max_upload).with_remote(media.remote).with_allowance(media.allowance);
     let media_seam = media.seam().clone();
-    // V2-29: `docs` beside them — documents, over their own file; who may is
-    // the gate's word on a document's organization, asked through its seam.
-    // V2-31: every change a document takes is reserved against its writer's allowance.
-    docs.store.set_quota(Arc::new(crate::quota_allowance::DocsMetered(access.meter().clone())));
-    let docs = DocsActivation::new(docs.store);
-    let docs_seam = docs.seam().clone();
+    // V2-29: `notes` beside them — notes, over their own file; who may is
+    // the gate's word on a note's organization, asked through its seam.
+    // V2-31: every change a note takes is reserved against its writer's allowance.
+    notes.store.set_quota(Arc::new(crate::quota_allowance::NotesMetered(access.meter().clone())));
+    let notes = NotesActivation::new(notes.store);
+    let notes_seam = notes.seam().clone();
     // V2-31: `quota` beside them — every principal's usage per source, over
     // its own file; what it knows of teams and stores it asks through its
     // seam, and the tickets service reserves through the meter it is given.
@@ -617,7 +620,7 @@ where
         .register(tickets)
         .register(ui)
         .register(media)
-        .register(docs)
+        .register(notes)
         .register(quota)
         // ORG-4: `orgs` beside `members` — the organizations, and their making.
         .register(OrgsActivation::with_access(Arc::clone(&store), access.clone()))
@@ -653,8 +656,8 @@ where
     // V2-24: the media service asks `tickets.may` through this service, as
     // the caller it serves (its permit is the tickets service's word).
     media_seam.attach(&service);
-    // V2-29: the docs service asks the gate and `orgs.list` through it.
-    docs_seam.attach(&service);
+    // V2-29: the notes service asks the gate and `orgs.list` through it.
+    notes_seam.attach(&service);
     // V2-31: the quota service asks `members` and the stores through this
     // service as the server's own caller; the tickets service's writes
     // reserve through the meter, asking `quota.*` the same way.
@@ -741,19 +744,19 @@ mod tests {
         assert_eq!(media.parent(), tickets.parent(), "still beside it");
     }
 
-    /// V2-29: the docs file is beside the tickets file, never it, nor the ui or media file.
+    /// V2-29: the notes file is beside the tickets file, never it, nor the ui or media file.
     #[test]
-    fn the_docs_db_is_beside_the_tickets_file_never_it() {
-        for tickets in ["/var/lib/menger/tickets.db", "/tmp/x/local.db", "/tmp/x/docs.db.d/tickets.db"] {
+    fn the_notes_db_is_beside_the_tickets_file_never_it() {
+        for tickets in ["/var/lib/menger/tickets.db", "/tmp/x/local.db", "/tmp/x/notes.db.d/tickets.db"] {
             let tickets = Path::new(tickets);
-            let docs = default_docs_db_path(tickets);
-            assert_eq!(docs, tickets.parent().unwrap().join("docs.db"), "{}", tickets.display());
-            assert!(docs != tickets && docs != default_ui_db_path(tickets) && docs != default_media_db_path(tickets));
+            let notes = default_notes_db_path(tickets);
+            assert_eq!(notes, tickets.parent().unwrap().join("notes.db"), "{}", tickets.display());
+            assert!(notes != tickets && notes != default_ui_db_path(tickets) && notes != default_media_db_path(tickets));
         }
-        let tickets = Path::new("/tmp/x/docs.db");
-        let docs = default_docs_db_path(tickets);
-        assert_ne!(docs, tickets);
-        assert_eq!(docs.parent(), tickets.parent(), "still beside it");
+        let tickets = Path::new("/tmp/x/notes.db");
+        let notes = default_notes_db_path(tickets);
+        assert_ne!(notes, tickets);
+        assert_eq!(notes.parent(), tickets.parent(), "still beside it");
     }
 
     /// V2-31: the quota file is beside the tickets file, never the same file.
@@ -794,14 +797,14 @@ mod tests {
     /// the plain names, as before.
     #[test]
     fn a_scratch_database_names_its_siblings_after_its_stem() {
-        let names = |t: &Path| [default_ui_db_path(t), default_media_db_path(t), default_docs_db_path(t), default_quota_db_path(t)];
+        let names = |t: &Path| [default_ui_db_path(t), default_media_db_path(t), default_notes_db_path(t), default_quota_db_path(t)];
         let mine = Path::new("/tmp/menger-X.db");
-        assert_eq!(names(mine).map(|p| p.display().to_string()), ["/tmp/menger-X.ui.db", "/tmp/menger-X.media.db", "/tmp/menger-X.docs.db", "/tmp/menger-X.quota.db"]);
+        assert_eq!(names(mine).map(|p| p.display().to_string()), ["/tmp/menger-X.ui.db", "/tmp/menger-X.media.db", "/tmp/menger-X.notes.db", "/tmp/menger-X.quota.db"]);
         assert_eq!(default_media_blob_dir(&default_media_db_path(mine)), Path::new("/tmp/menger-X.media.blobs"));
         assert_eq!(sessions_file(mine), Path::new("/tmp/menger-X.sessions.jsonl"), "as its sessions are");
         let theirs = names(Path::new("/tmp/menger-Y.db"));
         assert!(names(mine).iter().all(|p| !theirs.contains(p)), "two servers in /tmp share no file");
-        for t in ["/tmp/x/ui.db", "/tmp/x/media.db", "/tmp/x/docs.db", "/tmp/x/quota.db", "/tmp/x/t", "rel.db", "/tmp/x/menger-X.media.db"] {
+        for t in ["/tmp/x/ui.db", "/tmp/x/media.db", "/tmp/x/notes.db", "/tmp/x/quota.db", "/tmp/x/t", "rel.db", "/tmp/x/menger-X.media.db"] {
             let t = Path::new(t);
             let all = names(t);
             assert!(all.iter().all(|p| p != t && p.parent() == t.parent()), "{}: beside it, never it", t.display());
@@ -812,7 +815,7 @@ mod tests {
         for dir in ["/var/lib/menger", "/home/u/.local/share/menger"] {
             for name in DATA_DIR_DB_FILES {
                 let t = Path::new(dir).join(name);
-                assert_eq!(names(&t).map(|p| p.file_name().unwrap().to_str().unwrap().to_string()), ["ui.db", "media.db", "docs.db", "quota.db"]);
+                assert_eq!(names(&t).map(|p| p.file_name().unwrap().to_str().unwrap().to_string()), ["ui.db", "media.db", "notes.db", "quota.db"]);
                 assert_eq!(default_media_blob_dir(&default_media_db_path(&t)), Path::new(dir).join("media/blobs"));
             }
         }

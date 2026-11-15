@@ -337,7 +337,7 @@ pub enum MediaEvent {
     },
     /// EDITOR-32: one of `list`'s rows — a kept file, when it was first
     /// kept (`at`, unix seconds), and the tickets (`tickets`, ids as the
-    /// tickets service names them now) and documents (`docs`) it is kept
+    /// tickets service names them now) and notes (`notes`) it is kept
     /// for, among those the caller reads.
     Listed {
         hash: String,
@@ -350,7 +350,7 @@ pub enum MediaEvent {
         name: Option<String>,
         at: i64,
         tickets: Vec<String>,
-        docs: Vec<String>,
+        notes: Vec<String>,
     },
     /// EDITOR-32: `list`'s last answer — `next`, the `after` that asks the
     /// page after this one, or none when there is no more.
@@ -419,10 +419,10 @@ pub enum MediaEvent {
         ticket: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         upload: Option<String>,
-        /// V2-29: `put` for a document that is none, or that the docs
+        /// V2-29: `put` for a note that is none, or that the notes
         /// service says you may not write.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        doc: Option<String>,
+        note: Option<String>,
     },
     /// Refused, naming why in `reason` — `too_large` (with `bytes` and
     /// `max`), `truncated`, `bad_data`, `out_of_order`, `incomplete`,
@@ -478,7 +478,7 @@ impl MediaEvent {
 
     /// `not_found` naming a hash.
     pub fn no_hash(hash: &str) -> Self {
-        MediaEvent::NotFound { hash: Some(hash.into()), ticket: None, upload: None, doc: None }
+        MediaEvent::NotFound { hash: Some(hash.into()), ticket: None, upload: None, note: None }
     }
 }
 

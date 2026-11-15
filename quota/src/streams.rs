@@ -253,7 +253,7 @@ pub(crate) async fn set(act: QuotaActivation, user: Caller, who: (Option<String>
 pub const COUNTERS: &[(&str, &str, Option<&str>, Option<&str>)] = &[
     ("tickets.revisions.usage", "{}", Some("tickets.count"), Some("tickets.bytes")),
     ("media.usage", r#"{"everyone": true}"#, None, Some("media.bytes")),
-    ("docs.usage", r#"{"everyone": true}"#, Some("docs.count"), Some("docs.bytes")),
+    ("notes.usage", r#"{"everyone": true}"#, Some("notes.count"), Some("notes.bytes")),
 ];
 
 pub(crate) fn recount(act: QuotaActivation, user: Option<Caller>, principal: Option<String>) -> impl Stream<Item = QuotaEvent> + Send + 'static {

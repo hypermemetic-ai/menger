@@ -68,16 +68,27 @@ pub const SOURCES: &[Source] = &[
     Source { name: "media.fetch.bytes", unit: Unit::Bytes, window: Window::Day, what: "bytes the server fetched for you (unfurl, fetch)" },
     Source { name: "media.fetch.calls", unit: Unit::Calls, window: Window::Day, what: "fetches the server made for you (unfurl, fetch)" },
     Source { name: "media.egress.bytes", unit: Unit::Bytes, window: Window::Day, what: "media served to you at /media/<hash>" },
-    Source { name: "docs.bytes", unit: Unit::Bytes, window: Window::Total, what: "document bodies and their revisions" },
-    Source { name: "docs.count", unit: Unit::Count, window: Window::Total, what: "documents created" },
+    Source { name: "notes.bytes", unit: Unit::Bytes, window: Window::Total, what: "note bodies and their revisions" },
+    Source { name: "notes.count", unit: Unit::Count, window: Window::Total, what: "notes created" },
     Source { name: "tickets.bytes", unit: Unit::Bytes, window: Window::Total, what: "ticket bodies and their revisions" },
     Source { name: "tickets.count", unit: Unit::Count, window: Window::Total, what: "tickets created" },
     Source { name: "questions.count", unit: Unit::Count, window: Window::Total, what: "questions asked" },
 ];
 
-/// The source named `name`; `None` for a name that is none.
+/// The source named `name`; `None` for a name that is none — a name a
+/// source had before ([`RENAMED`]) too: only a plan reads one ([`renamed`]).
 pub fn source(name: &str) -> Option<&'static Source> {
     SOURCES.iter().find(|s| s.name == name)
+}
+
+/// NOTES-3: the sources that changed their names — (before, now). The
+/// docs service became the notes service; a plan naming the old source is
+/// read as the new, and the ledger's rows are rekeyed once as it opens.
+pub const RENAMED: &[(&str, &str)] = &[("docs.bytes", "notes.bytes"), ("docs.count", "notes.count")];
+
+/// `name` as it is called now: the new name of a renamed source, else itself.
+pub fn renamed(name: &str) -> &str {
+    RENAMED.iter().find(|(old, _)| *old == name).map_or(name, |(_, new)| new)
 }
 
 /// Every source's name, for a refusal that names them.
