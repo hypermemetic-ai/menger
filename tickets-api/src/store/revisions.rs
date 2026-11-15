@@ -304,6 +304,7 @@ pub(super) struct Kept {
     ticket: TicketId,
     rev: u32,
     fields: Vec<String>,
+    title: String,
 }
 
 struct Recording {
@@ -691,7 +692,7 @@ pub(super) fn flush(conn: &Connection) -> rusqlite::Result<()> {
             },
         )?;
         fields.shrink_to_fit();
-        kept.push(Kept { shortcode, ticket: TicketId::new(t.id.clone()), rev: next, fields });
+        kept.push(Kept { shortcode, ticket: TicketId::new(t.id.clone()), rev: next, fields, title: now_fields.title.clone() });
     }
     with(|r| r.kept.extend(kept));
     Ok(())
@@ -712,7 +713,7 @@ pub(super) fn publish(tx: &Broadcast) {
     })
     .unwrap_or_default();
     for k in kept {
-        let revised = Change::Revised { shortcode: k.shortcode, ticket: k.ticket, rev: k.rev, fields: k.fields };
+        let revised = Change::Revised { shortcode: k.shortcode, ticket: k.ticket, rev: k.rev, fields: k.fields, title: k.title };
         // TICKETS-39: and to `watch { actor }`, with its writer.
         tx.wrote(&revised);
         let _ = tx.revisions.send(revised);
@@ -737,10 +738,12 @@ const SELECT: &str = "SELECT ticket, rev, at_unix, actor, name, source, message,
                              title, status, kind, severity, parent, blocked_by, labels, commits FROM revisions";
 
 fn read(r: &rusqlite::Row<'_>) -> rusqlite::Result<Kept_> {
+    let fields = fields_of(r, 13)?;
     Ok(Kept_ {
         revision: Revision {
             ticket: TicketId::new(r.get::<_, String>(0)?),
             rev: r.get(1)?,
+            title: fields.title.clone(),
             at_unix: r.get(2)?,
             actor: r.get(3)?,
             name: r.get(4)?,
@@ -753,7 +756,7 @@ fn read(r: &rusqlite::Row<'_>) -> rusqlite::Result<Kept_> {
             added: r.get(11)?,
             removed: r.get(12)?,
         },
-        fields: fields_of(r, 13)?,
+        fields,
     })
 }
 

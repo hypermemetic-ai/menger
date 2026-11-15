@@ -2116,8 +2116,15 @@ pub enum TicketsEvent {
     /// `null` with nothing written).
     RevisionRestored { ticket: Ticket, from_rev: u32, changed: Vec<String>, rev: Option<u32> },
     /// TICKETS-7: on `watch`, after a write's other events — a revision the
-    /// write kept: its ticket, its number, and the fields it changed.
-    Revised { ticket: TicketId, rev: u32, fields: Vec<String> },
+    /// write kept: its ticket, its number, and the fields it changed; and
+    /// (SURFACE-24) the ticket's title as that revision keeps it.
+    Revised {
+        ticket: TicketId,
+        rev: u32,
+        fields: Vec<String>,
+        #[serde(default)]
+        title: String,
+    },
 }
 
 #[cfg(test)]

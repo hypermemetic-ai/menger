@@ -2716,7 +2716,8 @@ async fn revisions_over_the_wire() {
     let seen = watch_until(&mut watch, "revised").await;
     assert_eq!((seen[0]["type"].as_str(), seen.last().unwrap()["rev"].clone()), (Some("amended"), json!(2)), "{seen:?}");
     collect(call(&client, "tickets.amend", json!({"id": "REV-1", "title": "renamed"})).await).await;
-    watch_until(&mut watch, "revised").await;
+    // SURFACE-24: `revised` says the title its revision keeps.
+    assert_eq!(watch_until(&mut watch, "revised").await.last().unwrap()["title"], "renamed");
 
     // V2-37: the title, by the same hand within the window, folds into the
     // body's revision.
@@ -2724,6 +2725,8 @@ async fn revisions_over_the_wire() {
     let revs: Vec<i64> = listed.iter().filter(|e| e["type"] == "revision").map(|e| e["revision"]["rev"].as_i64().unwrap()).collect();
     assert_eq!(revs, [2, 1], "{listed:?}");
     assert_eq!(listed[0]["revision"]["fields"], json!(["title", "body"]));
+    // SURFACE-24: each row says the title as it stood at that revision.
+    assert_eq!((listed[0]["revision"]["title"].as_str(), listed[1]["revision"]["title"].as_str()), (Some("renamed"), Some("root")));
     assert_eq!((listed[0]["revision"]["added"].clone(), listed[0]["revision"]["removed"].clone()), (json!(2), json!(1)));
     assert_eq!((listed[2]["type"].as_str(), listed[2]["count"].clone(), listed[2]["latest"].clone()), (Some("revisions_end"), json!(2), json!(2)));
 

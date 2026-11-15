@@ -122,6 +122,7 @@
   import TicketPicker from "plexus-ui:ticket-picker";
   import TicketRelations from "plexus-ui:ticket-relations";
   import TicketRevisions from "plexus-ui:ticket-revisions";
+  import RevisionLabel from "plexus-ui:revision-label";
   import TicketQuestions from "plexus-ui:ticket-questions";
   import QueuePage from "plexus-ui:queue-page";
   import PageQueue from "plexus-ui:page-queue";
@@ -261,6 +262,8 @@
       ["ticket-commits", TicketCommits, ID, ["hover", "focus"], {}],
       ["ticket-history", TicketHistory, ID, ["hover"], { loading: { sheet: "loading" }, ...gone }],
       ["ticket-revisions", TicketRevisions, ID, ["hover", "focus", "selected"], { loading: { sheet: "loading" }, ...gone }],
+      // SURFACE-24: what a revision is, as both lists of them name it — its title as it stood, its message.
+      ["revision-label", RevisionLabel, (t) => ({ r: { ticket: t, rev: 9, title: `the ticket ${t}, iteration 5`, message: "restored title, body from revision 5" } }), [], { empty: { r: { rev: 1, title: "a revision with no message" } } }],
       ["ticket-edit", TicketEdit, ID, ["hover", "focus", "disabled", "checked"], { checked: { sheet: "open" }, loading: { sheet: "loading" } }, false, { checked: ["[role=radio][aria-checked=false]"] }],
       // COMPS-16: a thread as its own tag's content — two posts, one of two paragraphs and one over 280 — as the
       // sheet's ticket's first writer (a save there refuses: that body holds none); drawn only, with no ticket.
