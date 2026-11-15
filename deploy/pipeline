@@ -42,7 +42,9 @@
 #   deploy/pipeline remote prod             app.menger.sh through infra's promote.yml: what test runs, then
 #                                           `ui promote --to prod --from test` (UI-15: one store, prod's pointer
 #                                           onto test's live version, no second push), then the smoke —
-#                                           refused unless that release's suite passed (DEPLOY-52)
+#                                           refused unless that release's suite passed (DEPLOY-52) — or
+#                                           `--ahead-of-suite WHY`: the owner's, 2026-11-15, prod takes it now
+#                                           and the suite is repaired behind it
 #   deploy/pipeline smoke test|prod         the smoke against app-test / app.menger.sh, on its own
 #   deploy/pipeline local --image IMAGE     RUN-25: IMAGE here as the container menger-app-local
 #                                           (127.0.0.1:4470 WebSocket, :4471 shell, volume
@@ -1148,7 +1150,18 @@ cmd_remote() {
     test|prod) local url host; url=$(app_url "$env")/; host=${url#https://}; host=${host%%/*} ;;
     *) die "usage: deploy/pipeline remote test --image IMAGE | remote prod" ;;
   esac
-  local img; img=$(image_arg "$@")
+  # The owner, 2026-11-15: "prod should take the plexus ui feature instantly. if anything is noticed then the
+  # release is rolled back. if the tests fail they are repaired behind the scenes" — `remote prod --ahead-of-suite
+  # WHY` takes test's release whatever its suite says (running, red, none), the words kept in the log.
+  local ahead="" args=()
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --ahead-of-suite) [[ $# -ge 2 && -n $2 ]] || die "--ahead-of-suite needs the words why"; ahead=$2; shift ;;
+      *) args+=("$1") ;;
+    esac; shift
+  done
+  [[ -z $ahead || $env == prod ]] || die "--ahead-of-suite is remote prod's"
+  local img; img=$(image_arg "${args[@]}")
   if [[ ! -f $APP_YML ]]; then
     die "$host is not declared yet (RUN-11): menger has no deploy/app.yml for hypermemetic-infra to deploy — nothing was changed"
   fi
@@ -1208,6 +1221,10 @@ cmd_remote() {
     # CI-9: a fast build is test's alone — prod takes the perf build, the one the bench holds
     [[ $(release_profile "$rel") == fast ]] && die "$rel is a fast build (CI-9: test's quick build, never a prod candidate) — prod takes the perf build: deploy/pipeline build --branch B (no --fast), image, remote test, suite, then remote prod"
     s=$(suite_of "$rel")
+    if [[ -n $ahead && $s != passed ]]; then
+      say "remote prod ahead of the suite ($s): $ahead — test's release goes now; a red suite is repaired behind it, and anything noticed is a rollback"
+      s=passed
+    fi
     case $s in
       passed) ;;
       failed) die "$rel's suite FAILED ($(suite_line "$rel")) — a release whose suite is red never reaches prod; fix forward, then remote test the fix" ;;

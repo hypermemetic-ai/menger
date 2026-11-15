@@ -357,6 +357,18 @@ run remote prod
 same "remote prod, suite red: exits 1" "$code" 1
 has "remote prod, suite red: said" "$err" "$R1's suite FAILED (failed 2026-10-23T06:30:00Z — workspace red; log /x.log) — a release whose suite is red never reaches prod"
 same "remote prod, refused: infra never asked" "$(<"$STUB_INFRA_LOG")" ""
+run remote prod --ahead-of-suite
+same "remote prod, --ahead-of-suite with no words: exits 1" "$code" 1
+has "remote prod, --ahead-of-suite with no words: said" "$err" "--ahead-of-suite needs the words why"
+run remote test --ahead-of-suite "x" --image menger:$R1
+same "remote test, --ahead-of-suite: refused" "$code" 1
+has "remote test, --ahead-of-suite: said" "$err" "--ahead-of-suite is remote prod's"
+same "remote prod, --ahead-of-suite refusals: infra never asked" "$(<"$STUB_INFRA_LOG")" ""
+run remote prod --ahead-of-suite "the owner: prod takes it now"
+same "remote prod ahead of a red suite: exits 0" "$code" 0
+has "remote prod ahead of a red suite: said, with the words" "$err" "remote prod ahead of the suite (failed): the owner: prod takes it now"
+same "remote prod ahead of a red suite: promote.yml" "$(<"$STUB_INFRA_LOG")" "promote.yml -e app_dir=$(dirname "$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)")"
+: >"$STUB_INFRA_LOG"
 suite_mark "$R1" "passed 2026-10-23T06:30:00Z — workspace 3 passed, 0 failed; frontend 1 passed, 0 failed"
 # CI-9: a fast release (test's quick build) never reaches prod, its suite passed or not
 chmod u+w "$D/releases/$R1" "$D/releases/$R1/RELEASE"; echo "profile:   fast (CI-9: test's quick build — never a prod candidate)" >>"$D/releases/$R1/RELEASE"
@@ -443,8 +455,8 @@ same "backfill: the older lines' records" "$(since "$m" '[.environment, .state, 
 m=$(mark); run backfill
 has "backfill again: nothing new" "$err" "record: 0 sent, "
 same "backfill again: nothing sent" "$(mark)" "$m"
-# DEPLOY-52: a remote run's line is a record too; app-local's, an image's, a suite's are not
-same "backfill: remote runs are records" "$("$REPO/deploy/record" --from pipeline-log "$D/deployments.log" -c | jq -s 'map(select(.environment == "app-prod")) | length')" 1
+# DEPLOY-52: a remote run's line is a record too; app-local's, an image's, a suite's are not (two prod runs: ahead of a red suite, then passed)
+same "backfill: remote runs are records" "$("$REPO/deploy/record" --from pipeline-log "$D/deployments.log" -c | jq -s 'map(select(.environment == "app-prod")) | length')" 2
 STUB_TRACKER=down run backfill
 same "backfill, tracker down: exits 0" "$code" 0
 # no pipeline key (none): synapse, as before

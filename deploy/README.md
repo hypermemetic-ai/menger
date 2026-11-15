@@ -255,7 +255,12 @@ the owner's.
 6. **Promote** (`remote prod`). infra's `promote.yml` ships the image test
    runs — the release `deployments.log` last shows test running `ok` — and
    only when that release's suite `passed`: `failed`, `running` or no result
-   is refused before infra is asked, naming why. Then, for a release that
+   is refused before infra is asked, naming why — unless the owner sends it
+   ahead: `remote prod --ahead-of-suite WHY` (owner, 2026-11-15: "prod should
+   take the plexus ui feature instantly. if anything is noticed then the
+   release is rolled back. if the tests fail they are repaired behind the
+   scenes") takes test's release whatever its suite says, WHY in the log;
+   a red suite is then fixed forward. Then, for a release that
    carries a bundle, **the UI's promote** (UI-15): once `tickets.health`
    answers on app.menger.sh, `ui promote --to prod --from test` as the
    pipeline key on prod's socket — prod's live pointer onto the version
