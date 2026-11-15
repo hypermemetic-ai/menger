@@ -347,3 +347,96 @@ async fn whose_a_ticket_is_is_asked_of_the_tickets_service_over_the_seam() {
     assert_eq!(one(&stranger, "media.get", json!({"hash": own})).await, json!({"type": "not_found", "hash": own}), "no one else");
     assert_eq!(one(&viewer, "media.get", json!({"hash": own})).await["type"], "not_found", "not even a viewer of the putter's shortcode");
 }
+
+/// Every event a call answers, the gate's error item whole.
+async fn all(client: &WsClient, method: &str, params: Value) -> Vec<Value> {
+    let mut sub = call(client, method, params).await.expect("subscribe");
+    let mut out = Vec::new();
+    while let Some(item) = tokio::time::timeout(Duration::from_secs(20), sub.next()).await.expect("an answer") {
+        let item = item.unwrap();
+        match item["type"].as_str() {
+            Some("done") => break,
+            Some("data") => out.push(item["content"].clone()),
+            _ => {
+                out.push(item);
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// `media.list`'s rows as `(hash, tickets, docs)`, and its `page { next }`.
+async fn listed(client: &WsClient, params: Value) -> (Vec<(String, Value, Value)>, Value) {
+    let mut events = all(client, "media.list", params).await;
+    let page = events.pop().expect("a page");
+    assert_eq!(page["type"], "page", "the last event: {page}");
+    let rows = events
+        .into_iter()
+        .map(|e| {
+            assert_eq!(e["type"], "listed", "{e}");
+            (e["hash"].as_str().unwrap().to_string(), e["tickets"].clone(), e["docs"].clone())
+        })
+        .collect();
+    (rows, page["next"].clone())
+}
+
+/// EDITOR-32: `media.list` answers the files each reader may see, newest
+/// first, each with the tickets and documents it is kept for **among those
+/// the reader reads** — asked of `tickets.may` and `docs.may` as the reader:
+/// A's viewer sees the image A-2 and B-2 share with A-2 alone, and none of
+/// B's own file or the admin's document; B's editor sees its own; the admin
+/// all of it. By kind, paged by `after`; a viewer's read, a bad kind refused
+/// naming the parameter.
+#[tokio::test]
+async fn media_list_answers_each_reader_what_it_may_see_and_where_it_is_used() {
+    let port = start_server().await;
+    let admin = connect(port).await;
+    for (epic, title, kind) in [("A", "a", "scope"), ("A", "a build", "build"), ("B", "b", "scope"), ("B", "b build", "build")] {
+        assert_eq!(one(&admin, "tickets.create", json!({"epic": epic, "title": title, "kind": kind})).await["type"], "created");
+    }
+    grant(&admin, &EDITOR_A, "editor", "A").await;
+    grant(&admin, &STRANGER, "editor", "B").await;
+    grant(&admin, &VIEWER_A, "viewer", "A").await;
+    let (editor, stranger, viewer) = (connect_key(&EDITOR_A, port).await, connect_key(&STRANGER, port).await, connect_key(&VIEWER_A, port).await);
+
+    // One PNG on A-2 and B-2; a GIF on B-2 alone; a PDF on the admin's document; one with no ticket.
+    let png = one(&editor, "media.put", json!({"ticket": "A-2", "data": PNG_2X1, "name": "dot.png"})).await["hash"].as_str().unwrap().to_string();
+    assert_eq!(one(&stranger, "media.put", json!({"ticket": "B-2", "data": PNG_2X1})).await["duplicate"], true);
+    let gif = one(&stranger, "media.put", json!({"ticket": "B-2", "data": GIF})).await["hash"].as_str().unwrap().to_string();
+    let made = one(&admin, "docs.create", json!({"title": "a deck"})).await;
+    let doc = made["doc"]["id"].as_str().unwrap_or_else(|| panic!("{made}")).to_string();
+    let pdf = one(&admin, "media.put", json!({"doc": doc, "data": b64(b"%PDF-1.4 deck"), "name": "deck.pdf"})).await;
+    assert_eq!(pdf["kind"], "pdf", "{pdf}");
+    let pdf = pdf["hash"].as_str().unwrap().to_string();
+    assert_eq!(one(&editor, "media.put", json!({"data": GIF.replace("AQAB", "AgAC")})).await["type"], "stored", "the editor's own");
+
+    // The admin: every file used somewhere, newest first, every owner.
+    let (rows, next) = listed(&admin, json!({})).await;
+    assert_eq!(rows, vec![(pdf.clone(), json!([]), json!([doc])), (gif.clone(), json!(["B-2"]), json!([])), (png.clone(), json!(["A-2", "B-2"]), json!([]))]);
+    assert_eq!(next, Value::Null);
+    let first = all(&admin, "media.list", json!({"kind": "image", "limit": 1})).await;
+    assert_eq!(first[0]["name"], Value::Null, "the GIF came with no name");
+    assert_eq!((first[0]["kind"].as_str(), first[0]["width"].as_u64(), first[0]["mime"].as_str()), (Some("image"), Some(1), Some("image/gif")), "{first:?}");
+    assert!(first[0]["at"].as_i64().unwrap() > 0);
+
+    // A's viewer: the shared PNG with A-2 alone — B-2 is out of its reach, so is the GIF and the document.
+    let (rows, _) = listed(&viewer, json!({})).await;
+    assert_eq!(rows, vec![(png.clone(), json!(["A-2"]), json!([]))], "a reader without reach sees none of B's or the document's");
+    // B's editor: its GIF, and the PNG as B-2's.
+    let (rows, _) = listed(&stranger, json!({})).await;
+    assert_eq!(rows, vec![(gif.clone(), json!(["B-2"]), json!([])), (png.clone(), json!(["B-2"]), json!([]))]);
+
+    // By kind, and paged.
+    assert_eq!(listed(&admin, json!({"kind": "pdf"})).await.0.into_iter().map(|r| r.0).collect::<Vec<_>>(), vec![pdf.clone()]);
+    assert!(listed(&admin, json!({"kind": "video"})).await.0.is_empty());
+    let (rows, next) = listed(&admin, json!({"limit": 2})).await;
+    assert_eq!((rows.len(), next.as_str()), (2, Some(gif.as_str())));
+    let (rows, next) = listed(&admin, json!({"limit": 2, "after": next})).await;
+    assert_eq!((rows.into_iter().map(|r| r.0).collect::<Vec<_>>(), next), (vec![png.clone()], Value::Null));
+    assert_eq!(one(&admin, "media.list", json!({"after": "0".repeat(64)})).await, json!({"type": "not_found", "hash": "0".repeat(64)}));
+
+    // A typed parameter: a kind that is none is refused before the method runs.
+    let bad = one(&viewer, "media.list", json!({"kind": "movie"})).await;
+    assert!(bad.to_string().contains("kind"), "{bad}");
+}

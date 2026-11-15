@@ -45,6 +45,7 @@
 //! | [`vocab`] | the typed parameters: [`MediaHash`], [`MediaType`], [`MediaData`] |
 //! | [`store`] | the file: `media` and `media_owners`, `put`, `kept`, `bytes` |
 //! | [`seam`] | the tickets service as a client; the shell's [`fetch`] |
+//! | [`listing`] | EDITOR-32: `media.list` — the kept files the caller may see, each owner asked of the seam |
 //! | [`activation`] | `media.put` and `media.get`, the one declaration |
 
 pub mod allowance;
@@ -58,9 +59,9 @@ pub use remote::Remote;
 pub mod unfurl;
 pub use image::{MediaEvent, MediaInfo};
 pub mod vocab;
-pub use vocab::{FileName, MediaData, MediaHash, MediaType, UploadId, WebUrl};
+pub use vocab::{FileName, MediaData, MediaHash, MediaKind, MediaType, UploadId, WebUrl};
 pub mod store;
-pub use store::{default_blob_dir, MediaStore, Owner, Put, StoreError};
+pub use store::{default_blob_dir, Listed, MediaStore, Owner, Put, StoreError};
 mod caller;
 pub use caller::{Caller, MediaRequest};
 pub mod seam;
@@ -68,6 +69,7 @@ pub use seam::{fetch, Fetched, Seam};
 pub mod activation;
 pub use activation::{MediaActivation, MediaClient};
 mod streams;
+pub mod listing;
 
 /// The service's file when `--media-db-path` names none: `media.db` beside
 /// the tickets file, never the same file.

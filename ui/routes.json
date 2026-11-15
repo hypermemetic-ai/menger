@@ -52,5 +52,6 @@
   "#/sheet/:id": "page-sheet",
   "#/usage": "page-usage",
   "#/usage/:principal": "page-usage",
-  "#/quota": "page-quota"
+  "#/quota": "page-quota",
+  "#/media": "page-media"
 }

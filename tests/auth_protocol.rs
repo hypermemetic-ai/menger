@@ -321,6 +321,8 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     // EDITOR-10: what a file is, your usage and a link's card are reads;
     // an upload in chunks and a remote file kept are an editor's.
     ("media.info", Today::Viewer, None),
+    // EDITOR-32: every kept file the caller may see — a read.
+    ("media.list", Today::Viewer, None),
     ("media.usage", Today::Viewer, None),
     ("media.unfurl", Today::Viewer, None),
     ("media.begin", Today::Editor, None),

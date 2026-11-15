@@ -19,7 +19,7 @@ use crate::image::MediaEvent;
 use crate::remote::Remote;
 use crate::seam::Seam;
 use crate::store::MediaStore;
-use crate::vocab::{FileName, MediaData, MediaHash, MediaType, UploadId, WebUrl};
+use crate::vocab::{FileName, MediaData, MediaHash, MediaKind, MediaType, UploadId, WebUrl};
 use futures::Stream;
 use menger_docs::DocId;
 use menger_tickets_api::vocab::TicketRef;
@@ -97,7 +97,7 @@ impl MediaActivation {
     request = MediaRequest,
     typed_params,
     roles(
-        viewer = ["get", "info", "usage", "unfurl"],
+        viewer = ["get", "info", "list", "usage", "unfurl"],
         editor = [viewer, "put", "begin", "chunk", "finish", "fetch"],
     )
 )]
@@ -184,6 +184,39 @@ impl MediaActivation {
         hash: MediaHash,
     ) -> impl Stream<Item = MediaEvent> + Send + 'static {
         futures::stream::once(crate::streams::info(self.clone(), user, hash))
+    }
+
+    /// Every kept file you may see, newest first; yields listed { hash, mime, kind, name, bytes, width, height, at, tickets, docs } per file, then page { next }.
+    ///
+    /// EDITOR-32: the files kept for a ticket or a document, each with the
+    /// tickets (`tickets`, by their ids now) and documents (`docs`) it is
+    /// kept for among those you read — asked of `tickets.may` and
+    /// `docs.may` as you. A file kept only for tickets and documents you
+    /// cannot read is not listed; a file kept with no ticket or document
+    /// (yours before a ticket existed, a link's preview) is used nowhere
+    /// and not listed either. `at` is when it was first kept (unix
+    /// seconds). A page holds `limit` files (60; at most 500), and the last
+    /// event is `page { next }`: `--after <next>` asks the page after it,
+    /// none when there is no more (a page may hold fewer when most of the
+    /// store is out of your reach). `not_found { hash }` for an `after`
+    /// that names no file. Viewer.
+    #[plexus_rpc::macros::method(
+        group = "read",
+        example(note = "the newest files", params = r#"{}"#),
+        example(note = "videos, the next page", params = r#"{"kind": "video", "limit": 20, "after": "9f2c6ae2b4d1e1a8f7c3b0d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718"}"#)
+    )]
+    pub async fn list(
+        &self,
+        #[from_auth(self.callers.verify)] user: Caller,
+        /// Only files of this kind: image, video, audio, pdf or file (optional: every kind).
+        kind: Option<MediaKind>,
+        /// How many files in a page (optional: 60; at most 500).
+        limit: Option<u32>,
+        /// The page after this file: the `next` the last page answered (optional: the newest).
+        after: Option<MediaHash>,
+    ) -> impl Stream<Item = MediaEvent> + Send + 'static {
+        use futures::StreamExt;
+        futures::stream::once(crate::listing::list(self.clone(), user, kind, after, limit)).flat_map(futures::stream::iter)
     }
 
     /// What you have put: yields usage { principal, files, bytes } — each file once, however many tickets it is for; an admin of * names anyone, or every keeper (then unattributed { files, bytes }).

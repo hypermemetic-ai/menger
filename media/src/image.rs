@@ -335,6 +335,29 @@ pub enum MediaEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
     },
+    /// EDITOR-32: one of `list`'s rows — a kept file, when it was first
+    /// kept (`at`, unix seconds), and the tickets (`tickets`, ids as the
+    /// tickets service names them now) and documents (`docs`) it is kept
+    /// for, among those the caller reads.
+    Listed {
+        hash: String,
+        mime: String,
+        bytes: u64,
+        width: u32,
+        height: u32,
+        kind: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        at: i64,
+        tickets: Vec<String>,
+        docs: Vec<String>,
+    },
+    /// EDITOR-32: `list`'s last answer — `next`, the `after` that asks the
+    /// page after this one, or none when there is no more.
+    Page {
+        #[serde(default)]
+        next: Option<String>,
+    },
     /// `begin`'s answer: the upload's id, its size, the bytes it has
     /// (`received`: 0 when begun, more when resumed — the next chunk's
     /// `offset`) and the most one chunk may carry (`chunk`, in bytes before

@@ -67,6 +67,8 @@
   import QuotaHistory from "plexus-ui:quota-history";
   import PageReady from "plexus-ui:page-ready";
   import PageReleases from "plexus-ui:page-releases";
+  // EDITOR-32: every kept file, and where it is used.
+  import PageMedia from "plexus-ui:page-media";
   import PageSearch from "plexus-ui:page-search";
   import PageShell from "plexus-ui:page-shell";
   import PageTicket from "plexus-ui:page-ticket";
@@ -325,6 +327,7 @@
       ["page-usage", PageUsage, F, [], {}, true],
       ["page-quota", PageQuota, F, [], {}, true],
       ["page-releases", PageReleases, F, [], {}, true],
+      ["page-media", PageMedia, F, [], { loading: { sheet: "loading" } }, true],
       ["page-bulk", PageBulk, (t) => ({ ids: t }), [], {}, true],
       ["page-blockers", PageBlockers, ID, [], {}, true],
       ["page-edit", PageEdit, ID, [], {}, true],
