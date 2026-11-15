@@ -46,6 +46,7 @@
   import { tick } from "svelte";
   import { bus, live } from "plexus-ui/host";
   import KeysGlobal from "plexus-ui:keys-global";
+  import ImageZoom from "plexus-ui:image-zoom";
   import NoteQuick from "plexus-ui:note-quick";
   import { capsOf } from "./keys-global.svelte";
 
@@ -219,6 +220,7 @@
   {/if}
   <NoteQuick/>
   <KeysGlobal/>
+  <ImageZoom/>
 </header>
 
 <style>
@@ -254,7 +256,7 @@
   .top-search input:hover, .top-search input:global([data-sheet~=hover]) { border-color: var(--muted); }
   .top-search input:focus-visible, .top-search input:global([data-sheet~=focus]) { outline: none; border-color: var(--focus); box-shadow: 0 0 0 2px var(--sel); }
   .top-jump { display: inline-flex; gap: 6px; align-items: center; padding: 3px 8px; font-size: 12px; color: var(--muted); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; transition: color var(--motion-fast) var(--ease), border-color var(--motion-fast) var(--ease); }
-  .app-top > :global([data-slot=note-quick]), .app-top > :global([data-slot=keys-global]) { display: contents; }
+  .app-top > :global([data-slot=note-quick]), .app-top > :global([data-slot=keys-global]), .app-top > :global([data-slot=image-zoom]) { display: contents; }
   .top-jump:hover, .top-jump:global([data-sheet~=hover]) { color: var(--ink); border-color: var(--muted); }
   .top-edit { position: relative; display: inline-flex; gap: 6px; align-items: center; padding: 3px 8px; font-size: 12px; color: var(--accent); text-decoration: none; background: var(--sel); border: var(--border) solid var(--accent); border-radius: var(--radius); cursor: pointer; transition: background-color var(--motion-fast) var(--ease); }
   .top-edit:hover, .top-edit:global([data-sheet~=hover]) { background: var(--card); }

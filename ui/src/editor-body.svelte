@@ -182,6 +182,7 @@
   import PillTable, { providePills } from "./ticket-pills.svelte";
   import { ingest } from "./media-ingest.svelte";
   import { drawAll } from "./media-draw.svelte";
+  import { zoomable } from "./image-zoom.svelte";
   import { Annotation, EditorSelection, EditorState, StateEffect, StateField, Transaction } from "@codemirror/state";
   import { Decoration, EditorView, WidgetType, keymap, placeholder } from "@codemirror/view";
   import { defaultKeymap, history, historyKeymap, indentWithTab, undo as cmUndo, redo as cmRedo } from "@codemirror/commands";
@@ -495,6 +496,7 @@
         if (ev.button !== 0) return;
         // A player, a viewer, a card's download: used where it is, the caret stays out.
         if (ev.target?.closest?.(FILE_OWN)) return;
+        if (zoomable(ev.target)) return; // EDITOR-31: an image opens large (image-zoom hears the click), the caret stays out
         if (ev.target?.closest?.("button, input, select, textarea, summary")) return; // a control drawn in the block is its own (a code card's copy)
         const a = ev.target?.closest?.("a[href]");
         if (a && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); window.open(a.href, "_blank", "noopener"); return; }
@@ -1126,6 +1128,7 @@
 </section>
 
 <style>
+  .editor-body :global(.blk-in img:not(a img, button img, label img, [role=radio] img, [data-no-zoom] img)) { cursor: zoom-in; } /* EDITOR-31 */
   .editor-body { position: relative; display: block; color: var(--ink); font-family: var(--font-text); font-size: var(--text-size); }
   .state { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 14px 0 0; padding-top: 8px; font-size: 11px; color: var(--muted); border-top: var(--border) solid var(--line); }
   .state[data-state=saved]::before { content: "\2713"; color: var(--live); }
