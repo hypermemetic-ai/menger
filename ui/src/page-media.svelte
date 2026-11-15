@@ -177,7 +177,7 @@
   .end { display: flex; justify-content: center; min-height: 1px; padding: 18px 0 0; }
   .more { padding: 4px 18px; font: inherit; color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius-pill); cursor: pointer; }
   .more:hover { background: var(--hover); }
-  .more:disabled { color: var(--disabled); cursor: default; }
+  .more:disabled, .more:global([data-sheet~=disabled]) { color: var(--disabled); cursor: default; }
   [data-loading] .face, [data-loading] .cap { color: transparent; background: var(--skeleton); }
   .empty { margin: 8px 0; color: var(--muted); }
   [data-refused] { color: var(--warn); }
