@@ -101,6 +101,7 @@
   import CodeIdeTree from "plexus-ui:code-ide-tree";
   import CodeIdeTabs from "plexus-ui:code-ide-tabs";
   import CodeIdeView from "plexus-ui:code-ide-view";
+  import CodeIdeFollow from "plexus-ui:code-ide-follow";
   import PageCode from "plexus-ui:page-code";
   import TicketChipSv from "plexus-ui:ticket-chip-sv";
   import TicketLinks from "plexus-ui:ticket-links";
@@ -273,6 +274,7 @@
       ["code-ide", CodeIde, () => ({ sheet: "sample", repo: "hypermemetic-ai/kiln", ref: "main", dir: "src", open: "src/cones.rs#L5-L10, src/log.rs", height: "360px" }), ["hover", "focus"], { loading: { sheet: "loading" } }, false, { hover: [".row", ".ctl"], focus: [".row", "input[data-finder]"] }],
       ["code-ide-tree", CodeIdeTree, () => ({ tree: CODE_TREE, open: ["src"], shown: "src/cones.rs", tabs: ["src/cones.rs", "src/log.rs"], crumb: "starts in src/" }), ["hover", "focus"], { loading: { sheet: "loading" }, empty: { query: "zzqq" } }, false, { hover: [".row"], focus: [".row"] }],
       ["code-ide-tabs", CodeIdeTabs, () => ({ tabs: [{ path: "src/cones.rs", mark: [5, 10] }, { path: "src/log.rs", mark: null }], shown: "src/cones.rs", gone: [] }), ["hover", "focus", "selected"], {}, false, { hover: [".tab"], focus: [".tab"], selected: ["[role=tab][aria-selected=false]"] }],
+      ["code-ide-follow", CodeIdeFollow, () => ({ sheet: "sample" }), ["focus", "disabled"], {}, false, { focus: ["input[data-field=follow-who]"], disabled: ["input[data-action=follow]"] }],
       ["code-ide-view", CodeIdeView, () => ({ text: "fn main() {\n    let cone = \"6\";\n    println!(\"{}\", cone);\n}\n", key: "sheet:src/main.rs", path: "src/main.rs", mark: [2, 2] }), [], {}],
       ["ticket-relations", TicketRelations, ID, ["hover", "focus"], { loading: { sheet: "loading" } }],
       ["ticket-subtasks", TicketSubtasks, ID, ["hover", "focus"], { loading: { sheet: "loading" } }],

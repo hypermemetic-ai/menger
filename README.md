@@ -1049,6 +1049,39 @@ tree lacks in its tab or the tree's crumb, a binary or too large file by
 its size with a link to GitHub. `tests/pages/code-ide.mjs` is the page
 group.
 
+**Follow** (CODE-6): an agent opens files in the reader's view. The head's
+"follow" and the agent's name (`code-ide-follow`, bundled in) — `builder` unless another is written: a name
+it signs in as, or its principal — are the reader's, off until ticked, kept
+in this browser and shared by every `code-ide` it draws. On, the page opens
+the ui service's watch as a session (`ui.watch { session, follows }`, an id
+`s-` and 12 hex made once a page, one for every view on it), says where it
+is (`ui.here`, the page's `/app/#/…`, again whenever the address moves),
+and says `ui.follow` at once when the name changes or follow goes off (and
+then holds no session). A `shown` whose `to` is a code address, read as the
+route reads it, is applied in place — no navigation, no reload, no history
+entry: each file of its `open` a tab beside the reader's (the reader's tabs
+and marks kept), the first shown with its lines marked and scrolled to, its
+`dir` and the file's directory opened, another ref or commit taken as the
+ref control takes one, another repository opened in its stead (the old
+one's tabs closed). With several views on a page the one showing that
+repository takes it, else the first. Its `say` is a note above the lines
+(who sent it, its markdown through the host's sanitized `markdown()`, a
+dismiss); a second show replaces it; `point`, a selector inside the view,
+is ringed until the note goes. A `to` that is no code address is the note
+alone, with `to` as a link. A show is applied once (`seq`). A show that
+reached nobody is kept for the reader by the ui service an hour (FRAME-48's
+knock) and arrives once, when a session of theirs next follows that agent.
+The agent, an editor on `*`:
+
+```sh
+synapse --url wss://app-test.menger.sh/ws --as builder menger ui sessions
+synapse --url wss://app-test.menger.sh/ws --as builder menger ui show --to '/app/#/code/hypermemetic-ai/menger/v2/open=src%2Fshell.rs%23L183-L187' --say 'the page policy'
+```
+
+The address is `/app/#/code/<owner>/<name>/<ref>/<view>`, `<view>` as
+"copy link" writes it — `dir=a,b;open=path#L<a>-L<b>,path` with each `/`
+as `%2F` and each `#` as `%23` (a `/` left as it is is read too).
+
 ## Tickets
 
 **Kinds.** `scope | execution | build | gap | spike` (AGS-13, the owner's

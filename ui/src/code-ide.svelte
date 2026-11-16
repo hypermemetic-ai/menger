@@ -35,7 +35,9 @@
      (`data-reason` for a refusal), `input[data-goto]`, and the siblings'. `sheet`: "loading" draws the
      skeleton and asks nothing; "sample" draws a repository of its own, with no call. -->
 <script module>
-  export const uses = ["code.open", "code.refs", "code.fetch", "code.tree", "code.read", "auth.requires", "auth.whoami"];
+  import { FOLLOW, SESSION } from "./code-ide-follow.svelte";
+  export const uses = ["code.open", "code.refs", "code.fetch", "code.tree", "code.read", "auth.requires", "auth.whoami",
+    "ui.versions", "ui.watch", "ui.here", "ui.follow"];
 
   const HEX = /^[0-9a-f]{7,40}$/i;
   /** `L5` → [5, 5], `L5-L10` (or `L5-10`) → [5, 10]; null when it is no mark. */
@@ -210,6 +212,56 @@
     read: (p) => said(S_FILES[p.file] != null ? { type: "file", path: p.file, bytes: S_FILES[p.file].length, lines: S_FILES[p.file].split("\n").length - 1, text: S_FILES[p.file] } : { type: "not_found", path: p.file }),
   };
 
+  // ── CODE-6: follow — an agent the reader follows opens files in the reader's view ──
+  /** A code address as the route reads it — `/app/#/code/<owner>/<name>[/<ref>[/<view>]]` (the origin, `/app/`
+   *  and a `?query` may be left out or given), each segment percent-decoded as the router decodes it → `{ repo,
+   *  ref, view }`; a view written with its slashes unencoded is read whole. Null when it is no code address. */
+  export function codeAddress(to) {
+    const m = /^(?:https?:\/\/[^/#]+)?(?:\/app\/?)?#\/code\/([^?]*)/.exec(String(to ?? "").trim());
+    if (!m) return null;
+    const segs = m[1].split("/");
+    const dec = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
+    const [owner, name, ref = "", ...rest] = segs.map(dec);
+    if (!owner || !name) return null;
+    return { repo: `${owner}/${name}`, ref, view: rest.join("/") };
+  }
+  // The reader's choice and the page's one session are code-ide-follow's (FOLLOW, SESSION). The views on the
+  // page (each `{ root, repo, take, bus }`), the shows heard (by `seq`: one applied once), and the bus that says
+  // where the page is.
+  const VIEWS = new Set(), HEARD = new Set();
+  const F = { bus: null, said: null, timer: null, tries: 0, listening: false };
+  /** `ui.here`: where the page is, said when the session's watch opens and whenever the address moves; once
+   *  more a moment on while the watch is not open yet (`unknown_session`). */
+  function sayHere(again = false) {
+    clearTimeout(F.timer);
+    F.timer = setTimeout(() => {
+      const b = F.bus;
+      if (!b || !FOLLOW.on) return;
+      const route = `${location.pathname}${location.hash || "#/"}`;
+      if (route === F.said && !again) return;
+      F.said = route;
+      b.call("ui.here", { session: SESSION, route }).then((a) => {
+        if (a?.ok) { F.tries = 0; return; }
+        F.said = null;
+        if (++F.tries <= 5) setTimeout(() => sayHere(true), 600);
+      }, () => {});
+    }, 40);
+  }
+  /** A `shown` heard on the session's watch (a row: the fold keeps its type off; a knock has no `everyone`). */
+  function heard(row) {
+    if (!row || typeof row.to !== "string" || !("everyone" in row)) return;
+    if (row.seq != null) {
+      if (HEARD.has(row.seq)) return;
+      HEARD.add(row.seq);
+    }
+    if (!FOLLOW.on || !(row.everyone || row.by === FOLLOW.who || row.principal === FOLLOW.who)) return;
+    const addr = codeAddress(row.to);
+    const views = [...VIEWS].filter((v) => v.root()?.isConnected)
+      .sort((x, y) => (x.root().compareDocumentPosition(y.root()) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+    const target = (addr && views.find((v) => v.repo() === addr.repo.toLowerCase())) ?? views[0];
+    target?.take(row, addr);
+  }
+
   /** A refusal in words, and what to do. */
   export function refusalOf(e, repo, want) {
     const reason = e?.reason ?? (/bad_repo/.test(e?.message ?? "") ? "bad_repo" : e?.error_kind ?? "error");
@@ -233,10 +285,11 @@
 </script>
 
 <script>
-  import { tick, untrack } from "svelte";
-  import { bus } from "plexus-ui/host";
+  import { onDestroy, tick, untrack } from "svelte";
+  import { bus, markdown } from "plexus-ui/host";
   import Tree from "./code-ide-tree.svelte";
   import Tabs from "./code-ide-tabs.svelte";
+  import Follow from "./code-ide-follow.svelte";
   import View from "./code-ide-view.svelte";
 
   let { repo = "", ref = "", commit = "", dir = "", open = "", height = "", view = "", page = "", sheet = null } = $props();
@@ -314,15 +367,18 @@
   }
 
   // ── what the tag says, then the commit, then the tree ──────────────────
-  async function start() {
+  let named = [];                 // the directories the tag (or a show) named, the first scrolled to
+  /** What the tag says — or, from a show of another repository (CODE-6), what its address says. */
+  async function start(from = { repo, ref, commit, dir, open, view }) {
     const n = ++seq;
     phase = "loading"; refusal = null; tree = null; at = null; refs = null; got = {}; status = ""; crumb = ""; query = ""; busy = false; otherRef = false;
     if (sheet === "loading") return;
-    const p = parseRepo(sample ? repo || S_REPO : repo);
-    const v = parseView(view);
+    const p = parseRepo(sample ? from.repo || S_REPO : from.repo);
+    const v = parseView(from.view);
     name = p.repo.toLowerCase(); // GitHub reads a name without regard to case; the service answers it lower-cased
-    let ds = dirsOf(dir || v.dir), os = opensOf(open || v.open);
-    let refname = String(ref ?? "").trim() || null, pin = String(commit ?? "").trim() || null;
+    named = dirsOf(from.dir || v.dir);
+    let ds = named, os = opensOf(from.open || v.open);
+    let refname = String(from.ref ?? "").trim() || null, pin = String(from.commit ?? "").trim() || null;
     if (!name) return fail({ reason: "bad_repo", message: "no repository named: repo=\"owner/name\", or a github.com address" });
     if (p.kind && p.rest) {
       const e = await askRefs();
@@ -406,10 +462,9 @@
     }
     if (why === "start") {
       dirs = open;
-      const first = dirsOf(dir || parseView(view).dir).find((d) => isDir(tree.kinds.get(d))) ?? open.at(-1);
+      const first = named.find((d) => isDir(tree.kinds.get(d))) ?? open.at(-1);
       if (first) reveal = { dir: first, n: (reveal?.n ?? 0) + 1 };
     }
-    const named = dirsOf(dir || parseView(view).dir);
     crumb = lacks.length ? `${lacks.join(", ")} ${lacks.length > 1 ? "are" : "is"} not in the tree at ${short(at.commit)}` : why === "start" && named.length ? `starts in ${named[0]}/` : "";
     const files = `${tree.files.length} file${tree.files.length === 1 ? "" : "s"}`;
     if (why === "refresh") status = before?.commit === at.commit ? `asked GitHub: ${at.ref} is still at ${short(at.commit)} (its answer is kept a minute). Nothing fetched.` : `${at.ref} moved from ${short(before?.commit)} to ${short(at.commit)}; the tabs stay, and a file the tree lacks says so.`;
@@ -569,6 +624,106 @@
     });
   });
 
+  // ── CODE-6: follow ────────────────────────────────────────────────────
+  // With follow on, the session's watch: `ui.watch` with the page's id and whom it follows (one stream for
+  // every code-ide on the page: the same spec is one collection), its shows folded by their number. Off, it
+  // is let go and nothing is asked. The snapshot is the live version alone, a row with no `seq`, kept by
+  // nobody: the collection holds the shows.
+  let note = $state.raw(null);    // { by, principal, say, to, link, point, n }
+  let pend = $state.raw(null);    // { path, mark }: a shown file's lines, scrolled to once its text is drawn
+  // The session's watch is code-ide-follow's (one collection for every code-ide on the page); its shows come
+  // here (`heard`, a `seq` applied once, by the view that should take it), and its opening says where it is.
+  if (sheet == null) {
+    const me = { root: () => root, repo: () => name, take, bus: b };
+    VIEWS.add(me);
+    F.bus ??= b;
+    if (!F.listening) { F.listening = true; addEventListener("hashchange", () => sayHere()); }
+    onDestroy(() => {
+      VIEWS.delete(me);
+      if (F.bus === b) F.bus = [...VIEWS][0]?.bus ?? null;
+    });
+  }
+  /** The reader turned follow on or off, or named another agent (code-ide-follow said `ui.follow`). */
+  function followed(on, who, refusal) {
+    if (refusal) { status = refusal; return; }
+    if (!on) { note = null; status = "following nobody: nothing moves this view but you"; return; }
+    status = `following ${who}: what ${who} shows opens here (ui.show). Turn it off at any time.`;
+    sayHere(true);
+  }
+
+  /** A show applied here, in place: its files tabs beside the reader's (the first shown, its lines marked and
+   *  scrolled to), its directories open, its ref or repository taken as the controls take them; its words
+   *  the note. Nothing navigates; on the page the address follows the view as it always does. */
+  function take(row, addr) {
+    const to = String(row.to);
+    const link = !addr && /^(\/app\/)?#\//.test(to) ? (to.startsWith("#") ? `/app/${to}` : to) : null;
+    note = { by: row.by, principal: row.principal, say: row.say ?? "", to, link, point: row.point ?? null, n: (note?.n ?? 0) + 1 };
+    // What it shows is put before the reader: in a body, the view scrolled onto the screen (never the page's address).
+    if (!onPage && !full) tick().then(() => root?.scrollIntoView({ block: "nearest" }));
+    if (!addr) { status = `${row.by} shows you ${to}; this view stays as it is`; return; }
+    const v = parseView(addr.view);
+    const os = opensOf(v.open), ds = dirsOf(v.dir);
+    const first = os[0] ?? null;
+    if (addr.repo.toLowerCase() !== name) {
+      // Another repository: it is opened as a tag naming it would be; the reader's tabs of the old one go.
+      pend = first?.mark ? { path: first.path, mark: first.mark } : null;
+      start({ repo: addr.repo, ref: addr.ref, commit: "", dir: v.dir, open: v.open, view: "" });
+      status = `${row.by} opened ${addr.repo}${first ? ` at ${first.path}` : ""}; your tabs of ${name} were closed`;
+      return;
+    }
+    // The same repository: the reader's tabs and marks kept, the show's added (a mark it names replaces).
+    let next = tabs.slice();
+    for (const t of os) {
+      const i = next.findIndex((x) => x.path === t.path);
+      if (i < 0) next.push({ path: t.path, mark: t.mark });
+      else if (t.mark) next[i] = { path: t.path, mark: t.mark };
+    }
+    tabs = next;
+    const opened = [...dirs];
+    const add = (d) => { const parts = d.split("/"); for (let i = 1; i <= parts.length; i++) { const p = parts.slice(0, i).join("/"); if (p && !opened.includes(p)) opened.push(p); } };
+    for (const d of ds) add(d);
+    if (first?.path.includes("/")) add(first.path.slice(0, first.path.lastIndexOf("/")));
+    dirs = opened;
+    if (ds[0]) reveal = { dir: ds[0], n: (reveal?.n ?? 0) + 1 };
+    if (first) { shown = first.path; pend = first.mark ? { path: first.path, mark: first.mark } : null; }
+    drawer = false;
+    // Another ref or commit: taken as the ref control takes one (a hash the listing lacks is read as a commit).
+    const want = String(addr.ref ?? "").trim();
+    const same = !want || (pinned ? at?.commit?.startsWith(want.toLowerCase()) : want === at?.ref);
+    if (!same) {
+      pinned = false;
+      go({ refname: want }, ++seq, "ref");
+    }
+    status = `${row.by} opened ${first ? `${first.path}${first.mark ? ` at L${first.mark[0]}${first.mark[1] > first.mark[0] ? `–L${first.mark[1]}` : ""}` : ""}` : addr.repo}${same ? "" : ` on ${want}`} here; your other tabs are kept`;
+  }
+  // A shown file's lines scrolled to once its text is drawn (the view scrolls a file it draws first itself).
+  $effect(() => {
+    const p = pend, s = shown, t = text, k = shownKey;
+    if (!p || s !== p.path || t == null || !k) return;
+    untrack(() => { pend = null; tick().then(() => { jump = { mark: p.mark, n: (jump?.n ?? 0) + 1 }; }); });
+  });
+  // `point`: what it names inside this view ringed until the note is dismissed (again when the lines redraw).
+  $effect(() => {
+    const n = note, _t = text, _s = shown, _p = phase;
+    untrack(() => tick().then(() => {
+      for (const el of root?.querySelectorAll("[data-code-ide-ring]") ?? []) el.removeAttribute("data-code-ide-ring");
+      if (!n?.point || !root) return;
+      let el = null;
+      try { el = root.querySelector(n.point); } catch { /* not a selector */ }
+      el?.setAttribute("data-code-ide-ring", "");
+    }));
+  });
+  function dismiss() {
+    note = null;
+    tick().then(() => root?.querySelector("[data-action=follow]")?.focus());
+  }
+  // On the page, where it is follows the address (written in place, which no hashchange says).
+  $effect(() => {
+    if (!FOLLOW.on || !onPage || phase !== "ready") return;
+    void viewNow();
+    untrack(() => tick().then(() => sayHere()));
+  });
+
   // ── what is drawn ─────────────────────────────────────────────────────
   const matches = $derived(tree && query ? find(tree.files, query) : []);
   const shownTab = $derived(tabs.find((t) => t.path === shown) ?? null);
@@ -623,9 +778,24 @@
       <button type="button" class="ctl" data-action="refresh" title="ask GitHub for the branch's tip again" disabled={busy} onclick={refresh}>{busy ? "asking…" : "refresh"}</button>
       <button type="button" class="ctl" data-action="pin" title="pin this commit: the view never moves" onclick={pin}>pin</button>
     {/if}
+    {#if sheet == null || sample}<Follow {sheet} disabled={sample} onheard={heard} onopen={() => sayHere(true)} onchange={followed} />{/if}
     <span class="grow"></span>
     <a class="gh" data-action="github" href={ghHref} target="_blank" rel="noopener noreferrer">on GitHub ↗</a>
     {#if !onPage}<button type="button" class="ctl" data-action="full" aria-pressed={full ? "true" : "false"} title={full ? "put it back in its place (Escape)" : "fill the window with this view"} onclick={() => (full = !full)}>{full ? "back" : "fill"}</button>{/if}
+  </div>
+  <div class="notes">
+    {#if note}
+      <div class="note" data-surface="code-ide-note" data-by={note.by} data-code={note.link || !codeAddress(note.to) ? "false" : "true"} role="status" title={note.principal}>
+        <b class="by">{note.by} shows you</b>
+        <span class="words">
+          {#if note.say}<span class="say">{@html markdown(note.say)}</span>{/if}
+          {#if !codeAddress(note.to)}
+            {#if note.link}<a class="to" data-field="note-to" href={note.link}>{note.to}</a>{:else}<span class="to" data-field="note-to">{note.to}</span>{/if}
+          {/if}
+        </span>
+        <button type="button" class="ctl" data-action="dismiss" aria-label="dismiss the note" onclick={dismiss}>dismiss</button>
+      </div>
+    {/if}
   </div>
   <div class="main">
     <div class="side">
@@ -672,7 +842,7 @@
 </div>
 
 <style>
-  .ide { position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; grid-template-columns: minmax(0, 1fr); box-sizing: border-box; height: max(320px, 70vh); min-width: 0; margin: 6px 0; overflow: hidden; color: var(--ink); background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius-xl); font-family: var(--font-text); font-size: 12.5px; line-height: 1.5; }
+  .ide { position: relative; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; grid-template-columns: minmax(0, 1fr); box-sizing: border-box; height: max(320px, 70vh); min-width: 0; margin: 6px 0; overflow: hidden; color: var(--ink); background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius-xl); font-family: var(--font-text); font-size: 12.5px; line-height: 1.5; }
   .ide.on-page { height: 100vh; height: 100dvh; margin: 0; border: 0; border-radius: 0; }
   .ide.full { position: fixed; inset: 0; z-index: 900; height: auto; margin: 0; border-radius: 0; }
   .head { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; min-width: 0; padding: 5px 8px; border-bottom: var(--border) solid var(--line); }
@@ -696,6 +866,16 @@
   .ctl:focus-visible, .ref:focus-visible, .hash:focus-visible, .goto:focus-visible, .repo:focus-visible, .gh:focus-visible, .notice a:focus-visible,
   .ctl:global([data-sheet~=focus]), .ref:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
   .treebtn { display: none; }
+  /* CODE-6: the note of what an agent showed (the follow control is code-ide-follow's). */
+  .notes { min-width: 0; }
+  .note { display: flex; gap: 8px; align-items: baseline; min-width: 0; padding: 5px 10px; background: var(--sel); border-bottom: var(--border) solid var(--line); }
+  .note .by { flex: none; font-weight: var(--weight-strong); color: var(--accent); }
+  .note .words { display: flex; flex: 1; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; min-width: 0; color: var(--ink); overflow-wrap: anywhere; }
+  .note .say :global(p) { display: inline; margin: 0; }
+  .note .say :global(a), .note .to { color: var(--accent); }
+  .note .to { font-size: 11px; }
+  .note a:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  .ide :global([data-code-ide-ring]) { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: var(--radius); }
   .main { position: relative; display: grid; grid-template-columns: clamp(150px, 28%, 240px) minmax(0, 1fr); min-height: 0; min-width: 0; }
   .side { min-height: 0; min-width: 0; border-right: var(--border) solid var(--line); }
   .scrim { display: none; }
