@@ -1,6 +1,9 @@
-// LAYERS-20: kiln-live at #/kiln — plexus-examples' kiln (Rust, its log in SQLite) as wasm in a worker of the
-// tab, reached through its generated client as frames; its generated part ui/src/kiln-activation.svelte
-// (scripts/kiln-activation). Run alone by `node tests/pages_browser.mjs --group kiln --seed 200`.
+// LAYERS-20: kiln-live — plexus-examples' kiln (Rust, its log in SQLite) as wasm in a worker of the tab,
+// reached through its generated client as frames; its generated part ui/src/kiln-activation.svelte
+// (scripts/kiln-activation). A component with no route (owner: "we don't want a page, just a component"),
+// so it is shown as one is in menger: placed in a section on the running service — `ui slots set --layout
+// page-shell --slot main --component kiln-live`, page-shell's main at #/hello — and the section cleared after.
+// Run alone by `node tests/pages_browser.mjs --group kiln --seed 200`.
 // KILN_SHOT=<file.png> shoots the page at 1100 wide after a firing, a refusal and a heat.
 //
 // Marks: `[data-surface=kiln-live]` (`data-state`, `data-store`), `[data-field=…]`, `[data-action=fire|heat]`,
@@ -8,8 +11,12 @@
 import { sentCalls } from "../../scripts/ui-throwaway.mjs";
 
 export default async (ctx) => {
-  const { test, assert, eventually, openPage } = ctx;
-  const kiln = (page) => page.locator("[data-surface=kiln-live]");
+  const { test, assert, eventually, openPage, sy } = ctx;
+  const LAYOUT = "page-shell", SLOT = "main", ROUTE = "#/hello";
+  sy("ui", "slots", "set", "--layout", LAYOUT, "--slot", SLOT, "--component", "kiln-live");
+  const listed = sy("ui", "slots", "list", "--layout", LAYOUT).find((e) => e.type === "assignment" && e.slot === SLOT);
+  if (listed?.component !== "kiln-live") throw new Error(`ui slots set: ${LAYOUT}'s ${SLOT} is ${JSON.stringify(listed)}`);
+  const kiln = (page) => page.locator(`[data-layout=${LAYOUT}][data-slot=${SLOT}] [data-surface=kiln-live]`);
   const errors = (seen) => seen.console.filter((l) => l.startsWith("error") || l.startsWith("pageerror"));
   const running = async (page, seen) => {
     await eventually("kiln-live running", async () => (await kiln(page).getAttribute("data-state", { timeout: 1000 })) === "running", 30_000).catch(async (e) => {
@@ -27,7 +34,7 @@ export default async (ctx) => {
   let held = null; // the first tab: its worker holds the browser's file store
 
   await test("kiln_live_fires_refuses_and_heats_in_a_worker_with_no_console_error", async () => {
-    const { context, page, seen } = await openPage("#/kiln");
+    const { context, page, seen } = await openPage(ROUTE);
     const kilnRequests = [];
     page.on("requestfinished", async (r) => { if (r.url().includes("kiln-activation")) kilnRequests.push({ url: r.url(), sizes: await r.sizes().catch(() => null) }); });
     const workers = [];
@@ -101,7 +108,7 @@ export default async (ctx) => {
     const seen = { console: [] };
     page.on("console", (m) => seen.console.push(`${m.type()}: ${m.text()}`));
     page.on("pageerror", (e) => seen.console.push(`pageerror: ${e.message}`));
-    await page.goto(`${ctx.server.origin}/app/#/kiln`);
+    await page.goto(`${ctx.server.origin}/app/${ROUTE}`);
     await running(page, seen);
     assert((await kiln(page).getAttribute("data-store")) === "memory", "the second tab's store is memory");
     const store = await kiln(page).locator("[data-field=store]").textContent();
@@ -113,4 +120,6 @@ export default async (ctx) => {
     await page.close();
     await held.context.close();
   });
+
+  sy("ui", "slots", "clear", "--layout", LAYOUT, "--slot", SLOT);
 };

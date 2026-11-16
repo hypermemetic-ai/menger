@@ -56,6 +56,5 @@
   "#/media": "page-media",
   "#/code/:owner/:name": "page-code",
   "#/code/:owner/:name/:ref": "page-code",
-  "#/code/:owner/:name/:ref/:view": "page-code",
-  "#/kiln": "page-kiln"
+  "#/code/:owner/:name/:ref/:view": "page-code"
 }

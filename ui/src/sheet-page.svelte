@@ -103,10 +103,9 @@
   import CodeIdeView from "plexus-ui:code-ide-view";
   import CodeIdeFollow from "plexus-ui:code-ide-follow";
   import PageCode from "plexus-ui:page-code";
-  // LAYERS-20: the kiln in a worker — its page, its component, and its generated part (a module with no view).
+  // LAYERS-20: the kiln in a worker — its component, and its generated part (a module with no view).
   import KilnLive from "plexus-ui:kiln-live";
   import KilnActivation from "plexus-ui:kiln-activation";
-  import PageKiln from "plexus-ui:page-kiln";
   import TicketChipSv from "plexus-ui:ticket-chip-sv";
   import TicketLinks from "plexus-ui:ticket-links";
   import PageT from "plexus-ui:page-t";
@@ -358,7 +357,6 @@
       ["page-releases", PageReleases, F, [], {}, true],
       ["page-media", PageMedia, F, [], { loading: { sheet: "loading" } }, true],
       ["page-code", PageCode, () => ({ owner: "hypermemetic-ai", name: "kiln", sheet: "sample" }), [], { loading: { sheet: "loading" } }, true],
-      ["page-kiln", PageKiln, () => ({ sheet: "sample" }), [], { loading: { sheet: "loading" } }, true],
       ["page-bulk", PageBulk, (t) => ({ ids: t }), [], {}, true],
       ["page-blockers", PageBlockers, ID, [], {}, true],
       ["page-edit", PageEdit, ID, [], {}, true],

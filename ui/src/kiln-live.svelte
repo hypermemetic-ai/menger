@@ -1,8 +1,9 @@
 <!-- LAYERS-20: a real activation inside a menger component — plexus-examples' kiln (Rust, its log in SQLite),
      compiled to wasm and run in a worker of this tab, reached through its generated client as frames.
      menger's server serves this component and takes no other part: `uses` is empty, and nothing here
-     calls the bus. Placed at #/kiln by page-kiln: LAYERS-20 asks for the kiln at an address of its own,
-     since it belongs to no ticket's body or page section yet (a tag in a body is the nearest place after it).
+     calls the bus. A component with no route of its own (owner, 2026-11-16: "we don't want a page, just
+     a component"): it is shown where it is placed — a layout's section (`ui slots set --layout page-shell
+     --slot main --component kiln-live`, as tests/pages/kiln.mjs does) or another component's bound mark.
      `sheet`: "sample" draws a firing, a refusal and a heat with no kiln started (the sheet's); "loading"
      draws the start.
 

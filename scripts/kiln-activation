@@ -1,6 +1,6 @@
 #!/usr/bin/env -S node --no-warnings
 // LAYERS-20: writes ui/src/kiln-activation.svelte — the generated part of
-// kiln-live (#/kiln) — from the v2 packages beside this checkout:
+// kiln-live (a component, placed in a section) — from the v2 packages beside this checkout:
 //
 //   scripts/kiln-activation            build it all and write the file
 //   scripts/kiln-activation --check    exit 1 when the file is stale against the kiln's interface
