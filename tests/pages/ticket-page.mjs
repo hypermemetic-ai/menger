@@ -558,7 +558,7 @@ export default async (ctx) => {
   // of menger — by its sibling import and by its bound mark — draws from props
   // alone: `uses` empty, and no call of a service's on the wire. EDITOR-9: and
   // what draws its diagrams and code beside it: mermaid-diagram (Pele) and the
-  // code card's components (code-card, code-paint, a painter per language), EDITOR-14: and its pages' components (m-mockup, m-live, m-page; COMPS-3), each
+  // code card's components (code-card, code-paint, a painter per language; CODE-3: not code-ide, a view of the code service's of its own), EDITOR-14: and its pages' components (m-mockup, m-live, m-page; COMPS-3), each
   // `uses` empty too.
   await test("ticket_view_draws_from_props_with_no_call", async () => {
     const live = () => sy("ui", "versions").find((e) => e.type === "version" && e.live)?.hash;
@@ -579,7 +579,7 @@ export default async (ctx) => {
     const alone = bundle(path.dirname(session), "view-alone", {
       engine: v1.engine,
       edit: (ui) => {
-        for (const f of fs.readdirSync(path.join(ui, "src"))) if (f !== "ticket-view.svelte" && f !== "mermaid-diagram.svelte" && !["m-mockup.svelte", "m-live.svelte", "m-page.svelte", "m-details.svelte", "tag-components.svelte", "tag-source.svelte", "component-def.svelte"].includes(f) && f !== "ticket-links.svelte" && !f.startsWith("code-")) fs.rmSync(path.join(ui, "src", f));
+        for (const f of fs.readdirSync(path.join(ui, "src"))) if (f !== "ticket-view.svelte" && f !== "mermaid-diagram.svelte" && !["m-mockup.svelte", "m-live.svelte", "m-page.svelte", "m-details.svelte", "tag-components.svelte", "tag-source.svelte", "component-def.svelte"].includes(f) && f !== "ticket-links.svelte" && !(f.startsWith("code-") && !f.startsWith("code-ide"))) fs.rmSync(path.join(ui, "src", f));
         fs.writeFileSync(path.join(ui, "src", "view-host.svelte"), host);
         fs.writeFileSync(path.join(ui, "routes.json"), JSON.stringify({ "#/": "view-host" }));
         fs.writeFileSync(path.join(ui, "slots.json"), "{}");
@@ -587,7 +587,7 @@ export default async (ctx) => {
     });
     const m = JSON.parse(alone.manifest);
     // COMPS-4: and what draws its tags and says its definitions (tag-components, component-def); EDITOR-22: its folds' line (m-details).
-    const drawers = Object.keys(m.components).filter((c) => c === "mermaid-diagram" || ["m-mockup", "m-live", "m-page", "m-details", "tag-components", "tag-source", "component-def"].includes(c) || c === "ticket-links" || c.startsWith("code-"));
+    const drawers = Object.keys(m.components).filter((c) => c === "mermaid-diagram" || ["m-mockup", "m-live", "m-page", "m-details", "tag-components", "tag-source", "component-def"].includes(c) || c === "ticket-links" || (c.startsWith("code-") && !c.startsWith("code-ide")));
     assert(JSON.stringify(Object.keys(m.components).filter((c) => !drawers.includes(c)).sort()) === JSON.stringify(["ticket-view", "view-host"]) && drawers.includes("mermaid-diagram") && ["m-mockup", "m-live", "m-page"].every((c) => drawers.includes(c)) && drawers.includes("code-card") && drawers.includes("code-rust"), `the bundle holds the view, what draws its diagrams and code, and its page: ${Object.keys(m.components)}`);
     // COMPS-4: nothing of menger's called — the only uses are the framework's ui service's (what a tag names,
     // asked only once a tag or a definition is on screen; a definition's save), which every tenant mounts.

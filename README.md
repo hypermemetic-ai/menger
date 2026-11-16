@@ -381,6 +381,13 @@ tag alone in its text and saves the body its own way (a ticket's amend, a
 document's CRDT), refusing the same way. With no ticket or document known
 it is drawn only, and says so. `tests/pages/writer.mjs`.
 
+**A repository in a body** (CODE-3). `<code-ide repo="owner/name" ref="main"
+dir="src" open="src/a.rs#L5-L10, src/b.rs">` is a bundle tag like any:
+the code service's repository at that ref, those directories open and those
+tabs, read-only, at `height` (70vh); the same view fills the page at
+`#/code/<owner>/<name>/<ref>/<view>`. "`code`" › "The view" has its
+attributes and its address. `tests/pages/code-ide.mjs`.
+
 **v1's definitions** (COMPS-5). A fence with no `html` holding v1's custom
 element — a `<template>`, or a script reading `this.root`, `this.menger` or
 `this.attr` (rhx drops `<template>`; its own `<script>` and `<style>` say
@@ -996,7 +1003,51 @@ synapse -P 4460 menger code kept
 
 A test points the service at a local stand-in for both hosts with the
 hidden `--code-github-at IP:PORT` (`CodeSetup::github_at`): read over http,
-let through although not public (`tests/wire_code.rs`, `code/tests/code.rs`).
+let through although not public (`tests/wire_code.rs`, `code/tests/code.rs`), and the browser's stand-in, `tests/code-github.mjs`, which
+`node tests/code-github.mjs [PORT]` runs alone for a server started by hand).
+
+**The view** (CODE-3) is `code-ide` (`ui/src/code-ide.svelte`, real Svelte,
+svelte/1, with `code-ide-tree`, `code-ide-tabs` and `code-ide-view` bundled
+in), drawn by its tag in any body and filling the page at `#/code/<owner>/<name>`,
+`#/code/<owner>/<name>/<ref>` and `#/code/<owner>/<name>/<ref>/<view>`
+(`page-code`): a head (the repository, a branch, tag or commit, the commit
+and when it was made, refresh and pin on a branch, GitHub at the shown
+file's marked lines, fill the window), the tree with a finder (ctrl/⌘+p;
+a subsequence of the path, best first, Enter opens the first), tabs, and
+the lines — one CodeMirror view, read-only, its state swapped per tab,
+painted by the language code-card's `langOf` names from the path through
+the same painters (each a module of its own, fetched the first time a file
+in it is shown), a 20,000-line file drawn as a few dozen line elements. A
+line number marks its line, a shift-click a range. The tree is one `tree`
+and a file one `read` for a commit while the page is open; a tab shown
+again asks nothing; a file under the pointer 150 ms is read ahead. A commit
+not kept is fetched when the reader holds `code.fetch` (asked of
+`auth.requires` and `auth.whoami`, once a page); for one who does not, the
+view says someone who may must open it once, and calls nothing it would be
+refused. The tag:
+
+```html
+<code-ide repo="hypermemetic-ai/kiln" ref="main" dir="src" open="src/cones.rs#L5-L10, src/log.rs"></code-ide>
+```
+
+`repo` is `owner/name` or a github.com address (of the repository, a
+`/tree/<ref>/<dir>` or a `/blob/<ref>/<path>#L<a>-L<b>`, filling what the
+tag leaves out, the ref matched against `refs` longest first); `ref` a
+branch or tag, resolved on every mount; `commit` a hash, pinned, winning
+over `ref`; `dir` directories, comma-separated, each open, the first
+scrolled to; `open` paths, comma-separated, each a tab, the first shown,
+each with `#L<a>` or `#L<a>-L<b>`; `height` a CSS length (70vh, at least
+320 px). "copy this view as a tag" writes the tag that reopens what is on
+screen (`ref` on a branch, `commit` once pinned, the open directories, the
+tabs in order with their marks); "copy link" the address, whose last
+segment is the same `dir=…;open=…`, one segment percent-encoded (the
+router decodes it); "copy permanent link" the same at the commit. On the
+page the address follows the view in place (`history.replaceState`), so
+the address at any moment reopens what is on screen. What cannot be shown
+is said where it would be: a refusal in words with what to do, a path the
+tree lacks in its tab or the tree's crumb, a binary or too large file by
+its size with a link to GitHub. `tests/pages/code-ide.mjs` is the page
+group.
 
 ## Tickets
 
