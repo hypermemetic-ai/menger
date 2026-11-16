@@ -53,5 +53,8 @@
   "#/usage": "page-usage",
   "#/usage/:principal": "page-usage",
   "#/quota": "page-quota",
-  "#/media": "page-media"
+  "#/media": "page-media",
+  "#/code/:owner/:name": "page-code",
+  "#/code/:owner/:name/:ref": "page-code",
+  "#/code/:owner/:name/:ref/:view": "page-code"
 }
