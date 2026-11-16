@@ -300,6 +300,11 @@ to name another) — nothing in the env files or `run-menger` for it.
 V2-29: the docs service alike — `docs.db` beside the database
 (`--docs-db-path`, `MENGER_DOCS_DB_PATH`); a release carries it, so the
 first deploy after it opens an empty `docs.db` in the data volume.
+CODE-2: the code service alike — `code.db` beside the database and its
+files' bytes in `code/blobs/` (`--code-db-path`, `--code-blob-dir`,
+`--code-max-bytes`, 5 GiB unless named); the first deploy after it opens
+an empty one, and the server reads `github.com` and
+`codeload.github.com` over https from then on.
 
 After a deploy is healthy — `remote test`, and `local` — the pipeline
 pushes the release's bundle: `ui.push { bundle, manifest, signature,

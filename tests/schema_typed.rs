@@ -103,7 +103,7 @@ async fn no_service_has_an_untyped_site() {
     let c = support::connect(port).await;
     let all = schemas(&c).await;
     let paths: Vec<&str> = all.keys().map(String::as_str).collect();
-    for p in ["tickets", "tickets.commits", "tickets.nav", "tickets.inputs", "ui", "ui.slots", "media", "docs", "quota", "orgs", "members", "members.teams", "session"] {
+    for p in ["tickets", "tickets.commits", "tickets.nav", "tickets.inputs", "ui", "ui.slots", "media", "docs", "quota", "code", "orgs", "members", "members.teams", "session"] {
         assert!(paths.contains(&p), "{p} not walked: {paths:?}");
     }
     let mut found = Vec::new();

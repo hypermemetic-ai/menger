@@ -23,7 +23,9 @@
 
 # V2-31: `quota/` is the quota service — menger-quota, allowances per
 # principal and source, its ledger in a file of its own (`quota.db`).
-members = [".", "tickets-api", "media", "docs", "quota"]
+# CODE-2: `code/` is the code service — menger-code, a public GitHub
+# repository's commits fetched once and kept, its file of its own (`code.db`).
+members = [".", "tickets-api", "media", "docs", "quota", "code"]
 # TETHER-7: `tether/` is a workspace of its own — substrate's sqlx and this
 # workspace's rusqlite link two libsqlite3-sys, which one resolve refuses.
 exclude = ["tether"]
@@ -99,6 +101,10 @@ menger-docs = { path = "docs", version = "0.8.0" }
 # its own file (`quota.db`); the meter the tickets service's writes reserve
 # through; the write-rate bucket the call layer keeps.
 menger-quota = { path = "quota", version = "0.8.0" }
+# CODE-2: the code service — a public GitHub repository's commits fetched
+# once and kept (`code.db` and its blobs), the tree and files answered from
+# them; every new byte reserved through the quota service (`code.bytes`).
+menger-code = { path = "code", version = "0.8.0" }
 # UI-3, FRAME-5: the ui service — the framework's (plexus-ui's `service/`):
 # its activation registered beside `tickets`, its routes mounted on the
 # shell, serving `/`, `/app/` and `/app/<hash>/…` from its store.
@@ -208,6 +214,9 @@ http-body-util = "0.1"
 # UI-3: tests/wire_ui.rs and tests/ui_serve.rs build a bundle (a small tar)
 # and sign its sha256.
 tar = { version = "0.4", default-features = false }
+# CODE-2: tests/wire_code.rs builds a commit's archive as GitHub writes it
+# (a gzip tar) for its stand-in.
+flate2 = "1"
 # UI-7: tests/wire_ui_compile.rs knows a source's tree from the compiler
 # natively (the same bytes as the module, UI-5), and registers a reduced
 # `tickets` — a probe activation (plexus-macros, schemars, async-stream:

@@ -13,7 +13,7 @@ versioned by content hash and drawn by a small engine. SV-4: rhx (Rhai in
 markup, `rhx/1`) is retired from menger's UI — its sources are kept in
 `ui/retired-rhx/`, out of the bundle.
 
-v1 is tag `v0.0.1`; what v2 cut — the chats, comments, deployments, themes, notes, assignees and components, the Leptos app (trunk) with the frames' SDK (sdk-codegen) and mockups, the diagrams service — lives there. Media came back as a service of its own (V2-24, "The services"), and documents have a service of their own (V2-29, `docs`). Every input is held to a per-user allowance by the quota service (V2-31).
+v1 is tag `v0.0.1`; what v2 cut — the chats, comments, deployments, themes, notes, assignees and components, the Leptos app (trunk) with the frames' SDK (sdk-codegen) and mockups, the diagrams service — lives there. Media came back as a service of its own (V2-24, "The services"), and documents have a service of their own (V2-29, `docs`). Every input is held to a per-user allowance by the quota service (V2-31). Public GitHub repositories are read through a service of menger's own, `code` (CODE-2).
 
 ## Run
 
@@ -138,14 +138,16 @@ synapse -P 4460 menger tickets health
 ```
 
 **Every file of a server is named after its database** (SCRATCH-NAMES).
-The ui, media, docs and quota services each keep a file beside the
+The ui, media, docs, quota and code services each keep a file beside the
 database unless its flag (`--ui-db-path`, `--media-db-path`,
-`--docs-db-path`, `--quota-db-path`) names another. Beside a database
+`--docs-db-path`, `--quota-db-path`, `--code-db-path`) names another. Beside a database
 named as a data directory's — `tickets.db` (prod, test, the image) or
 `local.db` (a local start) — they are `ui.db`, `media.db`, `docs.db`,
-`quota.db` and the media's bytes in `media/blobs/`; beside any other, they
+`quota.db`, `code.db`, the media's bytes in `media/blobs/` and the code's in
+`code/blobs/`; beside any other, they
 carry the database's stem: `/tmp/menger-dev.db` → `/tmp/menger-dev.ui.db`,
-`.media.db`, `.docs.db`, `.quota.db` and `/tmp/menger-dev.media.blobs/`, as
+`.media.db`, `.docs.db`, `.quota.db`, `.code.db`, `/tmp/menger-dev.media.blobs/`
+and `/tmp/menger-dev.code.blobs/`, as
 its sessions are `/tmp/menger-dev.sessions.jsonl`. So two dev servers in
 one directory share no file, and `scripts/cleanup-gate.sh dev` takes all of
 one. A push needs `--ui-signer` (below, "The ui service").
@@ -307,7 +309,7 @@ where it has one (a list in it is `;`-separated).
 
 | group | flags |
 |---|---|
-| run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path` (`ui.db` beside the database — named after it beside one not named `tickets.db` or `local.db`, `menger-dev.ui.db`; so every file below, SCRATCH-NAMES), `--ui-signer`, `--ui-compiler`, `--ui-allow-rhx` (SV-6: rhx/1 taken again — without it every `ui.push` and `ui.author` carrying an rhx component is refused `rhx_disabled`, naming it; `MENGER_UI_ALLOW_RHX`), `--ui-author-key`, `--media-db-path` (`media.db` beside the database), `--media-store` (`disk`), `--media-blob-dir` (`media/blobs` beside `media.db`; `<stem>.media.blobs` beside a `<stem>.media.db`), `--media-max-bytes`, `--docs-db-path` (`docs.db` beside the database), `--quota-db-path` (`quota.db` beside the database), `--quota-plan` (the defaults a new quota file starts from; the built-in `free-1k`), `--ui-channel` (UI-15: the live pointer this environment serves in its ui file; default from `--env`: `test`, `prod`, else `default`), `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell`, `--no-mcp` (V2-43: no `/mcp`), `--child NAME=stdio:CMD` or `NAME=ws://…` (POLYGLOT-5: an activation in another process mounted under NAME behind the gate; repeatable; `--child-timeout`, `--child-max-calls`, `--child-env`, `--child-key`: plexus-core's `ChildArgs`; one that does not answer stops the start, exit 2; NAME a service of menger's own is refused) |
+| run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path` (`ui.db` beside the database — named after it beside one not named `tickets.db` or `local.db`, `menger-dev.ui.db`; so every file below, SCRATCH-NAMES), `--ui-signer`, `--ui-compiler`, `--ui-allow-rhx` (SV-6: rhx/1 taken again — without it every `ui.push` and `ui.author` carrying an rhx component is refused `rhx_disabled`, naming it; `MENGER_UI_ALLOW_RHX`), `--ui-author-key`, `--media-db-path` (`media.db` beside the database), `--media-store` (`disk`), `--media-blob-dir` (`media/blobs` beside `media.db`; `<stem>.media.blobs` beside a `<stem>.media.db`), `--media-max-bytes`, `--docs-db-path` (`docs.db` beside the database), `--quota-db-path` (`quota.db` beside the database), `--quota-plan` (the defaults a new quota file starts from; the built-in `free-1k`), `--code-db-path` (CODE-2: `code.db` beside the database; `MENGER_CODE_DB_PATH`), `--code-blob-dir` (`code/blobs` beside `code.db`; `<stem>.code.blobs` beside a `<stem>.code.db`; `MENGER_CODE_BLOB_DIR`), `--code-max-bytes` (what the code service keeps at most, 5 GiB; past it the commit read longest ago goes; `MENGER_CODE_MAX_BYTES`), `--ui-channel` (UI-15: the live pointer this environment serves in its ui file; default from `--env`: `test`, `prod`, else `default`), `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell`, `--no-mcp` (V2-43: no `/mcp`), `--child NAME=stdio:CMD` or `NAME=ws://…` (POLYGLOT-5: an activation in another process mounted under NAME behind the gate; repeatable; `--child-timeout`, `--child-max-calls`, `--child-env`, `--child-key`: plexus-core's `ChildArgs`; one that does not answer stops the start, exit 2; NAME a service of menger's own is refused) |
 | sign-in | `--auth-provider`, `--admin`, `--public-url`, `--login-button`, `--login-email`, `--login-password`, `--login-forgot`, `--identity`, `--workos-api-key-file`, `--allowed-origin`, `--frame-ancestor` (an origin that may frame the shell's pages; none by default), `--live-origin` (an origin the shell's pages may frame), `--allowed-host`, `--trusted-proxy`, `--return-origin`, `--session-hours` (12), `--session-idle-minutes` (120), `--mcp-authorization-server` (V2-43: `/mcp` a protected resource naming it) |
 | maintenance and testing | `--dev-login`, `--dev-password`, `--dev-idp-ws`, `--dev-user` (all `--env test` only), `--verify-derived`, `--seed-synthetic`, `--seed-value`, `--seed-shape` (`flat`, `nested`), `--seed-into-existing` |
 | limits | `--max-body-bytes` (8 MiB), `--max-message-bytes` (32 MiB; V2-54: one socket message — a UI bundle is pushed in one), `--max-calls-per-connection` (256), `--idle-timeout-secs` (900), `--max-connections` (1,024), `--max-connections-per-ip` (256), `--max-connections-per-principal` (4; V2-31: a person's), `--max-connections-per-agent` (64; V2-31: a `key:` principal's), `--max-writes-per-second` (20; V2-31), `--max-anonymous-connections` (128), `--max-anonymous-connections-per-ip` (32) |
@@ -491,6 +493,7 @@ behind plexus-core's gate; menger's own are declared on the frame
 | `media` | any file a body shows, by sha256 — its rows in a file of its own (`media.db`), its bytes in a `BlobStore` (the disk); links read into cards; the ticket's (or, V2-29, the doc's) permit asked through the seam | `media/` (`menger-media`, V2-24, EDITOR-10) |
 | `docs` | documents — writing, not work: a title and a markdown body kept as a Yjs CRDT, written live by many hands, every change kept, in a file of its own (`docs.db`); who may is the gate's word on the document's organization | `docs/` (`menger-docs`, V2-29) |
 | `quota` | every principal's allowance per source, its usage counted, tabulated and enforced — its ledger in a file of its own (`quota.db`); every storing write reserved through the seam before it lands | `quota/` (`menger-quota`, V2-31) |
+| `code` | public GitHub repositories: a branch or tag resolved to a commit by git's own listing, the commit's whole tree fetched once and kept — its files by sha256 on disk, its tree in a file of its own (`code.db`) — and the tree and any file answered from what is kept; every new byte reserved through the seam | `code/` (`menger-code`, CODE-2) |
 
 **Service to service.** The ui service reaches the tickets service as a
 client, never through its store: its seam (`../plexus-ui/service/src/seam.rs`)
@@ -544,7 +547,8 @@ stores or fetches for a principal asks `quota.reserve { principal, source,
 amount }` before it writes, then `commit` (what it kept) or `release`,
 through `HubTransport::as_(service, system)` as the server's own caller
 (`menger_quota::QuotaSeam`, the `Meter` a service holds — the tickets
-service in its `Access`, the media service as its `Allowance`). The quota
+service in its `Access`, the media service as its `Allowance`, the code
+service as its own, `menger_code::Allowance`). The quota
 service asks back the same way: `members.teams.show` for a team's members,
 `members.list` for an organization's, and each store's own count for a
 recount (`tickets.revisions.usage`, `media.usage { everyone }`,
@@ -932,6 +936,67 @@ view of the same points; for an admin the whole system's too;
 `#/usage/:principal` an admin's look at another) and `#/quota` (an admin's
 table of everyone — sortable by stored or a source's use, the cap edited in
 place).
+
+### `code` (CODE-2)
+
+The owner, 2026-11-15: "a component that loads in a nice fast, ideally rust
+based, ide into menger that we can point at gh and navigate the codebase
+from." The page's policy keeps the browser off GitHub and no environment
+holds a checkout, so a public repository reaches a ticket only through this
+service (CODE-1); its view is CODE-3's.
+
+| method | flags | who | what it does |
+|---|---|---|---|
+| `open` | `--repo [--refname] [--commit]` | viewer | the commit a branch or tag (`--refname`; none: the default branch) or a hash names: `opened { repo, commit, ref, tip, committed_unix, kept, files, bytes }` — `ref` the branch or tag resolved, `tip` true for a branch, `kept` whether its tree is held (the last three null when not). A hash that is kept asks GitHub nothing (a short one: the kept commit it begins); one not kept is answered as given, or as the tip it begins |
+| `refs` | `--repo` | viewer | `refs { repo, default_branch, branches, tags }`, each `{ name, commit }` (an annotated tag: the commit it points at) |
+| `fetch` | `--repo --commit` | editor | the commit's whole tree read in one request and kept: `fetched { repo, commit, files, bytes, new_bytes }` — `new_bytes` what was new to the store, each file once, and what counts against the caller (`code.bytes`); kept already: `new_bytes: 0`, nothing asked |
+| `tree` | `--repo --commit [--under]` | viewer | every entry under the directory `--under` (the whole tree when none), by path: `tree { repo, commit, path, entries: [{ path, kind, bytes, target? }], truncated }` — `kind` `file`, `dir`, `link` (its target as text, never followed) or `module` (a submodule `.gitmodules` names); at most 20,000 |
+| `read` | `--repo --commit --file` | viewer | the file `--file` (a path from the tree's root): `file { path, bytes, lines, text }` for text up to 2 MiB; in band `binary { path, bytes }` (a NUL in its first 8 KiB, or not UTF-8), `too_large { path, bytes, max }`, `link { path, target }`, `not_found { path }`, `not_kept { repo, commit }` |
+| `kept` | | viewer | `kept { repo, commit, files, bytes, committed_unix, fetched_by, fetched_unix, read_unix }` per commit, the one read longest ago first, then `store { commits, bytes, max_bytes }` |
+| `forget` | `--repo --commit` | admin | a kept commit dropped, its files' bytes credited to whom they were reserved for: `forgotten { repo, commit, freed }` |
+
+A path in the tree is `--under` and `--file`, never `--path`, which
+synapse makes absolute on the caller's machine. **A repository** is GitHub's `owner/name` and nothing else (lower-cased):
+another host, a path or `..` is refused by its type (`bad_repo`,
+`invalid_params`) before any request. **Reading GitHub** is two addresses
+alone, over https, through the media service's `Remote` and its rules
+(public addresses, the connection pinned, redirects held to the same host,
+a time limit, a byte cap), with no credential, no cookie and a `User-Agent`
+naming the product (`menger-code/1`), never a caller, a ticket or the
+tracker: git's listing,
+`https://github.com/<owner>/<name>.git/info/refs?service=git-upload-pack`
+(protocol v0 pkt-lines; the default branch its `symref=HEAD:refs/heads/…`),
+reused for a minute per repository; and the archive,
+`https://codeload.github.com/<owner>/<name>/tar.gz/<commit>` (its pax
+global header carries the full hash; its entries under one top directory,
+dropped; their time the commit's). GitHub answers a listing of a
+repository that is not there, or private, **401** (never 404), and an
+archive of either 404, as of a commit not there — `not_public` and
+`no_such_commit`, told apart by the listing. In band, nothing kept:
+`not_public`, `no_such_ref`, `no_such_commit`, `rate_limited {
+retry_after_secs }`, `too_large { max }` (100 MiB compressed, 400 MiB
+unpacked, 50,000 entries), `bad_path` (an entry absolute, holding `..` or
+outside the top directory), `bad_archive`, `unreachable`, `full`, and the
+quota service's refusals (`over_allowance`, …).
+
+**What is kept.** A commit never changes, so what is kept for it is right
+for good: `code.db` (`--code-db-path`) holds `commits`, `entries` (path,
+kind, size, blob, a link's target) and `blobs` (a file's sha256, size and
+whom its bytes were reserved for); the bytes are `<root>/<aa>/<sha256>`
+(`--code-blob-dir`; a fetch stages under `<root>/tmp/`, cleared at start).
+Two fetches of one commit at once make one request. The whole store stays
+under `--code-max-bytes` (5 GiB): a fetch that would pass it drops the
+commits read longest ago — never one read in the last hour, a file going
+only when no kept commit names it, its bytes credited — or is refused
+`full`, nothing dropped. Each `tree` and `read` marks its commit read.
+
+```sh
+synapse -P 4460 menger code kept
+```
+
+A test points the service at a local stand-in for both hosts with the
+hidden `--code-github-at IP:PORT` (`CodeSetup::github_at`): read over http,
+let through although not public (`tests/wire_code.rs`, `code/tests/code.rs`).
 
 ## Tickets
 
@@ -1834,6 +1899,8 @@ media/               menger-media: the media service — images by sha256 in med
                      ticket's permit asked of tickets through the seam (V2-24)
 quota/               menger-quota: the quota service — allowances per principal and source
                      in quota.db, every storing write reserved through the seam (V2-31)
+code/                menger-code: the code service — public GitHub commits fetched once, their
+                     files by sha256 and trees in code.db, answered from what is kept (CODE-2)
 ui/                  the UI's source bundle (compiled and drawn by ../plexus-ui's
                      plexus-ui-compiler and plexus-ui-engine, FRAME-3; stored and
                      served by its plexus-ui-service, FRAME-5)

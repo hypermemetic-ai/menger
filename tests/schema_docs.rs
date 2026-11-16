@@ -73,6 +73,8 @@ const PATHS: &[&str] = &[
     "tickets.inputs", "tickets.nav", "tickets.revisions", "tickets.subtasks", "tickets.work", "ui", "ui.routes", "ui.slots", "media", "docs",
     // V2-31: the quota service.
     "quota",
+    // CODE-2: the code service.
+    "code",
 ];
 
 /// Whether `word` occurs in `text` as an identifier of its own, ignoring

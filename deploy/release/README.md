@@ -46,11 +46,12 @@ scripts/package --container rust:1-bullseye --check --binstall
 
 1. **The version.** 0.7.1 is on crates.io for all five crates, from before
    the binary carried the UI; the tree has moved since. The first version
-   that carries the UI and `menger start` is a bump of all five
+   that carries the UI and `menger start` is a bump of all six
    (`menger-quota`, `menger-tickets-api`, `menger-docs`, `menger-media`,
-   `menger`) and of each `version = "…"` they name each other by.
+   `menger-code` — CODE-2, never published yet — and `menger`) and of each
+   `version = "…"` they name each other by.
 2. **crates.io**, in dependency order — `menger-quota`,
-   `menger-tickets-api`, `menger-docs`, `menger-media`, then, after
+   `menger-tickets-api`, `menger-docs`, `menger-media`, `menger-code`, then, after
    `scripts/embed-ui`, `cargo publish -p menger --allow-dirty` (the bundle
    is ignored by git, which cargo calls dirty). `cargo install menger`
    then serves the app.

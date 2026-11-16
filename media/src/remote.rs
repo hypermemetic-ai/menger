@@ -20,6 +20,11 @@
 //!   off and refused); the content type checked against what the caller
 //!   takes.
 //!
+//! - CODE-2: a fetch may be held to named hosts ([`Limits::hosts`]: a
+//!   redirect elsewhere is refused) and streamed to a sink rather than read
+//!   into memory ([`Remote::stream`]), the same rules holding; a 429 is
+//!   [`Refusal::Limited`], with the wait the server asked.
+//!
 //! A test (and only a test, through a hidden server flag) may name exact
 //! `ip:port` pairs that are let through although private ([`Remote::allowing`]):
 //! a local server standing in for the internet.
@@ -51,6 +56,9 @@ pub enum Refusal {
     BadType(String),
     /// The server answered an error status.
     Status(u16),
+    /// CODE-2: the server answered 429, too many requests — and how long to
+    /// wait, when it said (`Retry-After`, in seconds).
+    Limited { retry_after_secs: Option<u64> },
     /// No answer: the name does not resolve, the connection failed.
     Unreachable(String),
 }
@@ -66,6 +74,7 @@ impl Refusal {
             Refusal::TooLarge { .. } => "too_large",
             Refusal::BadType(_) => "bad_type",
             Refusal::Status(_) => "http_status",
+            Refusal::Limited { .. } => "rate_limited",
             Refusal::Unreachable(_) => "unreachable",
         }
     }
@@ -81,6 +90,8 @@ impl std::fmt::Display for Refusal {
             Refusal::TooLarge { max } => write!(f, "larger than {}", crate::image::size(*max as u64)),
             Refusal::BadType(t) => write!(f, "the answer is {t}, which this does not take"),
             Refusal::Status(s) => write!(f, "the server answered {s}"),
+            Refusal::Limited { retry_after_secs: Some(s) } => write!(f, "the server limits how often it is asked: try again in {s} s"),
+            Refusal::Limited { retry_after_secs: None } => f.write_str("the server limits how often it is asked: try again later"),
             Refusal::Unreachable(why) => write!(f, "unreachable: {why}"),
         }
     }
@@ -116,12 +127,30 @@ pub struct Limits {
     pub accept: Vec<&'static str>,
     /// Content types refused, the same way.
     pub refuse: Vec<&'static str>,
+    /// CODE-2: the only hosts asked, a redirect included (exact, lower
+    /// case); empty: any host the rules let through.
+    pub hosts: Vec<String>,
+    /// CODE-2: the `User-Agent` sent — a product's name, never a person's.
+    pub agent: &'static str,
+    /// CODE-2: the `Accept` sent.
+    pub accept_header: &'static str,
 }
+
+/// The `User-Agent` an unfurl and a fetch send.
+pub const UNFURL_AGENT: &str = "menger-unfurl/1 (+https://menger.sh)";
+
+/// The `Accept` an unfurl and a fetch send.
+pub const PAGE_ACCEPT: &str = "text/html,application/xhtml+xml,application/json;q=0.9,image/*;q=0.8,*/*;q=0.5";
 
 impl Limits {
     /// A page: 5 s, 5 MiB, HTML (or an image, which is a card of its own).
     pub fn page() -> Self {
-        Limits { timeout: PAGE_TIMEOUT, max: PAGE_MAX, accept: vec!["text/html", "application/xhtml+xml", "image/"], refuse: vec![] }
+        Limits { timeout: PAGE_TIMEOUT, max: PAGE_MAX, accept: vec!["text/html", "application/xhtml+xml", "image/"], refuse: vec![], hosts: vec![], agent: UNFURL_AGENT, accept_header: PAGE_ACCEPT }
+    }
+
+    /// Whether `u`'s host is one this fetch may ask.
+    fn reaches(&self, u: &url::Url) -> bool {
+        self.hosts.is_empty() || u.host_str().is_some_and(|h| self.hosts.iter().any(|ok| ok.eq_ignore_ascii_case(h)))
     }
 
     fn takes(&self, mime: &str) -> bool {
@@ -248,21 +277,39 @@ impl Remote {
 
     /// Fetches `url` under `limits` and every rule above.
     pub async fn get(&self, url: &str, limits: &Limits) -> Result<Got, Refusal> {
+        let mut bytes = Vec::new();
+        let mut sink = |chunk: &[u8]| -> Result<(), String> {
+            bytes.extend_from_slice(chunk);
+            Ok(())
+        };
+        let s = self.stream(url, limits, &mut sink).await?;
+        Ok(Got { url: s.url, mime: s.mime, bytes })
+    }
+
+    /// CODE-2: fetches `url` under `limits` and every rule above, handing
+    /// each chunk of the body to `sink` as it comes rather than keeping it —
+    /// a body past `limits.max` refused [`Refusal::TooLarge`] once the cap
+    /// is passed (what reached `sink` before is the caller's to drop). A
+    /// sink's `Err` ends the fetch as [`Refusal::Unreachable`].
+    pub async fn stream(&self, url: &str, limits: &Limits, sink: &mut (dyn FnMut(&[u8]) -> Result<(), String> + Send)) -> Result<Streamed, Refusal> {
         let url = Self::parse(url)?;
-        match tokio::time::timeout(limits.timeout, self.follow(url, limits)).await {
+        match tokio::time::timeout(limits.timeout, self.follow(url, limits, sink)).await {
             Ok(r) => r,
             Err(_) => Err(Refusal::Timeout),
         }
     }
 
-    async fn follow(&self, mut url: url::Url, limits: &Limits) -> Result<Got, Refusal> {
+    async fn follow(&self, mut url: url::Url, limits: &Limits, sink: &mut (dyn FnMut(&[u8]) -> Result<(), String> + Send)) -> Result<Streamed, Refusal> {
         for hop in 0..=MAX_REDIRECTS {
+            if !limits.reaches(&url) {
+                return Err(Refusal::BadUrl(format!("{} is not a host this fetch asks", url.host_str().unwrap_or("?"))));
+            }
             let (host, addrs) = self.resolve(&url).await?;
             let mut client = reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .no_proxy()
                 .timeout(limits.timeout)
-                .user_agent("menger-unfurl/1 (+https://menger.sh)");
+                .user_agent(limits.agent);
             if !host.is_empty() {
                 // Pinned: the connection goes to the addresses just checked.
                 client = client.resolve_to_addrs(&host, &addrs);
@@ -270,7 +317,7 @@ impl Remote {
             let client = client.build().map_err(|e| Refusal::Unreachable(e.to_string()))?;
             let mut r = client
                 .get(url.clone())
-                .header(reqwest::header::ACCEPT, "text/html,application/xhtml+xml,application/json;q=0.9,image/*;q=0.8,*/*;q=0.5")
+                .header(reqwest::header::ACCEPT, limits.accept_header)
                 .send()
                 .await
                 .map_err(|e| if e.is_timeout() { Refusal::Timeout } else { Refusal::Unreachable(e.to_string()) })?;
@@ -283,6 +330,10 @@ impl Remote {
                 let next = url.join(to).map_err(|e| Refusal::BadUrl(e.to_string()))?;
                 url = Self::parse(next.as_str())?;
                 continue;
+            }
+            if status.as_u16() == 429 {
+                let retry_after_secs = r.headers().get(reqwest::header::RETRY_AFTER).and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse().ok());
+                return Err(Refusal::Limited { retry_after_secs });
             }
             if !status.is_success() {
                 return Err(Refusal::Status(status.as_u16()));
@@ -299,17 +350,27 @@ impl Remote {
             if r.content_length().is_some_and(|n| n as usize > limits.max) {
                 return Err(Refusal::TooLarge { max: limits.max });
             }
-            let mut bytes = Vec::new();
+            let mut read = 0usize;
             while let Some(chunk) = r.chunk().await.map_err(|e| if e.is_timeout() { Refusal::Timeout } else { Refusal::Unreachable(e.to_string()) })? {
-                if bytes.len() + chunk.len() > limits.max {
+                if read + chunk.len() > limits.max {
                     return Err(Refusal::TooLarge { max: limits.max });
                 }
-                bytes.extend_from_slice(&chunk);
+                read += chunk.len();
+                sink(&chunk).map_err(|e| Refusal::Unreachable(format!("keeping what was read: {e}")))?;
             }
-            return Ok(Got { url, mime, bytes });
+            return Ok(Streamed { url, mime, bytes: read as u64 });
         }
         Err(Refusal::TooManyRedirects)
     }
+}
+
+/// CODE-2: what [`Remote::stream`] read: where, its type, and how many
+/// bytes went to the sink.
+#[derive(Debug, Clone)]
+pub struct Streamed {
+    pub url: url::Url,
+    pub mime: String,
+    pub bytes: u64,
 }
 
 #[cfg(test)]
@@ -346,7 +407,7 @@ mod tests {
     fn a_limit_takes_types_by_essence_or_prefix() {
         let page = Limits::page();
         assert!(page.takes("text/html") && page.takes("image/png") && !page.takes("application/octet-stream") && !page.takes("text/plain"));
-        let any = Limits { timeout: PAGE_TIMEOUT, max: 1, accept: vec![], refuse: vec!["text/html"] };
+        let any = Limits { max: 1, accept: vec![], refuse: vec!["text/html"], ..Limits::page() };
         assert!(any.takes("application/pdf") && !any.takes("text/html"));
     }
 }

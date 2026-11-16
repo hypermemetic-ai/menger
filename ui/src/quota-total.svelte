@@ -46,6 +46,7 @@
     "media.bytes": "files kept", "media.fetch.bytes": "fetched today", "media.fetch.calls": "fetches today",
     "media.egress.bytes": "served today", "docs.bytes": "documents", "docs.count": "documents made",
     "tickets.bytes": "tickets", "tickets.count": "tickets made", "questions.count": "questions asked",
+    "code.bytes": "code kept",
   };
   /** An amount in words: bytes as 1.9 GB (powers of 1000, as the caps are set), counts as the number. */
   function amount(unit, n) {
