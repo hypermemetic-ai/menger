@@ -11,11 +11,11 @@
 // code-ide-tree's `input[data-finder]`, `[data-dir][aria-expanded]`, `[data-file]`; code-ide-tabs'
 // `[data-tab][aria-selected]`, `[data-close]`; code-ide-view's `[data-surface=code-ide-view]` and
 // CodeMirror's `.cm-line` (`.cm-marked`) and `.cm-gutterElement`.
-import { INIT, sentCalls } from "../../scripts/ui-throwaway.mjs";
+import { INIT, sentCalls, synapse } from "../../scripts/ui-throwaway.mjs";
 import { makeKey, readToken, sessionCookies, writeSession } from "../../scripts/throwaway-login.mjs";
 
 export default async (ctx) => {
-  const { test, assert, eventually, sleep, openPage, sy, server, path, fs, github, token } = ctx;
+  const { test, assert, eventually, sleep, openPage, sy, server, path, fs, github, token, sameDocument, marked: markPage } = ctx;
   const EPIC = "CODEIDE";
   const KILN = "hypermemetic-ai/kiln";
   const MAIN = github.hashOf("kiln main"), MOVED = github.hashOf("kiln main moved"), V120 = github.hashOf("kiln v1.2.0");
@@ -386,6 +386,252 @@ export default async (ctx) => {
       await context.close();
     }
   });
+
+  // ── CODE-6: follow — an agent the reader follows opens files in the reader's view ──
+  // The agent is a second key, signed in as `builder`, an editor on `*` (ui.show and ui.sessions are an
+  // editor's); the reader is the run's owner.
+  const agentKey = path.join(server.work, "code-agent.key");
+  const agentPrincipal = makeKey(agentKey);
+  const granted = sy("members", "grant", "--principal", agentPrincipal, "--scope", "*", "--role", "editor");
+  assert(granted.some((e) => e.type === "grant"), `builder granted: ${JSON.stringify(granted)}`);
+  const agentSession = path.join(server.work, "code-agent.session");
+  await writeSession(`ws://127.0.0.1:${server.ws}`, agentKey, agentSession, "builder");
+  const agent = (...a) => synapse(server, agentSession, ...a);
+  const sessionsOf = () => agent("ui", "sessions").filter((e) => e.type === "session");
+  const show = (to, ...more) => agent("ui", "show", "--to", to, ...more);
+  const kilnAt = (ref, view) => `/app/#/code/${KILN}/${encodeURIComponent(ref)}/${encodeURIComponent(view).replace(/%3D/g, "=").replace(/%2C/g, ",").replace(/%3B/g, ";")}`;
+  const followBox = (c) => c.locator("input[data-action=follow]");
+  const watchesWithSession = async (page) => (await sentCalls(page)).filter((x) => x.method === "ui.watch" && x.params?.session);
+  /** Follow turned on by the reader; the agent sees one session, where the page is. */
+  async function followOn(page, c, route) {
+    await followBox(c).check();
+    return eventually("builder sees the reader's session", async () => {
+      const s = sessionsOf();
+      return s.length === 1 && s[0].route && (!route || s[0].route === route) ? s[0] : null;
+    }, 10_000).catch(async (e) => { throw new Error(`${e.message}: ${JSON.stringify(sessionsOf())}`); });
+  }
+
+  await test("code_ide_follow_is_off_until_the_reader_turns_it_on", async () => {
+    const id = withTag("the kiln, followed", TAG);
+    const { context, page, seen } = await openPage(`#/ticket/${id}`);
+    try {
+      const c = ide(page);
+      await ready(page, c, seen);
+      assert(!(await followBox(c).isChecked()) && (await c.locator("input[data-field=follow-who]").inputValue()) === "builder", "off, builder named");
+      await sleep(600);
+      assert(!(await watchesWithSession(page)).length, "no session opened");
+      assert(!(await sentCalls(page)).some((x) => x.method === "ui.here" || x.method === "ui.follow"), "nothing said");
+      assert(sessionsOf().length === 0, `builder sees no session: ${JSON.stringify(sessionsOf())}`);
+      const nobody = show(kilnAt("main", "open=src/store.rs"));
+      assert(nobody.some((e) => e.type === "refused" && e.reason === "nobody_follows"), `a show reaches nobody: ${JSON.stringify(nobody)}`);
+      // Turned on: one session, its route the page's, kept in this browser.
+      const s = await followOn(page, c);
+      assert(s.route.startsWith("/app/#/") && s.route.includes(id), `its route the page's: ${s.route}`);
+      assert(JSON.stringify(s.follows) === JSON.stringify(["builder"]), `it follows builder: ${JSON.stringify(s)}`);
+      const w = await watchesWithSession(page);
+      assert(w.length >= 1 && /^s-[0-9a-f]{12}$/.test(w[0].params.session) && JSON.stringify(w[0].params.follows) === JSON.stringify(["builder"]), `ui.watch with the page's session: ${JSON.stringify(w.map((x) => x.params))}`);
+      const kept = await page.evaluate(() => localStorage.getItem("menger.code-ide.follow"));
+      assert(JSON.parse(kept)?.on === true, `kept in the browser: ${kept}`);
+      // Kept: the page opened again follows from the start, with a session of its own.
+      await page.reload();
+      const c2 = ide(page);
+      await ready(page, c2, seen, "ready after the reload");
+      assert(await followBox(c2).isChecked(), "still on after a reload");
+      await eventually("one session again", async () => sessionsOf().length === 1, 10_000);
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("code_ide_follow_a_file_opened_for_the_reader", async () => {
+    const id = withTag("the kiln, shown a file", TAG);
+    const { context, page, seen } = await openPage(`#/ticket/${id}`);
+    try {
+      const c = ide(page);
+      await ready(page, c, seen);
+      await eventually("cones.rs drawn", async () => (await shownText(c)).includes("pub fn known"));
+      await followOn(page, c);
+      const origin = await markPage(page);
+      const length = await page.evaluate(() => history.length);
+      const hash = await page.evaluate(() => location.hash);
+      const a = show(kilnAt("main", "open=src/store.rs#L3-L5"), "--say", "where a firing is **appended**", "--point", "[data-tab='src/log.rs']");
+      assert(a.some((e) => e.type === "shown" && e.sessions === 1), `shown to one session: ${JSON.stringify(a)}`);
+      await eventually("store.rs shown beside the reader's tabs", async () => JSON.stringify(await tabsOf(c)) === JSON.stringify(["src/cones.rs", "src/log.rs", "src/store.rs*"]), 10_000)
+        .catch(async (e) => { throw new Error(`${e.message}: ${await tabsOf(c)}\n${seen.console.slice(-8).join("\n")}`); });
+      await eventually("lines 3 to 5 marked and in view", async () => (await shownText(c)).includes("pub fn append") && (await marked(c)) === 3 && (await lineOnScreen(c, 3)), 5_000);
+      const note = c.locator("[data-surface=code-ide-note]");
+      assert((await note.getAttribute("data-by")) === "builder", "the note says who");
+      assert(/where a firing is appended/.test(await note.textContent()) && (await note.locator("strong").count()) === 1, `its words, markdown drawn: ${await note.innerHTML()}`);
+      assert((await c.locator("[data-dir=src]").getAttribute("aria-expanded")) === "true", "its directory open");
+      await eventually("the pointed tab ringed", async () => (await c.locator("[data-tab='src/log.rs'][data-code-ide-ring]").count()) === 1, 3_000);
+      await sameDocument(page, origin, "a show applied in place");
+      assert((await page.evaluate(() => location.hash)) === hash && (await page.evaluate(() => history.length)) === length, "no navigation, no history entry");
+      // A second show replaces the note; dismissed, the ring goes too.
+      show(kilnAt("main", "open=src/cones.rs#L5"), "--say", "and here the cone is checked");
+      await eventually("cones.rs shown, its mark replaced", async () => (await tabsOf(c)).includes("src/cones.rs*") && (await marked(c)) === 1, 10_000);
+      assert((await c.locator("[data-surface=code-ide-note]").count()) === 1 && /the cone is checked/.test(await note.textContent()), "the note replaced");
+      await c.locator("[data-action=dismiss]").click();
+      await eventually("the note gone", async () => (await note.count()) === 0 && (await c.locator("[data-code-ide-ring]").count()) === 0, 3_000);
+      // Keyboard: the toggle and the name are reachable, and the dismiss leaves the focus on the toggle.
+      assert(await followBox(c).evaluate((el) => el === document.activeElement), "focus back on follow");
+      await sameDocument(page, origin, "after the second show");
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("code_ide_follow_another_branch", async () => {
+    const id = withTag("the kiln, shown a branch", TAG);
+    const { context, page, seen } = await openPage(`#/ticket/${id}`);
+    try {
+      const c = ide(page);
+      await ready(page, c, seen);
+      assert((await c.getAttribute("data-commit")) === MAIN, "on main");
+      await followOn(page, c);
+      show(kilnAt("glazes", "dir=src;open=src/glaze.rs#L1-L2"), "--say", "the celadon");
+      await eventually("glazes' tip", async () => (await c.getAttribute("data-commit")) === github.hashOf("kiln glazes") && (await state(c)) === "ready", 20_000);
+      assert((await c.locator("select[data-field=ref]").inputValue()) === "b:glazes" && (await c.getAttribute("data-pinned")) === "false", "the head shows glazes, at its tip");
+      await eventually("glaze.rs drawn at that commit, its lines marked", async () => (await shownText(c)).includes("celadon") && (await marked(c)) === 2, 10_000);
+      assert(JSON.stringify(await tabsOf(c)) === JSON.stringify(["src/cones.rs", "src/log.rs", "src/glaze.rs*"]), `the reader's tabs kept: ${await tabsOf(c)}`);
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("code_ide_follow_not_a_code_address", async () => {
+    const id = withTag("the kiln, shown a ticket", TAG);
+    const { context, page, seen } = await openPage(`#/ticket/${id}`);
+    try {
+      const c = ide(page);
+      await ready(page, c, seen);
+      await followOn(page, c);
+      const origin = await markPage(page);
+      const hash = await page.evaluate(() => location.hash);
+      const before = await tabsOf(c);
+      show("/app/#/ticket/KILN-2", "--say", "the firing to look at");
+      const note = c.locator("[data-surface=code-ide-note]");
+      await eventually("the note drawn", async () => (await note.count()) === 1, 10_000);
+      assert(/the firing to look at/.test(await note.textContent()), "its words");
+      assert((await note.locator("a[data-field=note-to]").getAttribute("href")) === "/app/#/ticket/KILN-2", "a link to the ticket");
+      assert(JSON.stringify(await tabsOf(c)) === JSON.stringify(before) && (await c.getAttribute("data-commit")) === MAIN, "the view stays as it is");
+      await sameDocument(page, origin, "a ticket shown");
+      assert((await page.evaluate(() => location.hash)) === hash, "not navigated");
+    } finally {
+      await context.close();
+    }
+  });
+
+  await test("code_ide_follow_turned_off", async () => {
+    const id = withTag("the kiln, unfollowed", TAG);
+    const { context, page, seen } = await openPage(`#/ticket/${id}`);
+    try {
+      const c = ide(page);
+      await ready(page, c, seen);
+      await followOn(page, c);
+      await followBox(c).uncheck();
+      assert((await sentCalls(page)).some((x) => x.method === "ui.follow" && JSON.stringify(x.params.follows) === "[]"), "ui.follow said at once: nobody");
+      await eventually("builder sees no session", async () => sessionsOf().length === 0, 5_000);
+      const before = await tabsOf(c);
+      const a = show(kilnAt("main", "open=src/store.rs#L3-L5"), "--say", "not for you");
+      assert(a.some((e) => e.type === "refused" && e.reason === "nobody_follows"), `nobody follows: ${JSON.stringify(a)}`);
+      await sleep(800);
+      assert(JSON.stringify(await tabsOf(c)) === JSON.stringify(before) && (await c.locator("[data-surface=code-ide-note]").count()) === 0, "the view did not move");
+      assert(JSON.parse(await page.evaluate(() => localStorage.getItem("menger.code-ide.follow")))?.on === false, "kept off");
+      // Another name: the session follows it, at once.
+      await c.locator("input[data-field=follow-who]").fill("someone-else");
+      await c.locator("input[data-field=follow-who]").press("Enter");
+      await followBox(c).check();
+      await sleep(600);
+      assert(sessionsOf().length === 0, "following someone else: builder reaches nobody");
+      await c.locator("input[data-field=follow-who]").fill("builder");
+      await c.locator("input[data-field=follow-who]").press("Enter");
+      assert((await sentCalls(page)).some((x) => x.method === "ui.follow" && JSON.stringify(x.params.follows) === '["builder"]'), "ui.follow said for the new name");
+      await eventually("builder again", async () => sessionsOf().length === 1, 5_000);
+      // The framework's knock (FRAME-48): the show that reached nobody was kept for this reader, and the next
+      // session of theirs that opens following builder hears it once: the page opened again.
+      await page.reload();
+      const c2 = ide(page);
+      await ready(page, c2, seen, "ready after the reload");
+      await eventually("the show kept while off arrives once a session follows again", async () => /not for you/.test(await c2.locator("[data-surface=code-ide-note]").textContent({ timeout: 500 }).catch(() => "")), 10_000)
+        .catch(async (e) => { throw new Error(`${e.message}: tabs ${await tabsOf(c2)}; sessions ${JSON.stringify(sessionsOf())}`); });
+    } finally {
+      await page.evaluate(() => localStorage.removeItem("menger.code-ide.follow")).catch(() => {});
+      await context.close();
+    }
+  });
+
+  await test("code_ide_follow_two_views_one_session_and_the_page", async () => {
+    // Two views on one page: one session; the show of menger taken by the view showing menger.
+    const id = withTag("two repositories", `<code-ide repo="${KILN}" ref="main" open="src/cones.rs"></code-ide>\n\n<code-ide repo="hypermemetic-ai/menger" ref="v2" open="README.md"></code-ide>`);
+    const { context, page, seen } = await openPage(`#/ticket/${id}`);
+    try {
+      const all = page.locator("[data-surface=tag-component][data-name=code-ide] [data-surface=code-ide]");
+      await eventually("two views", async () => (await all.count()) === 2, 20_000);
+      const [k, m] = [all.nth(0), all.nth(1)];
+      await ready(page, k, seen);
+      await ready(page, m, seen, "menger ready");
+      await followOn(page, k);
+      assert(await followBox(m).isChecked(), "the choice is every view's");
+      assert(new Set((await watchesWithSession(page)).map((x) => x.params.session)).size === 1, "one session for the page");
+      show("/app/#/code/hypermemetic-ai/menger/v2/open=src%2Fshell.rs%23L183-L187", "--say", "the page policy");
+      await eventually("menger's view takes it", async () => (await tabsOf(m)).includes("src/shell.rs*") && (await marked(m)) === 5, 10_000)
+        .catch(async (e) => { throw new Error(`${e.message}: kiln ${await k.getAttribute("data-repo")} ${await tabsOf(k)}; menger ${await m.getAttribute("data-repo")} ${await tabsOf(m)} marked ${await marked(m)}; notes ${await page.locator("[data-surface=code-ide-note]").count()}\n${seen.console.slice(-8).join("\n")}`); });
+      assert(JSON.stringify(await tabsOf(k)) === JSON.stringify(["src/cones.rs*"]) && (await k.locator("[data-surface=code-ide-note]").count()) === 0,
+        `the kiln's view untouched: ${await tabsOf(k)}; its note: ${await k.locator("[data-surface=code-ide-note]").textContent({ timeout: 500 }).catch(() => "none")}`);
+    } finally {
+      await context.close();
+    }
+    // At #/code/…: where the page is follows the view; another repository taken in place.
+    const view = encodeURIComponent("dir=src;open=src/cones.rs");
+    const second = await openPage(`#/code/${KILN}/main/${view}`);
+    try {
+      const { page: p2, seen: s2 } = second;
+      const c = p2.locator("[data-surface=page-code] [data-surface=code-ide]");
+      await ready(p2, c, s2);
+      const s = await followOn(p2, c);
+      assert(s.route.startsWith(`/app/#/code/${KILN}/main/`), `its route the code address: ${s.route}`);
+      await c.locator("[data-file='src/log.rs']").click();
+      await eventually("ui.here follows the address", async () => sessionsOf()[0]?.route?.includes("log.rs"), 5_000);
+      const origin = await markPage(p2);
+      const length = await p2.evaluate(() => history.length);
+      show("/app/#/code/hypermemetic-ai/menger/v2/dir=ui%2Fsrc;open=README.md", "--say", "now menger");
+      await eventually("menger opened in place", async () => (await c.getAttribute("data-repo")) === "hypermemetic-ai/menger" && (await state(c)) === "ready" && JSON.stringify(await tabsOf(c)) === JSON.stringify(["README.md*"]), 20_000);
+      assert((await c.locator("[data-dir='ui/src']").getAttribute("aria-expanded")) === "true", "its directory open");
+      await eventually("the address follows", async () => new URL(p2.url()).hash.startsWith("#/code/hypermemetic-ai/menger/v2/"), 3_000);
+      await sameDocument(p2, origin, "another repository, in place");
+      assert((await p2.evaluate(() => history.length)) === length, "no history entry");
+      await eventually("ui.here says menger", async () => sessionsOf()[0]?.route?.includes("hypermemetic-ai/menger"), 5_000);
+    } finally {
+      await second.context.close();
+    }
+  });
+
+  if (process.env.CODE_IDE_FOLLOW_SHOTS) {
+    await test("code_ide_follow_shots", async () => {
+      const dir = process.env.CODE_IDE_FOLLOW_SHOTS;
+      fs.mkdirSync(dir, { recursive: true });
+      const id = withTag("the kiln, followed, shot", TAG);
+      for (const scheme of ["light", "dark"]) for (const width of [390, 1440]) {
+        const { context, page, seen } = await openPage(`#/ticket/${id}`);
+        try {
+          await page.emulateMedia({ colorScheme: scheme });
+          await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+          const c = ide(page);
+          await ready(page, c, seen);
+          await followOn(page, c);
+          show(kilnAt("main", "open=src/store.rs#L3-L5"), "--say", "This is where a firing is appended. One row a firing: `store::append`.");
+          await eventually("shown", async () => (await marked(c)) === 3 && (await c.locator("[data-surface=code-ide-note]").count()) === 1, 10_000);
+          await eventually("painted", async () => (await c.locator("[data-surface=code-ide-view]").getAttribute("data-painted")) === "yes", 10_000);
+          await c.scrollIntoViewIfNeeded();
+          await sleep(300);
+          await page.screenshot({ path: path.join(dir, `follow-${width}-${scheme}.png`) });
+          await c.screenshot({ path: path.join(dir, `follow-${width}-${scheme}-alone.png`) });
+        } finally {
+          await context.close();
+        }
+      }
+    });
+  }
 
   // ── a phone ─────────────────────────────────────────────────────────────
   await test("code_ide_at_390_the_tree_is_a_drawer", async () => {
