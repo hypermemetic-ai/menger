@@ -363,6 +363,15 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("quota.set", Today::Admin, None),
     ("quota.recount", Today::Admin, None),
     ("tickets.revisions.usage", Today::Admin, None),
+    // CODE-2: the code service — a viewer opens, lists and reads what is
+    // kept, an editor fetches, the admin forgets; each held anywhere.
+    ("code.open", Today::Viewer, None),
+    ("code.refs", Today::Viewer, None),
+    ("code.tree", Today::Viewer, None),
+    ("code.read", Today::Viewer, None),
+    ("code.kept", Today::Viewer, None),
+    ("code.fetch", Today::Editor, None),
+    ("code.forget", Today::Admin, None),
     // V2-31: and the docs store's own count, which the recount reads.
     ("docs.usage", Today::Admin, None),
     // V2-30: questions on a range — a viewer reads them and an agent's
@@ -412,7 +421,7 @@ async fn the_roles_are_what_identity_21_asked_method_by_method() {
         .map(|(path, s)| (format!("tickets.{path}"), s));
     let top = service.list_plugin_schemas().into_iter().map(|s| (s.namespace.clone(), s));
     for (path, schema) in top.chain(children) {
-        if !["tickets", "members", "session", "media", "docs", "quota"].contains(&schema.namespace.as_str()) && !path.starts_with("tickets.") {
+        if !["tickets", "members", "session", "media", "docs", "quota", "code"].contains(&schema.namespace.as_str()) && !path.starts_with("tickets.") {
             continue;
         }
         for m in &schema.methods {

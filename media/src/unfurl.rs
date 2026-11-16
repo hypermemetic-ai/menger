@@ -392,7 +392,7 @@ pub async fn fetch(remote: &Remote, store: &Arc<MediaStore>, url: &str, owner: O
 /// put's) and the name (`name`, else the address's last segment) — so the
 /// media service holds their size of the caller's storage first.
 pub async fn fetch_bytes(remote: &Remote, url: &str, name: Option<String>) -> Result<(Vec<u8>, Option<String>), MediaEvent> {
-    let limits = Limits { timeout: FETCH_TIMEOUT, max: kinds::PUT_MAX, accept: vec![], refuse: vec!["text/html", "application/xhtml+xml"] };
+    let limits = Limits { timeout: FETCH_TIMEOUT, max: kinds::PUT_MAX, accept: vec![], refuse: vec!["text/html", "application/xhtml+xml"], ..Limits::page() };
     let got = remote.get(url, &limits).await.map_err(MediaEvent::from)?;
     let name = name.or_else(|| got.url.path_segments().and_then(|mut s| s.next_back().map(str::to_string)).filter(|n| !n.is_empty()));
     Ok((got.bytes, name))

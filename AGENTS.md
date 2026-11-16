@@ -2,7 +2,7 @@
 
 A plan is a program whose leaves are prose. menger is a Plexus RPC
 ticketing service and the seed of a Plexus-native reactive web framework.
-This is **v2**: the tickets service, the ui service, the media service, the docs service and the quota service, nothing else.
+This is **v2**: the tickets service, the ui service, the media service, the docs service, the quota service and the code service, nothing else.
 
 v1 is tag `v0.0.1`; v2 cut its chats, comments, deployments, themes, notes, assignees and components, the Leptos app (trunk) and the frames' SDK (sdk-codegen), mockups and the diagrams service — read v1 there, never here. Media came back as a service of its own (V2-24, `media/`), and a body's pages as sandboxed frames (EDITOR-14, COMPS-3: `ui/src/m-mockup.svelte`, `m-live.svelte` and `m-page.svelte`, real Svelte: `svelte/1`, on plexus-ui's frames, COMPS-2).
 
@@ -73,9 +73,10 @@ the default data directory, `~/.local/share/menger` — prod's directory on
 this machine; it writes `local.key`, `local.json` and `once/` beside prod's
 file. Never run it that way here. A dev server's `--db-path` names all its
 files (SCRATCH-NAMES): beside a database not named `tickets.db` or
-`local.db`, the ui, media, docs and quota files carry its stem —
+`local.db`, the ui, media, docs, quota and code files carry its stem —
 `/tmp/menger-dev.db` → `/tmp/menger-dev.ui.db`, `.media.db`, `.docs.db`,
-`.quota.db`, `/tmp/menger-dev.media.blobs/` — so throwaways in `/tmp` share
+`.quota.db`, `.code.db`, `/tmp/menger-dev.media.blobs/`,
+`/tmp/menger-dev.code.blobs/` — so throwaways in `/tmp` share
 none, and `scripts/cleanup-gate.sh dev` takes every one; a flag that names a
 file still wins. A file in `/tmp` named plainly (`/tmp/ui.db`,
 `/tmp/media.db`) is no gate's, and the gate refuses it.
@@ -123,7 +124,15 @@ its seam; the editor writes it at `#/doc/:id`), and `quota` (V2-31: `quota/`, `m
 every principal's allowance per source in `quota.db`, `--quota-db-path`;
 every storing write reserved through its seam; V2-70: a point a day per
 principal and source kept as history, `quota.history`, backfilled by the
-recount and charted on `#/usage` — README "`quota`"). A service reaches another as a
+recount and charted on `#/usage` — README "`quota`"), and `code` (CODE-2:
+`code/`, `menger-code` — a public GitHub repository's branch or tag resolved
+to a commit by git's own listing, the commit's whole tree fetched once from
+codeload and kept, its files by sha256 under `--code-blob-dir` and its tree
+in `code.db`, `--code-db-path`; `tree` and `read` answer from what is kept
+and ask GitHub nothing; every new byte reserved for the fetcher as
+`code.bytes`, the store held under `--code-max-bytes` — README "`code`";
+`code kept` lists what is kept: `synapse -P 4460 menger code kept`). A test
+points it at a local stand-in with the hidden `--code-github-at IP:PORT`. A service reaches another as a
 client, through plexus-core's `HubTransport::as_(service, caller)` — the ui
 service's seam (`../plexus-ui/service/src/seam.rs`) asks each service a
 component's `uses` names (`tickets`) as the server's own caller; the media
@@ -717,7 +726,7 @@ question.
   plexus-login being the one substrate names — still the 0.7 line, since
   plexus-substrate has no 0.8 revision yet (V2-58). Every activation is `impl FooActivation` (MACRO-13,
   MACRO-21): the stem names the namespace, the trait and the client.
-- **Workspace members** (`Cargo.toml`): `.`, `tickets-api`, `media`, `quota`;
+- **Workspace members** (`Cargo.toml`): `.`, `tickets-api`, `media`, `docs`, `quota`, `code`;
   `tether/` is its own workspace. Three repositories
   hold what menger lifted out: `plexus-webapp` (FRAME-4; published),
   `plexus-login` (FRAME-4; published) and plexus-ui,
