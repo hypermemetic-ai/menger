@@ -103,6 +103,10 @@
   import CodeIdeView from "plexus-ui:code-ide-view";
   import CodeIdeFollow from "plexus-ui:code-ide-follow";
   import PageCode from "plexus-ui:page-code";
+  // LAYERS-20: the kiln in a worker — its page, its component, and its generated part (a module with no view).
+  import KilnLive from "plexus-ui:kiln-live";
+  import KilnActivation from "plexus-ui:kiln-activation";
+  import PageKiln from "plexus-ui:page-kiln";
   import TicketChipSv from "plexus-ui:ticket-chip-sv";
   import TicketLinks from "plexus-ui:ticket-links";
   import PageT from "plexus-ui:page-t";
@@ -275,6 +279,9 @@
       ["code-ide-tree", CodeIdeTree, () => ({ tree: CODE_TREE, open: ["src"], shown: "src/cones.rs", tabs: ["src/cones.rs", "src/log.rs"], crumb: "starts in src/" }), ["hover", "focus"], { loading: { sheet: "loading" }, empty: { query: "zzqq" } }, false, { hover: [".row"], focus: [".row"] }],
       ["code-ide-tabs", CodeIdeTabs, () => ({ tabs: [{ path: "src/cones.rs", mark: [5, 10] }, { path: "src/log.rs", mark: null }], shown: "src/cones.rs", gone: [] }), ["hover", "focus", "selected"], {}, false, { hover: [".tab"], focus: [".tab"], selected: ["[role=tab][aria-selected=false]"] }],
       ["code-ide-follow", CodeIdeFollow, () => ({ sheet: "sample" }), ["focus", "disabled"], {}, false, { focus: ["input[data-field=follow-who]"], disabled: ["input[data-action=follow]"] }],
+      // LAYERS-20: the kiln — the sheet's own firing, refusal and heat, no kiln started; its generated part draws nothing.
+      ["kiln-live", KilnLive, () => ({ sheet: "sample" }), ["hover", "focus", "disabled"], { loading: { sheet: "loading" } }, false, { hover: ["[data-action=fire]"], focus: ["[data-action=fire]"], disabled: ["[data-action=heat]"] }],
+      ["kiln-activation", KilnActivation, F, [], {}],
       ["code-ide-view", CodeIdeView, () => ({ text: "fn main() {\n    let cone = \"6\";\n    println!(\"{}\", cone);\n}\n", key: "sheet:src/main.rs", path: "src/main.rs", mark: [2, 2] }), [], {}],
       ["ticket-relations", TicketRelations, ID, ["hover", "focus"], { loading: { sheet: "loading" } }],
       ["ticket-subtasks", TicketSubtasks, ID, ["hover", "focus"], { loading: { sheet: "loading" } }],
@@ -351,6 +358,7 @@
       ["page-releases", PageReleases, F, [], {}, true],
       ["page-media", PageMedia, F, [], { loading: { sheet: "loading" } }, true],
       ["page-code", PageCode, () => ({ owner: "hypermemetic-ai", name: "kiln", sheet: "sample" }), [], { loading: { sheet: "loading" } }, true],
+      ["page-kiln", PageKiln, () => ({ sheet: "sample" }), [], { loading: { sheet: "loading" } }, true],
       ["page-bulk", PageBulk, (t) => ({ ids: t }), [], {}, true],
       ["page-blockers", PageBlockers, ID, [], {}, true],
       ["page-edit", PageEdit, ID, [], {}, true],
