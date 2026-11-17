@@ -720,6 +720,18 @@ build_v2() { # V2-7, FRAME-8: every step on this machine — the release, the to
   (cd "$BUILD" && bash "$wasm_sh" "$BUILD/dist/ui-compiler.wasm") >"$lr" 2>&1 || { red_run; die "ui-compiler-wasm failed — $lr"; }
   [[ -s $BUILD/dist/ui-compiler.wasm ]] || { red_run; die "ui-compiler-wasm: no $BUILD/dist/ui-compiler.wasm after $PUI/scripts/ui-compiler-wasm.sh — $lr"; }
   V2_STEPS+=", ui-compiler-wasm"
+  # NOTES-2: the Svelte compiler module is the framework's script's too — $PUI/scripts/svelte-compiler-wasm.sh
+  # OUT: Svelte's compiler in QuickJS, made by Node from the checkout's node_modules and javy (which
+  # the script fetches once and holds to its sha256) — what --ui-svelte-compiler takes, so ui.author
+  # takes svelte/1. A release of v2 always carries it: no script, a failed one, or no module after it
+  # fails the build, named.
+  step "svelte-compiler-wasm (the framework's scripts/svelte-compiler-wasm.sh, on this machine)"
+  lr=$(log_path build-svelte-compiler); say "log: $lr"
+  local svelte_sh=$PUI/scripts/svelte-compiler-wasm.sh
+  [[ -f $svelte_sh ]] || { red_run; die "svelte-compiler-wasm: no scripts/svelte-compiler-wasm.sh in $PUI (NOTES-2: the framework's, since plexus-ui 0.2.2) — no release without the Svelte compiler module"; }
+  (cd "$BUILD" && bash "$svelte_sh" "$BUILD/dist/svelte-compiler.wasm") >"$lr" 2>&1 || { red_run; die "svelte-compiler-wasm failed — $lr"; }
+  [[ -s $BUILD/dist/svelte-compiler.wasm ]] || { red_run; die "svelte-compiler-wasm: no $BUILD/dist/svelte-compiler.wasm after $PUI/scripts/svelte-compiler-wasm.sh — $lr"; }
+  V2_STEPS+=", svelte-compiler-wasm"
   id=$(date -u +%Y%m%dT%H%M%SZ)-$short
   stage=$RELEASES/$id.tmp
   mkdir -p "$stage/bin" "$stage/dist"
@@ -729,6 +741,7 @@ build_v2() { # V2-7, FRAME-8: every step on this machine — the release, the to
   chmod 0755 "$stage/bin/"*
   cp "$BUILD/dist/ui.tar" "$stage/dist/"
   cp "$BUILD/dist/ui-compiler.wasm" "$stage/dist/"
+  cp "$BUILD/dist/svelte-compiler.wasm" "$stage/dist/"
   return 0
 }
 cmd_build() {

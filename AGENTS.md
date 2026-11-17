@@ -188,7 +188,10 @@ whichever the live pointer names at `/app/`:
   `local.db`), `--ui-signer` (`MENGER_UI_SIGNERS`, `;`-separated 64-hex
   public keys; none: every push refused `no_signer`), `--ui-compiler`
   (`MENGER_UI_COMPILER`, `dist/ui-compiler.wasm`; without it a push stores
-  the trees as given and says `compiled: false`).
+  the trees as given and says `compiled: false`), `--ui-svelte-compiler`
+  (NOTES-2: `MENGER_UI_SVELTE_COMPILER`, `dist/svelte-compiler.wasm` — what
+  `ui.author` compiles `svelte/1` in; without it a `svelte/1` source is
+  refused `no_compiler`; a push is never compiled in it).
 - **Who may**: `versions`, `watch` and `slots list` a viewer's; `push` the
   `deployer`'s (V2-7: the pipeline key); `rollback`, `preview`, `slots set`
   and `slots clear` the admin's (`../plexus-ui/service/src/activation.rs`).
@@ -344,6 +347,25 @@ hand — `deploy/pipeline build --branch v2 --no-gate`, then `image`, then
 `remote test --image …`. The deploy builds the bundle and
 pushes it as the `pipeline` key, the only signer on app-test; every open page
 there hot-swaps to it.
+
+**Or at run time, with no build and no deploy** (NOTES-2): `ui.author` takes
+the `svelte/1` source itself, on a menger started with `--ui-svelte-compiler` — every
+release is; a dev server names `dist/svelte-compiler.wasm`, which
+`"$(scripts/plexus-ui-src)"/scripts/svelte-compiler-wasm.sh dist/svelte-compiler.wasm`
+makes (Node 22 and javy, which the script fetches once). The call is `ui
+author` with its parameters as a file (`-p @author.json`, before the service
+name): `{ "bundle": "notes", "sources": [{ "name": "graph-nodes", "profile":
+"svelte/1", "source": "…" }] }`. It answers `authored { version }`, or
+`refused` — `compile_failed` naming the component and its line. Name a
+`bundle`: a named bundle is never live and keeps its own undo line (`ui
+history | undo | redo` with the same `bundle`), and a page draws a component
+of it by a mark pinned to the version (`data-component`, `data-version`;
+plexus-ui's `CONTRACT.md` "A bound mark"). Without `bundle` the call builds
+on the live bundle, and on menger that is refused: `ui.author` compiles
+every `svelte/1` source of its base, and menger's own holds one past a
+compile's fuel (`spec-outline`). Who may: `ui.author` is the `editor`'s
+grant on `*`; on a server whose `editor` role was ever edited the stored
+role wins (`auth roles` says what it holds).
 
 ## Deploying
 

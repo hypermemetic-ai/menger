@@ -116,7 +116,7 @@ menger-logs = { path = "logs", version = "0.8.0" }
 # its activation registered beside `tickets`, its routes mounted on the
 # shell, serving `/`, `/app/` and `/app/<hash>/…` from its store.
 # V2-47: by published version; scripts/plexus-ui-release moves it.
-plexus-ui-service = "0.2.4"
+plexus-ui-service = "0.2.6"
 
 # SCAFFOLD-5: the shell (the app's build as a table, stamped and served) and
 # the local server (`menger::local`'s serving) — plexus-webapp, a repository
@@ -229,7 +229,7 @@ flate2 = "1"
 # `tickets` — a probe activation (plexus-macros, schemars, async-stream:
 # V2-4's, above) — to show the lint reads the running service.
 # FRAME-3, V2-47: by published version, the service's; scripts/plexus-ui-release moves it.
-plexus-ui-compiler = "0.2.4"
+plexus-ui-compiler = "0.2.6"
 # UI-7: the in-process tests' stub compiler modules, written as text.
 wat = "1"
 # V2-29: tests/wire_notes.rs types into a note as two browsers would — two

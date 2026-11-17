@@ -13,8 +13,10 @@
 # module as --ui-compiler when the release holds one (UI-5); STUDIO-3: the
 # ui service's author key (--ui-author-key: MENGER_UI_AUTHOR_KEY, else
 # ui-author.key beside the database, made at first start, 0600), which signs
-# what an editor authors in the studio (ui.author). A release before
-# v2 (app/index.html) is started as it always was.
+# what an editor authors in the studio (ui.author); NOTES-2: and the Svelte
+# compiler module as --ui-svelte-compiler when the release holds one
+# (dist/svelte-compiler.wasm), which that author's svelte/1 is compiled in.
+# A release before v2 (app/index.html) is started as it always was.
 set -eu
 here=$(dirname "$(readlink -f "$0")")
 set -- --port "$MENGER_WS_PORT" --shell-port "$MENGER_SHELL_PORT"
@@ -27,6 +29,7 @@ if [ -f "$here/../dist/ui.tar" ]; then
   for k in $keys; do [ -n "$k" ] && set -- "$@" --ui-signer "$k"; done
   IFS=$old_ifs
   [ -f "$here/../dist/ui-compiler.wasm" ] && set -- "$@" --ui-compiler "$here/../dist/ui-compiler.wasm"
+  [ -f "$here/../dist/svelte-compiler.wasm" ] && set -- "$@" --ui-svelte-compiler "$here/../dist/svelte-compiler.wasm"
   set -- "$@" --ui-author-key "${MENGER_UI_AUTHOR_KEY:-$(dirname "$db")/ui-author.key}"
 fi
 exec "$here/menger" "$@"

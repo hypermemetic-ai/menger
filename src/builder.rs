@@ -165,6 +165,11 @@ pub struct UiSetup {
     /// UI-7: the compiler module (`--ui-compiler`) every push compiles its
     /// sources in; none: the trees are stored as given (`compiled: false`).
     pub compiler: Option<Compiler>,
+    /// NOTES-2: the Svelte compiler module (`--ui-svelte-compiler`) the
+    /// service compiles `svelte/1` in — what `ui.author` takes, and each
+    /// source of a push; none: an authored `svelte/1` source is refused
+    /// `no_compiler`, a pushed module taken as given.
+    pub svelte: Option<plexus_ui_service::SvelteCompiler>,
     /// STUDIO-3: the key `ui.author` signs an editor's version with
     /// (`--ui-author-key`); none: every author refused `no_signer`.
     pub author: Option<plexus_ui_service::AuthorKey>,
@@ -191,7 +196,7 @@ impl UiSetup {
         }
         let store = UiStore::open_channel(path, channel).map_err(|e| anyhow::anyhow!("{} (--ui-channel {channel}): {e}", path.display()))?;
         tracing::info!("ui:        {} (channel {channel})", path.display());
-        Ok(Self { store: Arc::new(store), signers, compiler: None, author: None, allow_rhx: false })
+        Ok(Self { store: Arc::new(store), signers, compiler: None, svelte: None, author: None, allow_rhx: false })
     }
 
     /// UI-15: the channel the store is on.
@@ -202,6 +207,12 @@ impl UiSetup {
     /// UI-7: pushes compile in `compiler` (`--ui-compiler`).
     pub fn compiling(mut self, compiler: Option<Compiler>) -> Self {
         self.compiler = compiler;
+        self
+    }
+
+    /// NOTES-2: `svelte/1` compiled in `svelte` (`--ui-svelte-compiler`).
+    pub fn svelte_compiling(mut self, svelte: Option<plexus_ui_service::SvelteCompiler>) -> Self {
+        self.svelte = svelte;
         self
     }
 
@@ -722,7 +733,12 @@ where
     // FRAME-5: the framework's, its caller the gate's (no access layer of
     // menger's in it).
     // SV-6: rhx refused unless --ui-allow-rhx.
-    let ui = UiActivation::new(ui.store, ui.signers).compiling(ui.compiler).allowing_rhx(ui.allow_rhx).authoring(ui.author);
+    // NOTES-2: and what `ui.author` is given, when it is `svelte/1`, in
+    // `--ui-svelte-compiler`'s — the authors' alone (`svelte_authoring`): a
+    // deploy's push is taken as it always was, its modules as given. menger's
+    // own bundle holds components past one compile's fuel, so compiled at
+    // every push (`svelte_compiling`) no deploy would be taken.
+    let ui = UiActivation::new(ui.store, ui.signers).compiling(ui.compiler).svelte_authoring(ui.svelte).allowing_rhx(ui.allow_rhx).authoring(ui.author);
     // FRAME-5: the gate's grants generation moves with the store's count, so
     // a watch held by the gate (`ui.watch`) hears `members.*` too.
     let generation = grants_generation(&store);

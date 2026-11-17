@@ -349,6 +349,25 @@ async fn the_studio_is_mounted_for_the_admin_and_editors() {
     assert_eq!(m.get("/studio/", Some(&capped)).await.status(), 403, "the admin capped at editor@KILN-1");
     assert_eq!(m.get("/studio/ui-compiler.wasm", Some(&capped)).await.status(), 403);
     assert_eq!(m.get("/studio/", Some(&mine)).await.status(), 200, "the admin uncapped");
+    // NOTES-2: no --ui-svelte-compiler here, so the studio has no Svelte module to fetch.
+    assert_eq!(m.get("/studio/svelte-compiler.wasm", Some(&mine)).await.status(), 404, "no module, no file");
+}
+
+/// NOTES-2: started with `--ui-svelte-compiler`, menger serves the studio the
+/// same bytes at `/studio/svelte-compiler.wasm` — to a session that may open
+/// the studio, and to no other.
+#[tokio::test]
+async fn the_studio_is_served_the_svelte_compiler_module() {
+    let module = support::svelte_compiler_wasm();
+    let m = start_with(None, &["--ui-svelte-compiler", module.to_str().unwrap()]).await;
+    let admin = connect(m.ws).await;
+    let mine = support::mint_session(m.ws).await;
+    let got = m.get("/studio/svelte-compiler.wasm", Some(&mine)).await;
+    assert_eq!(got.status(), 200);
+    assert_eq!(got.bytes().await.unwrap().as_ref(), std::fs::read(&module).unwrap().as_slice(), "the module's own bytes");
+    call(&admin, "auth.grant", json!({ "principal": support::principal_of(&SOMEONE), "role": "viewer", "scope": "*" })).await;
+    let viewer = support::mint_session_for(&SOMEONE, m.ws).await;
+    assert_eq!(m.get("/studio/svelte-compiler.wasm", Some(&viewer)).await.status(), 403, "a viewer");
 }
 
 /// UI-15: two mengers on one `ui.db` — one on channel `test`

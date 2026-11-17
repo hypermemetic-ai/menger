@@ -182,7 +182,12 @@ the owner's.
    - `ui-compiler-wasm` — the framework's `$PUI/scripts/ui-compiler-wasm.sh
      dist/ui-compiler.wasm` (rustup's `wasm32-unknown-unknown`; FRAME-7):
      the compiler module. A release of v2 always carries it: no script, a
-     failed one, or no module after it fails the build, named.
+     failed one, or no module after it fails the build, named;
+   - `svelte-compiler-wasm` (NOTES-2) — the framework's
+     `$PUI/scripts/svelte-compiler-wasm.sh dist/svelte-compiler.wasm` (Node
+     22 and javy, which the script fetches once and holds to its sha256):
+     the Svelte compiler module, which `ui.author` compiles `svelte/1` in.
+     A release always carries it, by the same three refusals.
 
    The release is `~/.local/share/menger-deploy/releases/<UTC time>-<sha>/`:
 
@@ -192,6 +197,7 @@ the owner's.
    bin/plexus-ui               the tool that built the bundle, and pushes it (not in the image)
    dist/ui.tar                 the UI's bundle, pushed after the deploy
    dist/ui-compiler.wasm       the compiler module, --ui-compiler
+   dist/svelte-compiler.wasm   what ui.author compiles svelte/1 in, --ui-svelte-compiler (NOTES-2)
    RELEASE                     release, commit, branch, subject, built, rustc, profile, steps, gate
    SUITE, TESTED               marks, once its suite ran and once test passed it
    ```
@@ -289,8 +295,11 @@ The image copies `dist/` to `/opt/menger/dist`, and `run-menger` starts the
 the database, in the data volume — UI-15: on the box, `/shared/ui.db`, the
 one store both environments mount; the channel is `MENGER_UI_CHANNEL`,
 read by menger itself), one `--ui-signer` per key of
-`MENGER_UI_SIGNERS` (`;`-separated 64-hex public keys) and `--ui-compiler`
-when the module is there. A service names its signers at start: app-test's
+`MENGER_UI_SIGNERS` (`;`-separated 64-hex public keys), `--ui-compiler`
+when the module is there and `--ui-svelte-compiler` when its module is
+(NOTES-2: a release from before it starts as it did, and refuses a
+`svelte/1` source `no_compiler`). The `svelte/1` module is for `ui.author`
+alone: the deploy's push is not compiled in it, and is taken as before. A service names its signers at start: app-test's
 line in `deploy/env/app-test.env` is the pipeline key's public key, written
 by hand, never by a test; prod names none (UI-15: it takes no push).
 
@@ -403,8 +412,8 @@ gone after the deploy fails it, recorded `sessions lost`.
 Every log a run writes is a file of its own, never overwritten:
 `~/.local/state/menger-deploy/logs/<UTC yyyymmddThhmmssZ>-<short sha>-<step>.log`
 (`MENGER_DEPLOY_LOGS` moves the directory). `build` keeps `gate-workspace`,
-`build-release`, `build-ui-prebuild`, `build-ui` and `build-ui-compiler`
-apart; `build`, `suite`, `smoke`, `landing`, `image`, `local` and `remote`
+`build-release`, `build-ui-prebuild`, `build-ui`, `build-ui-compiler` and
+`build-svelte-compiler` (the `svelte/1` module's) apart; `build`, `suite`, `smoke`, `landing`, `image`, `local` and `remote`
 also keep everything they said as `<stamp>-<command>[-<arg>].log`. Each
 says `log: <path>` as it opens one, and a failure names the file. The gate
 runs `cargo test --workspace --no-fail-fast`, so one red shows every
