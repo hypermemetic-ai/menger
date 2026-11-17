@@ -13,23 +13,31 @@
 // sits one level deeper). Each is read as committed in its repository; a
 // dirty one is said in the header (`+dirty`).
 //
-// What goes in, one `<script module>` and nothing else:
-//   - the kiln: plexus-examples' storing kiln (Rust, SQLite inside), built for
-//     wasm32 in a container (plexus-examples/scripts/web.sh, through
-//     plexus-rt/scripts/kiln.sh), turned into JavaScript by jco with its wasm
-//     inline as base64 — wrapped in an async function, so nothing of it runs
-//     until a worker asks;
-//   - plexus-rt (plexus-rt.ts, its types stripped) and its codec's wasm
-//     (plexus-proto-web, built by plexus-rt/scripts/codec.sh) as base64;
+// What goes in, one `<script module>` and nothing else (LSTORE-5: the kiln
+// stores through the import plexus:store/sql, and SQLite is the engine's, once):
+//   - the kiln: plexus-examples' storing kiln (Rust) with no SQLite inside,
+//     built for wasm32 by plain cargo (plexus-rt/scripts/kiln.sh), turned into
+//     JavaScript by jco, minified, with its wasm inline as base64 — wrapped in
+//     an async function, so nothing of it runs until a worker asks;
+//   - the one SQLite engine (plexus/engine, built in a container by
+//     plexus-rt/scripts/engine.sh): its three core modules as base64, compiled
+//     once by the page and given to the worker, and its JavaScript (jco's,
+//     minified), wrapped in a function the worker calls;
+//   - plexus-rt (plexus-rt.ts) and plexus-rt's store (store.ts: the page's
+//     `give`, the worker's `openStore`, and the import itself), their types
+//     stripped, and the codec's wasm (plexus-proto-web, built by
+//     plexus-rt/scripts/codec.sh) as base64;
 //   - the kiln's client and serving side, written by plexus-gen from the
 //     kiln's IR (plexus-examples/ir/kiln.json), its types stripped;
-//   - plexus-rt's store host (test/page/store-host.js: the browser's file
-//     store, OPFS, for the kiln's SQLite) with a `forget` added;
 //   - both sides, written here: in a worker named `plexus-kiln` the module
-//     serves the kiln over the worker's messages, its store kept in OPFS when
-//     the browser gives one, else in memory, said to the page first as a
-//     string message; in a page it puts `startKiln` on
-//     globalThis[Symbol.for("menger.kiln-activation")].
+//     opens the kiln's store (in OPFS, `kiln/kiln.db`, when the browser gives
+//     one, else in memory, said to the page first as a string message) and
+//     serves the kiln over the worker's messages; in a page it puts
+//     `startKiln` on globalThis[Symbol.for("menger.kiln-activation")].
+//
+// Every wasm in it is built with this machine's paths remapped (the scripts
+// of plexus-rt and plexus-examples do it): scripts/tests/kiln-activation
+// decodes each and finds no home directory.
 //
 // Why a global and not an import: a component's module exports only the
 // host's `mount` and `css` (plexus-ui's svelte/1 wrapper), and a sibling
@@ -46,7 +54,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { stripTypeScriptTypes } from "node:module";
+import { createRequire, stripTypeScriptTypes } from "node:module";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -100,8 +108,10 @@ try {
       return `${r} ${head}${dirty ? "+dirty" : ""}`;
     });
   if (!fs.existsSync(at("plexus-rt/node_modules/.bin/jco"))) die(`${at("plexus-rt")}: npm ci there first (jco)`);
-  say("the kiln, for wasm32 in a container, then jco …");
+  say("the kiln, for wasm32 by cargo, then jco …");
   const kilnDir = run(at("plexus-rt/scripts/kiln.sh"), [path.join(work, "kiln")], { env });
+  say("the engine, for wasm32 in a container, then jco …");
+  const engineDir = run(at("plexus-rt/scripts/engine.sh"), [path.join(work, "engine")], { env });
   say("the codec …");
   const codecWasm = fs.readFileSync(run(at("plexus-rt/scripts/codec.sh"), [], { env }));
   say("the client, by plexus-gen …");
@@ -126,32 +136,57 @@ try {
     return `const ${name} = (() => {\n${unbus(js).trim()}\nreturn { ${names.join(", ")} };\n})();`;
   };
   const strip = (ts) => stripTypeScriptTypes(ts).replace(/^[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n");
+  // Svelte reserves a name beginning with `$`, which jco's minifier gives some locals (`$`, `$e`):
+  // each such short name becomes `_$…`, found as a token by acorn (jco's), never in a string. The
+  // longer `$root`, `$imports` are wasm's names, keys and properties only, and stay.
+  const acorn = createRequire(at("plexus-rt/node_modules/"))("acorn");
+  const undollar = (name, js) => {
+    const toks = [...acorn.tokenizer(js, { ecmaVersion: "latest", sourceType: "module" })].filter((t) => t.type.label === "name");
+    if (toks.some((t) => t.value.startsWith("_$"))) throw new Error(`${name}: a name begins with _$ already`);
+    let out = "", from = 0;
+    for (const t of toks.filter((t) => /^\$\w?$/.test(t.value))) (out += js.slice(from, t.start) + "_" + t.value), (from = t.end);
+    return out + js.slice(from);
+  };
+  // jco's minified JavaScript is one line: its statements are cut at `;`, `}` or the start.
+  const unexport = (name, js, swaps) => {
+    js = undollar(name, js.replace(/^"use components";/, ""));
+    for (const [from, to] of swaps) {
+      if (!from.test(js)) throw new Error(`${name}: no ${from}`);
+      js = js.replace(from, to);
+    }
+    if (/(^|[;}])(import|export)\b/.test(js)) throw new Error(`${name}: an import or export is left`);
+    return unbus(js);
+  };
 
   const rt = scope("rt", strip(read(at("plexus-rt/plexus-rt.ts"))));
+  const store = scope("store", strip(read(at("plexus-rt/store.ts"))));
   const client = scope("generated", strip(clientTs), { "./plexus-rt.ts": "rt" });
-  const host = scope("storeHost", read(at("plexus-rt/test/page/store-host.js")) +
-    "\n/// Added by scripts/kiln-activation: every file let go, so the kiln keeps its store in memory.\n" +
-    "export function forget() { for (const f of files) try { f.close(); } catch {} files.length = 0; kept.clear(); }\n");
 
-  let kiln = read(path.join(kilnDir, "kiln.js")).replace(/^"use components";\n/, "");
-  const hostImport = /^import \{([^}]*)\} from "\.\/store-host\.js";$/m;
-  if (!hostImport.test(kiln)) throw new Error("kiln.js: no import of ./store-host.js");
-  const hostNames = hostImport.exec(kiln)[1];
-  // First in the function: an import is bound before any of the module runs.
-  kiln = `const {${hostNames}} = storeHost;\n` + kiln.replace(hostImport, "")
-    .replace(/^export \{ (\w+) as kiln, .*$/m, "return $1;")
-    .replace(/^export const _util = /m, "const _util = ");
-  if (/^\s*(import|export)\b/m.test(kiln)) throw new Error("kiln.js: an import or export is left");
-  if (/<\/script/i.test(kiln + rt + client + host)) throw new Error("a </script in the text");
-  kiln = unbus(kiln);
+  // The kiln's import plexus:store/sql is the store's `open`, `execute`, `query`: bound first in the
+  // function, as an import is bound before any of the module runs.
+  let sqlNames;
+  const kiln = unexport("kiln.js", read(path.join(kilnDir, "kiln.js")), [
+    [/import\{([^}]*)\}from"\.\/store\.js";/, (_, names) => ((sqlNames = names.replace(/ as /g, ":")), "")],
+    [/;export\{(\w+) as kiln,[^}]*\}/, ";const kiln=$1"],
+    [/;export const _util=/, ";const _util="],
+  ]).replace(/^/, () => `const{${sqlNames}}=store;`) + ";return kiln;";
+  const glue = unexport("sqlite.js", read(path.join(engineDir, "sqlite.js")), [
+    [/;export function instantiate\(/, ";function instantiate("],
+    // Its way of reading a core module in Node, never taken in a page: a bundler would try to resolve it.
+    [/import\(`node:fs\/promises`\)/, 'Promise.reject(new Error("no node:fs in a page"))'],
+    [/\}export const _util=\{\};?\s*$/, "}"],
+  ]) + ";return instantiate;";
+  const cores = Object.fromEntries(["sqlite.core.wasm", "sqlite.core2.wasm", "sqlite.core3.wasm"].map((n) => [n, fs.readFileSync(path.join(engineDir, n))]));
+  if (/<\/script/i.test(kiln + glue + rt + store + client)) throw new Error("a </script in the text");
 
   const b64 = (bytes) => Buffer.from(bytes).toString("base64");
   const text = `<script module>
-  // kiln-activation — GENERATED by scripts/kiln-activation (LAYERS-20). Never edited by hand: run the script.
-  // The kiln activation of plexus-examples (Rust, its log in SQLite) as wasm, the runtime plexus-rt and its
-  // codec, the client plexus-gen wrote from the kiln's IR, and both sides: a worker that serves the kiln, and
-  // startKiln() for a page (globalThis[Symbol.for("menger.kiln-activation")]). kiln-live reaches this file's
-  // own module by URL; nothing imports it as a sibling, so the kiln is in the bundle once.
+  // kiln-activation — GENERATED by scripts/kiln-activation (LAYERS-20, LSTORE-5). Never edited by hand: run the script.
+  // The kiln activation of plexus-examples (Rust) as wasm with no SQLite inside, the one SQLite engine it stores
+  // through (plexus:store/sql), the runtime plexus-rt with its store and its codec, the client plexus-gen wrote
+  // from the kiln's IR, and both sides: a worker that serves the kiln, and startKiln() for a page
+  // (globalThis[Symbol.for("menger.kiln-activation")]). kiln-live reaches this file's own module by URL; nothing
+  // imports it as a sibling, so the kiln and the engine are in the bundle once.
   // interface ${hash}
 ${repos.map((r) => `  // from ${r}`).join("\n")}
   // jco ${jco}
@@ -160,42 +195,39 @@ ${repos.map((r) => `  // from ${r}`).join("\n")}
   // ---- plexus-rt: frames over a channel ----
 ${rt}
 
+  // ---- plexus-rt's store: the page gives the engine, the worker opens the store, the import itself ----
+${store}
+
   // ---- the codec's wasm (plexus-proto-web) ----
   const CODEC = "${b64(codecWasm)}";
-  const codec = () => rt.Codec.load(Uint8Array.from(atob(CODEC), (c) => c.charCodeAt(0)));
+  const bytes = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  const codec = () => rt.Codec.load(bytes(CODEC));
 
   // ---- the kiln's client and serving side (plexus-gen, from plexus-examples/ir/kiln.json) ----
 ${client}
 
-  // ---- the store host: the browser's file store for the kiln's SQLite (plexus-rt test/page/store-host.js) ----
-${host}
+  // ---- the engine: SQLite's core modules, compiled once by the page; its JavaScript, run by the worker ----
+  const CORES = {
+${Object.entries(cores).map(([n, b]) => `    "${n}": "${b64(b)}",`).join("\n")}
+  };
+  let engine;
+  const theEngine = () => (engine ??= store.loadEngine(Object.fromEntries(Object.entries(CORES).map(([n, b]) => [n, bytes(b)]))));
+  function engineGlue() {
+${glue}
+  }
 
-  // ---- the kiln: jco's JavaScript, its wasm inline; run only when a worker asks ----
+  // ---- the kiln: jco's JavaScript, its wasm inline, its store the import above; run only when a worker asks ----
   async function loadKiln() {
 ${kiln}
   }
 
   // ---- the worker's side ----
-  const FILES = ["kiln.db", "kiln.db-journal"];
-  /** The kiln's files opened in the browser's file store, or why not. A reload's
-   *  worker may find the last page's still holding them for a moment: it waits. */
-  async function keepStore() {
-    if (!globalThis.navigator?.storage?.getDirectory) return { kept: false, why: "this browser gives a worker no file store" };
-    for (let tries = 0; ; tries++) {
-      try {
-        await storeHost.keep(FILES);
-        return { kept: true };
-      } catch (e) {
-        storeHost.forget();
-        if (e?.name === "NoModificationAllowedError" && tries < 20) { await new Promise((ok) => setTimeout(ok, 100)); continue; }
-        return { kept: false, why: \`\${e?.name ?? "Error"}: \${e?.message ?? e}\` };
-      }
-    }
-  }
   async function serveInWorker() {
-    const store = await keepStore();
+    // The page names the activation (\`give\`): the store is the kiln's own, kiln/kiln.db in the
+    // browser's file store when it gives one; a reload's worker waits for the last page's to let go.
+    const opened = await store.openStore({ keep: ["kiln"], instantiate: engineGlue() });
     // Said first, as a string: a frame is never one.
-    globalThis.postMessage(JSON.stringify({ store }));
+    globalThis.postMessage(JSON.stringify({ store: opened.kept ? { kept: true } : { kept: false, why: opened.why } }));
     const [kiln, c] = await Promise.all([loadKiln(), codec()]);
     const server = new rt.Server(rt.hostChannel(), c);
     generated.serveKiln(kiln, server);
@@ -203,12 +235,12 @@ ${kiln}
   }
 
   // ---- the page's side ----
-  /** The kiln started in a worker made from \`url\` (this file's own module), and its
-   *  generated client in this page. \`tap(from, frame)\` sees every frame that crosses.
+  /** The kiln started in a worker made from \`url\` (this file's own module), given the engine,
+   *  and its generated client in this page. \`tap(from, frame)\` sees every frame that crosses.
    *  Answers { client, store: { kept, why? }, interface, worker, PlexusFailure }. */
   async function startKiln(url, tap) {
-    const worker = new Worker(url, { type: "module", name: "plexus-kiln" });
-    const store = new Promise((ok) => worker.addEventListener("message", (e) => {
+    const worker = store.give(new Worker(url, { type: "module", name: "plexus-kiln" }), "kiln", theEngine());
+    const kept = new Promise((ok) => worker.addEventListener("message", (e) => {
       if (typeof e.data !== "string") return;
       e.stopImmediatePropagation();
       ok(JSON.parse(e.data).store);
@@ -222,11 +254,12 @@ ${kiln}
       worker.terminate();
       throw e;
     }
-    return { client, store: await store, interface: conn.interface, worker, PlexusFailure: rt.PlexusFailure };
+    return { client, store: await kept, interface: conn.interface, worker, PlexusFailure: rt.PlexusFailure };
   }
 
   if (typeof WorkerGlobalScope !== "undefined" && globalThis instanceof WorkerGlobalScope) {
-    if (globalThis.name === "plexus-kiln") serveInWorker();
+    // A failure is thrown out of the worker, so the page's channel closes saying it.
+    if (globalThis.name === "plexus-kiln") serveInWorker().catch((e) => setTimeout(() => { throw e; }));
   } else {
     globalThis[Symbol.for("menger.kiln-activation")] = { startKiln, interface: "${hash}" };
   }
