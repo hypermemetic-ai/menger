@@ -94,6 +94,7 @@ deploy/pipeline backfill                               # deployments.log → the
 deploy/pipeline landing [REV] [--check]                # landing/ at REV (default main) → gate → the edge (menger.sh)
 deploy/pipeline ui [--watch]                           # UI-17: ui/ of this checkout, committed or not, live on test: no image, no cargo
 deploy/pipeline ui promote                             # UI-17: what test has live onto prod, a pointer move (the owner's)
+deploy/pipeline ui prod [--watch]                      # both in one command: ui/ of this checkout live on test, then prod's pointer onto it
 deploy/pipeline remote-secret test|prod                # IDENTITY-45: the WorkOS API key on the box, from a pipe
 ```
 
@@ -383,6 +384,25 @@ write; prod's open pages hear `live` and swap. The smoke on prod then wants
 that version live and `/app/` serving the bundle's page. The UI alone goes
 back on prod with `ui rollback --to <version> --channel prod` (an admin's,
 from either socket), or forward again with another promote.
+
+**`ui prod` is the push and the promote in one command** (owner, 2026-11-16:
+"we do not wait for a deployment. we need to get that down from taking any
+time at all to being practically instant. we want to iterate directly in
+prod"). `deploy/pipeline ui prod` builds `ui/` of the checkout it is run
+from, committed or not, pushes it live on test as `ui` does, and moves prod's
+pointer onto the version it just pushed; `--watch` does it again on every
+change under `ui/`. It says each step and the time the whole took (`ok   prod
+has <hash> live: pushed and promoted in <ms> ms`). It stops with prod as it
+was when the build or the push is refused, when test's server is not the one
+the bundle was built against (`contract_matches: false`), and when prod took
+a version other than the one just pushed (another push reached test in
+between: run it again). It is refused before anything is built while prod's
+server is not on the release test runs: the bundle is checked against test's
+server alone and `ui.promote` checks nothing, so on another release prod may
+lack a method the interface calls. Then the release is promoted first
+(`remote prod`), or `ui` and `ui promote` are run one after the other by
+someone who has looked. A push replaces the whole interface, not one
+component: look at the app on prod after it.
 
 ### The smoke
 
