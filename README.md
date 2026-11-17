@@ -199,7 +199,9 @@ the placeholder too (or the entrypoint of an `--app-dist` build). `/studio/` (ST
 plexus-ui's `studio/` built `--name studio` and pushed `--no-live` keeps as
 `bundle:studio` (a deploy pushes it after the app's) — to a session the gate
 says holds `ui.author` on `*` — admin, an `editor` on `*` (403 otherwise), with `--ui-compiler`'s module at
-`/studio/ui-compiler.wasm`, which it compiles a new page in. The
+`/studio/ui-compiler.wasm`, which it compiles a new page in, and
+`--ui-svelte-compiler`'s at `/studio/svelte-compiler.wasm`, which it
+compiles `svelte/1` in (NOTES-2; 404 on a server started without it). The
 login routes (`/login`, `/login/start`, `/login/callback`, `/logout`,
 `/auth/cli`, …) are plexus-login's. Every page goes out under a
 Content-Security-Policy (ACCESS-28, `PAGE_CSP`): no inline script but the
@@ -309,10 +311,26 @@ where it has one (a list in it is `;`-separated).
 
 | group | flags |
 |---|---|
-| run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path` (`ui.db` beside the database — named after it beside one not named `tickets.db` or `local.db`, `menger-dev.ui.db`; so every file below, SCRATCH-NAMES), `--ui-signer`, `--ui-compiler`, `--ui-allow-rhx` (SV-6: rhx/1 taken again — without it every `ui.push` and `ui.author` carrying an rhx component is refused `rhx_disabled`, naming it; `MENGER_UI_ALLOW_RHX`), `--ui-author-key`, `--media-db-path` (`media.db` beside the database), `--media-store` (`disk`), `--media-blob-dir` (`media/blobs` beside `media.db`; `<stem>.media.blobs` beside a `<stem>.media.db`), `--media-max-bytes`, `--notes-db-path` (`notes.db` beside the database; NOTES-3: a `docs.db` there and no `notes.db` is moved to it at start, a link left at the old name), `--quota-db-path` (`quota.db` beside the database), `--quota-plan` (the defaults a new quota file starts from; the built-in `free-1k`), `--code-db-path` (CODE-2: `code.db` beside the database; `MENGER_CODE_DB_PATH`), `--code-blob-dir` (`code/blobs` beside `code.db`; `<stem>.code.blobs` beside a `<stem>.code.db`; `MENGER_CODE_BLOB_DIR`), `--code-max-bytes` (what the code service keeps at most, 5 GiB; past it the commit read longest ago goes; `MENGER_CODE_MAX_BYTES`), `--logs-db-path` (LOGS-2: `logs.db` beside the database; `MENGER_LOGS_DB_PATH`), `--ui-channel` (UI-15: the live pointer this environment serves in its ui file; default from `--env`: `test`, `prod`, else `default`), `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell`, `--no-mcp` (V2-43: no `/mcp`), `--child NAME=stdio:CMD` or `NAME=ws://…` (POLYGLOT-5: an activation in another process mounted under NAME behind the gate; repeatable; `--child-timeout`, `--child-max-calls`, `--child-env`, `--child-key`: plexus-core's `ChildArgs`; one that does not answer stops the start, exit 2; NAME a service of menger's own is refused) |
+| run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path` (`ui.db` beside the database — named after it beside one not named `tickets.db` or `local.db`, `menger-dev.ui.db`; so every file below, SCRATCH-NAMES), `--ui-signer`, `--ui-compiler`, `--ui-svelte-compiler` (NOTES-2: plexus-ui's Svelte compiler module, `dist/svelte-compiler.wasm` — what `ui.author` compiles `svelte/1` in; without it a `svelte/1` source is refused `no_compiler`; a push is never compiled in it; `MENGER_UI_SVELTE_COMPILER`), `--ui-allow-rhx` (SV-6: rhx/1 taken again — without it every `ui.push` and `ui.author` carrying an rhx component is refused `rhx_disabled`, naming it; `MENGER_UI_ALLOW_RHX`), `--ui-author-key`, `--media-db-path` (`media.db` beside the database), `--media-store` (`disk`), `--media-blob-dir` (`media/blobs` beside `media.db`; `<stem>.media.blobs` beside a `<stem>.media.db`), `--media-max-bytes`, `--notes-db-path` (`notes.db` beside the database; NOTES-3: a `docs.db` there and no `notes.db` is moved to it at start, a link left at the old name), `--quota-db-path` (`quota.db` beside the database), `--quota-plan` (the defaults a new quota file starts from; the built-in `free-1k`), `--code-db-path` (CODE-2: `code.db` beside the database; `MENGER_CODE_DB_PATH`), `--code-blob-dir` (`code/blobs` beside `code.db`; `<stem>.code.blobs` beside a `<stem>.code.db`; `MENGER_CODE_BLOB_DIR`), `--code-max-bytes` (what the code service keeps at most, 5 GiB; past it the commit read longest ago goes; `MENGER_CODE_MAX_BYTES`), `--logs-db-path` (LOGS-2: `logs.db` beside the database; `MENGER_LOGS_DB_PATH`), `--ui-channel` (UI-15: the live pointer this environment serves in its ui file; default from `--env`: `test`, `prod`, else `default`), `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell`, `--no-mcp` (V2-43: no `/mcp`), `--child NAME=stdio:CMD` or `NAME=ws://…` (POLYGLOT-5: an activation in another process mounted under NAME behind the gate; repeatable; `--child-timeout`, `--child-max-calls`, `--child-env`, `--child-key`: plexus-core's `ChildArgs`; one that does not answer stops the start, exit 2; NAME a service of menger's own is refused) |
 | sign-in | `--auth-provider`, `--admin`, `--public-url`, `--login-button`, `--login-email`, `--login-password`, `--login-forgot`, `--identity`, `--workos-api-key-file`, `--allowed-origin`, `--frame-ancestor` (an origin that may frame the shell's pages; none by default), `--live-origin` (an origin the shell's pages may frame), `--allowed-host`, `--trusted-proxy`, `--return-origin`, `--session-hours` (12), `--session-idle-minutes` (120), `--mcp-authorization-server` (V2-43: `/mcp` a protected resource naming it) |
 | maintenance and testing | `--dev-login`, `--dev-password`, `--dev-idp-ws`, `--dev-user` (all `--env test` only), `--verify-derived`, `--seed-synthetic`, `--seed-value`, `--seed-shape` (`flat`, `nested`), `--seed-into-existing` |
 | limits | `--max-body-bytes` (8 MiB), `--max-message-bytes` (32 MiB; V2-54: one socket message — a UI bundle is pushed in one), `--max-calls-per-connection` (256), `--idle-timeout-secs` (900), `--max-connections` (1,024), `--max-connections-per-ip` (256), `--max-connections-per-principal` (4; V2-31: a person's), `--max-connections-per-agent` (64; V2-31: a `key:` principal's), `--max-writes-per-second` (20; V2-31), `--max-anonymous-connections` (128), `--max-anonymous-connections-per-ip` (32) |
+
+`--ui-svelte-compiler` (NOTES-2) names the module plexus-ui compiles
+`svelte/1` in (`dist/svelte-compiler.wasm`, made by the framework's
+`scripts/svelte-compiler-wasm.sh`; a release carries it and `run-menger`
+passes it). With it `ui.author` takes a `svelte/1` source: compiled in the
+service, kept in the live bundle or in a named one (`bundle`), and refused
+`compile_failed` — naming the component and its line — when it does not
+compile. A file that is not the module stops the start, naming the flag and
+the file. The module is handed over for authors alone
+(`UiActivation::svelte_authoring`, plexus-ui 0.2.6): a pushed bundle's
+`svelte/1` is never compiled in it, so a deploy's push is taken exactly as
+it was before the flag. `ui.author` compiles what it is given together with
+every `svelte/1` source of the bundle it builds on, each within one fixed
+fuel, and menger's own bundle holds a component past it (`spec-outline`):
+authored over the live bundle a source is refused `compile_failed` ("ran
+out of fuel"), so what is authored goes into a named bundle of its own.
 
 `--ui-author-key` names the file of the key the ui service signs an
 editor's authored version with (made at first start, 0600; one open to its

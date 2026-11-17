@@ -111,6 +111,9 @@ pub struct Studio {
     pub may: Arc<dyn Fn(&plexus_rpc::core::plexus::AuthContext) -> bool + Send + Sync>,
     /// `--ui-compiler`'s bytes, served at `/studio/ui-compiler.wasm`.
     pub compiler: Option<Vec<u8>>,
+    /// NOTES-2: `--ui-svelte-compiler`'s bytes, served at
+    /// `/studio/svelte-compiler.wasm` (none: 404 there).
+    pub svelte_compiler: Option<Vec<u8>>,
 }
 
 /// UI-3: a version's files never change under its hash — kept a year
@@ -344,8 +347,14 @@ async fn router(cfg: ShellConfig, at: std::net::SocketAddr) -> Router {
             Some(s) => {
                 let may = s.may.clone();
                 let routes = routes.studio(move |ctx| may(ctx));
-                match s.compiler {
+                let routes = match s.compiler {
                     Some(bytes) => routes.compiler_module(bytes),
+                    None => routes,
+                };
+                // NOTES-2: and the Svelte compiler module, which the studio
+                // compiles a svelte/1 source in before it authors.
+                match s.svelte_compiler {
+                    Some(bytes) => routes.svelte_compiler_module(bytes),
                     None => routes,
                 }
             }

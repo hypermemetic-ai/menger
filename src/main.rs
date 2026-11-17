@@ -163,6 +163,18 @@ struct Args {
     #[arg(global = true, long = "ui-compiler", env = "MENGER_UI_COMPILER", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
     ui_compiler: Option<PathBuf>,
 
+    // NOTES-2: the module the ui service compiles svelte/1 in.
+    /// The Svelte compiler module (svelte-compiler.wasm) the ui service compiles svelte/1 in: what `ui.author` takes, and each source of a push
+    ///
+    /// plexus-ui's own module (Svelte's compiler in QuickJS, built by its
+    /// scripts/svelte-compiler-wasm.sh), run in wasmtime over memory alone;
+    /// a file that is not that module is refused at start. The studio is
+    /// served the same bytes. Without it, a svelte/1 source sent to
+    /// `ui.author` is refused `no_compiler`, and a push's modules are taken
+    /// as given.
+    #[arg(global = true, long = "ui-svelte-compiler", env = "MENGER_UI_SVELTE_COMPILER", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
+    ui_svelte_compiler: Option<PathBuf>,
+
     // SV-6: rhx is switched off; this turns it back on.
     /// Take rhx/1 components again: without it every `ui.push` and `ui.author` carrying one is refused `rhx_disabled`, naming it
     ///
@@ -710,7 +722,18 @@ async fn run(args: Args) -> anyhow::Result<()> {
         Some(path) => Some(std::fs::read(path).map_err(|e| anyhow::anyhow!("--ui-compiler {}: {e}", path.display()))?),
         None => None,
     };
-    let ui = ui.compiling(compiler).allowing_rhx(args.ui_allow_rhx);
+    // NOTES-2: the Svelte compiler module — refused at start when it is not
+    // plexus-ui's; the studio is served the same bytes.
+    let (svelte, studio_svelte) = match &args.ui_svelte_compiler {
+        Some(path) => {
+            let bytes = std::fs::read(path).map_err(|e| anyhow::anyhow!("--ui-svelte-compiler {}: {e}", path.display()))?;
+            let svelte = plexus_ui_service::SvelteCompiler::new(&bytes).map_err(|e| anyhow::anyhow!("--ui-svelte-compiler {}: {e}", path.display()))?;
+            tracing::info!("ui svelte: {} ({} bytes)", path.display(), bytes.len());
+            (Some(svelte), Some(bytes))
+        }
+        None => (None, None),
+    };
+    let ui = ui.compiling(compiler).svelte_compiling(svelte).allowing_rhx(args.ui_allow_rhx);
     // STUDIO-3: the author key, made at first start when its file is missing.
     let author = match &args.ui_author_key {
         Some(path) => {
@@ -871,7 +894,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
             // UI-3: `/app/` and `/app/<hash>/…` from the ui service's store.
             ui: Some(ui_store),
             // STUDIO-2: /studio/ for a session holding ui.author on * (the gate's answer).
-            studio: Some(shell::Studio { may: std::sync::Arc::new(move |ctx| studio_may.as_ref().is_some_and(|may| may(ctx))), compiler: studio_module }),
+            studio: Some(shell::Studio { may: std::sync::Arc::new(move |ctx| studio_may.as_ref().is_some_and(|may| may(ctx))), compiler: studio_module, svelte_compiler: studio_svelte }),
             // V2-24: /media/<hash> — the media service asked as the session.
             media: Some(menger::media_route::MediaServe { service: service.clone(), store: media_serve.store.clone(), allowance: media_serve.allowance.clone() }),
             framing: shell::Framing {

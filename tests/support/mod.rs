@@ -286,6 +286,7 @@ pub async fn spawn_menger(port: u16, db: &Path, extra: &[String]) -> Spawned {
     for var in ["MENGER_DB_PATH", "MENGER_AUTH_PROVIDERS", "MENGER_ADMINS", "MENGER_UI_DB_PATH", "MENGER_UI_SIGNERS", "MENGER_UI_COMPILER", "MENGER_UI_ALLOW_RHX", "MENGER_UI_CHANNEL", "MENGER_ENV", "MENGER_MEDIA_DB_PATH", "MENGER_NOTES_DB_PATH", "MENGER_MAX_MESSAGE_BYTES", "RUST_LOG"] {
         cmd.env_remove(var);
     }
+    cmd.env_remove("MENGER_UI_SVELTE_COMPILER"); // NOTES-2
     cmd.env("PLEXUS_NO_REGISTRY", "1").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     let mut server = Spawned { child: cmd.spawn().expect("spawn menger"), port };
     for _ in 0..200 {
@@ -511,6 +512,42 @@ pub fn ui_compiler_wasm() -> std::path::PathBuf {
                 .status()
                 .unwrap_or_else(|e| panic!("{} runs: {e}", script.display()));
             assert!(status.success(), "{} failed: {status}", script.display());
+            assert!(path.is_file(), "{} was written", path.display());
+            if let Some(m) = run {
+                std::fs::write(m, b"").expect("the run's mark");
+            }
+            path
+        })
+        .clone()
+}
+
+/// NOTES-2: `dist/svelte-compiler.wasm` — plexus-ui's Svelte compiler module
+/// (SV-2), built once per test binary by the framework's
+/// `scripts/svelte-compiler-wasm.sh OUT`, of the checkout
+/// `scripts/plexus-ui-src --node-modules` names (the tag of the version
+/// menger takes; its node_modules hold the svelte the module carries) —
+/// what a test server takes as `--ui-svelte-compiler`. Node 22 and javy
+/// 9.1.0 (the script fetches it once, held to its sha256). Under one lock,
+/// once per nextest run, as [`ui_compiler_wasm`] is.
+pub fn svelte_compiler_wasm() -> std::path::PathBuf {
+    static BUILT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    BUILT
+        .get_or_init(|| {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+            let src = std::process::Command::new(root.join("scripts/plexus-ui-src")).arg("--node-modules").arg(root).output().expect("scripts/plexus-ui-src runs");
+            assert!(src.status.success(), "scripts/plexus-ui-src --node-modules: {}", String::from_utf8_lossy(&src.stderr));
+            let script = std::path::PathBuf::from(String::from_utf8_lossy(&src.stdout).trim()).join("scripts/svelte-compiler-wasm.sh");
+            let path = root.join("dist/svelte-compiler.wasm");
+            let target = std::env::var_os("CARGO_TARGET_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| root.join("target"));
+            std::fs::create_dir_all(&target).expect("the target directory");
+            let lock = std::fs::File::create(target.join("svelte-compiler-wasm.lock")).expect("the module's lock file");
+            lock.lock().expect("the module's lock");
+            let run = std::env::var("NEXTEST_RUN_ID").ok().map(|id| target.join(format!("svelte-compiler-wasm.{id}.built")));
+            if run.as_ref().is_some_and(|m| m.is_file()) && path.is_file() {
+                return path;
+            }
+            let out = std::process::Command::new("bash").arg(&script).arg(&path).current_dir(root).output().unwrap_or_else(|e| panic!("{} runs: {e}", script.display()));
+            assert!(out.status.success(), "{} failed: {}\n{}", script.display(), out.status, String::from_utf8_lossy(&out.stderr));
             assert!(path.is_file(), "{} was written", path.display());
             if let Some(m) = run {
                 std::fs::write(m, b"").expect("the run's mark");

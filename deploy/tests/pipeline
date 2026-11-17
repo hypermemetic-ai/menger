@@ -1332,6 +1332,15 @@ echo "${IN_CODEGEN:+codegen}${IN_CODEGEN:-host} CARGO_TARGET_DIR=${CARGO_TARGET_
 case ${STUB_UI_COMPILER:-ok} in fail) echo "ui-compiler-wasm (stand-in): failed" >&2; exit 1 ;; empty) exit 0 ;; esac
 mkdir -p "$(dirname "$1")" && printf '\0asm\1\0\0\0' >"$1"
 WASM
+# NOTES-2: and its Svelte compiler module script, a stand-in alike: says the OUT it was given and
+# writes a module there (STUB_SVELTE_COMPILER=fail: exits 1; empty: writes nothing)
+cat >"$B/plexus-ui/scripts/svelte-compiler-wasm.sh" <<'SVELTE'
+#!/usr/bin/env bash
+set -eu
+echo "OUT=${1:-}" >>"$STUB_SVELTE_COMPILER_RAN"
+case ${STUB_SVELTE_COMPILER:-ok} in fail) echo "svelte-compiler-wasm (stand-in): failed" >&2; exit 1 ;; empty) exit 0 ;; esac
+mkdir -p "$(dirname "$1")" && printf '\0asm\1\0\0\0' >"$1"
+SVELTE
 for t in trunk npm wasm-pack; do printf '#!/usr/bin/env bash\necho "%s $*" >>"%s"\nexit 99\n' "$t" "$B/browser.log" >"$B/bin/$t"; done
 printf '#!/usr/bin/env bash\necho "rustc 1.90.0 (stand-in)"\n' >"$B/bin/rustc"
 cat >"$B/bin/cargo" <<'CARGO'
@@ -1441,12 +1450,12 @@ esac
 echo "synapse (stand-in): no answer for: $*" >&2; exit 1
 SYNAPSE
 chmod +x "$B/bin/"* "$B/fake-menger"
-export STUB_CARGO_LOG=$B/cargo.log STUB_BUILD_DOCKER=$B/docker.argv STUB_UI_COMPILER_RAN=$B/ui-compiler.ran \
+export STUB_CARGO_LOG=$B/cargo.log STUB_BUILD_DOCKER=$B/docker.argv STUB_UI_COMPILER_RAN=$B/ui-compiler.ran STUB_SVELTE_COMPILER_RAN=$B/svelte-compiler.ran \
   STUB_FAKE_MENGER=$B/fake-menger STUB_MENGER_UP=$B/up STUB_MENGER_RAN=$B/menger.ran STUB_BUILD_SYNAPSE=$B/synapse.argv \
   STUB_MENGER_PIDS=$B/menger.pids STUB_UI_TOOL_LOG=$B/plexus-ui.log STUB_CONTRACT_OVER=$B/contract-over.sh
 # the build's TMPDIR: where mktemp makes its scratch (UI-12: the binary's HOME and data directory)
 T5TMP=$SCRATCH/tmp5; mkdir -p "$T5TMP"
-bb() { : >"$STUB_CARGO_LOG"; : >"$STUB_BUILD_DOCKER"; : >"$STUB_UI_TOOL_LOG"; : >"$B/browser.log"; : >"$STUB_UI_COMPILER_RAN"; : >"$STUB_MENGER_RAN"; : >"$STUB_BUILD_SYNAPSE"; : >"$STUB_MENGER_PIDS"
+bb() { : >"$STUB_CARGO_LOG"; : >"$STUB_BUILD_DOCKER"; : >"$STUB_UI_TOOL_LOG"; : >"$B/browser.log"; : >"$STUB_UI_COMPILER_RAN"; : >"$STUB_SVELTE_COMPILER_RAN"; : >"$STUB_MENGER_RAN"; : >"$STUB_BUILD_SYNAPSE"; : >"$STUB_MENGER_PIDS"
   PATH=$B/bin:$PATH HOME=$H5 TMPDIR=$T5TMP DISK_CHECK_USED_PCT=10 DISK_CHECK_AVAIL_GB=900 "$BR/deploy/pipeline" "$@" >"$SCRATCH/out" 2>"$SCRATCH/err"; code=$?; err=$(<"$SCRATCH/err"); }
 field() { sed -n "s/^$1: *//p" "$2" 2>/dev/null; } # FIELD RELEASEFILE
 bb build --branch v2 --no-gate
@@ -1454,7 +1463,7 @@ same "$T1: build --branch v2 exits 0" "$code" 0
 VR=$(tail -n 1 "$SCRATCH/out"); RF=$D5/releases/$VR/RELEASE
 same "$T1: a release of v2's tip" "$(field commit "$RF")" "$VSHA"
 same "$T1: the release names its branch" "$(field branch "$RF")" "v2"
-same "$T1: the release's steps" "$(field steps "$RF")" "cargo build, plexus-ui, ui-prebuild, ui-build, ui-compiler-wasm"
+same "$T1: the release's steps" "$(field steps "$RF")" "cargo build, plexus-ui, ui-prebuild, ui-build, ui-compiler-wasm, svelte-compiler-wasm"
 # SV-6: no studio built, none carried — the studio is plexus-studio's, edited in the database
 same "$T1: no studio built" "$(grep -c -- '--name studio' "$STUB_UI_TOOL_LOG")" 0
 [[ ! -e $D5/releases/$VR/dist/studio.tar ]] && ok || bad "$T1: the release carries a dist/studio.tar"
@@ -1470,6 +1479,9 @@ same "$T1: no container asked" "$(<"$STUB_BUILD_DOCKER")" ""
 has "$T1: the compiler module built on this machine by ../plexus-ui's script, into the build's target and dist/" "$(cat "$B/ui-compiler.ran" 2>/dev/null)" "host CARGO_TARGET_DIR=$B/menger-build/target OUT=$B/menger-build/dist/ui-compiler.wasm"
 same "$T1: the release's dist/ui.tar holds the page and its manifest" "$(tar -tf "$D5/releases/$VR/dist/ui.tar" 2>/dev/null | paste -sd' ')" "index.html manifest.json"
 [[ -s $D5/releases/$VR/dist/ui-compiler.wasm ]] && ok || bad "$T1: no dist/ui-compiler.wasm in the release"
+# NOTES-2: and the Svelte compiler module, by the framework's script, into dist/ and the release
+has "$T1: the Svelte compiler module built by ../plexus-ui's script, into dist/" "$(cat "$B/svelte-compiler.ran" 2>/dev/null)" "OUT=$B/menger-build/dist/svelte-compiler.wasm"
+[[ -s $D5/releases/$VR/dist/svelte-compiler.wasm ]] && ok || bad "$T1: no dist/svelte-compiler.wasm in the release"
 [[ -x $D5/releases/$VR/bin/menger && -f $D5/releases/$VR/bin/run-menger && ! -e $D5/releases/$VR/app ]] && ok || bad "$T1: the release is bin/menger, bin/run-menger and dist/, no app/"
 # a frontend/ the build checkout kept untracked (git clean keeps /frontend/target/) is no frontend
 mkdir -p "$B/menger-build/frontend/target/release" && : >"$B/menger-build/frontend/target/release/stale"
@@ -1488,6 +1500,19 @@ for mode in fail empty; do
   [[ $code != 0 ]] && ok || bad "$T1: the script $mode: the build exits 0"
   has "$T1: the script $mode: the step named" "$err" "ui-compiler-wasm"
   same "$T1: the script $mode: no release" "$(releases_now)" "$before"
+done
+# NOTES-2: no Svelte compiler module, no release — the same three ways, the step named
+mv "$B/plexus-ui/scripts/svelte-compiler-wasm.sh" "$B/svelte-compiler-wasm.sh.away"
+next_second0; bb build --branch v2 --no-gate
+[[ $code != 0 ]] && ok || bad "$T1: no ../plexus-ui/scripts/svelte-compiler-wasm.sh: the build exits 0"
+has "$T1: no Svelte script: the step named" "$err" "svelte-compiler-wasm: no scripts/svelte-compiler-wasm.sh in $B/menger-build/../plexus-ui"
+same "$T1: no Svelte script: no release" "$(releases_now)" "$before"
+mv "$B/svelte-compiler-wasm.sh.away" "$B/plexus-ui/scripts/svelte-compiler-wasm.sh"
+for mode in fail empty; do
+  next_second0; STUB_SVELTE_COMPILER=$mode bb build --branch v2 --no-gate
+  [[ $code != 0 ]] && ok || bad "$T1: the Svelte script $mode: the build exits 0"
+  has "$T1: the Svelte script $mode: the step named" "$err" "svelte-compiler-wasm"
+  same "$T1: the Svelte script $mode: no release" "$(releases_now)" "$before"
 done
 same "$T1: an untracked frontend/ left in the build checkout: no trunk, no npm" "$(<"$B/browser.log")" ""
 [[ -d $B/menger-build/frontend/target ]] && ok || bad "$T1: (setup) the untracked frontend/target is gone — the check above proves nothing"
@@ -1710,6 +1735,7 @@ v2release() { # DIR N WASM(0/1) [BUNDLE] [DAY] → a v2 release at IC[N], laid o
   cp "$REPO/deploy/launch/run-menger" "$r/bin/run-menger"; chmod +x "$r/bin/"*
   cp "${4:-$UBC/dist/ui.tar}" "$r/dist/ui.tar"
   [[ $3 == 1 ]] && printf '\0asm\1\0\0\0' >"$r/dist/ui-compiler.wasm"
+  [[ $3 == 1 ]] && printf '\0asm\1\0\0\0' >"$r/dist/svelte-compiler.wasm"   # NOTES-2
   [[ -n ${STUDIO_TAR:-} ]] && cp "$STUDIO_TAR" "$r/dist/studio.tar"
   chmod -R a-w "$r"; echo "$id"
 }
@@ -1732,6 +1758,7 @@ same "$T2: image of a v2 release exits 0" "$code" 0
 ctxl=$(<"$STUB_CONTEXT")
 has "$T2: the context holds dist/ui.tar" "$ctxl" "./release/dist/ui.tar"
 has "$T2: the context holds dist/ui-compiler.wasm" "$ctxl" "./release/dist/ui-compiler.wasm"
+has "$T2: the context holds dist/svelte-compiler.wasm (NOTES-2)" "$ctxl" "./release/dist/svelte-compiler.wasm"
 [[ $ctxl != *./release/app/* ]] && ok || bad "$T2: an app/ in a v2 image: $ctxl"
 df=$(cat "$(cat "$STUB_CTX_COPY.last" 2>/dev/null)/Dockerfile" 2>/dev/null)
 has "$T2: the Dockerfile copies dist/ into the image" "$df" "release/dist"
@@ -1743,12 +1770,14 @@ has "$T2: the entrypoint passes --ui-signer, the first key" "$a" "--ui-signer $P
 has "$T2: the entrypoint passes --ui-signer, the second key" "$a" "--ui-signer $PUB3"
 same "$T2: one --ui-signer per key" "$(grep -o -- '--ui-signer' <<<"$a" | wc -l)" 2
 [[ $a =~ --ui-compiler\ [^\ ]*/dist/ui-compiler\.wasm ]] && ok || bad "$T2: the entrypoint passes no --ui-compiler <…/dist/ui-compiler.wasm>: '$a'"
+[[ $a =~ --ui-svelte-compiler\ [^\ ]*/dist/svelte-compiler\.wasm ]] && ok || bad "$T2: the entrypoint passes no --ui-svelte-compiler <…/dist/svelte-compiler.wasm> (NOTES-2): '$a'"
 # until UI-5 lands a release may hold no compiler module: imaged all the same, the flag omitted
 irun6 image "$V6N"
 same "$T2: a release with no compiler module: exits 0" "$code" 0
 a=$(entry_args)
 has "$T2: … the signer still passed" "$a" "--ui-signer $PUB2"
 [[ -n $a && $a != *--ui-compiler* ]] && ok || bad "$T2: --ui-compiler with no module (or no entrypoint ran): '$a'"
+[[ -n $a && $a != *--ui-svelte-compiler* ]] && ok || bad "$T2: --ui-svelte-compiler with no module (NOTES-2): '$a'"
 # the pipeline's public key is the orchestrator's to write: its format checked only when it is there
 if sl=$(grep '^MENGER_UI_SIGNERS=' "$REPO/deploy/env/app-test.env"); then
   [[ ${sl#*=} =~ ^[0-9a-f]{64}(\;[0-9a-f]{64})*$ ]] && ok || bad "$T2: deploy/env/app-test.env's MENGER_UI_SIGNERS is not 64-hex keys: $sl"
