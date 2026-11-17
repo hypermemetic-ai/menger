@@ -122,7 +122,11 @@ sha256 in `media.db`, `--media-db-path`), `notes` (V2-29, NOTES-3: `notes/`,
 who may is the gate's word on the note's organization, asked through
 its seam; the editor writes it at `#/note/:id`, and `#/doc/:id` opens the
 same note; the docs service renamed, what it kept moved at the first start
-by `src/notes_move.rs`), and `quota` (V2-31: `quota/`, `menger-quota` —
+by `src/notes_move.rs`; NOTES-5: an agent follows a note as text, `notes
+watch --id X --text true`, and leaves marks on it without writing it —
+`notes mark`, `unmark`, `marks`, a range anchored as a question's is
+(`notes/src/marks.rs`), underlined on the page by `ui/src/note-margin.svelte` (real
+Svelte, `svelte/1`) beside the questions' ranges — README "`notes`"), and `quota` (V2-31: `quota/`, `menger-quota` —
 every principal's allowance per source in `quota.db`, `--quota-db-path`;
 every storing write reserved through its seam; V2-70: a point a day per
 principal and source kept as history, `quota.history`, backfilled by the

@@ -393,6 +393,11 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("notes.ask", Today::Editor, None),
     ("notes.reply", Today::Editor, None),
     ("notes.resolve", Today::Editor, None),
+    // NOTES-5: marks on a range — a viewer reads them, an editor marks and
+    // takes one off (never writing the text).
+    ("notes.marks", Today::Viewer, None),
+    ("notes.mark", Today::Editor, None),
+    ("notes.unmark", Today::Editor, None),
 ];
 
 /// AUTH-7's one deliberate narrowing of the table: what an anonymous or
