@@ -28,7 +28,7 @@ a branch's tip → build (no gate) → release → image (GHCR) → remote test 
 | deployed by | `deploy/pipeline remote test --image …` (infra's `app.yml`) | `deploy/pipeline remote prod` (infra's `promote.yml`: what test runs) |
 | recorded as | `test` | `app-prod`, promoting from `test` |
 | its data | its own tracker, in the box's volume | the tracker since RUN-13 |
-| its UI | UI-15: one component store, `menger-shared`'s `/shared/ui.db`, on the channel `test` — a deploy pushes the bundle here | the same file, on the channel `prod` — `remote prod` promotes test's live version onto it, no second push |
+| its UI | UI-15: one component store, `menger-shared`'s `/shared/ui.db`, on the channel `test` — a deploy pushes the bundle here | the same file, on the channel `prod` — `remote prod` promotes test's live version onto it, no second push; `ui prod` pushes a working tree's `ui/` onto it directly |
 | settings | `deploy/env/app-test.env` | `deploy/env/app-prod.env` |
 
 **What each runs** is what `deploy/pipeline status` says — ask it, never
@@ -94,7 +94,7 @@ deploy/pipeline backfill                               # deployments.log → the
 deploy/pipeline landing [REV] [--check]                # landing/ at REV (default main) → gate → the edge (menger.sh)
 deploy/pipeline ui [--watch]                           # UI-17: ui/ of this checkout, committed or not, live on test: no image, no cargo
 deploy/pipeline ui promote                             # UI-17: what test has live onto prod, a pointer move (the owner's)
-deploy/pipeline ui prod [--watch]                      # both in one command: ui/ of this checkout live on test, then prod's pointer onto it
+deploy/pipeline ui prod [--watch]                      # ui/ of this checkout live on PROD: pushed on prod's own socket, checked against prod's server; test takes no part
 deploy/pipeline remote-secret test|prod                # IDENTITY-45: the WorkOS API key on the box, from a pipe
 ```
 
@@ -282,10 +282,11 @@ the owner's.
    the promoted version live and `/app/` serving the bundle's page; recorded
    as `app-prod` (from `test`). A failed smoke is recorded `failed`;
    `bin/infra rollback.yml -e app_dir=<checkout>` puts prod back on its
-   previous image ("On the Linode"). prod takes no push, so
-   `deploy/env/app-prod.env` names no `MENGER_UI_SIGNERS`; it names the
-   store and its channel (`MENGER_UI_DB_PATH=/shared/ui.db`,
-   `MENGER_UI_CHANNEL=prod`), as test's names its (`test`). The pipeline key
+   previous image ("On the Linode"). A release is never pushed to prod a
+   second time; `deploy/env/app-prod.env` names the store and its channel
+   (`MENGER_UI_DB_PATH=/shared/ui.db`, `MENGER_UI_CHANNEL=prod`), as test's
+   names its (`test`), and the pipeline key as its signer
+   (`MENGER_UI_SIGNERS`, for `ui prod` alone: below). The pipeline key
    must hold `deployer` on `*` on prod, as it does on test (the operator
    grants it once).
 
@@ -302,7 +303,7 @@ when the module is there and `--ui-svelte-compiler` when its module is
 `svelte/1` source `no_compiler`). The `svelte/1` module is for `ui.author`
 alone: the deploy's push is not compiled in it, and is taken as before. A service names its signers at start: app-test's
 line in `deploy/env/app-test.env` is the pipeline key's public key, written
-by hand, never by a test; prod names none (UI-15: it takes no push).
+by hand, never by a test; prod's names the same key (owner, 2026-11-16: `ui prod`, below).
 
 V2-24: the media service keeps its file beside the database in the data
 volume by default (`media.db`; `--media-db-path`, `MENGER_MEDIA_DB_PATH`
@@ -374,35 +375,48 @@ deploy — recorded `failed`, the reason (`bad_signature`, `no_signer`, …) on
 stderr and in deployments.log — and leaves live the version that was live;
 the pipeline never calls `ui.rollback`.
 
-**Prod is a promote, not a push** (UI-15). The store is one file for both
-environments (infra's `menger-shared` volume, `/shared/ui.db`; `deploy/app.yml`
-`shared`), test on the channel `test`, prod on `prod`: a push on test moves
-`live:test` alone, and `remote prod` calls `ui.promote { to: prod, from:
-test }` as the pipeline key on prod's socket — `deploy/menger-call.mjs`, no
-bundle on the wire — which moves `live:prod` onto test's live version in one
-write; prod's open pages hear `live` and swap. The smoke on prod then wants
-that version live and `/app/` serving the bundle's page. The UI alone goes
-back on prod with `ui rollback --to <version> --channel prod` (an admin's,
-from either socket), or forward again with another promote.
+**A release reaches prod by a promote, not a push** (UI-15). The store is one
+file for both environments (infra's `menger-shared` volume, `/shared/ui.db`;
+`deploy/app.yml` `shared`), test on the channel `test`, prod on `prod`: a
+push on test moves `live:test` alone, and `remote prod` calls `ui.promote {
+to: prod, from: test }` as the pipeline key on prod's socket —
+`deploy/menger-call.mjs`, no bundle on the wire — which moves `live:prod`
+onto test's live version in one write; prod's open pages hear `live` and
+swap. The smoke on prod then wants that version live and `/app/` serving the
+bundle's page. The UI alone goes back on prod with `ui rollback --to
+<version> --channel prod` (an admin's, from either socket), or forward again
+with another promote.
 
-**`ui prod` is the push and the promote in one command** (owner, 2026-11-16:
-"we do not wait for a deployment. we need to get that down from taking any
-time at all to being practically instant. we want to iterate directly in
-prod"). `deploy/pipeline ui prod` builds `ui/` of the checkout it is run
-from, committed or not, pushes it live on test as `ui` does, and moves prod's
-pointer onto the version it just pushed; `--watch` does it again on every
-change under `ui/`. It says each step and the time the whole took (`ok   prod
-has <hash> live: pushed and promoted in <ms> ms`). It stops with prod as it
-was when the build or the push is refused, when test's server is not the one
-the bundle was built against (`contract_matches: false`), and when prod took
-a version other than the one just pushed (another push reached test in
-between: run it again). It is refused before anything is built while prod's
-server is not on the release test runs: the bundle is checked against test's
-server alone and `ui.promote` checks nothing, so on another release prod may
-lack a method the interface calls. Then the release is promoted first
-(`remote prod`), or `ui` and `ui promote` are run one after the other by
-someone who has looked. A push replaces the whole interface, not one
-component: look at the app on prod after it.
+**`ui prod` pushes a working tree's `ui/` straight to prod** (owner,
+2026-11-16: "we do not wait for a deployment. we need to get that down from
+taking any time at all to being practically instant. we want to iterate
+directly in prod"; and, shown that prod could only take what test's server
+had accepted, of letting prod take pushes checked against its own server:
+"take the first"). `deploy/pipeline ui prod` is `ui` with prod where test
+was: it builds `ui/` of the checkout it is run from, committed or not, with
+the tool and the engine of the release prod runs, checks every method the
+components call against prod's own server (`--contract-from` prod's
+socket), and pushes it there as the pipeline key, live on the channel
+`prod`; `--watch` does it again on every change under `ui/`. It says `ok
+<commit> live on prod: <hash> in <ms> ms`. Test is asked nothing and its
+pointer does not move, so the two servers may run different releases: what
+matters is that the tree's `ui/` fits prod's. A tree ahead of prod's server
+is refused `unknown_method` and nothing moves — run it from a checkout at
+the commit prod's server runs, with the component changed. For this, prod
+names a signer: `MENGER_UI_SIGNERS` in `deploy/env/app-prod.env` is the
+pipeline key's public key, as test's is; a prod started from a release
+before that line refuses `no_signer`, and the command says to promote one
+that carries it. Three things follow from pushing where no release went:
+
+- **A push replaces the whole interface**, not one component: look at the
+  app on prod after it.
+- **The next `remote prod` puts prod's pointer back onto what test has
+  live.** What was pushed to prod alone stays live only until then, so its
+  source is committed and merged to `v2` in the same pass and the next
+  release carries it.
+- **Prod's interface may differ from test's** until that release. `ui`
+  (test) and `ui promote` (test's live version onto prod) are still there
+  for the case where both run one release.
 
 ### The smoke
 
@@ -619,7 +633,7 @@ Let's Encrypt, http → https 308), the A record, and sets
 | environment | host | settings (copied to the box as `app.env`) |
 |---|---|---|
 | test | `app-test.menger.sh` | `deploy/env/app-test.env` — WorkOS staging, `MENGER_UI_SIGNERS` the pipeline key's, `MENGER_UI_DB_PATH=/shared/ui.db`, `MENGER_UI_CHANNEL=test` |
-| prod | `app.menger.sh` | `deploy/env/app-prod.env` — WorkOS production; the GitHub button through WorkOS's API with the key on the box; `MENGER_UI_DB_PATH=/shared/ui.db`, `MENGER_UI_CHANNEL=prod`, no signer |
+| prod | `app.menger.sh` | `deploy/env/app-prod.env` — WorkOS production; the GitHub button through WorkOS's API with the key on the box; `MENGER_UI_DB_PATH=/shared/ui.db`, `MENGER_UI_CHANNEL=prod`, the pipeline key as `MENGER_UI_SIGNERS` (`ui prod`) |
 
 The settings are menger's own (README "Run"): `MENGER_PUBLIC_URL=https://<host>`,
 `MENGER_BIND=0.0.0.0`, `MENGER_AUTH_PROVIDERS` = WorkOS (AuthKit) and
@@ -944,7 +958,7 @@ Each runs on a throwaway root and touches nothing real; none runs under
   refused, no key), a tracker down, hung, refusing or without v1's
   record method (DEPLOY-62: nothing sent or queued, what waited set
   aside), `remote prod`'s suite
-  check and its promote (UI-15: no push to prod, one `ui.promote` as the
+  check and its promote (UI-15: a release is not pushed to prod, one `ui.promote` as the
   pipeline key, the hash in the log line, a refusal failing it with nothing
   moved), the suite green and red, `build --branch` on a tree with no
   `frontend/`, `local`, `status`, `backfill` and the retired commands.

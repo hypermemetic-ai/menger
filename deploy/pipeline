@@ -39,9 +39,9 @@
 #                                           (DEPLOY-52: test is app-test); passing marks it TESTED
 #   deploy/pipeline ui [--watch]            UI-17: ui/ of this checkout live on test, no image, no cargo
 #   deploy/pipeline ui promote              UI-17: what test has live onto prod (a pointer move; the owner's)
-#   deploy/pipeline ui prod [--watch]       both in one command (owner, 2026-11-16: "we want to iterate directly in
-#                                           prod"): ui/ of this checkout live on test, then prod's pointer onto
-#                                           it; refused while prod's server is not on the release test runs
+#   deploy/pipeline ui prod [--watch]       ui/ of this checkout live on PROD, pushed on prod's own socket and
+#                                           checked against prod's server; test takes no part (owner, 2026-11-16:
+#                                           "we want to iterate directly in prod")
 #   deploy/pipeline remote prod             app.menger.sh through infra's promote.yml: what test runs, then
 #                                           `ui promote --to prod --from test` (UI-15: one store, prod's pointer
 #                                           onto test's live version, no second push), then the smoke —
@@ -1801,8 +1801,8 @@ ui_engine() { # REL → a directory holding REL's engine
   [[ -f $d/engine.wasm ]] && { echo "$d"; return 0; }
   mkdir -p "$d" && tar -xf "$RELEASES/$1/dist/ui.tar" -C "$d" engine.js engine.wasm host.js && echo "$d"
 }
-ui_once() { # WS TOOL ENGINE TAR — one build and push; says what happened; 1 when nothing moved
-  local ws=$1 tool=$2 engine=$3 tar=$4 commit t0 ms out
+ui_once() { # WS TOOL ENGINE TAR [ENV] — one build and push to ENV (test; or prod); says what happened; 1 when nothing moved
+  local ws=$1 tool=$2 engine=$3 tar=$4 env=${5:-test} commit t0 ms out
   t0=$(date +%s%3N)
   commit=menger@$(git -C "$REPO" rev-parse --short HEAD)
   [[ -n $(git -C "$REPO" status --porcelain -- ui) ]] && commit+=-dirty
@@ -1810,39 +1810,34 @@ ui_once() { # WS TOOL ENGINE TAR — one build and push; says what happened; 1 w
         --node-modules "$PUI/node_modules" --contract-from "$ws" --service menger \
         --key-file "$DEPLOY_KEY_FILE" --as pipeline --commit "$commit" -o "$tar" 2>&1); then
     say "red  $commit: the build refused it — nothing moved"; say "$out"
-    grep -q unknown_method <<<"$out" && say "     a method test's server does not have: this change needs a release (deploy/pipeline build)"
+    grep -q unknown_method <<<"$out" && say "     a method $env's server does not have: this change needs a release (deploy/pipeline build)"
     return 1
   fi
-  if ! ui_push_tar "$ws" "$tar" "$2"; then say "red  $commit: the push refused it — $UI_WHY"; return 1; fi
+  if ! ui_push_tar "$ws" "$tar" "$2"; then
+    say "red  $commit: the push refused it — $UI_WHY"
+    [[ $env == prod && $UI_WHY == *no_signer* ]] && say "     prod's release is from before prod took a push: promote one that carries MENGER_UI_SIGNERS in deploy/env/app-prod.env (deploy/pipeline remote prod)"
+    return 1
+  fi
   ms=$(( $(date +%s%3N) - t0 ))
-  say "ok   $commit live on test: ${UI_PUSHED:0:12} in ${ms} ms, contract_matches: ${UI_MATCHES:-null}"
+  say "ok   $commit live on $env: ${UI_PUSHED:0:12} in ${ms} ms, contract_matches: ${UI_MATCHES:-null}"
   [[ $UI_MATCHES != false ]]
 }
 ui_stamp() { find "$REPO/ui" -type f -printf '%T@ %s %p\n' | sort | sha256sum; }
 ui_prod_ws() { local p; p=$(app_url prod); p=wss://${p#https://}; echo "${p%/}/ws"; }
 # The owner, 2026-11-16: "we do not wait for a deployment. we need to get that down from taking any time at
-# all to being practically instant. we want to iterate directly in prod" — ui_once, then prod's pointer onto
-# what it pushed: one build, one push, one promote, and the time the whole of it took.
-ui_once_prod() { # WS TOOL ENGINE TAR — says what happened; 1 when prod is not on this tree's ui/
-  local t0 pushed ms; t0=$(date +%s%3N)
-  ui_once "$@" || { say "     prod is as it was: nothing was promoted"; return 1; }
-  pushed=$UI_PUSHED
-  if ! ui_promote "$(ui_prod_ws)" test prod; then say "red  the promote was refused, prod is as it was: $UI_WHY"; return 1; fi
-  if [[ $UI_PROMOTED != "$pushed" ]]; then
-    say "red  prod took ${UI_PROMOTED:0:12}, not the ${pushed:0:12} just pushed: another push reached test in between — run it again"
-    return 1
-  fi
-  ms=$(( $(date +%s%3N) - t0 ))
-  say "ok   prod has ${UI_PROMOTED:0:12} live$([[ $UI_MOVED == true ]] || echo ' already'): pushed and promoted in ${ms} ms"
-}
+# all to being practically instant. we want to iterate directly in prod" — and, shown that prod could only
+# take what test's server had accepted: "take the first" (let prod take pushes itself). So `ui prod` is
+# ui_once on prod's own socket: built against prod's server (--contract-from it), pushed there as the
+# pipeline key, live on the channel prod. Test is not asked and its pointer does not move. A release still
+# reaches prod by the promote (UI-15), which puts prod's pointer back onto what test has live.
 cmd_ui() {
-  local watch=0 once=ui_once usage="usage: deploy/pipeline ui [--watch] | ui prod [--watch] | ui promote"
+  local watch=0 env=test usage="usage: deploy/pipeline ui [--watch] | ui prod [--watch] | ui promote"
   case ${1:-} in
     promote)
       ui_promote "$(ui_prod_ws)" test prod || die "the promote was refused, nothing moved: $UI_WHY"
       say "ok   prod has ${UI_PROMOTED:0:12} live$([[ $UI_MOVED == true ]] || echo ' already')"
       return 0 ;;
-    prod) once=ui_once_prod; shift ;;
+    prod) env=prod; shift ;;
   esac
   case ${1:-} in
     --watch) watch=1 ;;
@@ -1853,23 +1848,20 @@ cmd_ui() {
   [[ -n $DEPLOY_KEY_FILE ]] || die "no pipeline key (MENGER_DEPLOY_KEY_FILE) to push as"
   [[ -d $REPO/ui/src ]] || die "$REPO has no ui/src: UI-only pushes are v2's"
   local rel tool engine ws tar stamp now
-  rel=$(last_good test); [[ -n $rel ]] && release_bundle "$rel" || die "test runs no release with a bundle (${rel:-none}): deploy one first"
-  if [[ $once == ui_once_prod ]]; then
-    # the bundle is checked against test's server alone, and ui.promote checks nothing: on another release prod may lack a method it calls
-    local on_prod; on_prod=$(last_good app-prod)
-    [[ $on_prod == "$rel" ]] || die "ui prod: prod's server runs ${on_prod:-no release} and test's $rel — this ui/ is checked against test's server alone, so prod may not have what it calls. Promote the release first (deploy/pipeline remote prod), or run ui and then ui promote yourself"
-  fi
+  # the tool and the engine are the release's that the environment pushed to runs
+  if [[ $env == prod ]]; then rel=$(last_good app-prod); else rel=$(last_good test); fi
+  [[ -n $rel ]] && release_bundle "$rel" || die "$env runs no release with a bundle (${rel:-none}): deploy one first"
   tool=$(ui_tool "$rel"); [[ -n $tool ]] || die "no plexus-ui (the release carries none; MENGER_PLEXUS_UI, or PATH)"
   engine=$(ui_engine "$rel") || die "no engine in $rel's bundle"
   local uilog; uilog=$(mktemp); plexus_ui_src "$REPO" "$uilog" keep   # V2-47: svelte/1's node_modules, of the plexus-ui this tree takes
-  ws=$(app_url test); ws=wss://${ws#https://}; ws=${ws%/}/ws
+  ws=$(app_url "$env"); ws=wss://${ws#https://}; ws=${ws%/}/ws
   tar=$(mktemp --suffix=.tar); trap "rm -f '$tar' '$uilog'" EXIT
-  if [[ $watch == 0 ]]; then "$once" "$ws" "$tool" "$engine" "$tar"; return; fi
-  say "watching $REPO/ui → $ws$([[ $once == ui_once_prod ]] && echo ", then prod") (release $rel); Ctrl-C ends it"
-  stamp=$(ui_stamp); "$once" "$ws" "$tool" "$engine" "$tar" || true
+  if [[ $watch == 0 ]]; then ui_once "$ws" "$tool" "$engine" "$tar" "$env"; return; fi
+  say "watching $REPO/ui → $ws (release $rel); Ctrl-C ends it"
+  stamp=$(ui_stamp); ui_once "$ws" "$tool" "$engine" "$tar" "$env" || true
   while sleep "${MENGER_UI_WATCH_SECS:-0.3}"; do
     now=$(ui_stamp); [[ $now == "$stamp" ]] && continue
-    stamp=$now; "$once" "$ws" "$tool" "$engine" "$tar" || true
+    stamp=$now; ui_once "$ws" "$tool" "$engine" "$tar" "$env" || true
   done
 }
 
