@@ -2083,6 +2083,28 @@ v2run ui promote
 same "$T17: promote exits 0" "$code" 0
 has "$T17: one promote on prod's socket" "$(cat "$STUB_UI_STATE/calls")" "ui.promote wss://app.menger.sh/ws pipeline argv"
 [[ $(grep -c '^ui.push' "$STUB_UI_STATE/calls") == 0 ]] && ok || bad "$T17: promote pushed"
+# ui prod (owner, 2026-11-16: "we want to iterate directly in prod"): both in one command — a push on
+# test's socket, then a promote on prod's, prod left on the version just pushed and the time said;
+# refused, with nothing pushed, while prod's server is not on the release test runs
+prodruns() { printf '%s\tapp-prod\trun\t%s\tok\n' "$(date -u +%FT%TZ)" "$1" >>"$D4/deployments.log"; }
+prodruns "$V4"; : >"$STUB_UI_STATE/calls"; rm -f "$STUB_UI_STATE/live.prod"
+STUB_UI_SIGNER=$PUB2 v2run ui prod
+same "$T17: ui prod exits 0" "$code" 0
+same "$T17: ui prod: a push on test, then a promote on prod" "$(grep -E '^ui\.(push|promote) ' "$STUB_UI_STATE/calls" | cut -d' ' -f1,2 | tr '\n' ' ')" "ui.push wss://app-test.menger.sh/ws ui.promote wss://app.menger.sh/ws "
+same "$T17: ui prod: prod's pointer is what was pushed" "$(cat "$STUB_UI_STATE/live.prod" 2>/dev/null)" "$(cat "$STUB_UI_STATE/live.test")"
+has "$T17: ui prod said, with the time" "$err" "live: pushed and promoted in "
+same "$T17: ui prod: no infra" "$(wc -c <"$SCRATCH/infra.argv" | tr -d ' ')" 0
+: >"$STUB_UI_STATE/calls"
+STUB_UI_SIGNER=$PUB2 v2run ui prod
+has "$T17: ui prod again, nothing changed: said there already" "$err" "live already: pushed and promoted in "
+prodruns 20200101T000000Z-0000000; : >"$STUB_UI_STATE/calls"
+STUB_UI_SIGNER=$PUB2 v2run ui prod
+same "$T17: ui prod, prod on another release: exits 1" "$code" 1
+has "$T17: … said why, and the way round" "$err" "ui prod: prod's server runs 20200101T000000Z-0000000 and test's $V4"
+[[ $(grep -c -E '^ui\.(push|promote) ' "$STUB_UI_STATE/calls") == 0 ]] && ok || bad "$T17: ui prod on another release pushed or promoted"
+prodruns "$V4"
+v2run ui prod nonsense
+same "$T17: ui prod's usage exits 1" "$code" 1
 v2run ui nonsense
 same "$T17: usage exits 1" "$code" 1
 
