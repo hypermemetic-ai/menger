@@ -490,6 +490,168 @@ async fn a_question_on_a_range_is_answered_live() {
     assert_eq!(one(&editor, "notes.reply", json!({"id": id, "thread": "zzzzzzzz", "body": "x"})).await, json!({"type": "not_found", "thread": "zzzzzzzz"}));
 }
 
+// ── NOTES-4: a note's slot ────────────────────────────────────────────────
+
+/// A version of the bundle `notes` holding `components` (each a svelte/1
+/// module, as the tool builds one), kept in the server's own ui file
+/// (`ui.db` beside `tickets.db`) as a `--no-live` push keeps one: its hash.
+fn keep_notes_version(dir: &std::path::Path, n: u32, components: &[&str]) -> String {
+    use plexus_ui_service::{Keep, NewVersion, UiStore};
+    let js = |c: &str| format!("export function mount(target) {{ target.textContent = \"{c} v{n}\"; return {{}}; }}\n");
+    let entries: serde_json::Map<String, Value> = components.iter().map(|c| (c.to_string(), json!({ "profile": "svelte/1", "module": support::sha_hex(js(c).as_bytes()), "uses": [] }))).collect();
+    let manifest = json!({ "abi": "engine/1", "name": "notes", "contract": "unknown", "routes": {}, "slots": {}, "components": entries }).to_string();
+    let mut b = tar::Builder::new(Vec::new());
+    let mut files = vec![("manifest.json".to_string(), manifest.clone())];
+    files.extend(components.iter().map(|c| (format!("components/{c}.js"), js(c))));
+    for (path, body) in files {
+        let mut h = tar::Header::new_gnu();
+        h.set_size(body.len() as u64);
+        h.set_mode(0o644);
+        h.set_cksum();
+        b.append_data(&mut h, path, body.as_bytes()).unwrap();
+    }
+    let bundle = b.into_inner().unwrap();
+    let hash = support::sha_hex(&bundle);
+    let store = UiStore::open(&dir.join("ui.db")).unwrap();
+    let v = NewVersion { bundle, manifest, commit: None, pushed_by: "test".into(), pushed_at: n as i64 };
+    store.push_kept(v, &hash, &Keep { live: false, aside_moves_name: true, ..Keep::default() }).unwrap().version
+}
+
+/// A note filled while it is open is said on every watch of it, read by a
+/// viewer as it stands, and refused to a viewer's fill (`forbidden`, the
+/// gate's); a fill naming a component the version does not hold, or a
+/// version nobody keeps, is refused naming both, and the slot is as it was.
+#[tokio::test]
+async fn a_slot_is_filled_said_read_and_held_to_the_editor() {
+    let (dir, _port, _admin, editor, viewer, _s, _org) = people().await;
+    let id = one(&editor, "notes.create", json!({"title": "The service map", "body": "Draw every service."})).await["note"]["id"].as_str().unwrap().to_string();
+    let empty = one(&viewer, "notes.slot", json!({"id": id})).await;
+    assert_eq!((empty["type"].as_str(), empty["slot"]["fills"].as_array().map(Vec::len), empty["slot"].get("fill")), (Some("slot"), Some(0), None), "{empty}");
+
+    let v1 = keep_notes_version(dir.path(), 1, &["graph-nodes"]);
+    let mut w = call(&viewer, "notes.watch", json!({"id": id})).await;
+    assert_eq!(next(&mut w).await["type"], "watching");
+    let filled = one(&editor, "notes.fill", json!({"id": id, "component": "graph-nodes", "version": &v1[..12], "say": "nodes on a ring", "props": {"nodes": 6}})).await;
+    assert_eq!(filled["type"], "filled", "{filled}");
+    assert_eq!(filled["slot"]["fill"]["version"], v1, "a prefix is kept as the whole hash: {filled}");
+    let heard = next_of(&mut w, "slot_changed").await;
+    assert_eq!((heard["id"].as_str(), &heard["slot"]), (Some(id.as_str()), &filled["slot"]), "{heard}");
+    let read = one(&viewer, "notes.slot", json!({"id": id})).await;
+    assert_eq!(read["slot"], filled["slot"]);
+    assert_eq!((read["slot"]["fill"]["n"].as_u64(), read["slot"]["fill"]["by"].is_string(), &read["slot"]["props"]), (Some(1), true, &json!({"nodes": 6})));
+
+    // A viewer may not fill: the gate's refusal; the slot answers them all the same.
+    assert!(gate_refused(&one(&viewer, "notes.fill", json!({"id": id, "component": "graph-nodes", "version": v1})).await, "notes.fill"));
+    assert_eq!(one(&viewer, "notes.slot", json!({"id": id})).await["slot"], filled["slot"]);
+
+    // A component the version does not hold; a version nobody keeps — each named, nothing written.
+    let no = one(&editor, "notes.fill", json!({"id": id, "component": "node-legend", "version": v1})).await;
+    assert_eq!(no["reason"], "unknown_component", "{no}");
+    assert!(no["message"].as_str().is_some_and(|m| m.contains("node-legend") && m.contains(&v1)), "{no}");
+    let none = "0".repeat(64);
+    let no = one(&editor, "notes.fill", json!({"id": id, "component": "graph-nodes", "version": none})).await;
+    assert_eq!(no["reason"], "unknown_version", "{no}");
+    assert!(no["message"].as_str().is_some_and(|m| m.contains("graph-nodes") && m.contains(&none)), "{no}");
+    assert_eq!(one(&viewer, "notes.slot", json!({"id": id})).await["slot"], filled["slot"], "as it was");
+
+    // An empty: nothing drawn, the fills kept.
+    let gone = one(&editor, "notes.empty", json!({"id": id})).await;
+    assert_eq!((gone["type"].as_str(), gone["slot"].get("fill"), gone["slot"]["fills"].as_array().map(Vec::len)), (Some("emptied"), None, Some(1)), "{gone}");
+    assert_eq!(next_of(&mut w, "slot_changed").await["slot"], gone["slot"]);
+}
+
+/// A build said on a filled slot reaches every watch with its step; the
+/// fill stays; a failure carries the refusal's line; a fill ends it.
+#[tokio::test]
+async fn a_build_is_said_step_by_step_and_a_failure_keeps_the_fill() {
+    let (dir, _port, _admin, editor, viewer, _s, _org) = people().await;
+    let id = one(&editor, "notes.create", json!({"title": "Map"})).await["note"]["id"].as_str().unwrap().to_string();
+    let (v1, v2) = (keep_notes_version(dir.path(), 1, &["graph-nodes"]), keep_notes_version(dir.path(), 2, &["graph-nodes"]));
+    one(&editor, "notes.fill", json!({"id": id, "component": "graph-nodes", "version": v1})).await;
+    let mut w = call(&viewer, "notes.watch", json!({"id": id})).await;
+    assert_eq!(next(&mut w).await["type"], "watching");
+
+    let b = one(&editor, "notes.building", json!({"id": id, "component": "graph-nodes", "step": "written", "say": "drag a node"})).await;
+    assert_eq!(b["type"], "building", "{b}");
+    let heard = next_of(&mut w, "building_changed").await;
+    assert_eq!((heard["building"]["step"].as_str(), heard["building"]["say"].as_str(), heard["slot"]["fill"]["version"].as_str()), (Some("written"), Some("drag a node"), Some(v1.as_str())), "the step, and the component that was there: {heard}");
+
+    let why = "graph-nodes.svelte:9:54 `drag` is not defined";
+    one(&editor, "notes.building", json!({"id": id, "component": "graph-nodes", "step": "written", "failed": true, "say": why})).await;
+    let heard = next_of(&mut w, "building_changed").await;
+    assert_eq!((heard["building"]["failed"].as_bool(), heard["building"]["say"].as_str(), heard["slot"]["fill"]["version"].as_str()), (Some(true), Some(why), Some(v1.as_str())), "{heard}");
+    assert!(gate_refused(&one(&viewer, "notes.building", json!({"id": id, "component": "graph-nodes"})).await, "notes.building"));
+    assert!(one(&editor, "notes.building", json!({"id": id, "component": "graph-nodes", "step": "drawn"})).await.to_string().contains("step"), "a step the vocabulary does not hold is refused naming it");
+
+    let filled = one(&editor, "notes.fill", json!({"id": id, "component": "graph-nodes", "version": v2})).await;
+    assert!(filled["slot"].get("building").is_none(), "a fill ends it: {filled}");
+    assert!(next_of(&mut w, "slot_changed").await["slot"].get("building").is_none());
+}
+
+/// A component's props, patched on one page, reach a second page's watch;
+/// a `null` takes a key away; the slot holds them to 64 KiB.
+#[tokio::test]
+async fn props_patched_on_one_page_reach_another() {
+    let (dir, port, _admin, editor, _viewer, _s, _org) = people().await;
+    let id = one(&editor, "notes.create", json!({"title": "Map"})).await["note"]["id"].as_str().unwrap().to_string();
+    let v1 = keep_notes_version(dir.path(), 1, &["graph-nodes"]);
+    one(&editor, "notes.fill", json!({"id": id, "component": "graph-nodes", "version": v1, "props": {"lines": [], "keep": true}})).await;
+    let second = connect_key(&EDITOR, port).await;
+    let mut w = call(&second, "notes.watch", json!({"id": id})).await;
+    assert_eq!(next(&mut w).await["type"], "watching");
+
+    let p = one(&editor, "notes.props", json!({"id": id, "patch": {"lines": [["tickets", "ui"]], "keep": null}})).await;
+    assert_eq!((p["type"].as_str(), &p["slot"]["props"]), (Some("props"), &json!({"lines": [["tickets", "ui"]]})), "{p}");
+    let heard = next_of(&mut w, "props_changed").await;
+    assert_eq!((&heard["props"], heard["by"].is_string(), &heard["slot"]["props"]), (&json!({"lines": [["tickets", "ui"]]}), true, &json!({"lines": [["tickets", "ui"]]})), "{heard}");
+    // A reload starts from them.
+    assert_eq!(one(&second, "notes.slot", json!({"id": id})).await["slot"]["props"], json!({"lines": [["tickets", "ui"]]}));
+
+    let half = "y".repeat(40 * 1024);
+    assert_eq!(one(&editor, "notes.props", json!({"id": id, "patch": {"a": half}})).await["type"], "props");
+    let over = one(&editor, "notes.props", json!({"id": id, "patch": {"b": half}})).await;
+    assert_eq!(over["reason"], "too_large", "{over}");
+    assert!(one(&editor, "notes.props", json!({"id": id, "patch": [1]})).await.to_string().contains("JSON object"), "a patch is an object");
+}
+
+/// NOTES-4: a menger started fresh with the Svelte compiler keeps the
+/// bundle `notes`, so an editor on `*` authors into it at once; the
+/// component authored fills a slot, and a push of the app's bundle (a
+/// deploy) leaves the slot drawing the same component at the same version,
+/// and the bundle's newest version where it was.
+#[tokio::test]
+async fn a_fresh_menger_keeps_the_bundle_notes_and_a_deploy_leaves_a_fill() {
+    use support::{connect, free_port, push_params, spawn_menger, ui_args, UI_SIGNER};
+    let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
+    let ws = free_port().await;
+    let mut extra = vec!["--no-shell".to_string()];
+    extra.extend(ui_args(&dir.path().join("ui.db")));
+    extra.extend(["--ui-author-key".to_string(), dir.path().join("author.key").display().to_string()]);
+    extra.extend(["--ui-svelte-compiler".to_string(), support::svelte_compiler_wasm().display().to_string()]);
+    let _m = spawn_menger(ws, &dir.path().join("t.db"), &extra).await;
+    let c = connect(ws).await;
+
+    let seed = support::call(&c, "ui.history", json!({"bundle": "notes"})).await;
+    assert!(seed.iter().any(|e| e["type"] == "move"), "the bundle notes is kept from the first start: {seed:?}");
+    let src = "<script module>\n  export const uses = [\"notes.props\"];\n</script>\n\n<script>\n  let { note = \"\", props = \"{}\" } = $props();\n  const p = $derived(JSON.parse(props || \"{}\"));\n</script>\n\n<p class=\"g\">{note}: {p.nodes ?? 0} nodes</p>\n\n<style>\n  .g { color: var(--muted); }\n</style>\n";
+    let made = support::call(&c, "ui.author", json!({"bundle": "notes", "sources": [{"name": "graph-nodes", "profile": "svelte/1", "source": src}]})).await;
+    assert_eq!(made[0]["type"], "authored", "{made:?}");
+    let version = made[0]["version"].as_str().unwrap().to_string();
+
+    assert_eq!(support::call(&c, "tickets.create", json!({"epic": "B", "title": "b", "kind": "scope"})).await[0]["type"], "created");
+    let id = support::call(&c, "notes.create", json!({"title": "The service map"})).await[0]["note"]["id"].as_str().unwrap().to_string();
+    let filled = support::call(&c, "notes.fill", json!({"id": id, "component": "graph-nodes", "version": version})).await;
+    assert_eq!(filled[0]["type"], "filled", "{filled:?}");
+
+    let pushed = support::call(&c, "ui.push", push_params(1, &UI_SIGNER)).await;
+    assert_eq!(pushed[0]["type"], "pushed", "the app's bundle, as a deploy pushes it: {pushed:?}");
+    let slot = support::call(&c, "notes.slot", json!({"id": id})).await;
+    assert_eq!((slot[0]["slot"]["fill"]["component"].as_str(), slot[0]["slot"]["fill"]["version"].as_str()), (Some("graph-nodes"), Some(version.as_str())), "{slot:?}");
+    let newest = support::call(&c, "ui.history", json!({"bundle": "notes", "limit": 1})).await;
+    assert_eq!(newest[0]["version"].as_str(), Some(version.as_str()), "the bundle's newest is still the authored one: {newest:?}");
+    assert!(support::call(&c, "ui.versions", json!({})).await.iter().any(|v| v["hash"].as_str() == Some(version.as_str()) && v["live"] == false), "kept, never live");
+}
+
 /// Every event an open stream says within `window`, past what it said before.
 async fn heard_within(sub: &mut Subscription<Value>, window: Duration) -> Vec<Value> {
     let until = tokio::time::Instant::now() + window;

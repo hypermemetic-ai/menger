@@ -87,6 +87,10 @@ pub mod start;
 /// nobody else chose one.
 pub mod embedded_ui;
 
+/// NOTES-4: the bundle `notes`, kept from the first start; the ui store's
+/// answer to whether a version holds a component.
+pub mod notes_bundle;
+
 /// The cache and its storage, re-exported from the activation crate so
 /// `menger::store::SeedSpec` and friends keep their paths.
 pub use menger_tickets_api::store;

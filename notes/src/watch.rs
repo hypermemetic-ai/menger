@@ -2,7 +2,8 @@
 //! that reads the note's organization: `created`, `updated` (every
 //! change of the body: the Yjs update to apply), `renamed`, `deleted`,
 //! `squashed`, and (V2-30) `asked`, `replied`, `resolved` — a thread whole
-//! each; one note's with `id`, every one's without (so an agent
+//! each; (NOTES-4) `slot_changed`, `building_changed`, `props_changed` — the
+//! slot whole each; one note's with `id`, every one's without (so an agent
 //! following every note hears a question asked of it). On one
 //! note, who is on it too: `present` and `left` — and with `session`,
 //! the watch is itself a presence on it for as long as it is open
@@ -117,6 +118,10 @@ fn said(change: Change, one: bool) -> Option<NotesEvent> {
         Change::Asked { thread, .. } => NotesEvent::Asked { thread },
         Change::Replied { thread, .. } => NotesEvent::Replied { thread },
         Change::Resolved { thread, .. } => NotesEvent::Resolved { thread },
+        // NOTES-4: the slot whole with each.
+        Change::SlotChanged { slot, .. } => NotesEvent::SlotChanged { id: slot.id.clone(), slot },
+        Change::BuildingChanged { slot, .. } => NotesEvent::BuildingChanged { id: slot.id.clone(), building: slot.building.clone(), slot },
+        Change::PropsChanged { slot, by, .. } => NotesEvent::PropsChanged { id: slot.id.clone(), props: slot.props.clone(), by, slot },
         Change::Marked { mark, .. } => NotesEvent::MarkChanged { id: mark.id.clone(), mark },
         Change::Unmarked { id, mark, .. } => NotesEvent::MarkRemoved { id, mark },
     })

@@ -393,6 +393,13 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("notes.ask", Today::Editor, None),
     ("notes.reply", Today::Editor, None),
     ("notes.resolve", Today::Editor, None),
+    // NOTES-4: a note's slot — a viewer reads it, an editor fills, empties,
+    // says a build and patches its props.
+    ("notes.slot", Today::Viewer, None),
+    ("notes.fill", Today::Editor, None),
+    ("notes.empty", Today::Editor, None),
+    ("notes.building", Today::Editor, None),
+    ("notes.props", Today::Editor, None),
     // NOTES-5: marks on a range — a viewer reads them, an editor marks and
     // takes one off (never writing the text).
     ("notes.marks", Today::Viewer, None),

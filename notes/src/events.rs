@@ -186,6 +186,64 @@ pub struct Resolution {
     pub by: String,
 }
 
+/// NOTES-4: a note's slot whole — what fills it now, its props, every fill
+/// it had and the build under way — as every answer and every watch event
+/// about it carries it (a page's `live()` replaces its row whole).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Slot {
+    /// The note.
+    pub id: String,
+    /// What fills it now — absent: nothing (never filled, or emptied).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<Fill>,
+    /// What the component in it is given beside the note's id: a JSON object (`{}` when none).
+    pub props: serde_json::Map<String, serde_json::Value>,
+    /// Every fill it had, the newest first (`fill`, when there is one, is among them).
+    pub fills: Vec<Fill>,
+    /// A build under way, said by the agent with `notes.building` — absent when none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub building: Option<Building>,
+}
+
+/// NOTES-4: one fill of a slot: a component of a kept version, who and when.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Fill {
+    /// Which fill of the slot it is, from 1.
+    pub n: u32,
+    /// The component, as its version's manifest names it.
+    pub component: String,
+    /// The version it is of: its hash, 64 hex digits — what the page pins its mark to.
+    pub version: String,
+    /// One line saying what this fill does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub say: Option<String>,
+    pub by: String,
+    pub principal: String,
+    /// When, unix milliseconds.
+    pub at: i64,
+}
+
+/// NOTES-4: a build under way in a slot — kept in memory only: a fill or an
+/// empty ends it, so do ten minutes without a word, and a restart.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Building {
+    /// The component being built.
+    pub component: String,
+    /// The last step reached: `heard`, `written` or `compiled` (absent: none yet).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<crate::vocab::BuildStep>,
+    /// The agent's line — with `failed`, the refusal (the compiler's line).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub say: Option<String>,
+    /// The build failed: the step after `step` is where.
+    pub failed: bool,
+    pub by: String,
+    pub principal: String,
+    /// When it began, and its last word — unix milliseconds.
+    pub started: i64,
+    pub at: i64,
+}
+
 /// NOTES-5: a mark — an agent's underline on a range of a note, which
 /// follows its words as a question's range does: a link, a line of state,
 /// or both. It sits on the text, never in it: no mark writes the note.
@@ -367,6 +425,27 @@ pub enum NotesEvent {
     /// `message` naming the grant and role it takes), or the meter refused the
     /// write (`quota`). Nothing was written.
     Refused { reason: String, message: String },
+    /// NOTES-4: `slot`'s answer: the note's slot whole.
+    Slot { slot: Slot },
+    /// NOTES-4: `fill`'s answer: the slot with its new fill.
+    Filled { slot: Slot },
+    /// NOTES-4: `empty`'s answer: the slot with nothing in it.
+    Emptied { slot: Slot },
+    /// NOTES-4: `building`'s answer: the slot with its build under way.
+    Building { slot: Slot },
+    /// NOTES-4: `props`' answer: the slot with its props merged.
+    Props { slot: Slot },
+    /// NOTES-4: a watch's word: the slot was filled or emptied — `slot` whole.
+    SlotChanged { id: String, slot: Slot },
+    /// NOTES-4: a watch's word: a build began, moved a step, failed or ended (`building` absent) — `slot` whole.
+    BuildingChanged {
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        building: Option<Building>,
+        slot: Slot,
+    },
+    /// NOTES-4: a watch's word: the slot's props, merged by `by` — `slot` whole.
+    PropsChanged { id: String, props: serde_json::Map<String, serde_json::Value>, by: String, slot: Slot },
     /// V2-31: `usage { everyone }` — what one principal's changes keep:
     /// the notes they made and the bytes they wrote.
     Usage { principal: String, count: u64, bytes: u64 },

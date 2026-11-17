@@ -182,6 +182,9 @@ dirs = "6"
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+# NOTES-4: the bundle `notes`' seed, a tar of its manifest alone, kept at
+# start (src/notes_bundle.rs) — the crate plexus-ui-service reads bundles with.
+tar = { version = "0.4", default-features = false }
 
 
 [dev-dependencies]

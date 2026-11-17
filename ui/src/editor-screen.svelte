@@ -16,7 +16,11 @@
      (`menger.editor.last`: a ticket's id, or `note:<id>` — `doc:<id>`, as a
      browser kept it before NOTES-3, read the same). Keys: `escape` (outside
      the text) and the bar's *board* go to `#/board`; `n` is *new*; `/` the
-     search. -->
+     search. NOTES-4: a note's page is the note on the left and its slot
+     on the right (note-slot, placed by its bound mark), each scrolling on its
+     own; under 760 px the two are tabs, the note first; the list of notes is
+     a drawer at every width on a note. A ticket is drawn as before, with no
+     slot. The page is flat on a note: hairlines, no shadow. -->
 <script module>
   export const uses = ["tickets.get", "tickets.watch", "notes.list", "notes.watch", "notes.create"];
   export const LAST = "menger.editor.last";
@@ -32,6 +36,7 @@
   import { ticketHref, editHref, settle } from "./ticket-links.svelte";
   import Editor from "plexus-ui:editor-body";
   import Questions from "plexus-ui:ticket-questions";
+  import NoteSlot from "plexus-ui:note-slot";
 
   let { id = null, note = null, uid = null, sheet = null } = $props();
   const b = bus();
@@ -79,6 +84,9 @@
   const found = live({ snapshot: "notes.list", params: () => ({ query: q.trim(), limit: 20 }), key: "id", when: () => q.trim().length > 0, debounce_ms: 150 });
   const hits = $derived(q.trim() ? found.rows.filter((r) => r.id && r.title != null) : []);
   let drawer = $state(false);
+  // NOTES-4: under 760 px the note and its slot are two tabs, the note first.
+  let tab = $state("note");
+  $effect(() => { void current; tab = "note"; });
   let searchBox = $state(null);
   const open = (to) => { drawer = false; q = ""; if (to.id !== current || to.kind !== cur?.kind) b.navigate(href(to)); };
 
@@ -145,11 +153,20 @@
       {/if}
     </nav>
     <button type="button" class="scrim" aria-label="close the notes" tabindex="-1" onclick={() => (drawer = false)}></button>
-    <div class="page">
-      {#if current}
+    <div class="page" data-two={current && isNote ? "" : undefined} data-tab={current && isNote ? tab : undefined}>
+      {#if current && isNote}
+        <div class="tabs" role="tablist" aria-label="the note and its slot">
+          <button type="button" role="tab" class="tab" data-tab="note" aria-selected={tab === "note"} onclick={() => (tab = "note")}>note</button>
+          <button type="button" role="tab" class="tab" data-tab="slot" aria-selected={tab === "slot"} onclick={() => (tab = "slot")}>slot</button>
+        </div>
+        <div class="col note-col" data-col="note">
+          <div class="sheet">{#key `${cur.kind}:${current}`}<Editor id={current} kind={cur.kind} {sheet}/>{/key}</div>
+        </div>
+        <div class="col slot-col" data-col="slot">{#key current}<NoteSlot note={current}/>{/key}</div>
+      {:else if current}
         <div class="sheet">
           {#key `${cur.kind}:${current}`}<Editor id={current} kind={cur.kind} {sheet}/>{/key}
-          {#if !isNote}{#key current}<Questions id={current}/>{/key}{/if}
+          {#key current}<Questions id={current}/>{/key}
         </div>
       {:else}
         <div class="welcome" data-welcome>
@@ -221,6 +238,28 @@
     .note { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; white-space: normal; overflow-wrap: anywhere; }
     .bar { padding: 4px 12px; }
     .sheet { padding-left: 12px; padding-right: 12px; }
+  }
+  /* NOTES-4: a note's page — the note on --panel, its slot on --bg, each scrolling alone; the list a drawer at every width. */
+  .editor-screen[data-kind=note] .notes { display: inline-flex; }
+  .editor-screen[data-kind=note] .main { grid-template-columns: minmax(0, 1fr); }
+  .editor-screen[data-kind=note] .list { position: absolute; z-index: 4; top: 0; bottom: 0; left: 0; width: min(280px, 82vw); transform: translateX(-100%); transition: transform var(--motion-fast) var(--ease); box-shadow: none; border-right: var(--border) solid var(--line); }
+  .editor-screen[data-kind=note][data-drawer=open] .list { transform: none; }
+  .editor-screen[data-kind=note][data-drawer=open] .scrim { display: block; position: absolute; inset: 0; z-index: 3; padding: 0; background: transparent; border: 0; }
+  .page[data-two] { display: grid; grid-template-columns: minmax(0, 42fr) minmax(0, 58fr); overflow: hidden; }
+  .page[data-two] .col { min-width: 0; min-height: 0; overflow: auto; }
+  .note-col { container: note-col / inline-size; background: var(--panel); border-right: var(--border) solid var(--line); }
+  .slot-col { background: var(--bg); }
+  .slot-col > :global([data-slot=note-slot]) { min-height: 100%; }
+  .page[data-two] .sheet { max-width: 720px; }
+  .tabs { display: none; }
+  @media (max-width: 759px) {
+    .page[data-two] { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+    .tabs { display: flex; gap: 0; margin: 8px 12px; padding: 2px; background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius); }
+    .tab { flex: 1; padding: 3px 0; font: inherit; font-family: var(--mono); font-size: 13px; color: var(--muted); background: none; border: 0; border-radius: var(--radius-sm); cursor: pointer; }
+    .tab[aria-selected=true] { color: var(--ink); background: var(--bg); }
+    .tab:focus-visible, .tab:global([data-sheet~=focus]) { outline: 2px solid var(--focus); outline-offset: 1px; }
+    .page[data-tab=note] .slot-col, .page[data-tab=slot] .note-col { display: none; }
+    .note-col { border-right: 0; }
   }
   @media (prefers-reduced-motion: reduce) {
     .btn, .list { transition: none; }

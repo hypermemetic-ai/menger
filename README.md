@@ -825,15 +825,20 @@ agents and image references.
 | `resolve` | `--id --thread [--open]` | the thread folded (or opened again): `resolved { thread }` |
 | `threads` | `--id` | `thread { thread }` each, by where its range stands, the detached (text deleted whole) last |
 | `waiting` | `[--to]` | the open questions asked of someone (`agent`, or a name) in the notes you read, oldest first — an agent's queue |
+| `slot` | `--id` | NOTES-4: the note's slot whole — `slot { slot: { id, fill?, props, fills, building? } }`: what fills it now (`fill { n, component, version, say?, by, principal, at }`), its props (a JSON object), every fill newest first, the build under way (`building { component, step?, say?, failed, by, principal, started, at }`) |
+| `fill` | `--id --component --version [--props] [--say]` | editor's: the slot filled with a component of a version the ui service keeps (`version` its hash, or 6 hex digits of it or more, kept whole) — the ui service asked whether the version holds the component: `refused { unknown_version \| unknown_component }` naming both, nothing written; `props` replaces the slot's (none: they stay); the build under way ends: `filled { slot }` |
+| `empty` | `--id` | editor's: nothing drawn, the props cleared, the fills kept, the build ended: `emptied { slot }` |
+| `building` | `--id --component [--step] [--say] [--failed]` | editor's: the slot is being built — `step` the last reached, `heard \| written \| compiled`; `say` one line; `failed true` with `say` the refusal (the compiler's line). Kept in memory: a fill or an empty ends it, so do ten minutes without a word and a restart: `building { slot }` |
+| `props` | `--id --patch` | editor's: a patch (a JSON object) merged into the slot's props, a key set to `null` taken away, held to 64 KiB (`refused { too_large }`): `props { slot }` |
 | `mark` | `--id --from --to [--link] [--label]`, or `--id --mark [--link] [--label]` | NOTES-5: a mark on characters `from..to` of the text, anchored as a question's range is, so it follows its words: `marked { mark }` — `{ mark, id, anchor { from, to }, from?, to?, detached, words, quote, link?, label?, by, principal, at, changed_at?, changed_by? }`; with `--mark` instead, that mark's `link` and `label` changed (an empty one taken off; its range is not moved). `link` is a ticket (`KILN-12`), an address of the app (`#/…`) or an `https` address, anything else refused; `label` one line, at most 200 characters. The note's text and revision are never changed |
 | `unmark` | `--id --mark` | NOTES-5: the mark taken off: `unmarked { id, mark }` |
 | `marks` | `--id` | NOTES-5: `mark { mark }` each, by where its range stands, with the `words` it holds now; the detached (every character deleted) last. A viewer's |
-| `watch` | `[--id] [--session] [--text]` | `watching`, then `created`, `updated { id, seq, update, by, session? }`, `renamed`, `deleted`, `squashed`, and on one note `present` and `left { session, client? }`, and (V2-30) `asked`, `replied`, `resolved` with the thread whole, and (NOTES-5) `mark_changed { id, mark }` (made or changed, whole) and `mark_removed { id, mark }`; with `--text true` (and `--id`) the note's markdown as words, `text { id, revision, body, by, at }` — once as the watch opens, then a second after the first change not yet said, holding every change since (at most one a second, the last always said); with `session` the watch is your presence while open, and your own updates are not said back; held to you by the gate as `ui.watch` is (`watch_closed { reason }`) |
+| `watch` | `[--id] [--session] [--text]` | `watching`, then `created`, `updated { id, seq, update, by, session? }`, `renamed`, `deleted`, `squashed`, and on one note `present` and `left { session, client? }`, and (V2-30) `asked`, `replied`, `resolved` with the thread whole, and (NOTES-5) `mark_changed { id, mark }` (made or changed, whole) and `mark_removed { id, mark }`, and (NOTES-4) `slot_changed { id, slot }`, `building_changed { id, building?, slot }`, `props_changed { id, props, by, slot }` with the slot whole; with `--text true` (and `--id`) the note's markdown as words, `text { id, revision, body, by, at }` — once as the watch opens, then a second after the first change not yet said, holding every change since (at most one a second, the last always said); with `session` the watch is your presence while open, and your own updates are not said back; held to you by the gate as `ui.watch` is (`watch_closed { reason }`) |
 
 **Who may**: a viewer reads, follows and is present (`get`, `list`,
-`state`, `history`, `replay`, `present`, `here`, `watch`, `may`, `marks`), an editor
-writes (`create`, `update`, `save`, `rename`, `restore`) and marks (`mark`,
-`unmark`), an admin deletes
+`state`, `history`, `replay`, `present`, `here`, `watch`, `may`, `slot`, `marks`), an editor
+writes (`create`, `update`, `save`, `rename`, `restore`, `fill`, `empty`,
+`building`, `props`) and marks (`mark`, `unmark`), an admin deletes
 and squashes — each grant held on the note's organization (`acme:`) or
 on `*`. The gate admits a call whose grant is held somewhere; the method
 asks it again on the organization: a note you do not read is
@@ -852,6 +857,56 @@ and listed last. A question asked of an agent waits in `waiting` and is said
 on every watch of the organization's notes; the agent answers with
 `reply`, or edits the note itself. Kept in `notes.db`'s `doc_threads` and
 `doc_replies`.
+
+**A note's slot** (NOTES-4; the owner, 2026-11-15: *"every note associated
+with a plexus-ui slot on it's right"*, and *"we instead want to show that
+the agent is building components as it builds"*). `#/note/<id>` (and `#/`
+when the last thing opened here was a note) draws the note on the left and
+its slot on the right, each scrolling on its own; under 760 px the two are
+tabs, the note first; the list of notes is a drawer at every width on that
+page; a ticket on the surface (`#/edit/<id>`) has no slot. The slot is
+`ui/src/note-slot.svelte` (svelte/1), placed by `editor-screen`: it draws
+the fill by a **bound mark pinned to its version** — `<div data-slot="fill"
+data-component data-version data-note data-props>` (plexus-ui's
+`CONTRACT.md` "A bound mark"): the component is given `note`, the note's
+id, and `props`, the slot's props **as JSON text** — a mark's props are
+`data-` attributes, strings, so the component reads `JSON.parse(props)`;
+new props reach the mounted component in place (`update(props)`), never a
+second mount; a new fill or version takes the old one out and mounts the
+new. Above it the component's name, which fill it is, who built it and
+when; while a build is under way its steps (heard, written, compiled,
+drawn) and the agent's line, the component that was there still drawn and
+usable; after a failure the refusal under it. Under it every fill, newest
+first: a click (or ‹ ›) draws that version on that page alone, nothing kept
+moves. A component that keeps state calls `notes.props` itself, so its
+`uses` names it. Kept in `notes.db`: `note_slots` (a row a note: the fill
+drawn, the props) and `note_fills` (a row a fill), added by the store's own
+migration — a file from before opens with every slot empty; a delete of the
+note leaves them. A fill asks the ui service whether the version holds the
+component through the seam (`notes/src/seam.rs` `Components`, which the
+builder answers from the ui service's own store, `src/notes_bundle.rs`:
+plexus-ui 0.2.6 has no wire method that says what a version holds).
+
+**The bundle `notes`** (NOTES-4): where a component written for a note is
+authored — `ui.author { bundle: "notes", sources: [{ name, profile:
+"svelte/1", source }] }` (README "The ui service"; AGENTS.md "Or at run
+time") — kept apart from the app's bundle. Every start keeps one where the
+pointer `bundle:notes` names none (`src/notes_bundle.rs`: a tar of its
+manifest alone, the same bytes on every menger, kept `--no-live`), so the
+first author has a version to build on; it is never live, and a deploy —
+the app's bundle pushed under its own name — never moves its pointer, so
+every version authored into it, and every slot pinned to one, stands. On
+the box the ui store is one file test and prod share (UI-15): the first
+start of a release carrying it keeps the seed for both, and a component
+authored on test is kept where prod could draw it, while each
+environment's slots are its own `notes.db`'s.
+
+```sh
+synapse -P 4460 menger notes slot --id 7k3mq2xa
+synapse -P 4460 menger notes building --id 7k3mq2xa --component graph-nodes --step written --say "drag a node"
+synapse -P 4460 menger notes fill --id 7k3mq2xa --component graph-nodes --version 3f9a1c0b7d2e --say "drag a node"
+synapse -P 4460 menger notes props --id 7k3mq2xa --patch '{"lines": [["tickets", "ui"]]}'
+```
 
 **What an agent leaves on a note** (NOTES-5; the owner, 2026-11-15: *"I
 want to make sure that agents can listen in on notes, and underline

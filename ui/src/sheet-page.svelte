@@ -123,6 +123,7 @@
   import TagSource from "plexus-ui:tag-source";
   import EditorBody from "plexus-ui:editor-body";
   import NoteMargin from "plexus-ui:note-margin";
+  import NoteSlot from "plexus-ui:note-slot";
   import MediaDraw from "plexus-ui:media-draw";
   import MediaIngest from "plexus-ui:media-ingest";
   import EditorScreen from "plexus-ui:editor-screen";
@@ -305,6 +306,8 @@
       ["tag-source", TagSource, (t) => ({}), [], {}],
       // V2-30: a note's margin, alone — its threads as a list (a ticket's id: none).
       ["note-margin", NoteMargin, ID, [], {}],
+      // NOTES-4: a note's slot, alone — no note of that id here: empty, its ‹ › and its rows hovered when filled.
+      ["note-slot", NoteSlot, (t) => ({ note: "zzqqxxjj" }), ["hover", "focus"], {}],
       // EDITOR-8: the rendering as the editor; hover and focus held on its revisions link (EDITOR-9: a block has no highlight).
       ["editor-body", EditorBody, ID, ["hover", "focus"], { loading: { sheet: "loading" }, ...gone }, false, { hover: [".revs"], focus: [".revs"] }],
       // EDITOR-10: what a doc absorbed, drawn — a file that is none here stays its link; the ingest draws nothing of its own.

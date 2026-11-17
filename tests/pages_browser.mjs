@@ -51,7 +51,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { makeKey, mintSession, readToken, sessionCookies, writeSession } from "../scripts/throwaway-login.mjs";
-import { INIT, TARGET, Throwaway, build, bundle, compilerModule, playwright, push, sentCalls, sleep, synapse, workDir } from "../scripts/ui-throwaway.mjs";
+import { INIT, TARGET, Throwaway, build, bundle, compilerModule, playwright, push, sentCalls, sleep, svelteCompilerModule, synapse, workDir } from "../scripts/ui-throwaway.mjs";
 import { githubStandIn } from "./code-github.mjs";
 
 const args = process.argv.slice(2);
@@ -276,6 +276,9 @@ async function main() {
   // components.mjs tests that feature, so this run allows rhx (--ui-allow-rhx); the bundle is
   // svelte/1 alone and pushes clean either way.
   server.allowRhx = true;
+  // NOTES-4: ui.author compiles svelte/1 — a note's slot is filled with a component authored into the
+  // bundle `notes` (tests/pages/slot.mjs).
+  server.svelteCompiler = svelteCompilerModule();
   const session = path.join(work, "session");
   let browser;
   // FRAME-14: from the start on, a failure anywhere stops the server.
