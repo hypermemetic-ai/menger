@@ -891,10 +891,13 @@ plexus-ui 0.2.6 has no wire method that says what a version holds).
 **The bundle `notes`** (NOTES-4): where a component written for a note is
 authored — `ui.author { bundle: "notes", sources: [{ name, profile:
 "svelte/1", source }] }` (README "The ui service"; AGENTS.md "Or at run
-time") — kept apart from the app's bundle. Every start keeps one where the
-pointer `bundle:notes` names none (`src/notes_bundle.rs`: a tar of its
-manifest alone, the same bytes on every menger, kept `--no-live`), so the
-first author has a version to build on; it is never live, and a deploy —
+time") — kept apart from the app's bundle. Every start of a menger that
+can author one in `svelte/1` (`--ui-author-key` and `--ui-svelte-compiler` both; NOTES-8:
+a menger that lacks either can write nothing into the bundle, keeps none,
+and its `ui versions` lists what was pushed and nothing else) keeps one
+where the pointer `bundle:notes` names none (`src/notes_bundle.rs`: a tar of
+its manifest alone, the same bytes on every menger, kept `--no-live`), so
+the first author has a version to build on; it is never live, and a deploy —
 the app's bundle pushed under its own name — never moves its pointer, so
 every version authored into it, and every slot pinned to one, stands. On
 the box the ui store is one file test and prod share (UI-15): the first

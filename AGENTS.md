@@ -374,11 +374,13 @@ compile's fuel (`spec-outline`). Who may: `ui.author` is the `editor`'s
 grant on `*`; on a server whose `editor` role was ever edited the stored
 role wins (`auth roles` says what it holds).
 
-**A note's slot** (NOTES-4): every menger keeps the bundle `notes` from its
-first start (`src/notes_bundle.rs`: a seed kept `--no-live` where the
-pointer `bundle:notes` names none; a deploy never moves it, and test and
-prod share it in the one ui store, UI-15), so `ui.author { bundle: "notes"
-}` builds on it at once. What it answers fills a note's slot: `notes.fill
+**A note's slot** (NOTES-4): a menger that can author a `svelte/1`
+component — `--ui-author-key` and `--ui-svelte-compiler` both, as every
+release has; NOTES-8: one that lacks either keeps none — keeps the bundle
+`notes` from its first start (`src/notes_bundle.rs`: a seed kept `--no-live`
+where the pointer `bundle:notes` names none; a deploy never moves it, and
+test and prod share it in the one ui store, UI-15), so `ui.author { bundle:
+"notes" }` builds on it at once. What it answers fills a note's slot: `notes.fill
 --id --component --version` (an editor's of the note; the ui service is
 asked whether the version holds the component, else `unknown_version` or
 `unknown_component`), and the note's page (`ui/src/note-slot.svelte`, real
@@ -458,7 +460,7 @@ deploy/pipeline releases                      # every release: its suite, tested
 - **A component is built straight into prod** (owner, 2026-11-16: "just
   deploy straight to prod"; "that's the new policy. for many kinds of
   components we prioritize building them directly into prod and testing them
-  concurrently"; and: "we do not wait for a deployment. we need to get that
+  concurrently"; and: "we do not wait for a [deploy]. we need to get that
   down from taking any time at all to being practically instant. we want to
   iterate directly in prod"). A change that is `ui/src` alone — a
   component's source; no method, no server code, nothing of the shell or the
