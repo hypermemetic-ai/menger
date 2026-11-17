@@ -178,7 +178,7 @@
   import { bus, live } from "plexus-ui/host";
   import { ticketHref } from "./ticket-links.svelte";
   import TicketView, { blocks, pageTag, pieceClass, refDefs } from "./ticket-view.svelte";
-  import Margin, { threadMarks } from "./note-margin.svelte";
+  import Margin, { threadMarks, noteMarks, setNoteMarks, marksIn, drawMarks, stateLine, followMark } from "./note-margin.svelte";
   import PillTable, { providePills } from "./ticket-pills.svelte";
   import { ingest } from "./media-ingest.svelte";
   import { drawAll } from "./media-draw.svelte";
@@ -476,8 +476,8 @@
 
   /** A block away from the caret: ticket-view's drawing of it. A click enters it at the clicked place. */
   class Drawn extends WidgetType {
-    constructor(piece, defs, hand) { super(); this.piece = piece; this.text = piece.text; this.defs = defs; this.hand = hand; }
-    eq(o) { return o.text === this.text && o.defs === this.defs && o.hand === this.hand && pieceClass(o.piece) === pieceClass(this.piece) && o.piece.wrap?.open === this.piece.wrap?.open && o.piece.wrap?.close === this.piece.wrap?.close && o.piece.src?.n === this.piece.src?.n; }
+    constructor(piece, defs, hand, marks = [], n = 0) { super(); this.piece = piece; this.text = piece.text; this.defs = defs; this.hand = hand; this.marks = marks; this.n = n; this.marked = marks.length ? JSON.stringify([n, marks]) : ""; }
+    eq(o) { return o.text === this.text && o.defs === this.defs && o.hand === this.hand && o.marked === this.marked && pieceClass(o.piece) === pieceClass(this.piece) && o.piece.wrap?.open === this.piece.wrap?.open && o.piece.wrap?.close === this.piece.wrap?.close && o.piece.src?.n === this.piece.src?.n; }
     toDOM(v) {
       const d = document.createElement("div");
       d.widget = this; // the widget this element draws now (updateDOM moves it)
@@ -492,8 +492,15 @@
       d.view = mount(TicketView, { target: d, props: { get body() { return shown.body; }, get piece() { return shown.piece; }, get defs() { return shown.defs; }, block: true }, context: contexts });
       // EDITOR-10: a lone file or URL drawn as its kind — a player, a viewer, a card.
       drawAll(d, b);
+      // NOTES-5: the marks it holds, underlined in the drawing (again once its pills and cards are drawn).
+      if (this.marks.length) {
+        const mark = () => { if (d.widget === this) drawMarks(d, this.text, this.marks, this.n, (link) => followMark(b, link)); };
+        mark();
+        requestAnimationFrame(mark);
+      }
       d.addEventListener("mousedown", (ev) => {
         if (ev.button !== 0) return;
+        if (ev.target?.closest?.("[data-mark-link]")) return; // NOTES-5: a linked mark is followed (its own click), the caret stays out
         // A player, a viewer, a card's download: used where it is, the caret stays out.
         if (ev.target?.closest?.(FILE_OWN)) return;
         if (zoomable(ev.target)) return; // EDITOR-31: an image opens large (image-zoom hears the click), the caret stays out
@@ -521,7 +528,7 @@
         dom.redraw(this);
         return true;
       }
-      if (!was || !this.piece.src || !isOwn(this.text) || this.hand !== was.hand || this.defs !== was.defs || pieceClass(this.piece) !== pieceClass(was.piece) || this.piece.src.n !== was.piece.src?.n) return false;
+      if (!was || !this.piece.src || !isOwn(this.text) || this.hand !== was.hand || this.marked !== was.marked || this.defs !== was.defs || pieceClass(this.piece) !== pieceClass(was.piece) || this.piece.src.n !== was.piece.src?.n) return false;
       dom.widget = this;
       return true;
     }
@@ -666,6 +673,14 @@
   /** `blocks()` of a document, kept per document (a document is immutable). */
   const blocksOf = (d) => { let b = BLOCKS.get(d); if (!b) { b = blocks(d.toString()); BLOCKS.set(d, b); } return b; };
 
+  /** NOTES-5: under the caret's block, the lines of state of the marks it holds. */
+  class MarkStates extends WidgetType {
+    constructor(marks, n) { super(); this.marks = marks.filter((m) => m.label); this.n = n; this.key = JSON.stringify([n, this.marks.map((m) => [m.mark, m.by, m.label])]); }
+    eq(o) { return o.key === this.key; }
+    toDOM() { const d = document.createElement("div"); d.className = "nm-states"; for (const m of this.marks) d.append(stateLine(m, this.n)); return d; }
+    ignoreEvent() { return true; }
+  }
+
   class Bullet extends WidgetType {
     toDOM() { const s = document.createElement("span"); s.className = "eb-bullet"; s.textContent = "•"; return s; }
     eq() { return true; }
@@ -684,13 +699,19 @@
     for (let k = 0; k < all.length; k++) {
       const blk = all[k];
       const end = k + 1 < all.length ? all[k + 1].from - 1 : state.doc.length;
+      // NOTES-5: the marks the block holds — drawn in its drawing, or (the caret's) its dot and lines of state.
+      const marks = isNote ? marksIn(state, blk.from, end) : [];
       if (focus && ranges.some((r) => r.from <= end && r.to >= blk.from)) {
         shown.push([blk.from, end]);
+        if (marks.length) {
+          out.push(Decoration.line({ class: "nm-dot" }).range(state.doc.lineAt(blk.from).from));
+          if (marks.some((m) => m.label)) out.push(Decoration.widget({ widget: new MarkStates(marks, k + 1), block: true, side: 1 }).range(state.doc.lineAt(Math.min(blk.to, end)).to));
+        }
         continue;
       }
       let hand = null;
       hands.between(blk.from, end, (_f, _t, d) => { hand = d.spec.attributes?.["data-hand"] ?? hand; });
-      out.push(Decoration.replace({ widget: new Drawn(blk, defs, hand), block: true }).range(blk.from, end));
+      out.push(Decoration.replace({ widget: new Drawn(blk, defs, hand, marks, k + 1), block: true }).range(blk.from, end));
     }
     if (shown.length) out.push(...formed(state, shown));
     return Decoration.set(out, true);
@@ -784,7 +805,7 @@
 
   const drawn = StateField.define({
     create: surface,
-    update(deco, tr) { return tr.docChanged || tr.selection || tr.effects.some((e) => e.is(focusFx) || e.is(handAdd) || e.is(handClear) || e.is(repaint)) ? surface(tr.state) : deco; },
+    update(deco, tr) { return tr.docChanged || tr.selection || tr.effects.some((e) => e.is(focusFx) || e.is(handAdd) || e.is(handClear) || e.is(repaint) || e.is(setNoteMarks)) ? surface(tr.state) : deco; },
     provide: (f) => EditorView.decorations.from(f),
   });
   const look = EditorView.theme({
@@ -984,6 +1005,7 @@
           isNote ? yCollab(ytext, aware, { undoManager: new Y.UndoManager(ytext) }) : history(),
           isNote ? keymap.of(yUndoManagerKeymap) : [],
           isNote ? threadMarks : [],
+          isNote ? noteMarks : [],
           keymap.of([
             // EDITOR-13: no modified key here — save, bold, italic, a link and ask are the engine's (`commands`).
             { key: "ArrowDown", run: (v) => vertical(v, true) },
@@ -1212,6 +1234,17 @@
   .editor-body :global(.eb-html), .editor-body :global(.eb-table), .editor-body :global(.eb-tag) { font-family: var(--font-text); font-size: 12px; color: var(--muted); }
   .editor-body :global(.eb-upload) { display: block; margin: 4px 0; padding: 6px 10px; font-family: var(--font-text); font-size: 11px; color: var(--muted); background: var(--card); border: var(--border) dashed var(--line); border-radius: var(--radius-lg); }
   .editor-body :global(.eb-upload[data-state=refused]) { color: var(--warn); border-color: var(--warn); }
+  /* NOTES-5: an agent's mark on the surface (note-margin's `noteMarks`, `drawMarks`) — its underline 1.5 px in the ink,
+     in the accent when linked; its block's dot in the margin; its line of state in the mono face under the block. */
+  .editor-body :global(.nm-u) { text-decoration: underline; text-decoration-color: var(--ink); text-decoration-thickness: 1.5px; text-underline-offset: 4px; }
+  .editor-body :global(.nm-u.nm-linked) { color: var(--accent); text-decoration-color: var(--accent); cursor: pointer; }
+  .editor-body :global(.nm-u.nm-linked:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--radius-sm); }
+  .editor-body :global([data-marked]), .editor-body :global(.cm-line.nm-dot) { position: relative; }
+  .editor-body :global([data-marked]::before), .editor-body :global(.cm-line.nm-dot::before) { content: ""; position: absolute; left: -16px; top: .55em; width: 8px; height: 8px; background: var(--ink); border-radius: 50%; }
+  .editor-body :global(.nm-state) { margin: 2px 0 10px; font-family: var(--mono); font-size: 11.5px; line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
+  @media (max-width: 640px) {
+    .editor-body :global([data-marked]::before), .editor-body :global(.cm-line.nm-dot::before) { left: -10px; width: 6px; height: 6px; }
+  }
   .editor-body :global(.eb-hand) { cursor: pointer; background: var(--sel); box-shadow: inset 2px 0 0 var(--accent); }
   .editor-body :global(.eb-hand::after) { content: attr(data-hand); float: right; padding-left: 8px; font-family: var(--font-text); font-size: 10px; color: var(--muted); }
   /* EDITOR-12: on a phone (under 641 px) the surface never scrolls sideways: every line breaks a long word (the

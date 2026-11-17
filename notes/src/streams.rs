@@ -31,7 +31,7 @@ pub const LIST_MAX: usize = 1_000;
 /// The role a grant of this service takes, for a refusal's words.
 fn role_of(grant: &str) -> &'static str {
     match grant {
-        "notes.threads" | "notes.waiting" | "notes.get" | "notes.list" | "notes.history" | "notes.replay" | "notes.state" | "notes.present" | "notes.watch" | "notes.may" => "viewer",
+        "notes.marks" | "notes.threads" | "notes.waiting" | "notes.get" | "notes.list" | "notes.history" | "notes.replay" | "notes.state" | "notes.present" | "notes.watch" | "notes.may" => "viewer",
         "notes.delete" => "admin",
         "notes.squash" => "notes.squash's grant (admin's by default)",
         _ => "editor",
@@ -42,8 +42,9 @@ fn role_of(grant: &str) -> &'static str {
 pub(crate) fn failed(e: StoreError) -> NotesEvent {
     match e {
         StoreError::NotFound(id) => NotesEvent::no_doc(&id),
-        StoreError::NoRevision(id, r) => NotesEvent::NotFound { id: Some(id), revision: Some(r), org: None, thread: None },
-        StoreError::NoThread(t) => NotesEvent::NotFound { id: None, revision: None, org: None, thread: Some(t) },
+        StoreError::NoRevision(id, r) => NotesEvent::NotFound { id: Some(id), revision: Some(r), org: None, thread: None, mark: None },
+        StoreError::NoThread(t) => NotesEvent::NotFound { id: None, revision: None, org: None, thread: Some(t), mark: None },
+        StoreError::NoMark(m) => NotesEvent::NotFound { id: None, revision: None, org: None, thread: None, mark: Some(m) },
         StoreError::BadRange(m) => NotesEvent::Error { message: format!("{m} (nothing was written)") },
         StoreError::Quota(m) => NotesEvent::Refused { reason: "quota".into(), message: format!("{m} (nothing was written)") },
         StoreError::Allowance(r) => NotesEvent::Refused { reason: r.reason, message: format!("{} (nothing was written)", r.message) },
@@ -98,7 +99,7 @@ pub(crate) async fn create(store: Arc<NotesStore>, seam: Seam, user: Caller, tit
             let org = org.trim().trim_end_matches(':').to_string();
             match seam.orgs(user.context()).await {
                 Ok(orgs) if orgs.contains(&org) => {}
-                Ok(_) => return NotesEvent::NotFound { id: None, revision: None, org: Some(org), thread: None },
+                Ok(_) => return NotesEvent::NotFound { id: None, revision: None, org: Some(org), thread: None, mark: None },
                 Err(message) => return NotesEvent::Error { message },
             }
             match seam.holds(user.context(), "notes.create", &org) {
@@ -341,6 +342,48 @@ pub(crate) async fn threads(store: Arc<NotesStore>, seam: Seam, user: Caller, id
     }
     match store.threads(&id).await {
         Ok(rows) => rows.into_iter().map(|thread| NotesEvent::Thread { thread }).collect(),
+        Err(e) => vec![failed(e)],
+    }
+}
+
+/// NOTES-5: `notes.mark` — with `mark`, that mark changed (its range stays:
+/// a range is moved by taking the mark off and making it again); without,
+/// a mark made on `from..to`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn mark(store: Arc<NotesStore>, seam: Seam, user: Caller, id: String, mark: Option<String>, from: Option<u32>, to: Option<u32>, link: Option<String>, label: Option<String>) -> NotesEvent {
+    if let Err(ev) = reached(&store, &seam, &user, &id, "notes.mark").await {
+        return ev;
+    }
+    let made = match (mark, from, to) {
+        (Some(_), Some(_), _) | (Some(_), _, Some(_)) => return NotesEvent::Error { message: "a mark's range is not moved: unmark it and mark again (nothing was written)".into() },
+        (Some(m), None, None) => store.remark(&id, &m, crate::marks::Remark { link, label }, hand(&user)).await,
+        (None, Some(from), Some(to)) => store.mark(&id, from, to, link, label, hand(&user)).await,
+        (None, ..) => return NotesEvent::Error { message: "a new mark names its range, from and to; a change names the mark (nothing was written)".into() },
+    };
+    match made {
+        Ok(mark) => NotesEvent::Marked { mark },
+        Err(e) => failed(e),
+    }
+}
+
+/// NOTES-5: `notes.unmark`.
+pub(crate) async fn unmark(store: Arc<NotesStore>, seam: Seam, user: Caller, id: String, mark: String) -> NotesEvent {
+    if let Err(ev) = reached(&store, &seam, &user, &id, "notes.unmark").await {
+        return ev;
+    }
+    match store.unmark(&id, &mark).await {
+        Ok(()) => NotesEvent::Unmarked { id, mark },
+        Err(e) => failed(e),
+    }
+}
+
+/// NOTES-5: `notes.marks`: the note's marks, where each stands now.
+pub(crate) async fn marks(store: Arc<NotesStore>, seam: Seam, user: Caller, id: String) -> Vec<NotesEvent> {
+    if let Err(ev) = reached(&store, &seam, &user, &id, "notes.marks").await {
+        return vec![ev];
+    }
+    match store.marks(&id).await {
+        Ok(rows) => rows.into_iter().map(|mark| NotesEvent::Mark { mark }).collect(),
         Err(e) => vec![failed(e)],
     }
 }

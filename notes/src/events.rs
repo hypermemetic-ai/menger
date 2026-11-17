@@ -186,6 +186,46 @@ pub struct Resolution {
     pub by: String,
 }
 
+/// NOTES-5: a mark — an agent's underline on a range of a note, which
+/// follows its words as a question's range does: a link, a line of state,
+/// or both. It sits on the text, never in it: no mark writes the note.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Mark {
+    /// Its id, 8 characters as a note's.
+    pub mark: String,
+    /// The note it is on.
+    pub id: String,
+    /// The range as the note's CRDT holds it: two Yjs relative positions (base64), which follow the text.
+    pub anchor: Anchor,
+    /// The range now, in characters of the text — absent when it is detached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<u32>,
+    /// Every character it was on was deleted: the mark is kept, listed last, drawn nowhere.
+    pub detached: bool,
+    /// The words the range holds now (empty when it is detached).
+    pub words: String,
+    /// The words it held when it was made.
+    pub quote: String,
+    /// What a click on its underline opens: a ticket (`KILN-12`), an address of the app (`#/…`) or an `https` address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
+    /// Its line of state, drawn under the passage that holds it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Who left it: their name, and their principal.
+    pub by: String,
+    pub principal: String,
+    /// When, unix milliseconds.
+    pub at: i64,
+    /// When it was last changed (unix milliseconds) and by whom — absent until it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed_by: Option<String>,
+}
+
 /// Why an open `watch` ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -280,6 +320,21 @@ pub enum NotesEvent {
     Replied { thread: Thread },
     /// V2-30: `resolve`'s answer, and a watch's: the thread folded (or opened again: `resolved` absent).
     Resolved { thread: Thread },
+    /// NOTES-5: `marks`' rows, a mark whole.
+    Mark { mark: Mark },
+    /// NOTES-5: `mark`'s answer: the mark made, or changed.
+    Marked { mark: Mark },
+    /// NOTES-5: `unmark`'s answer: the mark `mark` is gone from the note `id`.
+    Unmarked { id: String, mark: String },
+    /// NOTES-5: a watch's word: a mark made or changed on the note `id`, whole.
+    MarkChanged { id: String, mark: Mark },
+    /// NOTES-5: a watch's word: the mark `mark` taken off the note `id`.
+    MarkRemoved { id: String, mark: String },
+    /// NOTES-5: a watch's word with `text: true` — the note's markdown after
+    /// a change (at most once a second, the last change always said), and
+    /// once as the watch opens: its revision then, who wrote it last and when
+    /// (unix seconds).
+    Text { id: String, revision: u32, body: String, by: String, at: i64 },
     /// `may`'s answer: whether the caller holds `role` on the note `id`.
     May { id: String, role: menger_tickets_api::members::Role, held: bool },
     /// A watch is open: what it hears follows (`id` when it watches one note).
@@ -304,6 +359,9 @@ pub enum NotesEvent {
         /// V2-30: no such thread on the note.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         thread: Option<String>,
+        /// NOTES-5: no such mark on the note.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mark: Option<String>,
     },
     /// The caller reads the note but may not do this to it (`forbidden`,
     /// `message` naming the grant and role it takes), or the meter refused the
@@ -328,6 +386,6 @@ impl plexus_rpc::client::FromClientError for NotesEvent {
 impl NotesEvent {
     /// `not_found` for the note `id`.
     pub fn no_doc(id: &str) -> Self {
-        NotesEvent::NotFound { id: Some(id.to_string()), revision: None, org: None, thread: None }
+        NotesEvent::NotFound { id: Some(id.to_string()), revision: None, org: None, thread: None, mark: None }
     }
 }

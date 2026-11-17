@@ -28,20 +28,22 @@
 //! | [`crdt`] | the body, a Yjs CRDT: create, update, save (a diff merged), state, replay, history, squash, restore |
 //! | [`presence`] | who is on a note: entries held by a watch, idling out |
 //! | [`threads`] | V2-30: questions on a range, anchored in the CRDT, and their answers |
+//! | [`marks`] | NOTES-5: marks on a range — an underline, a link, a line of state — anchored as a question is, never writing the text |
 //! | [`quota`] | the meter every write is reserved against (always allows until V2-31) |
 //! | [`seam`] | the gate and `orgs.list` through the running service; [`seam::may`] for a client |
 //! | [`activation`] | the methods, the one declaration |
 
 pub mod vocab;
-pub use vocab::{AgentName, NoteAwareness, NoteBody, NoteId, NoteQuery, NoteSession, NoteTitle, NoteUpdate, NoteVector, ThreadId, ThreadText};
+pub use vocab::{AgentName, MarkId, MarkLabel, MarkLink, NoteAwareness, NoteBody, NoteId, NoteQuery, NoteSession, NoteTitle, NoteUpdate, NoteVector, ThreadId, ThreadText};
 pub mod events;
-pub use events::{Anchor, Author, Note, NotesEvent, HistoryRow, Present, Reply, Resolution, Thread, WatchEnd};
+pub use events::{Anchor, Author, Mark, Note, NotesEvent, HistoryRow, Present, Reply, Resolution, Thread, WatchEnd};
 pub mod store;
 pub use store::{Change, NotesStore, StoreError};
 pub mod crdt;
 pub mod presence;
 pub mod quota;
 pub mod threads;
+pub mod marks;
 mod caller;
 pub use caller::{Caller, NotesRequest};
 pub mod seam;

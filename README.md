@@ -825,11 +825,15 @@ agents and image references.
 | `resolve` | `--id --thread [--open]` | the thread folded (or opened again): `resolved { thread }` |
 | `threads` | `--id` | `thread { thread }` each, by where its range stands, the detached (text deleted whole) last |
 | `waiting` | `[--to]` | the open questions asked of someone (`agent`, or a name) in the notes you read, oldest first — an agent's queue |
-| `watch` | `[--id] [--session]` | `watching`, then `created`, `updated { id, seq, update, by, session? }`, `renamed`, `deleted`, `squashed`, and on one note `present` and `left { session, client? }`, and (V2-30) `asked`, `replied`, `resolved` with the thread whole; with `session` the watch is your presence while open, and your own updates are not said back; held to you by the gate as `ui.watch` is (`watch_closed { reason }`) |
+| `mark` | `--id --from --to [--link] [--label]`, or `--id --mark [--link] [--label]` | NOTES-5: a mark on characters `from..to` of the text, anchored as a question's range is, so it follows its words: `marked { mark }` — `{ mark, id, anchor { from, to }, from?, to?, detached, words, quote, link?, label?, by, principal, at, changed_at?, changed_by? }`; with `--mark` instead, that mark's `link` and `label` changed (an empty one taken off; its range is not moved). `link` is a ticket (`KILN-12`), an address of the app (`#/…`) or an `https` address, anything else refused; `label` one line, at most 200 characters. The note's text and revision are never changed |
+| `unmark` | `--id --mark` | NOTES-5: the mark taken off: `unmarked { id, mark }` |
+| `marks` | `--id` | NOTES-5: `mark { mark }` each, by where its range stands, with the `words` it holds now; the detached (every character deleted) last. A viewer's |
+| `watch` | `[--id] [--session] [--text]` | `watching`, then `created`, `updated { id, seq, update, by, session? }`, `renamed`, `deleted`, `squashed`, and on one note `present` and `left { session, client? }`, and (V2-30) `asked`, `replied`, `resolved` with the thread whole, and (NOTES-5) `mark_changed { id, mark }` (made or changed, whole) and `mark_removed { id, mark }`; with `--text true` (and `--id`) the note's markdown as words, `text { id, revision, body, by, at }` — once as the watch opens, then a second after the first change not yet said, holding every change since (at most one a second, the last always said); with `session` the watch is your presence while open, and your own updates are not said back; held to you by the gate as `ui.watch` is (`watch_closed { reason }`) |
 
 **Who may**: a viewer reads, follows and is present (`get`, `list`,
-`state`, `history`, `replay`, `present`, `here`, `watch`, `may`), an editor
-writes (`create`, `update`, `save`, `rename`, `restore`), an admin deletes
+`state`, `history`, `replay`, `present`, `here`, `watch`, `may`, `marks`), an editor
+writes (`create`, `update`, `save`, `rename`, `restore`) and marks (`mark`,
+`unmark`), an admin deletes
 and squashes — each grant held on the note's organization (`acme:`) or
 on `*`. The gate admits a call whose grant is held somewhere; the method
 asks it again on the organization: a note you do not read is
@@ -848,6 +852,34 @@ and listed last. A question asked of an agent waits in `waiting` and is said
 on every watch of the organization's notes; the agent answers with
 `reply`, or edits the note itself. Kept in `notes.db`'s `doc_threads` and
 `doc_replies`.
+
+**What an agent leaves on a note** (NOTES-5; the owner, 2026-11-15: *"I
+want to make sure that agents can listen in on notes, and underline
+sections, add links"*). An agent never answers in the note's own words, so
+what it leaves sits on the text, not in it. It **follows the note as
+text**: `watch --id X --text true` says the markdown, made in the service
+from the CRDT whoever wrote, so an agent needs no CRDT of its own. It
+**marks a range**: `mark` keeps an underline on characters of the markdown
+(the offsets `get`'s body counts), anchored as a question is, carrying a
+link, one line of state, or both; `marks` says where each stands now and
+the words it holds; a mark whose every character was deleted is kept,
+detached, listed last and drawn nowhere. The page underlines a marked
+range (in the accent when it is linked, and a click on it, or enter, opens
+the link: a ticket's page, the app's address, an `https` address in a new
+tab), draws its line of state in the mono face under the block that holds
+it as `¶n · who · label`, and a dot in that block's margin — in a drawn
+block in its drawing, in the caret's block by the surface's own
+decorations, beside the questions' (`ui/src/note-margin.svelte`, real Svelte: `svelte/1`). Kept in
+`notes.db`'s `note_marks`, made by the store's open on a file from before
+(which opens with no marks).
+
+```sh
+synapse -P 4460 menger notes watch --id 7k3mq2xa --text true                       # open-ended: text { body } as it is written
+synapse -P 4460 menger notes mark --id 7k3mq2xa --from 0 --to 40 --link KILN-12 --label "filed KILN-12"
+synapse -P 4460 menger notes mark --id 7k3mq2xa --mark m4k9q2xa --label "built graph-nodes v2"
+synapse -P 4460 menger notes marks --id 7k3mq2xa
+synapse -P 4460 menger notes unmark --id 7k3mq2xa --mark m4k9q2xa
+```
 
 **Presence**: a page's `watch { id, session }` is its presence for as long
 as it is open (gone, `left`, when the connection closes); a writer with no
