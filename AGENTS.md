@@ -457,7 +457,7 @@ deploy/pipeline releases                      # every release: its suite, tested
 - **A component is built straight into prod** (owner, 2026-11-16: "just
   deploy straight to prod"; "that's the new policy. for many kinds of
   components we prioritize building them directly into prod and testing them
-  concurrently"; and: "we do not wait for a deployment. we need to get that
+  concurrently"; and: "we do not wait for a [deploy]. we need to get that
   down from taking any time at all to being practically instant. we want to
   iterate directly in prod"). A change that is `ui/src` alone — a
   component's source; no method, no server code, nothing of the shell or the
