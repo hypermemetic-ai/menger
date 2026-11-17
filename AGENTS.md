@@ -465,16 +465,19 @@ deploy/pipeline releases                      # every release: its suite, tested
   day: "you don't have to plan it out :) just build it directly into a plexus
   ui componenet"), and waits for no gate, review or suite: `deploy/pipeline
   ui prod` from a checkout at the commit prod's server runs — the bundle
-  live on test in seconds (refused `unknown_method` when the tree is ahead of
-  the server), then prod's pointer onto it, in one command; `--watch` does it
-  again on every change, and `ui` and `ui promote` are its two halves. Look
-  at it on prod, change it, run it again. After each, check that the app
-  still draws — a push replaces the whole interface, not one component — and
-  that prod took the version just pushed. Its browser cases run beside it and
-  a red one is fixed forward; the interface alone goes back by pushing the
-  old source and promoting again (`ui rollback --channel prod` is an
-  admin's). The source is committed and merged to `v2` in the same pass, so
-  the next release carries it. Everything else keeps the rules above: a
+  checked against prod's own server and pushed on prod's socket (owner, the
+  same day, of letting prod take pushes itself, not only what test's server
+  had accepted: "take the first"), refused `unknown_method` when the tree is
+  ahead of that server. Test takes no part, so the two may run different
+  releases; `--watch` does it again on every change. Look at it on prod,
+  change it, run it again. After each, check that the app still draws — a
+  push replaces the whole interface, not one component. Its browser cases run
+  beside it and a red one is fixed forward; the interface alone goes back by
+  pushing the old source again (`ui rollback --channel prod` is an admin's).
+  The source is committed and merged to `v2` in the same pass: the next
+  `remote prod` puts prod's pointer back onto what test has live, so only a
+  release that carries the change keeps it. `ui` (test) and `ui promote`
+  (test's live version onto prod) are still there. Everything else keeps the rules above: a
   release passes test, and `remote prod` is the owner's word. Which kinds
   "many kinds" covers is the owner's to say; the component-only reading is an
   agent's, 2026-11-16.
@@ -509,7 +512,7 @@ This machine's agents are Ed25519 keys kept by synapse
 | key | principal | holds |
 |---|---|---|
 | `builder` | `key:54a9677a…3b0d28` | `editor` on `*` — the machine's default agent |
-| `pipeline` | `key:0ca8b6d1…227f60` | `viewer` on `*` + `deployer` — the pipeline's records, and on test `ui.push` |
+| `pipeline` | `key:0ca8b6d1…227f60` | `viewer` on `*` + `deployer` — the pipeline's records, and `ui.push`: a release's on test, `ui prod`'s on prod |
 | `operator` | `key:ba720a3d…3974b8e` | `--admin` — grants and break-glass, by hand only |
 
 **Exit 77 means sign in**, not a dead server: `_login` once per machine
