@@ -430,6 +430,8 @@ graph TD
       // Straight to the ticket, inside a batch: what was typed lands on its own doc.
       await caretAt(page, "a new page".length);
       await page.keyboard.type(" more");
+      // NOTES-4: on a note the list is a drawer at every width — opened by the bar's `notes`.
+      await screen.locator("[data-action=notes]").click();
       await screen.locator(`[data-field=notes] [data-note=${first}]`).first().click();
       // V2-42: by its uid, `#/t/<uid>/<ID>-<slug>/edit` (the recent row carries the uid), else by its id.
       await eventually("the ticket again, in the editor", async () => { const h = await hash(page); return h === `#/edit/${first}` || new RegExp(`^#/t/[0-9a-z]{8}/${first}(-[a-z0-9-]*)?/edit$`).test(h); }, 5_000);

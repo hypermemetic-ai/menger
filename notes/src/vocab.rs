@@ -10,6 +10,9 @@
 //! store mints one per note ([`mint`]), drawn again until no note
 //! of the file has it; it never changes and is never given out again.
 
+//! NOTES-4: and what fills a note's slot — [`ComponentName`],
+//! [`VersionRef`], [`SlotSay`], [`SlotProps`], [`BuildStep`].
+
 /// The alphabet, in digit order: Crockford's base32, lower case (TICKETS-35's).
 pub const ID_ALPHABET: &[u8; 32] = b"0123456789abcdefghjkmnpqrstvwxyz";
 
@@ -248,6 +251,109 @@ text_type!(
     agent_name
 );
 
+// ── NOTES-4: a note's slot ────────────────────────────────────────────────
+
+fn component_name(text: &str) -> Result<String, String> {
+    let t = text.trim();
+    let ok = t.len() <= 64 && t.starts_with(|c: char| c.is_ascii_lowercase()) && t.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') && !t.ends_with('-') && !t.contains("--");
+    match ok {
+        true => Ok(t.to_string()),
+        false => Err(not_a(t, "a component's name", "lower-case letters and digits, hyphen-separated, beginning with a letter, at most 64 — e.g. graph-nodes")),
+    }
+}
+
+text_type!(
+    /// NOTES-4: a component's name, as its bundle's manifest names it
+    /// (`graph-nodes`): lower-case letters and digits, hyphen-separated.
+    ComponentName,
+    component_name
+);
+
+fn version_ref(text: &str) -> Result<String, String> {
+    let t = text.trim().to_ascii_lowercase();
+    match (6..=64).contains(&t.len()) && t.bytes().all(|b| b.is_ascii_hexdigit()) {
+        true => Ok(t),
+        false => Err(not_a(&t, "a version", "a kept version's hash, 64 hex digits (or at least its first 6), as ui.author answered it")),
+    }
+}
+
+text_type!(
+    /// NOTES-4: a version the ui service keeps: its hash, 64 hex digits, or
+    /// at least the first 6 of them (resolved to the whole hash).
+    VersionRef,
+    version_ref
+);
+
+/// The most a slot's line (`say`) may be, in bytes: 4 KiB — a refusal's
+/// words fit.
+pub const SAY_MAX: usize = 4 * 1024;
+
+fn slot_say(text: &str) -> Result<String, String> {
+    let t = text.trim();
+    match (t.is_empty(), t.len() <= SAY_MAX) {
+        (true, _) => Err("a line says something: it is empty".to_string()),
+        (_, false) => Err(format!("a line is at most {SAY_MAX} bytes; this one is {}", t.len())),
+        _ => Ok(t.to_string()),
+    }
+}
+
+text_type!(
+    /// NOTES-4: one line of what a fill does or a build is at
+    /// (`click two nodes to connect`), or a build's refusal; at most 4 KiB.
+    SlotSay,
+    slot_say
+);
+
+/// NOTES-4: the most a slot's props may be, written as JSON: 64 KiB.
+pub const PROPS_MAX: usize = 64 * 1024;
+
+/// NOTES-4: a slot's props, or a patch of them: a JSON object (or a text
+/// holding one, as a flag gives it), at most 64 KiB written; in a patch a
+/// key set to `null` is taken away.
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub struct SlotProps(serde_json::Map<String, serde_json::Value>);
+
+impl SlotProps {
+    /// The object.
+    pub fn into_map(self) -> serde_json::Map<String, serde_json::Value> {
+        self.0
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SlotProps {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        let map = match <serde_json::Value as serde::Deserialize>::deserialize(d)? {
+            serde_json::Value::Object(map) => map,
+            // A flag's value comes as text (`synapse … --patch '{"nodes": 6}'`): the object it writes.
+            serde_json::Value::String(text) => match serde_json::from_str(&text) {
+                Ok(serde_json::Value::Object(map)) => map,
+                _ => return Err(D::Error::custom(format!("props are a JSON object, e.g. {{\"nodes\": 6}}; this is {text:?}"))),
+            },
+            other => return Err(D::Error::custom(format!("props are a JSON object, e.g. {{\"nodes\": 6}}; this is {other}"))),
+        };
+        let size = serde_json::to_string(&map).map_or(usize::MAX, |s| s.len());
+        match size <= PROPS_MAX {
+            true => Ok(Self(map)),
+            false => Err(D::Error::custom(format!("props are at most {PROPS_MAX} bytes written as JSON; these are {size}"))),
+        }
+    }
+}
+
+/// NOTES-4: how far a build in a slot has come — the steps the page shows,
+/// before `drawn` (which a fill is).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BuildStep {
+    /// The agent heard what the note asks.
+    Heard,
+    /// The source is written.
+    Written,
+    /// The source compiled (`ui.author` answered `authored`).
+    Compiled,
+}
+
 /// A fresh id from `draw`'s low 40 bits, most significant digit first.
 pub fn id_of_bits(bits: u64) -> String {
     (0..ID_LEN).map(|i| ID_ALPHABET[((bits >> (5 * (ID_LEN - 1 - i))) & 31) as usize] as char).collect()
@@ -301,5 +407,27 @@ mod tests {
         let first = id_of_bits(draw());
         let again = mint(|t| t == first);
         assert_ne!(again, first);
+    }
+
+    #[test]
+    fn a_slots_words_hold_and_refuse() {
+        assert_eq!("graph-nodes".parse::<ComponentName>().unwrap().as_str(), "graph-nodes");
+        for bad in ["", "Graph", "1graph", "graph-", "gr--aph", "graph_nodes"] {
+            assert!(bad.parse::<ComponentName>().is_err(), "{bad:?}");
+        }
+        assert_eq!("ABCDEF".parse::<VersionRef>().unwrap().as_str(), "abcdef");
+        for bad in ["abcde", "xyzxyz", &"a".repeat(65)] {
+            assert!(bad.parse::<VersionRef>().is_err(), "{bad:?}");
+        }
+        assert!("  ".parse::<SlotSay>().is_err());
+        let props: SlotProps = serde_json::from_str(r#"{"nodes": 6, "gone": null}"#).unwrap();
+        assert_eq!(props.into_map().len(), 2);
+        assert!(serde_json::from_str::<SlotProps>("[1]").is_err(), "an object only");
+        let flag: SlotProps = serde_json::from_str(r#""{\"nodes\": 6}""#).unwrap();
+        assert_eq!(flag.into_map().len(), 1, "a flag's text holding an object");
+        assert!(serde_json::from_str::<SlotProps>(r#""six""#).is_err());
+        let big = format!("{{\"x\": \"{}\"}}", "y".repeat(PROPS_MAX));
+        assert!(serde_json::from_str::<SlotProps>(&big).is_err(), "64 KiB at most");
+        assert_eq!(serde_json::from_str::<BuildStep>("\"written\"").unwrap(), BuildStep::Written);
     }
 }

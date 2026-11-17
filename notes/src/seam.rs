@@ -12,6 +12,13 @@
 //!
 //! The media service is a client of this one the same way: [`may`] asks
 //! `notes.may` as the caller before it keeps an image for a note.
+//!
+//! NOTES-4: a third — **does this kept version hold this component** —
+//! asked of the ui service before a slot is filled ([`Seam::component`]),
+//! through what the builder attaches ([`Components`]): the ui service's own
+//! store, in the process. The ui service of plexus-ui 0.2.6 answers no wire
+//! method a version's components (`ui.components` resolves the live bundle's
+//! and an author's own); the notes service opens no ui file either way.
 
 use crate::{NotesClient, NotesEvent};
 use futures::TryStreamExt;
@@ -26,6 +33,26 @@ use std::sync::{Arc, OnceLock, Weak};
 #[derive(Clone, Default)]
 pub struct Seam {
     at: Arc<OnceLock<Weak<DynamicHub>>>,
+    components: Arc<OnceLock<Arc<dyn Components>>>,
+}
+
+/// NOTES-4: what the ui service says of a component of a version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Held {
+    /// The version is kept (its whole hash) and holds the component.
+    Holds(String),
+    /// The version is kept (its whole hash) and holds no such component.
+    NoComponent(String),
+    /// The ui service keeps no such version (none, or a prefix naming two).
+    NoVersion,
+}
+
+/// NOTES-4: the ui service's answer to "does `version` hold `component`" —
+/// the builder attaches the running ui service's ([`Seam::attach_components`]).
+pub trait Components: Send + Sync {
+    /// Whether the kept version `version` (a hash, or its first 6 or more
+    /// hex digits) holds `component`. `Err`: the ui store failed, in words.
+    fn holds(&self, version: &str, component: &str) -> Result<Held, String>;
 }
 
 impl std::fmt::Debug for Seam {
@@ -50,6 +77,19 @@ impl Seam {
     /// The service this one is registered in; the first attach holds.
     pub fn attach(&self, service: &Arc<DynamicHub>) {
         let _ = self.at.set(Arc::downgrade(service));
+    }
+
+    /// NOTES-4: the ui service's word on versions; the first attach holds.
+    pub fn attach_components(&self, components: Arc<dyn Components>) {
+        let _ = self.components.set(components);
+    }
+
+    /// NOTES-4: whether the kept version `version` holds `component`, as the
+    /// ui service says (off the runtime). `Err`: none attached, or it failed.
+    pub async fn component(&self, version: &str, component: &str) -> Result<Held, String> {
+        let ui = self.components.get().cloned().ok_or("the notes service is not attached to the ui service")?;
+        let (version, component) = (version.to_string(), component.to_string());
+        tokio::task::spawn_blocking(move || ui.holds(&version, &component)).await.map_err(|e| format!("the ui service's answer failed: {e}"))?
     }
 
     /// The running service, while it runs.

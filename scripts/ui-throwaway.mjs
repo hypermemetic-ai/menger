@@ -112,6 +112,18 @@ export function compilerModule(work) {
   }
   return out;
 }
+/** NOTES-4: the Svelte compiler as a wasm module (the framework checkout's
+ *  scripts/svelte-compiler-wasm.sh; Node 22 and javy, which it fetches once) at the checkout's
+ *  `dist/svelte-compiler.wasm` — where tests/support's `svelte_compiler_wasm` keeps it — built when
+ *  missing: what `--ui-svelte-compiler` names, so `ui.author` compiles `svelte/1` (a note's slot). */
+export function svelteCompilerModule() {
+  const out = path.join(REPO, "dist", "svelte-compiler.wasm");
+  if (!fs.existsSync(out)) {
+    const src = run(path.join(REPO, "scripts", "plexus-ui-src"), ["--node-modules", REPO]).trim();
+    run("bash", [path.join(src, "scripts", "svelte-compiler-wasm.sh"), out], { cwd: REPO, stdio: ["ignore", "ignore", "inherit"] });
+  }
+  return out;
+}
 /** The plexus-ui tool (FRAME-8): the framework's cli/, built into this checkout's target by scripts/plexus-ui. */
 export const TOOL = path.join(REPO, "scripts", "plexus-ui");
 
@@ -151,7 +163,7 @@ export class Throwaway {
     this.ws = await freePort();
     this.shell = await freePort();
     const env = { ...process.env, PLEXUS_NO_REGISTRY: "1" };
-    for (const v of ["MENGER_DB_PATH", "MENGER_AUTH_PROVIDERS", "MENGER_ADMINS", "MENGER_UI_DB_PATH", "MENGER_UI_SIGNERS", "MENGER_UI_ALLOW_RHX", "MENGER_MEDIA_DB_PATH", "MENGER_NOTES_DB_PATH", "MENGER_CODE_DB_PATH", "MENGER_CODE_BLOB_DIR", "MENGER_APP_DIST", "RUST_LOG"]) delete env[v];
+    for (const v of ["MENGER_DB_PATH", "MENGER_AUTH_PROVIDERS", "MENGER_ADMINS", "MENGER_UI_DB_PATH", "MENGER_UI_SIGNERS", "MENGER_UI_ALLOW_RHX", "MENGER_UI_SVELTE_COMPILER", "MENGER_MEDIA_DB_PATH", "MENGER_NOTES_DB_PATH", "MENGER_CODE_DB_PATH", "MENGER_CODE_BLOB_DIR", "MENGER_APP_DIST", "RUST_LOG"]) delete env[v];
     const argv = [
       "--port", String(this.ws),
       "--shell-port", String(this.shell),
@@ -168,6 +180,8 @@ export class Throwaway {
       // COMPS-4: the compiler module and the author key, so ui.author runs (a ticket's definitions).
       ...(this.uiCompiler ? ["--ui-compiler", this.uiCompiler] : []),
       ...(this.authorKey ? ["--ui-author-key", this.authorKey] : []),
+      // NOTES-4: the Svelte compiler module, so ui.author compiles svelte/1 into the bundle `notes`.
+      ...(this.svelteCompiler ? ["--ui-svelte-compiler", this.svelteCompiler] : []),
       // SV-6: rhx is switched off; a run testing rhx itself (a ticket's rhx definitions) turns it on.
       ...(this.allowRhx ? ["--ui-allow-rhx"] : []),
       // CODE-3: the code service reads a stand-in for GitHub (tests/code-github.mjs), never the internet.

@@ -367,6 +367,22 @@ compile's fuel (`spec-outline`). Who may: `ui.author` is the `editor`'s
 grant on `*`; on a server whose `editor` role was ever edited the stored
 role wins (`auth roles` says what it holds).
 
+**A note's slot** (NOTES-4): every menger keeps the bundle `notes` from its
+first start (`src/notes_bundle.rs`: a seed kept `--no-live` where the
+pointer `bundle:notes` names none; a deploy never moves it, and test and
+prod share it in the one ui store, UI-15), so `ui.author { bundle: "notes"
+}` builds on it at once. What it answers fills a note's slot: `notes.fill
+--id --component --version` (an editor's of the note; the ui service is
+asked whether the version holds the component, else `unknown_version` or
+`unknown_component`), and the note's page (`ui/src/note-slot.svelte`, real
+Svelte, placed by `editor-screen` on the note's right) draws it by a mark
+pinned to that version, its props `note` (the id) and `props` (the slot's
+props as JSON text: a mark's props are strings). While it builds, an agent
+says `notes.building --step heard|written|compiled [--say] [--failed
+true]`; a component keeps its state with `notes.props --patch` (64 KiB),
+which reaches every page's mounted component in place. README "`notes`"
+has the wire; `tests/pages/slot.mjs` the page (`--group slot`).
+
 ## Deploying
 
 menger runs in two environments, both on the Linode as one image through

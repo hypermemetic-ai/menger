@@ -106,10 +106,12 @@ fn gone_in(path: &str, text: &str) -> Vec<&'static str> {
     // V2-31: and the quota service, whose sources name it (`media.bytes`).
     let media = path == "media" || path.starts_with("media.") || path == "quota";
     let notes = path == "notes" || path.starts_with("notes.") || media;
+    // NOTES-4: and the notes service, whose slot holds a component of the ui service's.
+    let slot = path == "notes" || path.starts_with("notes.");
     GONE_WORDS
         .iter()
         .chain(SCHEMA_WORDS)
-        .filter(|w| !(ui && UI_WORDS.contains(w)) && !(media && MEDIA_WORDS.contains(w)) && !(notes && NOTES_WORDS.contains(w)))
+        .filter(|w| !((ui || slot) && UI_WORDS.contains(w)) && !(media && MEDIA_WORDS.contains(w)) && !(notes && NOTES_WORDS.contains(w)))
         .filter(|w| says(text, w))
         .copied()
         .collect()
@@ -526,6 +528,8 @@ fn a_word_is_found_only_as_a_word_of_its_own() {
     // NOTES-3: `notes` is the notes service's word (and media's and quota's), not the tickets service's.
     assert_eq!(gone_in("notes", "a note's title, the notes you read"), Vec::<&str>::new());
     assert_eq!(gone_in("tickets", "a ticket's notes"), ["notes"]);
+    assert_eq!(gone_in("notes", "the component a slot holds"), Vec::<&str>::new(), "NOTES-4: a note's slot holds a ui component");
+    assert_eq!(gone_in("media", "a component"), ["component"], "only the notes service's slot says it beside ui");
 
     // Everything a method carries is held, each by its path: its own
     // description, a parameter's, a type's in `$defs` (once, with how many

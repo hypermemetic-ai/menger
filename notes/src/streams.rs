@@ -31,7 +31,7 @@ pub const LIST_MAX: usize = 1_000;
 /// The role a grant of this service takes, for a refusal's words.
 fn role_of(grant: &str) -> &'static str {
     match grant {
-        "notes.threads" | "notes.waiting" | "notes.get" | "notes.list" | "notes.history" | "notes.replay" | "notes.state" | "notes.present" | "notes.watch" | "notes.may" => "viewer",
+        "notes.slot" | "notes.threads" | "notes.waiting" | "notes.get" | "notes.list" | "notes.history" | "notes.replay" | "notes.state" | "notes.present" | "notes.watch" | "notes.may" => "viewer",
         "notes.delete" => "admin",
         "notes.squash" => "notes.squash's grant (admin's by default)",
         _ => "editor",
@@ -48,6 +48,7 @@ pub(crate) fn failed(e: StoreError) -> NotesEvent {
         StoreError::Quota(m) => NotesEvent::Refused { reason: "quota".into(), message: format!("{m} (nothing was written)") },
         StoreError::Allowance(r) => NotesEvent::Refused { reason: r.reason, message: format!("{} (nothing was written)", r.message) },
         e @ StoreError::BadUpdate(_) => NotesEvent::Error { message: format!("{e} (nothing was written)") },
+        StoreError::TooLarge(m) => NotesEvent::Refused { reason: "too_large".into(), message: m },
         StoreError::Db(m) => NotesEvent::Error { message: m },
     }
 }

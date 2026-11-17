@@ -738,6 +738,13 @@ where
     // deploy's push is taken as it always was, its modules as given. menger's
     // own bundle holds components past one compile's fuel, so compiled at
     // every push (`svelte_compiling`) no deploy would be taken.
+    // NOTES-4: the bundle `notes` kept where none is, before anything is
+    // served; the notes service asks the ui store what a version holds.
+    match crate::notes_bundle::seed(&ui.store) {
+        Ok(seeded) => tracing::info!("ui:        {seeded}"),
+        Err(e) => tracing::error!("the bundle {} was not kept: {e}", crate::notes_bundle::BUNDLE),
+    }
+    let notes_components = Arc::new(crate::notes_bundle::UiComponents(Arc::clone(&ui.store)));
     let ui = UiActivation::new(ui.store, ui.signers).compiling(ui.compiler).svelte_authoring(ui.svelte).allowing_rhx(ui.allow_rhx).authoring(ui.author);
     // FRAME-5: the gate's grants generation moves with the store's count, so
     // a watch held by the gate (`ui.watch`) hears `members.*` too.
@@ -755,6 +762,7 @@ where
     notes.store.set_quota(Arc::new(crate::quota_allowance::NotesMetered(access.meter().clone())));
     let notes = NotesActivation::new(notes.store);
     let notes_seam = notes.seam().clone();
+    notes_seam.attach_components(notes_components);
     // V2-31: `quota` beside them — every principal's usage per source, over
     // its own file; what it knows of teams and stores it asks through its
     // seam, and the tickets service reserves through the meter it is given.

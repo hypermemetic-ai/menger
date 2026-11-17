@@ -13,13 +13,16 @@
 //! on the note's organization (`acme:`) through the seam — a note
 //! in an organization the caller does not read is `not_found`, one it
 //! reads and may not write `refused { forbidden }`.
+//!
+//! NOTES-4: a note's slot — `slot` a viewer's; `fill`, `empty`,
+//! `building` and `props` an editor's of the note ([`crate::slot`]).
 
 use crate::caller::{Caller, Callers, NotesRequest};
 use crate::events::NotesEvent;
 use crate::seam::Seam;
 use crate::store::NotesStore;
 use crate::streams::{many, once};
-use crate::vocab::{AgentName, ThreadId, ThreadText, NoteAwareness, NoteBody, NoteId, NoteQuery, NoteSession, NoteTitle, NoteUpdate, NoteVector};
+use crate::vocab::{AgentName, BuildStep, ComponentName, SlotProps, SlotSay, VersionRef, ThreadId, ThreadText, NoteAwareness, NoteBody, NoteId, NoteQuery, NoteSession, NoteTitle, NoteUpdate, NoteVector};
 use futures::Stream;
 use menger_tickets_api::address::OrgId;
 use menger_tickets_api::members::Role;
@@ -45,7 +48,10 @@ impl NotesActivation {
                 loop {
                     every.tick().await;
                     match weak.upgrade() {
-                        Some(store) => store.sweep(),
+                        Some(store) => {
+                            store.sweep();
+                            store.sweep_builds();
+                        }
                         None => return,
                     }
                 }
@@ -71,8 +77,8 @@ impl NotesActivation {
     request = NotesRequest,
     typed_params,
     roles(
-        viewer = ["get", "list", "state", "history", "replay", "present", "here", "watch", "may", "threads", "waiting"],
-        editor = [viewer, "create", "update", "save", "rename", "restore", "ask", "reply", "resolve"],
+        viewer = ["get", "list", "state", "history", "replay", "present", "here", "watch", "may", "threads", "waiting", "slot"],
+        editor = [viewer, "create", "update", "save", "rename", "restore", "ask", "reply", "resolve", "fill", "empty", "building", "props"],
     )
 )]
 impl NotesActivation {
@@ -454,7 +460,108 @@ impl NotesActivation {
         many(crate::streams::waiting(store, seam, user, to.map(AgentName::into_string)))
     }
 
-    /// Follow notes: watching { id? } first, then created, updated { id, seq, update, by }, renamed, deleted, squashed, asked, replied, resolved — and, on one note, present and left — as they happen; open-ended, ends with watch_closed { reason, message }.
+    /// NOTES-4: a note's slot whole; yields slot { slot: { id, fill?, props, fills, building? } } — what fills it now, its props, every fill newest first, the build under way.
+    ///
+    /// A fill is `{ n, component, version, say?, by, principal, at }`; a
+    /// build `{ component, step?, say?, failed, by, principal, started, at }`.
+    /// The page draws `fill` by a mark pinned to its version. Viewer.
+    #[plexus_rpc::macros::method(group = "read", example(note = "the slot", params = r#"{"id": "7k3mq2xa"}"#))]
+    pub async fn slot(
+        &self,
+        #[from_auth(self.callers.verify)] user: Caller,
+        /// The note's id, e.g. 7k3mq2xa.
+        id: NoteId,
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
+        let (store, seam) = (self.store.clone(), self.seam.clone());
+        once(crate::slot_calls::slot(store, seam, user, id.into_string()))
+    }
+
+    /// NOTES-4: fill a note's slot with a component of a kept version; yields filled { slot }, said on watch as slot_changed; the build under way ends.
+    ///
+    /// The ui service is asked whether `version` (a hash, or its first 6 hex
+    /// digits or more) holds `component`: refused `unknown_version` or
+    /// `unknown_component` naming both, the slot unchanged. `props` replaces
+    /// the slot's props (none: they stay); `say` is one line of what this
+    /// fill does. Every open page draws it in place. Editor.
+    #[plexus_rpc::macros::method(group = "write", example(note = "graph-nodes, as authored", params = r#"{"id": "7k3mq2xa", "component": "graph-nodes", "version": "3f9a1c0b7d2e", "say": "click two nodes to connect"}"#))]
+    pub async fn fill(
+        &self,
+        #[from_auth(self.callers.verify)] user: Caller,
+        /// The note's id, e.g. 7k3mq2xa.
+        id: NoteId,
+        /// The component, e.g. graph-nodes.
+        component: ComponentName,
+        /// The version it is of, as ui.author answered it.
+        version: VersionRef,
+        /// The props it starts from, a JSON object (optional: the slot's stay).
+        props: Option<SlotProps>,
+        /// What this fill does, one line (optional).
+        say: Option<SlotSay>,
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
+        let (store, seam) = (self.store.clone(), self.seam.clone());
+        let (props, say) = (props.map(SlotProps::into_map), say.map(SlotSay::into_string));
+        once(crate::slot_calls::fill(store, seam, user, id.into_string(), component.into_string(), version.into_string(), props, say))
+    }
+
+    /// NOTES-4: empty a note's slot — nothing drawn, its props cleared, its fills kept; yields emptied { slot }, said on watch as slot_changed. Editor.
+    #[plexus_rpc::macros::method(group = "write", example(note = "nothing in it", params = r#"{"id": "7k3mq2xa"}"#))]
+    pub async fn empty(
+        &self,
+        #[from_auth(self.callers.verify)] user: Caller,
+        /// The note's id, e.g. 7k3mq2xa.
+        id: NoteId,
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
+        let (store, seam) = (self.store.clone(), self.seam.clone());
+        once(crate::slot_calls::empty(store, seam, user, id.into_string()))
+    }
+
+    /// NOTES-4: say a slot is being built — a step, a line, a failure; yields building { slot }, said on watch as building_changed.
+    ///
+    /// `step` is the last reached: `heard`, `written` or `compiled`; `say`
+    /// one line; `failed: true` with `say` holding the refusal (the
+    /// compiler's line) marks a build that failed. The component that is in
+    /// the slot stays drawn. A fill or an empty ends it; so do ten minutes
+    /// without a word, and a restart: it is kept in memory only. Editor.
+    #[plexus_rpc::macros::method(group = "write", values(step = ["heard", "written", "compiled"]), example(note = "the source is written", params = r#"{"id": "7k3mq2xa", "component": "graph-nodes", "step": "written", "say": "drag a node"}"#))]
+    pub async fn building(
+        &self,
+        #[from_auth(self.callers.verify)] user: Caller,
+        /// The note's id, e.g. 7k3mq2xa.
+        id: NoteId,
+        /// The component being built, e.g. graph-nodes.
+        component: ComponentName,
+        /// The last step reached: heard | written | compiled (optional).
+        step: Option<BuildStep>,
+        /// One line — with failed, the refusal (optional).
+        say: Option<SlotSay>,
+        /// The build failed (optional: false).
+        failed: Option<bool>,
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
+        let (store, seam) = (self.store.clone(), self.seam.clone());
+        let (component, say) = (component.into_string(), say.map(SlotSay::into_string));
+        once(crate::slot_calls::building(store, seam, user, id.into_string(), component, step, say, failed.unwrap_or(false)))
+    }
+
+    /// NOTES-4: merge a patch into a slot's props — what its component keeps its state in; yields props { slot }, said on watch as props_changed { id, props, by, slot }.
+    ///
+    /// A key set to `null` is taken away. The props are held to 64 KiB
+    /// written as JSON: past it, `refused { too_large }` and nothing
+    /// written. Every page open on the note hands the new props to the
+    /// component it has mounted. Editor.
+    #[plexus_rpc::macros::method(group = "write", example(note = "a line added", params = r#"{"id": "7k3mq2xa", "patch": {"lines": [["tickets", "ui"]]}}"#))]
+    pub async fn props(
+        &self,
+        #[from_auth(self.callers.verify)] user: Caller,
+        /// The note's id, e.g. 7k3mq2xa.
+        id: NoteId,
+        /// The patch, a JSON object: each key set, a null taken away.
+        patch: SlotProps,
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
+        let (store, seam) = (self.store.clone(), self.seam.clone());
+        once(crate::slot_calls::props(store, seam, user, id.into_string(), patch.into_map()))
+    }
+
+    /// Follow notes: watching { id? } first, then created, updated { id, seq, update, by }, renamed, deleted, squashed, asked, replied, resolved, slot_changed, building_changed, props_changed — and, on one note, present and left — as they happen; open-ended, ends with watch_closed { reason, message }.
     ///
     /// With `id`, one note's: each `updated` carries the Yjs update to
     /// apply (the stream ends after its `deleted`), and who comes and goes

@@ -12,7 +12,10 @@
      edit as it happens. A thread whose text was deleted whole is detached
      and listed at the end. Live by `notes.threads` and `notes.watch` (`asked`,
      `replied`, `resolved`). Under 1400 px the margin is a list under the
-     text. -->
+     text. NOTES-4: in a note's column beside its slot (narrower than 1100
+     px, the container `note-col`) the margin is a list under the text at
+     every width, each card quoting the words it is about, in the text's
+     order; flat there, as the page is. -->
 <script module>
   import { StateEffect, StateField } from "@codemirror/state";
   import { Decoration, EditorView } from "@codemirror/view";
@@ -209,6 +212,12 @@
   @media (max-width: 1399px) {
     .note-margin[data-beside] { position: static; width: auto; margin-top: 16px; }
     .note-margin[data-beside] .card { position: static; margin-bottom: 8px; }
+    .note-margin[data-beside] .count { position: static; }
+  }
+  /* NOTES-4: in a note's column beside its slot, a list under the text, flat. */
+  @container note-col (max-width: 1099px) {
+    .note-margin[data-beside] { position: static; width: auto; margin-top: 16px; }
+    .note-margin[data-beside] .card { position: static; margin-bottom: 8px; box-shadow: none; }
     .note-margin[data-beside] .count { position: static; }
   }
   /* EDITOR-12: on a phone a card is the column's width and its words break: the quote wraps to two lines. */

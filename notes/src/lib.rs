@@ -28,24 +28,27 @@
 //! | [`crdt`] | the body, a Yjs CRDT: create, update, save (a diff merged), state, replay, history, squash, restore |
 //! | [`presence`] | who is on a note: entries held by a watch, idling out |
 //! | [`threads`] | V2-30: questions on a range, anchored in the CRDT, and their answers |
+//! | [`slot`] | NOTES-4: a note's slot — the component drawn beside it, its props, its fills, the build under way |
 //! | [`quota`] | the meter every write is reserved against (always allows until V2-31) |
 //! | [`seam`] | the gate and `orgs.list` through the running service; [`seam::may`] for a client |
 //! | [`activation`] | the methods, the one declaration |
 
 pub mod vocab;
-pub use vocab::{AgentName, NoteAwareness, NoteBody, NoteId, NoteQuery, NoteSession, NoteTitle, NoteUpdate, NoteVector, ThreadId, ThreadText};
+pub use vocab::{AgentName, BuildStep, ComponentName, SlotProps, SlotSay, VersionRef, NoteAwareness, NoteBody, NoteId, NoteQuery, NoteSession, NoteTitle, NoteUpdate, NoteVector, ThreadId, ThreadText};
 pub mod events;
-pub use events::{Anchor, Author, Note, NotesEvent, HistoryRow, Present, Reply, Resolution, Thread, WatchEnd};
+pub use events::{Anchor, Author, Building, Fill, Note, NotesEvent, HistoryRow, Present, Reply, Resolution, Slot, Thread, WatchEnd};
 pub mod store;
 pub use store::{Change, NotesStore, StoreError};
 pub mod crdt;
 pub mod presence;
 pub mod quota;
 pub mod threads;
+pub mod slot;
+mod slot_calls;
 mod caller;
 pub use caller::{Caller, NotesRequest};
 pub mod seam;
-pub use seam::Seam;
+pub use seam::{Components, Held, Seam};
 pub mod activation;
 pub use activation::{NotesActivation, NotesClient};
 mod streams;

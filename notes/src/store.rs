@@ -28,7 +28,7 @@
 //!
 //! One connection behind a mutex; every read and write off the runtime.
 
-use crate::events::{Note, Present, Thread};
+use crate::events::{Building, Note, Present, Slot, Thread};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -93,6 +93,10 @@ pub enum Change {
     Asked { org: String, thread: Thread },
     Replied { org: String, thread: Thread },
     Resolved { org: String, thread: Thread },
+    /// NOTES-4: a slot filled or emptied, a build said, props merged (by `by`) — the slot whole.
+    SlotChanged { org: String, slot: Slot },
+    BuildingChanged { org: String, slot: Slot },
+    PropsChanged { org: String, slot: Slot, by: String },
 }
 
 impl Change {
@@ -103,6 +107,7 @@ impl Change {
             Change::Deleted { id, .. } | Change::Squashed { id, .. } | Change::Left { id, .. } => id,
             Change::Present { present, .. } => &present.id,
             Change::Asked { thread, .. } | Change::Replied { thread, .. } | Change::Resolved { thread, .. } => &thread.id,
+            Change::SlotChanged { slot, .. } | Change::BuildingChanged { slot, .. } | Change::PropsChanged { slot, .. } => &slot.id,
         }
     }
 
@@ -112,6 +117,7 @@ impl Change {
             Change::Created(d) | Change::Renamed(d) | Change::Updated { doc: d, .. } => &d.org,
             Change::Deleted { org, .. } | Change::Squashed { org, .. } | Change::Present { org, .. } | Change::Left { org, .. } => org,
             Change::Asked { org, .. } | Change::Replied { org, .. } | Change::Resolved { org, .. } => org,
+            Change::SlotChanged { org, .. } | Change::BuildingChanged { org, .. } | Change::PropsChanged { org, .. } => org,
         }
     }
 }
@@ -133,6 +139,8 @@ pub enum StoreError {
     Quota(String),
     /// V2-39: the quota refused it, with its reason (`over_allowance`, …).
     Allowance(crate::quota::Refused),
+    /// NOTES-4: what a write would make is past its cap (its words).
+    TooLarge(String),
     /// The file.
     Db(String),
 }
@@ -147,6 +155,7 @@ impl std::fmt::Display for StoreError {
             StoreError::BadUpdate(e) => write!(f, "not a Yjs v1 update: {e}"),
             StoreError::Quota(e) => write!(f, "{e}"),
             StoreError::Allowance(r) => write!(f, "{}", r.message),
+            StoreError::TooLarge(e) => write!(f, "{e}"),
             StoreError::Db(e) => write!(f, "the notes file: {e}"),
         }
     }
@@ -192,6 +201,8 @@ pub struct NotesStore {
     pub(crate) presence: crate::presence::Presence,
     /// The meter every byte written is reserved against (V2-31's).
     pub(crate) quota: std::sync::RwLock<Arc<dyn crate::quota::Quota>>,
+    /// NOTES-4: the build under way in each slot ([`crate::slot`]) — memory only.
+    pub(crate) builds: Mutex<HashMap<String, Building>>,
 }
 
 impl std::fmt::Debug for NotesStore {
@@ -270,6 +281,7 @@ impl NotesStore {
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
         conn.execute_batch(TABLES)?;
         conn.execute_batch(crate::threads::TABLES)?;
+        conn.execute_batch(crate::slot::TABLES)?;
         Ok(Self {
             conn: Mutex::new(conn),
             path: path.to_path_buf(),
@@ -277,6 +289,7 @@ impl NotesStore {
             loaded: Mutex::new(HashMap::new()),
             presence: crate::presence::Presence::default(),
             quota: std::sync::RwLock::new(Arc::new(crate::quota::AllowAll)),
+            builds: Mutex::new(HashMap::new()),
         })
     }
 
@@ -470,3 +483,5 @@ impl NotesStore {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_slot;
