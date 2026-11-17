@@ -57,7 +57,7 @@ async fn start_full(disk: Option<Arc<FakeDisk>>, limits: menger::calls::CallLimi
                 Some(disk) => quota.guarding(disk as Arc<dyn DiskUsage>),
                 None => quota,
             };
-            menger::build_rpc_services(&db_path, None, Default::default(), Vec::new(), access, backend, None, menger::store::BODY_MAX_DEFAULT, ui, media, menger::DocsSetup::beside(&db_path).unwrap(), quota, menger::CodeSetup::beside(&db_path).unwrap(), Vec::new(), |store, access| {
+            menger::build_rpc_services(&db_path, None, Default::default(), Vec::new(), access, backend, None, menger::store::BODY_MAX_DEFAULT, ui, media, menger::DocsSetup::beside(&db_path).unwrap(), quota, menger::CodeSetup::beside(&db_path).unwrap(), menger::LogsSetup::beside(&db_path).unwrap(), Vec::new(), |store, access| {
                 menger::TicketsActivation::with_access(store, access)
             })
             .await
@@ -771,7 +771,7 @@ async fn history_is_a_point_a_day_yours_and_the_systems_an_admins() {
     let end = h.last().unwrap();
     assert_eq!((end["type"].as_str(), end["principal"].as_str(), end["everyone"].as_bool(), end["days"].as_u64()), (Some("end"), Some(me.as_str()), Some(false), Some(3)), "{end}");
     let points: Vec<&Value> = h.iter().filter(|e| e["type"] == "point").collect();
-    assert_eq!(points.len(), 3 * 10, "every source (CODE-2: code.bytes the tenth), every day");
+    assert_eq!(points.len(), 3 * 11, "every source (CODE-2: code.bytes the tenth; LOGS-2: logs.bytes the eleventh), every day");
     let tb: Vec<&Value> = points.iter().copied().filter(|p| p["source"] == "tickets.bytes").collect();
     let used = source(&one(&editor, "quota.usage", json!({})).await, "tickets.bytes")["used"].as_u64().unwrap();
     assert_eq!(tb.iter().map(|p| p["used"].as_u64().unwrap()).collect::<Vec<_>>(), vec![0, 0, used], "today's is now; before, nothing");

@@ -37,7 +37,7 @@
 #   scratch-db  /tmp/menger-*.db, .db-shm, .db-wal, .sessions.jsonl(.lock),
 #               .log — a throwaway server's database, sessions and log; and
 #               (SCRATCH-NAMES) its other services' files, named after it —
-#               menger-NAME.{ui,media,docs,quota,code}.db(-shm, -wal) and the
+#               menger-NAME.{ui,media,docs,quota,code,logs}.db(-shm, -wal) and the
 #               directories menger-NAME.media.blobs and (CODE-2) .code.blobs
 #   pages-tmp   V2-38: /tmp/claude-UID/ui8-pages-… — a browser page-test run's work
 #               directory (tests/pages_browser.mjs, which removes its own since
@@ -246,7 +246,7 @@ scratch_name() { local b=${1#menger-}
     *.db-shm|*.db-wal) b=${b%.db-*} ;;
     *.db) b=${b%.db} ;;
   esac
-  case $b in *.ui|*.media|*.docs|*.quota|*.code) b=${b%.*} ;; esac
+  case $b in *.ui|*.media|*.docs|*.quota|*.code|*.logs) b=${b%.*} ;; esac
   printf '%s\n' "$b"
 }
 # every scratch file in /tmp of the gate N — the set the sweep takes whole or not at all
@@ -422,7 +422,7 @@ paths_for_name() {
     refuse "$n" 'not a gate name (letters, digits, . _ -; no ..)'; return
   fi
   # SCRATCH-NAMES: the server's database and its other services' files, named after it
-  for s in "" .ui .media .docs .quota .code; do db+=("$TMPR/menger-$n$s.db" "$TMPR/menger-$n$s.db-shm" "$TMPR/menger-$n$s.db-wal"); done
+  for s in "" .ui .media .docs .quota .code .logs; do db+=("$TMPR/menger-$n$s.db" "$TMPR/menger-$n$s.db-shm" "$TMPR/menger-$n$s.db-wal"); done
   for f in "$WS/.$n" "$WS/$n" "$CT/$n" "$SCR/$n" "${db[@]}" "$TMPR/menger-$n.media.blobs" "$TMPR/menger-$n.code.blobs" \
            "$TMPR/menger-$n.sessions.jsonl" "$TMPR/menger-$n.sessions.jsonl.lock" "$TMPR/menger-$n.log"; do
     [[ -e $f || -L $f ]] && printf '%s\n' "$f"

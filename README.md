@@ -13,7 +13,7 @@ versioned by content hash and drawn by a small engine. SV-4: rhx (Rhai in
 markup, `rhx/1`) is retired from menger's UI — its sources are kept in
 `ui/retired-rhx/`, out of the bundle.
 
-v1 is tag `v0.0.1`; what v2 cut — the chats, comments, deployments, themes, notes, assignees and components, the Leptos app (trunk) with the frames' SDK (sdk-codegen) and mockups, the diagrams service — lives there. Media came back as a service of its own (V2-24, "The services"), and documents have a service of their own (V2-29, `docs`). Every input is held to a per-user allowance by the quota service (V2-31). Public GitHub repositories are read through a service of menger's own, `code` (CODE-2).
+v1 is tag `v0.0.1`; what v2 cut — the chats, comments, deployments, themes, notes, assignees and components, the Leptos app (trunk) with the frames' SDK (sdk-codegen) and mockups, the diagrams service — lives there. Media came back as a service of its own (V2-24, "The services"), and documents have a service of their own (V2-29, `docs`). Every input is held to a per-user allowance by the quota service (V2-31). Public GitHub repositories are read through a service of menger's own, `code` (CODE-2), and structured facts — a benchmark's results first — are kept in typed tables made from a JSON Schema by another, `logs` (LOGS-2).
 
 ## Run
 
@@ -138,15 +138,15 @@ synapse -P 4460 menger tickets health
 ```
 
 **Every file of a server is named after its database** (SCRATCH-NAMES).
-The ui, media, docs, quota and code services each keep a file beside the
+The ui, media, docs, quota, code and logs services each keep a file beside the
 database unless its flag (`--ui-db-path`, `--media-db-path`,
-`--docs-db-path`, `--quota-db-path`, `--code-db-path`) names another. Beside a database
+`--docs-db-path`, `--quota-db-path`, `--code-db-path`, `--logs-db-path`) names another. Beside a database
 named as a data directory's — `tickets.db` (prod, test, the image) or
 `local.db` (a local start) — they are `ui.db`, `media.db`, `docs.db`,
-`quota.db`, `code.db`, the media's bytes in `media/blobs/` and the code's in
+`quota.db`, `code.db`, `logs.db`, the media's bytes in `media/blobs/` and the code's in
 `code/blobs/`; beside any other, they
 carry the database's stem: `/tmp/menger-dev.db` → `/tmp/menger-dev.ui.db`,
-`.media.db`, `.docs.db`, `.quota.db`, `.code.db`, `/tmp/menger-dev.media.blobs/`
+`.media.db`, `.docs.db`, `.quota.db`, `.code.db`, `.logs.db`, `/tmp/menger-dev.media.blobs/`
 and `/tmp/menger-dev.code.blobs/`, as
 its sessions are `/tmp/menger-dev.sessions.jsonl`. So two dev servers in
 one directory share no file, and `scripts/cleanup-gate.sh dev` takes all of
@@ -309,7 +309,7 @@ where it has one (a list in it is `;`-separated).
 
 | group | flags |
 |---|---|
-| run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path` (`ui.db` beside the database — named after it beside one not named `tickets.db` or `local.db`, `menger-dev.ui.db`; so every file below, SCRATCH-NAMES), `--ui-signer`, `--ui-compiler`, `--ui-allow-rhx` (SV-6: rhx/1 taken again — without it every `ui.push` and `ui.author` carrying an rhx component is refused `rhx_disabled`, naming it; `MENGER_UI_ALLOW_RHX`), `--ui-author-key`, `--media-db-path` (`media.db` beside the database), `--media-store` (`disk`), `--media-blob-dir` (`media/blobs` beside `media.db`; `<stem>.media.blobs` beside a `<stem>.media.db`), `--media-max-bytes`, `--docs-db-path` (`docs.db` beside the database), `--quota-db-path` (`quota.db` beside the database), `--quota-plan` (the defaults a new quota file starts from; the built-in `free-1k`), `--code-db-path` (CODE-2: `code.db` beside the database; `MENGER_CODE_DB_PATH`), `--code-blob-dir` (`code/blobs` beside `code.db`; `<stem>.code.blobs` beside a `<stem>.code.db`; `MENGER_CODE_BLOB_DIR`), `--code-max-bytes` (what the code service keeps at most, 5 GiB; past it the commit read longest ago goes; `MENGER_CODE_MAX_BYTES`), `--ui-channel` (UI-15: the live pointer this environment serves in its ui file; default from `--env`: `test`, `prod`, else `default`), `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell`, `--no-mcp` (V2-43: no `/mcp`), `--child NAME=stdio:CMD` or `NAME=ws://…` (POLYGLOT-5: an activation in another process mounted under NAME behind the gate; repeatable; `--child-timeout`, `--child-max-calls`, `--child-env`, `--child-key`: plexus-core's `ChildArgs`; one that does not answer stops the start, exit 2; NAME a service of menger's own is refused) |
+| run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path` (`ui.db` beside the database — named after it beside one not named `tickets.db` or `local.db`, `menger-dev.ui.db`; so every file below, SCRATCH-NAMES), `--ui-signer`, `--ui-compiler`, `--ui-allow-rhx` (SV-6: rhx/1 taken again — without it every `ui.push` and `ui.author` carrying an rhx component is refused `rhx_disabled`, naming it; `MENGER_UI_ALLOW_RHX`), `--ui-author-key`, `--media-db-path` (`media.db` beside the database), `--media-store` (`disk`), `--media-blob-dir` (`media/blobs` beside `media.db`; `<stem>.media.blobs` beside a `<stem>.media.db`), `--media-max-bytes`, `--docs-db-path` (`docs.db` beside the database), `--quota-db-path` (`quota.db` beside the database), `--quota-plan` (the defaults a new quota file starts from; the built-in `free-1k`), `--code-db-path` (CODE-2: `code.db` beside the database; `MENGER_CODE_DB_PATH`), `--code-blob-dir` (`code/blobs` beside `code.db`; `<stem>.code.blobs` beside a `<stem>.code.db`; `MENGER_CODE_BLOB_DIR`), `--code-max-bytes` (what the code service keeps at most, 5 GiB; past it the commit read longest ago goes; `MENGER_CODE_MAX_BYTES`), `--logs-db-path` (LOGS-2: `logs.db` beside the database; `MENGER_LOGS_DB_PATH`), `--ui-channel` (UI-15: the live pointer this environment serves in its ui file; default from `--env`: `test`, `prod`, else `default`), `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell`, `--no-mcp` (V2-43: no `/mcp`), `--child NAME=stdio:CMD` or `NAME=ws://…` (POLYGLOT-5: an activation in another process mounted under NAME behind the gate; repeatable; `--child-timeout`, `--child-max-calls`, `--child-env`, `--child-key`: plexus-core's `ChildArgs`; one that does not answer stops the start, exit 2; NAME a service of menger's own is refused) |
 | sign-in | `--auth-provider`, `--admin`, `--public-url`, `--login-button`, `--login-email`, `--login-password`, `--login-forgot`, `--identity`, `--workos-api-key-file`, `--allowed-origin`, `--frame-ancestor` (an origin that may frame the shell's pages; none by default), `--live-origin` (an origin the shell's pages may frame), `--allowed-host`, `--trusted-proxy`, `--return-origin`, `--session-hours` (12), `--session-idle-minutes` (120), `--mcp-authorization-server` (V2-43: `/mcp` a protected resource naming it) |
 | maintenance and testing | `--dev-login`, `--dev-password`, `--dev-idp-ws`, `--dev-user` (all `--env test` only), `--verify-derived`, `--seed-synthetic`, `--seed-value`, `--seed-shape` (`flat`, `nested`), `--seed-into-existing` |
 | limits | `--max-body-bytes` (8 MiB), `--max-message-bytes` (32 MiB; V2-54: one socket message — a UI bundle is pushed in one), `--max-calls-per-connection` (256), `--idle-timeout-secs` (900), `--max-connections` (1,024), `--max-connections-per-ip` (256), `--max-connections-per-principal` (4; V2-31: a person's), `--max-connections-per-agent` (64; V2-31: a `key:` principal's), `--max-writes-per-second` (20; V2-31), `--max-anonymous-connections` (128), `--max-anonymous-connections-per-ip` (32) |
@@ -501,6 +501,7 @@ behind plexus-core's gate; menger's own are declared on the frame
 | `docs` | documents — writing, not work: a title and a markdown body kept as a Yjs CRDT, written live by many hands, every change kept, in a file of its own (`docs.db`); who may is the gate's word on the document's organization | `docs/` (`menger-docs`, V2-29) |
 | `quota` | every principal's allowance per source, its usage counted, tabulated and enforced — its ledger in a file of its own (`quota.db`); every storing write reserved through the seam before it lands | `quota/` (`menger-quota`, V2-31) |
 | `code` | public GitHub repositories: a branch or tag resolved to a commit by git's own listing, the commit's whole tree fetched once and kept — its files by sha256 on disk, its tree in a file of its own (`code.db`) — and the tree and any file answered from what is kept; every new byte reserved through the seam | `code/` (`menger-code`, CODE-2) |
+| `logs` | logs: a typed table per log made from a JSON Schema, tied to a ticket by its uid and taking that ticket's reach — every log's table in a file of its own (`logs.db`); entries appended by name, each checked against the schema and kept with an envelope the server writes; every kept entry reserved through the seam | `logs/` (`menger-logs`, LOGS-2) |
 
 **Service to service.** The ui service reaches the tickets service as a
 client, never through its store: its seam (`../plexus-ui/service/src/seam.rs`)
@@ -518,6 +519,10 @@ and a `media.get` asks `tickets.may { id, role: viewer }` for a ticket the
 image was put for. Its seam is `media/src/seam.rs`; it never opens the
 tickets file either. The shell's `GET /media/<hash>` is a client of the
 media service in turn (`menger_media::fetch`, as the request's session).
+The logs service (LOGS-2) asks the same way, as the caller: `tickets.get`
+for the ticket a log is defined on (its uid, which the log keeps) and
+`tickets.may { id: <uid>, role }` before every call on a log — its seam is
+`logs/src/seam.rs`.
 
 **Pages in a body** (EDITOR-14) draw in frames, as v1 drew them: an
 `<m-mockup widths title description>…a page…</m-mockup>`, a ```` ```mockup ````
@@ -555,7 +560,8 @@ amount }` before it writes, then `commit` (what it kept) or `release`,
 through `HubTransport::as_(service, system)` as the server's own caller
 (`menger_quota::QuotaSeam`, the `Meter` a service holds — the tickets
 service in its `Access`, the media service as its `Allowance`, the code
-service as its own, `menger_code::Allowance`). The quota
+service as its own, `menger_code::Allowance`, the logs service as
+`menger_logs::Allowance`). The quota
 service asks back the same way: `members.teams.show` for a team's members,
 `members.list` for an organization's, and each store's own count for a
 recount (`tickets.revisions.usage`, `media.usage { everyone }`,
@@ -1081,6 +1087,80 @@ synapse --url wss://app-test.menger.sh/ws --as builder menger ui show --to '/app
 The address is `/app/#/code/<owner>/<name>/<ref>/<view>`, `<view>` as
 "copy link" writes it — `dir=a,b;open=path#L<a>-L<b>,path` with each `/`
 as `%2F` and each `#` as `%23` (a `/` left as it is is read too).
+
+### `logs` (LOGS-2)
+
+The owner, 2026-11-16: "we give it a json schema and it builds a table for
+it? then we can reference those logs dynamically and submit to them."
+LOGS-1 is the spec. A log is a table of its own (owner: "table per
+schema"), tied to one ticket by its uid (owner: "log tied to a ticket
+uuid"), so it follows the ticket through every move and takes its reach.
+
+| method | flags | who, on the log's ticket | what it does |
+|---|---|---|---|
+| `define` | `--name --on --schema` | admin | a log made from a JSON Schema of an object: `defined { log, ticket, uid, columns }` — `ticket` its id now, `uid` what the log keeps |
+| `append` | `--log (--entry \| --entries) [--tags] [--ticket]` | editor | entries checked and kept, all or none: `appended { log, seq, last, count, bytes }` — `seq` to `last` their numbers, `bytes` what counts against the caller (`logs.bytes`) |
+| `describe` | `--log` | viewer | `described { log, ticket, uid, schema, columns, entries, created_by, created_unix_ms, deprecated? }` |
+| `list` | | viewer | `log { log, ticket, uid, fields, entries, deprecated?, deprecated_fields? }` per log whose ticket the caller sees |
+| `extend` | `--log --schema` | admin | the schema grown by optional fields: `extended { log, added, columns }` |
+| `deprecate` | `--log [--field] --message` | admin | the log, or one field, closed to new entries: `deprecated { log, field?, message }` |
+
+**Who may.** At the gate `describe` and `list` are a viewer's, `append` an
+editor's, `define`, `extend` and `deprecate` the admin's — each held
+anywhere; then the log's ticket decides, asked of the tickets service as
+the caller (`tickets.may` by the uid): the same role on that ticket, else
+`refused { reason: forbidden }`. A log on a ticket the caller cannot see is
+`not_found { log }`, as one that is none, and `list` does not name it.
+
+**The schema.** Taken: a root `{"type": "object"}` with `properties`,
+`required`, `additionalProperties: false`, `title`, `description` and
+`$schema`; each property a `type` of `string` (a TEXT column), `integer`
+(INTEGER), `number` (REAL), `boolean` (INTEGER 0/1, answered as a
+boolean), `array` or `object` (TEXT holding the JSON, checked only to be
+that type), with `title`, `description` and — on a string — `enum`. A
+field's name is a lower-case letter, then lower-case letters, digits and
+`_`, at most 63 (SQLite reads a name without regard to case); `seq`, `at`,
+`by`, `tags`, `ticket`, `log`, `entry`, `rowid` and `oid` are the envelope's
+or the store's. Anything else — `oneOf`, `anyOf`, `allOf`, `not`, `$ref`,
+`pattern`, bounds, `items`, a nested `properties`, a type list — is refused
+`bad_schema`, its `place` a JSON pointer into the schema
+(`/properties/value/minimum`), and nothing is made. At most 200 fields and
+64 KiB of schema. A log's name is a field's rule too (`perf`,
+`deploy_sizes`), and is its own: a second `define` of it is `name_taken`.
+
+**An entry** is a JSON object: `--entry @result.json` (one, at most 64 KiB)
+or `--entries @results.jsonl` (JSON lines, or a JSON array; at most 10,000
+and 8 MiB in all). Each is checked — a field's type (an integer is a
+number; a number is no integer), `required`, `enum`, no field the schema
+does not name, no deprecated field (a null is as absent) — and one that
+does not fit refuses the call `bad_entry { index, field }`, `index` from 0;
+nothing of the call is kept. The server writes the envelope: `seq` (from 1
+in each log), `at` (unix milliseconds), `by` (the caller), `tags` (`--tags`,
+at most 32, each 1 to 64 of letters, digits, `. _ - : /`) and `ticket`
+(`--ticket`, any name of a ticket the caller sees, kept by its uid). An
+entry is never edited or deleted.
+
+**Growing and closing.** `extend` takes a schema that names every field the
+log has, each of its type, none newly required and no `enum` narrowed, and
+adds each new field as an optional column (an entry before it reads it as
+null); a field dropped, renamed, retyped or newly required is refused
+`not_grown`, naming it. `deprecate` closes a log (every append refused
+`deprecated`, saying so and why) or one field (an entry carrying it refused,
+naming it; one without it kept); what was written stays, and `describe` and
+`list` mark both. Nothing reopens either.
+
+**What is kept.** `logs.db` (`--logs-db-path`) holds `logs` (each log, its
+ticket's uid, its schema, its fields, its count and whether it is
+deprecated), a table a log, `log_<name>` (`seq` its key, `at`, `by`, `tags`,
+`ticket`, then a column a field), and `entry_tags` (`log`, `tag`, `seq`), so
+a tag is found in every log at once. A name enters SQL only once its rule
+holds, and quoted; every value is bound. Every append is reserved for its
+writer through the quota service before anything is kept (`logs.bytes`:
+each entry's JSON and its tags), then committed or released.
+
+```sh
+synapse -P 4460 menger logs list
+```
 
 ## Tickets
 

@@ -74,6 +74,7 @@ pub const SOURCES: &[Source] = &[
     Source { name: "tickets.count", unit: Unit::Count, window: Window::Total, what: "tickets created" },
     Source { name: "questions.count", unit: Unit::Count, window: Window::Total, what: "questions asked" },
     Source { name: "code.bytes", unit: Unit::Bytes, window: Window::Total, what: "repository files the code service kept for you (code.fetch), each new file once" },
+    Source { name: "logs.bytes", unit: Unit::Bytes, window: Window::Total, what: "log entries you appended (logs.append), each entry's JSON and its tags" },
 ];
 
 /// The source named `name`; `None` for a name that is none.
