@@ -47,7 +47,7 @@ let heat   = conn.stream("studio.kiln.heat", json!({ "cone": 6 }))?;`,
     {
       key: "interface", name: "an interface, enforced", built: false,
       holds: "Box<dyn Glazes>",
-      real: "Today `trait Glazes: plexus::Activation {}` is an empty marker: the IR records \"interface\": \"glazes\", and whatever is plugged in is mounted unchecked. `#[plexus::interface]`, `Glazes::HASH`, `fitting` and `GlazesClient` for an interface do not exist. `Error::Interface` does: a connection's root is refused with it at hello.",
+      real: "Today trait Glazes: plexus::Activation {} is an empty marker: the IR records \"interface\": \"glazes\", and whatever is plugged in is mounted unchecked. #[plexus::interface], Glazes::HASH, fitting and GlazesClient for an interface do not exist. Error::Interface does: a connection's root is refused with it at hello.",
       definition: `// The interface, written once. It gets a hash, as an activation does.
 #[plexus::interface]
 pub trait Glazes {
@@ -82,7 +82,7 @@ let all: Vec<Recipe> = glazes.recipes().await?;`,
     {
       key: "keyed", name: "one per key", built: false,
       holds: "Option<&Shelf>, by a key",
-      real: "The macro reads this form today and writes it to the IR (a `key` and a `list`). It refuses to serve it: \"a child per key is described, not served yet\". The client's `shelf(\"top\")` is not generated.",
+      real: "The macro reads this form today and writes it to the IR (a key and a list). It refuses to serve it: \"a child per key is described, not served yet\". The client's shelf(\"top\") is not generated.",
       definition: `// One child for each key. Which keys exist is asked while running.
 #[child(list = "shelves")]
 pub fn shelf(&self, name: String) -> Option<&Shelf> {
@@ -111,7 +111,7 @@ conn.call("kiln.shelf.top.load", ()).await?;`,
     {
       key: "absent", name: "may not be there", built: false,
       holds: "Result<Box<dyn Glazes>, Unavailable>",
-      real: "The macro refuses a child that may fail today: \"a child that may fail to be there is described, not served yet\". What exists: a child across a closed connection already fails every call `unavailable`, and `_tree` lists it with no hash.",
+      real: "The macro refuses a child that may fail today: \"a child that may fail to be there is described, not served yet\". What exists: a child across a closed connection already fails every call unavailable, and _tree lists it with no hash.",
       definition: `// Asked for at each call, not once at the start:
 // the child can come and go while the parent runs.
 #[child]
