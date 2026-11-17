@@ -442,10 +442,11 @@ deploy/pipeline releases                      # every release: its suite, tested
   page's policy — is built directly, not planned out first (owner, the same
   day: "you don't have to plan it out :) just build it directly into a plexus
   ui componenet"), and waits for no gate, review or suite: `deploy/pipeline
-  ui` from a checkout at the commit prod's server runs (the bundle live on
-  test in seconds; refused `unknown_method` when the tree is ahead of the
-  server), then `deploy/pipeline ui promote` (prod's pointer onto it). Look
-  at it on prod, change it, run both again. After each, check that the app
+  ui prod` from a checkout at the commit prod's server runs — the bundle
+  live on test in seconds (refused `unknown_method` when the tree is ahead of
+  the server), then prod's pointer onto it, in one command; `--watch` does it
+  again on every change, and `ui` and `ui promote` are its two halves. Look
+  at it on prod, change it, run it again. After each, check that the app
   still draws — a push replaces the whole interface, not one component — and
   that prod took the version just pushed. Its browser cases run beside it and
   a red one is fixed forward; the interface alone goes back by pushing the
