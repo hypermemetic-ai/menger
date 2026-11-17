@@ -2246,9 +2246,9 @@ dependencies = [
  "jsonrpsee",
  "jsonwebtoken",
  "menger-code",
- "menger-docs",
  "menger-logs",
  "menger-media",
+ "menger-notes",
  "menger-quota",
  "menger-tickets-api",
  "nostr",
@@ -2299,28 +2299,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "menger-docs"
-version = "0.8.0"
-dependencies = [
- "anyhow",
- "async-stream",
- "base64 0.22.1",
- "futures",
- "menger-tickets-api",
- "plexus-rpc",
- "rusqlite",
- "schemars",
- "serde",
- "serde_json",
- "similar",
- "tempfile",
- "tokio",
- "tracing",
- "uuid",
- "yrs",
-]
-
-[[package]]
 name = "menger-logs"
 version = "0.8.0"
 dependencies = [
@@ -2346,7 +2324,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "futures",
- "menger-docs",
+ "menger-notes",
  "menger-tickets-api",
  "plexus-rpc",
  "reqwest 0.12.28",
@@ -2360,6 +2338,28 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "menger-notes"
+version = "0.8.0"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "base64 0.22.1",
+ "futures",
+ "menger-tickets-api",
+ "plexus-rpc",
+ "rusqlite",
+ "schemars",
+ "serde",
+ "serde_json",
+ "similar",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+ "yrs",
 ]
 
 [[package]]

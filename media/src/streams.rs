@@ -13,8 +13,8 @@ use crate::image::MediaEvent;
 use crate::kinds;
 use crate::seam::{Answer, Seam};
 use crate::store::{MediaStore, Owner, StoreError, UPLOAD_TTL};
-use menger_docs::seam::Answer as DocAnswer;
-use menger_docs::DocId;
+use menger_notes::seam::Answer as NoteAnswer;
+use menger_notes::NoteId;
 use crate::vocab::{FileName, MediaData, MediaHash, UploadId, WebUrl};
 use menger_tickets_api::members::Role;
 use menger_tickets_api::vocab::TicketRef;
@@ -22,11 +22,11 @@ use std::sync::{Arc, RwLock, Weak};
 
 /// `not_found` for the ticket `t` names.
 fn no_ticket(t: &TicketRef) -> MediaEvent {
-    MediaEvent::NotFound { hash: None, ticket: Some(t.to_string()), upload: None, doc: None }
+    MediaEvent::NotFound { hash: None, ticket: Some(t.to_string()), upload: None, note: None }
 }
 
 fn no_upload(u: &str) -> MediaEvent {
-    MediaEvent::NotFound { hash: None, ticket: None, upload: Some(u.to_string()), doc: None }
+    MediaEvent::NotFound { hash: None, ticket: None, upload: Some(u.to_string()), note: None }
 }
 
 /// A store error as the wire says it.
@@ -43,15 +43,15 @@ fn said(e: StoreError, missing: impl FnOnce() -> MediaEvent) -> MediaEvent {
 /// role: editor }` as the caller); a ticket out of reach, or none, is
 /// answered as one that is not there. With no ticket, the file is the
 /// putter's.
-async fn owner(seam: &Seam, user: &Caller, ticket: Option<&TicketRef>, doc: Option<&DocId>) -> Result<Owner, MediaEvent> {
-    // V2-29: for a doc, the docs service's word (`docs.may { id, role: editor }` as the caller).
-    if let Some(d) = doc {
+async fn owner(seam: &Seam, user: &Caller, ticket: Option<&TicketRef>, note: Option<&NoteId>) -> Result<Owner, MediaEvent> {
+    // V2-29: for a note, the notes service's word (`notes.may { id, role: editor }` as the caller).
+    if let Some(d) = note {
         if ticket.is_some() {
-            return Err(MediaEvent::Error { message: "a file is put for a ticket or for a doc, not both (nothing was kept)".into() });
+            return Err(MediaEvent::Error { message: "a file is put for a ticket or for a note, not both (nothing was kept)".into() });
         }
-        return match seam.doc_may(user.context(), d.as_str(), Role::Editor).await {
-            Ok(DocAnswer::Held(id)) => Ok(Owner::Doc(id)),
-            Ok(DocAnswer::NotHeld | DocAnswer::NotFound) => Err(MediaEvent::NotFound { hash: None, ticket: None, upload: None, doc: Some(d.to_string()) }),
+        return match seam.note_may(user.context(), d.as_str(), Role::Editor).await {
+            Ok(NoteAnswer::Held(id)) => Ok(Owner::Note(id)),
+            Ok(NoteAnswer::NotHeld | NoteAnswer::NotFound) => Err(MediaEvent::NotFound { hash: None, ticket: None, upload: None, note: Some(d.to_string()) }),
             Err(message) => Err(MediaEvent::Error { message: format!("{message} (nothing was kept)") }),
         };
     }
@@ -86,8 +86,8 @@ fn stored(put: &Result<crate::store::Put, StoreError>) -> MediaEvent {
 /// `media.put`: the file checked and kept by the store, for the ticket the
 /// caller may edit — or, with none, as the caller's own; its bytes asked
 /// of the caller's allowance first.
-pub(crate) async fn put(me: MediaActivation, user: Caller, ticket: Option<TicketRef>, doc: Option<DocId>, data: MediaData, name: Option<FileName>) -> MediaEvent {
-    let on = match owner(&me.seam, &user, ticket.as_ref(), doc.as_ref()).await {
+pub(crate) async fn put(me: MediaActivation, user: Caller, ticket: Option<TicketRef>, note: Option<NoteId>, data: MediaData, name: Option<FileName>) -> MediaEvent {
+    let on = match owner(&me.seam, &user, ticket.as_ref(), note.as_ref()).await {
         Ok(on) => on,
         Err(ev) => return ev,
     };
@@ -115,7 +115,7 @@ async fn sees(seam: &Seam, user: &Caller, owners: &[Owner]) -> Result<bool, Stri
             Owner::Anyone => true,
             Owner::App(p) => p.as_deref() == Some(user.principal()) || seam.held_everywhere(user.context(), "media.get") == Some(true),
             Owner::Ticket(id) => matches!(seam.may(user.context(), id, Role::Viewer).await?, Answer::Held(_)),
-            Owner::Doc(id) => matches!(seam.doc_may(user.context(), id, Role::Viewer).await?, DocAnswer::Held(_)),
+            Owner::Note(id) => matches!(seam.note_may(user.context(), id, Role::Viewer).await?, NoteAnswer::Held(_)),
         };
         if seen {
             return Ok(true);
@@ -207,7 +207,7 @@ pub(crate) async fn usage(me: MediaActivation, user: Caller, (principal, everyon
 
 /// `media.begin`: a new upload, its size held against the caller's
 /// allowance — or the caller's own upload again, from what it has.
-pub(crate) async fn begin(me: MediaActivation, user: Caller, ticket: Option<TicketRef>, doc: Option<DocId>, name: Option<FileName>, size: Option<u64>, upload: Option<UploadId>) -> MediaEvent {
+pub(crate) async fn begin(me: MediaActivation, user: Caller, ticket: Option<TicketRef>, note: Option<NoteId>, name: Option<FileName>, size: Option<u64>, upload: Option<UploadId>) -> MediaEvent {
     let answer = |b: crate::store::Begun| MediaEvent::Upload { upload: b.upload, size: b.size, received: b.received, chunk: kinds::CHUNK_MAX as u64 };
     if let Some(u) = upload {
         return match me.store.resume(u.as_str(), user.principal()).await {
@@ -218,7 +218,7 @@ pub(crate) async fn begin(me: MediaActivation, user: Caller, ticket: Option<Tick
     let Some(size) = size else {
         return MediaEvent::refused("bad_data", "say the file's size (or the upload to resume)");
     };
-    let on = match owner(&me.seam, &user, ticket.as_ref(), doc.as_ref()).await {
+    let on = match owner(&me.seam, &user, ticket.as_ref(), note.as_ref()).await {
         Ok(on) => on,
         Err(ev) => return ev,
     };
@@ -291,8 +291,8 @@ pub(crate) async fn unfurl(me: MediaActivation, user: Caller, url: WebUrl) -> Me
 /// file it keeps, V2-69, of their storage (`media.bytes`) as a put's is —
 /// the bytes read first, then held at their size, committed when the file
 /// is new to them.
-pub(crate) async fn fetch(me: MediaActivation, user: Caller, url: WebUrl, ticket: Option<TicketRef>, doc: Option<DocId>, name: Option<FileName>) -> MediaEvent {
-    let on = match owner(&me.seam, &user, ticket.as_ref(), doc.as_ref()).await {
+pub(crate) async fn fetch(me: MediaActivation, user: Caller, url: WebUrl, ticket: Option<TicketRef>, note: Option<NoteId>, name: Option<FileName>) -> MediaEvent {
+    let on = match owner(&me.seam, &user, ticket.as_ref(), note.as_ref()).await {
         Ok(on) => on,
         Err(ev) => return ev,
     };

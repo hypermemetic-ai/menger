@@ -1,11 +1,11 @@
 //! V2-30: **asking on a selection** — a question anchored to a range of a
-//! document, answered in a thread beside it by a person or an agent (the
+//! note, answered in a thread beside it by a person or an agent (the
 //! owner, 2026-11-02: *"I want to have the ability to highlight a line in a
 //! doc and ask a question … these docs are really important and will be key
 //! locations for paired work."*).
 //!
 //! **The anchor follows the text.** A thread's range is two Yjs relative
-//! positions in the document's CRDT ([`yrs::StickyIndex`], the browser's
+//! positions in the note's CRDT ([`yrs::StickyIndex`], the browser's
 //! `Y.RelativePosition` byte for byte): the start sticks to the character
 //! after it, the end to the character before it, so every hand's edit —
 //! around the range, inside it — moves them with the text. Resolved now,
@@ -14,7 +14,7 @@
 //! **detached** (kept, listed at the end). The browser resolves the same
 //! positions in its own copy (`anchor`, base64), so the margin is exact.
 //!
-//! **Stored** in the docs file: `doc_threads` (a row per question: its
+//! **Stored** in the notes file: `doc_threads` (a row per question: its
 //! anchor, the text it quoted, the question, to whom, who and when, and
 //! when it was resolved) and `doc_replies` (a row per answer). Said on the
 //! channel for `watch`: `asked`, `replied`, `resolved`, each with the
@@ -22,7 +22,7 @@
 
 use crate::crdt::{b64, text_of, unb64, BODY};
 use crate::events::{Anchor, Reply, Resolution, Thread};
-use crate::store::{live_doc, now_ms, Change, DocsStore, StoreError};
+use crate::store::{live_doc, now_ms, Change, NotesStore, StoreError};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::sync::Arc;
 use yrs::updates::decoder::Decode;
@@ -109,7 +109,7 @@ fn row_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
     })
 }
 
-impl DocsStore {
+impl NotesStore {
     /// `row` made a [`Thread`]: its anchor resolved in `crdt` now, its replies read.
     fn dressed(&self, conn: &Connection, crdt: &yrs::Doc, row: Row) -> Result<Thread, StoreError> {
         let text = text_of(crdt);
@@ -145,7 +145,7 @@ impl DocsStore {
         })
     }
 
-    /// The thread `thread` of the live document `id`, dressed.
+    /// The thread `thread` of the live note `id`, dressed.
     fn thread_now(&self, conn: &Connection, id: &str, thread: &str) -> Result<Thread, StoreError> {
         let row = conn
             .query_row(&format!("SELECT {COLUMNS} FROM doc_threads WHERE thread = ?1 AND id = ?2"), params![thread, id], row_of)
@@ -156,7 +156,7 @@ impl DocsStore {
         self.dressed(conn, &crdt, row)
     }
 
-    /// `docs.ask`: a question on the characters `from..to` of `id`'s text
+    /// `notes.ask`: a question on the characters `from..to` of `id`'s text
     /// now, anchored in its CRDT, to `to_whom` when it says, by `hand`.
     pub async fn ask(self: &Arc<Self>, id: &str, from: u32, to: u32, question: &str, to_whom: Option<String>, hand: Hand) -> Result<Thread, StoreError> {
         let (id, question) = (id.to_string(), question.to_string());
@@ -209,7 +209,7 @@ impl DocsStore {
         Ok(thread.0)
     }
 
-    /// `docs.reply`: `body` under the thread, by `hand`.
+    /// `notes.reply`: `body` under the thread, by `hand`.
     pub async fn reply(self: &Arc<Self>, id: &str, thread: &str, body: &str, hand: Hand) -> Result<Thread, StoreError> {
         let (id, thread, body) = (id.to_string(), thread.to_string(), body.to_string());
         let (t, org) = self
@@ -226,7 +226,7 @@ impl DocsStore {
         Ok(t)
     }
 
-    /// `docs.resolve`: the thread folded, by `hand` (again: it opens).
+    /// `notes.resolve`: the thread folded, by `hand` (again: it opens).
     pub async fn resolve(self: &Arc<Self>, id: &str, thread: &str, open: bool, hand: Hand) -> Result<Thread, StoreError> {
         let (id, thread) = (id.to_string(), thread.to_string());
         let (t, org) = self
@@ -245,7 +245,7 @@ impl DocsStore {
         Ok(t)
     }
 
-    /// `docs.threads`: `id`'s threads, by where they stand in the text —
+    /// `notes.threads`: `id`'s threads, by where they stand in the text —
     /// the detached ones at the end, each by when it was asked.
     pub async fn threads(self: &Arc<Self>, id: &str) -> Result<Vec<Thread>, StoreError> {
         let id = id.to_string();
@@ -266,8 +266,8 @@ impl DocsStore {
         .await
     }
 
-    /// `docs.waiting`: the open threads asked of someone (`to_whom`) in the
-    /// documents of `orgs`, oldest first — `to` keeping those asked of it.
+    /// `notes.waiting`: the open threads asked of someone (`to_whom`) in the
+    /// notes of `orgs`, oldest first — `to` keeping those asked of it.
     pub async fn waiting(self: &Arc<Self>, orgs: Vec<String>, to: Option<String>) -> Result<Vec<Thread>, StoreError> {
         self.blocking(move |s| {
             let conn = s.lock();

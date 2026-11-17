@@ -6,7 +6,7 @@
        (a custom element's HTML and script, which only ever runs framed) — `definitions(body)`. A name is
        a tag's: lower case, with a hyphen (`x-counter`).
      - **On save** (`authorChanged(b, before, after)`, called by the editor after its amend, ticket-edit
-       after its body's, a doc after a pause) each definition whose text changed is `ui.author`ed: into
+       after its body's, a note after a pause) each definition whose text changed is `ui.author`ed: into
        the live bundle when the saver holds ui.author on `*`, else — refused `forbidden` — into their own
        namespace (`own: true`, plexus-ui's COMPS-4); an html one into the namespace always. The answer is
        kept by name (`registry.results`) and said under the block by this file's component (`DefLine`,
@@ -195,9 +195,9 @@
   /** Every tag under `node` drawn by its component (framed through the page's bus, the one this file's
    *  component holds), kept so as the table moves; `{ destroy }`. COMPS-16: `ctx` is what the framer knows —
    *  `src` (`{ name, n, source }`: the block-form tag this node draws, its own text and its place among the
-   *  body's tags of its name, ticket-view's `blocks()`) and `of` (`{ kind: ticket | doc, id, editor }`: the
+   *  body's tags of its name, ticket-view's `blocks()`) and `of` (`{ kind: ticket | note, id, editor }`: the
    *  body it sits in, from the context ticket-body and editor-body give). A native tag is handed them as
-   *  props — `source`, `n`, `ticket` or `doc`, `editor` — and its `children` as structure, always. */
+   *  props — `source`, `n`, `ticket` or `note`, `editor` — and its `children` as structure, always. */
   /** COMPS-23: a block-form tag's words from its source (its open and close lines are all the page draws of it). */
   const wordsOf = (source) => String(source ?? "").split("\n").slice(1, -1).join("\n").replace(/<[^>]*>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&");
   export function drawTags(node, ctx = null) {
@@ -248,7 +248,7 @@
           if (!("children" in props)) props.children = f.kids;
           if (f.src) { props.source = f.src.source; if (f.src.n != null) props.n = String(f.src.n); }
           const of = ctx?.of;
-          if (of?.id) props[of.kind === "doc" ? "doc" : "ticket"] = String(of.id);
+          if (of?.id) props[of.kind === "note" ? "note" : "ticket"] = String(of.id);
           if (of?.editor) props.editor = "true";
           const mark = document.createElement("div");
           mark.setAttribute("data-slot", `tag-${++slotSeq}`);

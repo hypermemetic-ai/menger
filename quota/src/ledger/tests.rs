@@ -63,7 +63,7 @@ fn over_the_cap_is_refused_typed_with_the_numbers() {
 #[test]
 fn the_effective_cap_is_own_then_teams_largest_then_default() {
     let (_d, l) = open();
-    let src = "docs.bytes";
+    let src = "notes.bytes";
     let cap = |who: &Who| l.usage(who, T0).unwrap().into_iter().find(|x| x.source.name == src).map(|x| (x.cap, x.from)).unwrap();
     let mut who = Who { principal: "idp:p".into(), teams: vec!["a".into(), "b".into()], exempt: false };
     assert_eq!(cap(&who), (Cap::At(200_000_000), CapFrom::Default));

@@ -8,6 +8,9 @@
 //! came back as a service of its own (`media/`, `menger-media`, registered
 //! in `src/builder.rs`), so its activation's name and its wire test left
 //! the list — the tickets crate itself still holds no media module.
+//! NOTES-3: the docs service became the notes service (`notes/`,
+//! `menger-notes`), so `NotesActivation` left the list of names too — the
+//! tickets crate still holds no notes module.
 
 use std::path::{Path, PathBuf};
 
@@ -110,7 +113,9 @@ const TYPES: &[&str] = &[
     "CommentsActivation",
     "DeploymentsActivation",
     "WebhookActivation",
-    "NotesActivation",
+    // NOTES-3: not v1's `NotesActivation` — the name came back with the docs
+    // service renamed (`notes/`, `menger-notes`, registered in
+    // `src/builder.rs`), a service of its own as media's came back in V2-24.
     "ThemesActivation",
     "ProfilesActivation",
     "MessageInputsActivation",

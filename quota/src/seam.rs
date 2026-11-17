@@ -6,7 +6,7 @@
 //! caller (the builder attaches it with `Access::system_caller`): a team's
 //! members (`members.teams.show`), an organization's principals
 //! (`members.list`), and each store's own count of what a principal keeps
-//! (`tickets.revisions.usage`, `media.usage`, `docs.usage`) for `recount`.
+//! (`tickets.revisions.usage`, `media.usage`, `notes.usage`) for `recount`.
 //! Whether a principal is exempt — an admin of `*`, the operator — is the
 //! gate's word, asked of the running service. It never opens another file.
 //!
@@ -163,7 +163,7 @@ impl Seam {
     }
 
     /// `method` (a store's usage read: `tickets.revisions.usage`,
-    /// `media.usage`, `docs.usage`) asked as the server with `params` (every
+    /// `media.usage`, `notes.usage`) asked as the server with `params` (every
     /// principal): each `usage { principal, count? | files?, bytes? }` it
     /// yields — and, V2-69, what it keeps that no one is charged for
     /// (`unattributed { files, bytes }`), said in words.
@@ -220,7 +220,7 @@ impl Seam {
 }
 
 /// The quota service as a [`Meter`]: what a writing service (tickets,
-/// media, docs, the shell's `/media/<hash>`) holds once the builder
+/// media, notes, the shell's `/media/<hash>`) holds once the builder
 /// attaches the running service.
 #[derive(Clone, Default)]
 pub struct QuotaSeam {

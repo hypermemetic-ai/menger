@@ -3,15 +3,15 @@
      opens on `note.open` on the bus: the global keys emit it (keys-global:
      ctrl+shift+l, cmd+shift+l, `g n` outside a text field, and ctrl+alt+n off a Mac) and so does the top bar's `note`
      button. A small window: a title line and the note; cmd/ctrl+enter keeps
-     it (`docs.create { title, body }`), escape closes it and keeps nothing.
+     it (`notes.create { title, body }`), escape closes it and keeps nothing.
      With no title the note's first line is its title. Kept, the window
-     closes and says so for a moment, with a link to the note at `#/doc/<id>`.
+     closes and says so for a moment, with a link to the note at `#/note/<id>`.
      Placed by app-top's bound mark, so it is on every page with the top bar.
-     The service is still `docs` until its rename to notes. SURFACE-10:
+     NOTES-3: the service is `notes`. SURFACE-10:
      `sheet`, a text, draws it open holding that text for the sheet (#/sheet)
      — nothing focused, its keys not bound, `note.open` not heard. -->
 <script module>
-  export const uses = ["docs.create"];
+  export const uses = ["notes.create"];
   const TITLE_MAX = 200;
 
   /** The title a note is kept under: the one typed, else its first line. */
@@ -53,9 +53,9 @@
     if (!named) { refused = "a note needs a title or a line of text"; return; }
     saving = true;
     refused = "";
-    const r = await b.call("docs.create", { title: named, body });
+    const r = await b.call("notes.create", { title: named, body });
     saving = false;
-    const made = r.events?.find((e) => e.type === "created")?.doc;
+    const made = r.events?.find((e) => e.type === "created")?.note;
     if (!(r.ok && made)) {
       refused = String(r.message ?? r.events?.find((e) => e.message)?.message ?? "refused").replace(/^Invalid params: /, "");
       return;
@@ -99,7 +99,7 @@
     </form>
   {/if}
   {#if kept}
-    <p class="note-kept" data-note-kept={kept.id} role="status">note kept: <a href={"#/doc/" + kept.id} onclick={() => (kept = null)}>{kept.title}</a></p>
+    <p class="note-kept" data-note-kept={kept.id} role="status">note kept: <a href={"#/note/" + kept.id} onclick={() => (kept = null)}>{kept.title}</a></p>
   {/if}
 </div>
 

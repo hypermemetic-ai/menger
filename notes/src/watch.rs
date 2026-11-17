@@ -1,10 +1,10 @@
-//! `docs.watch` as its stream — every write the store says, to a caller
-//! that reads the document's organization: `created`, `updated` (every
+//! `notes.watch` as its stream — every write the store says, to a caller
+//! that reads the note's organization: `created`, `updated` (every
 //! change of the body: the Yjs update to apply), `renamed`, `deleted`,
 //! `squashed`, and (V2-30) `asked`, `replied`, `resolved` — a thread whole
-//! each; one document's with `id`, every one's without (so an agent
-//! following every document hears a question asked of it). On one
-//! document, who is on it too: `present` and `left` — and with `session`,
+//! each; one note's with `id`, every one's without (so an agent
+//! following every note hears a question asked of it). On one
+//! note, who is on it too: `present` and `left` — and with `session`,
 //! the watch is itself a presence on it for as long as it is open
 //! ([`crate::presence::Held`]); an update that came from that session is
 //! not said back to it. Held to its caller as `ui.watch` is (FRAME-5): asked again when
@@ -15,9 +15,9 @@
 //! reaching the watch at once.
 
 use crate::caller::Caller;
-use crate::events::DocsEvent;
+use crate::events::NotesEvent;
 use crate::seam::Seam;
-use crate::store::{Change, DocsStore};
+use crate::store::{Change, NotesStore};
 use async_stream::stream;
 use futures::Stream;
 use std::sync::Arc;
@@ -71,34 +71,34 @@ impl Following {
     }
 }
 
-/// What the watch says of `change` — the document whole on a watch of it
+/// What the watch says of `change` — the note whole on a watch of it
 /// (`one`), without its body on a watch of every one.
-fn said(change: Change, one: bool) -> Option<DocsEvent> {
-    let shown = |d: crate::events::Doc| if one { d } else { d.summary() };
+fn said(change: Change, one: bool) -> Option<NotesEvent> {
+    let shown = |d: crate::events::Note| if one { d } else { d.summary() };
     Some(match change {
-        Change::Created(doc) => DocsEvent::Created { doc: shown(doc) },
+        Change::Created(doc) => NotesEvent::Created { note: shown(doc) },
         Change::Updated { doc, update, seq, session } => {
-            DocsEvent::Updated { id: doc.id.clone(), seq, update: if one { update } else { String::new() }, at: doc.at, by: doc.by.clone(), session, doc: Some(doc.summary()) }
+            NotesEvent::Updated { id: doc.id.clone(), seq, update: if one { update } else { String::new() }, at: doc.at, by: doc.by.clone(), session, note: Some(doc.summary()) }
         }
-        Change::Renamed(doc) => DocsEvent::Renamed { id: doc.id.clone(), title: doc.title.clone(), revision: doc.revision, at: doc.at, by: doc.by.clone(), doc: Some(shown(doc)) },
-        Change::Deleted { id, at, by, .. } => DocsEvent::Deleted { id, at, by },
-        Change::Squashed { id, until, removed, at, by, .. } => DocsEvent::Squashed { id, until, removed, at, by },
-        Change::Present { present, .. } if one => DocsEvent::Present { present },
-        Change::Left { id, session, client, .. } if one => DocsEvent::Left { id, session, client },
+        Change::Renamed(doc) => NotesEvent::Renamed { id: doc.id.clone(), title: doc.title.clone(), revision: doc.revision, at: doc.at, by: doc.by.clone(), note: Some(shown(doc)) },
+        Change::Deleted { id, at, by, .. } => NotesEvent::Deleted { id, at, by },
+        Change::Squashed { id, until, removed, at, by, .. } => NotesEvent::Squashed { id, until, removed, at, by },
+        Change::Present { present, .. } if one => NotesEvent::Present { present },
+        Change::Left { id, session, client, .. } if one => NotesEvent::Left { id, session, client },
         Change::Present { .. } | Change::Left { .. } => return None,
-        Change::Asked { thread, .. } => DocsEvent::Asked { thread },
-        Change::Replied { thread, .. } => DocsEvent::Replied { thread },
-        Change::Resolved { thread, .. } => DocsEvent::Resolved { thread },
+        Change::Asked { thread, .. } => NotesEvent::Asked { thread },
+        Change::Replied { thread, .. } => NotesEvent::Replied { thread },
+        Change::Resolved { thread, .. } => NotesEvent::Resolved { thread },
     })
 }
 
 /// The stream: subscribed at the call, then `watching`, then each write.
-pub(crate) fn watch(store: Arc<DocsStore>, seam: Seam, user: Caller, id: Option<String>, session: Option<String>) -> impl Stream<Item = DocsEvent> + Send + 'static {
+pub(crate) fn watch(store: Arc<NotesStore>, seam: Seam, user: Caller, id: Option<String>, session: Option<String>) -> impl Stream<Item = NotesEvent> + Send + 'static {
     let mut rx = store.subscribe();
     stream! {
         let mut _held = None;
         if let Some(id) = &id {
-            match crate::streams::reached(&store, &seam, &user, id, "docs.watch").await {
+            match crate::streams::reached(&store, &seam, &user, id, "notes.watch").await {
                 Ok(doc) => {
                     if let Some(session) = session.as_deref().filter(|s| !store.taken(id, s, user.principal())) {
                         store.arrive(id, &doc.org, session, &user.who(), true, None, None);
@@ -111,7 +111,7 @@ pub(crate) fn watch(store: Arc<DocsStore>, seam: Seam, user: Caller, id: Option<
                 }
             }
         }
-        yield DocsEvent::Watching { id: id.clone() };
+        yield NotesEvent::Watching { id: id.clone() };
         let mut following = Following::of(user);
         loop {
             let woke = tokio::select! {
@@ -120,7 +120,7 @@ pub(crate) fn watch(store: Arc<DocsStore>, seam: Seam, user: Caller, id: Option<
                 r = rx.recv() => Some(r),
             };
             if let Err((reason, message)) = following.caller.again() {
-                yield DocsEvent::WatchClosed { reason, message };
+                yield NotesEvent::WatchClosed { reason, message };
                 return;
             }
             match woke {
@@ -129,11 +129,11 @@ pub(crate) fn watch(store: Arc<DocsStore>, seam: Seam, user: Caller, id: Option<
                     if id.as_deref().is_some_and(|id| id != change.id()) {
                         continue;
                     }
-                    match seam.holds(following.caller.context(), "docs.watch", change.org()) {
+                    match seam.holds(following.caller.context(), "notes.watch", change.org()) {
                         Ok(true) => {}
                         Ok(false) => continue,
                         Err(message) => {
-                            yield DocsEvent::Error { message };
+                            yield NotesEvent::Error { message };
                             return;
                         }
                     }
@@ -150,7 +150,7 @@ pub(crate) fn watch(store: Arc<DocsStore>, seam: Seam, user: Caller, id: Option<
                         return;
                     }
                 }
-                Some(Err(RecvError::Lagged(missed))) => yield DocsEvent::Lagged { missed },
+                Some(Err(RecvError::Lagged(missed))) => yield NotesEvent::Lagged { missed },
                 Some(Err(RecvError::Closed)) => return,
             }
         }

@@ -2,7 +2,7 @@
 # resolved to a commit, the commit's whole tree fetched once and kept (its
 # files by sha256 on disk, the tree in a file of its own, `code.db`), and
 # the tree and its files answered from what is kept. A service of v2's own
-# beside `tickets`, `media`, `docs` and `quota` (V2-1); its reads of GitHub
+# beside `tickets`, `media`, `notes` and `quota` (V2-1); its reads of GitHub
 # go through the media service's `Remote` and its rules.
 [package]
 name = "menger-code"

@@ -1,7 +1,7 @@
 // EDITOR-31: an image in a body opens large on a click (ui/src/image-zoom.svelte, placed by app-top). One image
 // put by synapse (`media put`) and named in a ticket's body and a doc's: a click on it on `#/ticket/:id` opens the
 // modal, fitted to the window and captioned by its alt text, and Escape closes it; a click on it in the editor
-// (`#/doc/:id`) opens it too, and the block stays drawn with no caret in it; an image inside a link follows the
+// (`#/note/:id`) opens it too, and the block stays drawn with no caret in it; an image inside a link follows the
 // link, and a click with ctrl held opens no zoom.
 //
 // Marks: `dialog[data-surface=image-zoom]` (`open`, `data-open`), `[data-field=image|caption]`,
@@ -100,10 +100,10 @@ export default async (ctx) => {
   });
 
   await test("a_click_on_an_image_in_the_editor_opens_it_and_leaves_the_caret_out", async () => {
-    const docId = sy("docs", "create", "--title", "a doc with a picture", "--body", file("d0.md", "placeholder\n")).find((e) => e.type === "created").doc.id;
-    const dHash = put("doc", docId);
-    sy("docs", "save", "--id", docId, "--body", file("d1.md", body(dHash)));
-    const { context, page } = await openPage(`#/doc/${docId}`);
+    const docId = sy("notes", "create", "--title", "a doc with a picture", "--body", file("d0.md", "placeholder\n")).find((e) => e.type === "created").note.id;
+    const dHash = put("note", docId);
+    sy("notes", "save", "--id", docId, "--body", file("d1.md", body(dHash)));
+    const { context, page } = await openPage(`#/note/${docId}`);
     try {
       const img = page.locator(BODY_IMG("[data-surface=editor-body]")).first();
       await img.waitFor({ timeout: 20_000 });

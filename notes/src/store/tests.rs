@@ -1,8 +1,8 @@
-//! The docs store on its own file, its bodies Yjs CRDTs: a document made is
+//! The notes store on its own file, its bodies Yjs CRDTs: a note made is
 //! read back whole; two writers' concurrent updates converge, in the store
 //! and in each writer's copy; an agent's whole-body save merges with a live
 //! edit made meanwhile; every change is kept with who and when, a replay at
-//! a midpoint is the document then; a squash folds the changes up to a
+//! a midpoint is the note then; a squash folds the changes up to a
 //! moment into one snapshot, keeping who wrote what, and a replay before it
 //! is gone; a restore is a change more; a delete reads as none; the list is
 //! newest first, searched, paged; presence comes and goes; every write is
@@ -14,8 +14,8 @@ use base64::Engine;
 use yrs::updates::decoder::Decode;
 use yrs::{GetString, ReadTxn, StateVector, Text, Transact, Update};
 
-fn open(dir: &tempfile::TempDir) -> Arc<DocsStore> {
-    Arc::new(DocsStore::open(&dir.path().join("docs.db")).unwrap())
+fn open(dir: &tempfile::TempDir) -> Arc<NotesStore> {
+    Arc::new(NotesStore::open(&dir.path().join("notes.db")).unwrap())
 }
 
 fn b64(b: &[u8]) -> String {
@@ -23,7 +23,7 @@ fn b64(b: &[u8]) -> String {
 }
 
 /// A browser's copy of `id`: a CRDT synced from the store.
-async fn client(s: &Arc<DocsStore>, id: &str) -> yrs::Doc {
+async fn client(s: &Arc<NotesStore>, id: &str) -> yrs::Doc {
     let d = yrs::Doc::new();
     let st = s.state(id, None).await.unwrap();
     d.transact_mut().apply_update(Update::decode_v1(&unb64(&st.update).unwrap()).unwrap()).unwrap();
@@ -48,7 +48,7 @@ fn text(d: &yrs::Doc) -> String {
     s
 }
 
-async fn body(s: &Arc<DocsStore>, id: &str) -> String {
+async fn body(s: &Arc<NotesStore>, id: &str) -> String {
     s.get(id).await.unwrap().body.unwrap()
 }
 
@@ -57,7 +57,7 @@ async fn a_document_is_made_and_read_back_whole() {
     let dir = tempfile::tempdir().unwrap();
     let s = open(&dir);
     let d = s.create("acme", "The kiln", "# Fire\n", "owner", "key:o").await.unwrap();
-    assert!(d.id.parse::<crate::DocId>().is_ok(), "{}", d.id);
+    assert!(d.id.parse::<crate::NoteId>().is_ok(), "{}", d.id);
     assert_eq!((d.org.as_str(), d.title.as_str(), d.body.as_deref(), d.revision, d.bytes), ("acme", "The kiln", Some("# Fire\n"), 1, 7));
     assert_eq!(s.get(&d.id).await.unwrap(), d);
     assert!(matches!(s.get("zzzzzzzz").await, Err(StoreError::NotFound(_))));
@@ -102,7 +102,7 @@ async fn an_agents_whole_body_save_merges_with_a_live_edit() {
     let live = typed(&person, "first line\nsecond".len() as u32, " (typed live)");
     s.update(&id, &live, "person", "key:p", None).await.unwrap();
     let saved = s.save(&id, "FIRST LINE\nsecond line\n", Some(read.revision), "agent", "key:g").await.unwrap();
-    assert!(saved.stale, "it read revision 1; the document was at 2");
+    assert!(saved.stale, "it read revision 1; the note was at 2");
     assert_eq!(body(&s, &id).await, "FIRST LINE\nsecond (typed live) line\n", "both kept: the save merged, it did not overwrite");
     // The same body again writes nothing.
     let again = s.save(&id, "FIRST LINE\nsecond (typed live) line\n", None, "agent", "key:g").await.unwrap();
@@ -159,9 +159,9 @@ async fn a_squash_folds_the_changes_and_keeps_who_wrote_what() {
     let mut authors: Vec<(String, u32)> = snap.authors.clone().unwrap().into_iter().map(|a| (a.by, a.changes)).collect();
     authors.sort();
     assert_eq!(authors, [("a".to_string(), 1), ("ann".into(), 2), ("bob".into(), 1)], "who wrote what, kept");
-    assert_eq!(s.replay(&id, Some(4), None).await.unwrap().body.as_deref(), Some("abc"), "the snapshot is the document then");
+    assert_eq!(s.replay(&id, Some(4), None).await.unwrap().body.as_deref(), Some("abc"), "the snapshot is the note then");
     assert!(matches!(s.replay(&id, Some(2), None).await, Err(StoreError::NoRevision(_, 2))), "before it: gone");
-    assert_eq!(body(&s, &id).await, "abcde", "the document is as it was");
+    assert_eq!(body(&s, &id).await, "abcde", "the note is as it was");
     // A second squash folds the first's authors in.
     s.squash(&id, 6, "admin", "key:admin").await.unwrap();
     let snap = s.history(&id, 100, None).await.unwrap().into_iter().find(|r| r.kind == "snapshot").unwrap();
@@ -270,14 +270,14 @@ async fn the_meter_is_asked_before_a_write() {
     impl crate::quota::Quota for Full {
         fn reserve(&self, author: &str, bytes: u64) -> Result<crate::quota::Reserved, String> {
             if self.0.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                return Err(format!("{author} is out of docs.bytes"));
+                return Err(format!("{author} is out of notes.bytes"));
             }
             Ok(crate::quota::Reserved { author: author.into(), bytes, hold: None })
         }
         fn commit(&self, _: crate::quota::Reserved) {}
     }
     let dir = tempfile::tempdir().unwrap();
-    let s = Arc::new(DocsStore::open(&dir.path().join("docs.db")).unwrap().metered(Arc::new(Full(Default::default()))));
+    let s = Arc::new(NotesStore::open(&dir.path().join("notes.db")).unwrap().metered(Arc::new(Full(Default::default()))));
     let id = s.create("acme", "Metered", "ab", "a", "key:a").await.unwrap().id;
     assert!(matches!(s.save(&id, "a much longer body", None, "a", "key:a").await, Err(StoreError::Quota(m)) if m.contains("key:a")));
     assert_eq!((body(&s, &id).await, s.get(&id).await.unwrap().revision), ("ab".to_string(), 1), "nothing kept");

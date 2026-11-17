@@ -246,7 +246,7 @@ export default async (ctx) => {
       const line = (chart, source) => root.locator(`[data-chart=${chart}] [data-series="${source}"]`);
       await eventually("the stored chart", async () => (await line("stored", "tickets.bytes").count()) === 1, 10_000);
       const h = sy("quota", "history", "--days", "90");
-      for (const [chart, source] of [["stored", "media.bytes"], ["stored", "tickets.bytes"], ["stored", "docs.bytes"], ["day", "media.fetch.bytes"], ["day", "media.egress.bytes"]]) {
+      for (const [chart, source] of [["stored", "media.bytes"], ["stored", "tickets.bytes"], ["stored", "notes.bytes"], ["day", "media.fetch.bytes"], ["day", "media.egress.bytes"]]) {
         const l = line(chart, source);
         assert(Number(await l.getAttribute("data-points")) === 90, `${source}: a point a day`);
         assert(Number(await l.getAttribute("data-last")) === last(h, source).used, `${source}: its last is quota.history's (${last(h, source).used})`);

@@ -1,13 +1,13 @@
 //! The service's typed parameters (ACCESS-8, `typed_params`) — what names
-//! and carries a document: [`DocId`], [`DocTitle`], [`DocBody`],
-//! [`DocQuery`]. Each a transparent text whose `Deserialize` is its one
+//! and carries a note: [`NoteId`], [`NoteTitle`], [`NoteBody`],
+//! [`NoteQuery`]. Each a transparent text whose `Deserialize` is its one
 //! rule, so a bad value is `invalid_params` naming the parameter before the
 //! method runs (the media service's `vocab.rs`, the pattern).
 //!
-//! **A doc's id** is TICKETS-35's uid form: 8 characters of Crockford's
+//! **A note's id** is TICKETS-35's uid form: 8 characters of Crockford's
 //! base32, lower case (`0-9` and the letters but `i`, `l`, `o` and `u`) —
-//! 40 random bits, short, URL-safe (`#/doc/7k3mq2xa`), read case-blind. The
-//! store mints one per document ([`mint`]), drawn again until no document
+//! 40 random bits, short, URL-safe (`#/note/7k3mq2xa`), read case-blind. The
+//! store mints one per note ([`mint`]), drawn again until no note
 //! of the file has it; it never changes and is never given out again.
 
 /// The alphabet, in digit order: Crockford's base32, lower case (TICKETS-35's).
@@ -19,7 +19,7 @@ pub const ID_LEN: usize = 8;
 /// The most a title may be, in characters.
 pub const TITLE_MAX: usize = 200;
 
-/// The most a body may be, in bytes: 2 MiB — a document travels whole in
+/// The most a body may be, in bytes: 2 MiB — a note travels whole in
 /// one WebSocket message (10 MiB).
 pub const BODY_MAX: usize = 2 * 1024 * 1024;
 
@@ -87,19 +87,20 @@ fn not_a(text: &str, what: &str, shape: &str) -> String {
 
 fn id(text: &str) -> Result<String, String> {
     let t = text.trim();
-    // The app's route to it is read past: `#/doc/<id>`, `/app/#/doc/<id>`.
-    let t = t.rsplit_once("#/doc/").map_or(t, |(_, id)| id).trim_end_matches('/');
+    // The app's route to it is read past: `#/note/<id>`, `/app/#/note/<id>` —
+    // and `#/doc/<id>`, its link before NOTES-3, which the app still opens.
+    let t = t.rsplit_once("#/note/").or_else(|| t.rsplit_once("#/doc/")).map_or(t, |(_, id)| id).trim_end_matches('/');
     match t.len() == ID_LEN && t.bytes().all(|b| ID_ALPHABET.contains(&b.to_ascii_lowercase())) {
         true => Ok(t.to_ascii_lowercase()),
-        false => Err(not_a(t, "a doc's id", "8 characters of Crockford's base32 — digits and letters but i, l, o and u — as 7k3mq2xa")),
+        false => Err(not_a(t, "a note's id", "8 characters of Crockford's base32 — digits and letters but i, l, o and u — as 7k3mq2xa")),
     }
 }
 
 text_type!(
-    /// A document's id: 8 characters of Crockford's base32, lower case
-    /// (read case-blind; `#/doc/` before it is read past), as `create`
+    /// A note's id: 8 characters of Crockford's base32, lower case
+    /// (read case-blind; `#/note/` or `#/doc/` before it is read past), as `create`
     /// answered it.
-    DocId,
+    NoteId,
     id
 );
 
@@ -113,9 +114,9 @@ fn title(text: &str) -> Result<String, String> {
 }
 
 text_type!(
-    /// A document's title: one line of words (whitespace folded to single
+    /// A note's title: one line of words (whitespace folded to single
     /// spaces), at most 200 characters, never empty.
-    DocTitle,
+    NoteTitle,
     title
 );
 
@@ -127,8 +128,8 @@ fn body(text: &str) -> Result<String, String> {
 }
 
 text_type!(
-    /// A document's body: markdown, kept byte for byte, at most 2 MiB.
-    DocBody,
+    /// A note's body: markdown, kept byte for byte, at most 2 MiB.
+    NoteBody,
     body
 );
 
@@ -143,7 +144,7 @@ fn query(text: &str) -> Result<String, String> {
 text_type!(
     /// Words a title holds, case-blind (`kiln glaze` finds "The kiln's
     /// glaze"); at most 200 characters.
-    DocQuery,
+    NoteQuery,
     query
 );
 
@@ -168,8 +169,8 @@ fn update(text: &str) -> Result<String, String> {
 
 text_type!(
     /// A Yjs v1 update, standard base64 — what the browser's `Y.encodeStateAsUpdate`
-    /// and a doc's `update` event make; at most 8 MiB.
-    DocUpdate,
+    /// and a note's `update` event make; at most 8 MiB.
+    NoteUpdate,
     update
 );
 
@@ -179,7 +180,7 @@ fn vector(text: &str) -> Result<String, String> {
 
 text_type!(
     /// A Yjs state vector, standard base64 — `Y.encodeStateVector(ydoc)`.
-    DocVector,
+    NoteVector,
     vector
 );
 
@@ -190,7 +191,7 @@ fn awareness(text: &str) -> Result<String, String> {
 text_type!(
     /// A caret and selection: a Yjs awareness update, standard base64
     /// (`encodeAwarenessUpdate`); at most 64 KiB.
-    DocAwareness,
+    NoteAwareness,
     awareness
 );
 
@@ -203,8 +204,8 @@ fn session(text: &str) -> Result<String, String> {
 }
 
 text_type!(
-    /// A connection's own id on a document — the page makes one, e.g. s-3f9a1c.
-    DocSession,
+    /// A connection's own id on a note — the page makes one, e.g. s-3f9a1c.
+    NoteSession,
     session
 );
 
@@ -275,17 +276,18 @@ mod tests {
 
     #[test]
     fn the_spellings_hold_and_refuse() {
-        assert_eq!("7K3MQ2XA".parse::<DocId>().unwrap().as_str(), "7k3mq2xa");
-        assert_eq!("/app/#/doc/7k3mq2xa".parse::<DocId>().unwrap().as_str(), "7k3mq2xa");
+        assert_eq!("7K3MQ2XA".parse::<NoteId>().unwrap().as_str(), "7k3mq2xa");
+        assert_eq!("/app/#/note/7k3mq2xa".parse::<NoteId>().unwrap().as_str(), "7k3mq2xa");
+        assert_eq!("/app/#/doc/7k3mq2xa".parse::<NoteId>().unwrap().as_str(), "7k3mq2xa", "an old link");
         for bad in ["", "7k3mq2x", "7k3mq2xab", "7k3mq2xi", "7k3mq-xa"] {
-            assert!(bad.parse::<DocId>().is_err(), "{bad:?}");
+            assert!(bad.parse::<NoteId>().is_err(), "{bad:?}");
         }
-        assert_eq!("  The   kiln\n".parse::<DocTitle>().unwrap().as_str(), "The kiln");
-        assert!("   ".parse::<DocTitle>().is_err());
-        assert!("x".repeat(TITLE_MAX + 1).parse::<DocTitle>().is_err());
-        assert!("x".repeat(BODY_MAX + 1).parse::<DocBody>().is_err());
-        assert_eq!("".parse::<DocBody>().unwrap().as_str(), "");
-        assert!(serde_json::from_str::<DocId>("\"abc\"").is_err(), "deserializing is the check");
+        assert_eq!("  The   kiln\n".parse::<NoteTitle>().unwrap().as_str(), "The kiln");
+        assert!("   ".parse::<NoteTitle>().is_err());
+        assert!("x".repeat(TITLE_MAX + 1).parse::<NoteTitle>().is_err());
+        assert!("x".repeat(BODY_MAX + 1).parse::<NoteBody>().is_err());
+        assert_eq!("".parse::<NoteBody>().unwrap().as_str(), "");
+        assert!(serde_json::from_str::<NoteId>("\"abc\"").is_err(), "deserializing is the check");
     }
 
     #[test]
@@ -294,7 +296,7 @@ mod tests {
         assert_eq!(id_of_bits((1 << 40) - 1), "zzzzzzzz");
         for _ in 0..200 {
             let id = id_of_bits(draw());
-            assert!(id.parse::<DocId>().is_ok(), "{id}");
+            assert!(id.parse::<NoteId>().is_ok(), "{id}");
         }
         let first = id_of_bits(draw());
         let again = mint(|t| t == first);

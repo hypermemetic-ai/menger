@@ -1,5 +1,5 @@
 //! CODE-2: **the code service** — a public GitHub repository read inside
-//! menger, as a service of v2's own beside `tickets`, `media`, `docs` and
+//! menger, as a service of v2's own beside `tickets`, `media`, `notes` and
 //! `quota` (V2-1). The page's Content-Security-Policy keeps the browser off
 //! GitHub and test and prod hold no checkout, so a view of code (CODE-3)
 //! reads only what this service answers.

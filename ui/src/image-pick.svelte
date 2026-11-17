@@ -22,7 +22,7 @@
      (`await_reply`), and the ticket's questions show the same input. Nothing of one set of images is here: any
      options and images are the same tag. An image is `media:<hash>` (this origin's /media, behind the
      session) or a `data:image/…` URI; the page's policy loads nothing from elsewhere.
-     Drawn only, saving nothing, with no ticket (a preview, a document) or no decision id: it says so.
+     Drawn only, saving nothing, with no ticket (a preview, a note) or no decision id: it says so.
      Marks: `[data-surface=image-pick]` (`data-ticket`, `data-input`, `data-picked`, `data-state=saved|saving|
      refused|unsaved|loading|empty`), `[role=radio][data-option=<value>]` (`aria-checked`), `[data-field=question|
      state|caption|full]`. -->
@@ -83,11 +83,11 @@
   import { tick } from "svelte";
   import { bus, live, markdown } from "plexus-ui/host";
 
-  let { source = "", ticket = "", doc = "", n = "", editor = "" } = $props();
+  let { source = "", ticket = "", note = "", n = "", editor = "" } = $props();
   const b = bus();
 
   const pick = $derived(readPick(source));
-  const saves = $derived(!!ticket && !doc && !!pick.input);
+  const saves = $derived(!!ticket && !note && !!pick.input);
   const inputs = live({ snapshot: "tickets.inputs.list", params: () => ({ ticket }), changes: "tickets.watch", key: "id",
                         on: { input_changed: "upsert:input" }, when: () => saves });
   const row = $derived(saves ? inputs.rows.find((i) => i.id === pick.input) ?? null : null);

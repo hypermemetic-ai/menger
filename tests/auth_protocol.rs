@@ -329,26 +329,26 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("media.chunk", Today::Editor, None),
     ("media.finish", Today::Editor, None),
     ("media.fetch", Today::Editor, None),
-    // V2-29: the docs service — a viewer reads, follows and is present, an
+    // V2-29: the notes service — a viewer reads, follows and is present, an
     // editor writes (live updates and whole bodies), an admin deletes and
-    // squashes (`docs.squash`, grantable to a role by the role table); no
-    // target: the method asks the gate again on the document's organization.
-    ("docs.get", Today::Viewer, None),
-    ("docs.list", Today::Viewer, None),
-    ("docs.state", Today::Viewer, None),
-    ("docs.history", Today::Viewer, None),
-    ("docs.replay", Today::Viewer, None),
-    ("docs.present", Today::Viewer, None),
-    ("docs.here", Today::Viewer, None),
-    ("docs.watch", Today::Viewer, None),
-    ("docs.may", Today::Viewer, None),
-    ("docs.create", Today::Editor, None),
-    ("docs.update", Today::Editor, None),
-    ("docs.save", Today::Editor, None),
-    ("docs.rename", Today::Editor, None),
-    ("docs.restore", Today::Editor, None),
-    ("docs.delete", Today::Admin, None),
-    ("docs.squash", Today::Admin, None),
+    // squashes (`notes.squash`, grantable to a role by the role table); no
+    // target: the method asks the gate again on the note's organization.
+    ("notes.get", Today::Viewer, None),
+    ("notes.list", Today::Viewer, None),
+    ("notes.state", Today::Viewer, None),
+    ("notes.history", Today::Viewer, None),
+    ("notes.replay", Today::Viewer, None),
+    ("notes.present", Today::Viewer, None),
+    ("notes.here", Today::Viewer, None),
+    ("notes.watch", Today::Viewer, None),
+    ("notes.may", Today::Viewer, None),
+    ("notes.create", Today::Editor, None),
+    ("notes.update", Today::Editor, None),
+    ("notes.save", Today::Editor, None),
+    ("notes.rename", Today::Editor, None),
+    ("notes.restore", Today::Editor, None),
+    ("notes.delete", Today::Admin, None),
+    ("notes.squash", Today::Admin, None),
     // V2-31: the quota service — the seam's four are the server's own (an
     // admin's of `*`: no role holds them); a person's own usage anyone
     // signed in reads; the tabulation, the allowances and the recount an
@@ -384,15 +384,15 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("logs.define", Today::Admin, None),
     ("logs.extend", Today::Admin, None),
     ("logs.deprecate", Today::Admin, None),
-    // V2-31: and the docs store's own count, which the recount reads.
-    ("docs.usage", Today::Admin, None),
+    // V2-31: and the notes store's own count, which the recount reads.
+    ("notes.usage", Today::Admin, None),
     // V2-30: questions on a range — a viewer reads them and an agent's
     // queue, an editor asks, answers and resolves.
-    ("docs.threads", Today::Viewer, None),
-    ("docs.waiting", Today::Viewer, None),
-    ("docs.ask", Today::Editor, None),
-    ("docs.reply", Today::Editor, None),
-    ("docs.resolve", Today::Editor, None),
+    ("notes.threads", Today::Viewer, None),
+    ("notes.waiting", Today::Viewer, None),
+    ("notes.ask", Today::Editor, None),
+    ("notes.reply", Today::Editor, None),
+    ("notes.resolve", Today::Editor, None),
 ];
 
 /// AUTH-7's one deliberate narrowing of the table: what an anonymous or
@@ -433,7 +433,7 @@ async fn the_roles_are_what_identity_21_asked_method_by_method() {
         .map(|(path, s)| (format!("tickets.{path}"), s));
     let top = service.list_plugin_schemas().into_iter().map(|s| (s.namespace.clone(), s));
     for (path, schema) in top.chain(children) {
-        if !["tickets", "members", "session", "media", "docs", "quota", "code", "logs"].contains(&schema.namespace.as_str()) && !path.starts_with("tickets.") {
+        if !["tickets", "members", "session", "media", "notes", "quota", "code", "logs"].contains(&schema.namespace.as_str()) && !path.starts_with("tickets.") {
             continue;
         }
         for m in &schema.methods {

@@ -1,14 +1,14 @@
 //! EDITOR-32: **`media.list`** — every kept file the caller may see, newest
-//! first, a page at a time, each with the tickets and documents it is kept
+//! first, a page at a time, each with the tickets and notes it is kept
 //! for among those the caller reads (the owner, 2026-11-15: "a media page
 //! that shows all saved media, should be able to get to the tickets they
 //! are on too").
 //!
 //! The store answers rows ([`MediaStore::list`]: files kept for a ticket or
-//! a document, never a putter's own or a link's preview — those are used
+//! a note, never a putter's own or a link's preview — those are used
 //! nowhere); whose each owner is, is asked of the seam as the caller —
-//! `tickets.may { id, role: viewer }` for a ticket, `docs.may` for a
-//! document — once per owner per call, a few at a time. An owner the caller
+//! `tickets.may { id, role: viewer }` for a ticket, `notes.may` for a
+//! note — once per owner per call, a few at a time. An owner the caller
 //! cannot read is left off its row, and a row left with none is left out
 //! (ACCESS-10: not found ≡ not yours). A ticket is answered by the id the
 //! tickets service names it by now (a ticket moved since keeps its file).
@@ -24,7 +24,7 @@ use crate::seam::Answer;
 use crate::store::{Listed, MediaStore, Owner, StoreError};
 use crate::vocab::{MediaHash, MediaKind};
 use futures::StreamExt;
-use menger_docs::seam::Answer as DocAnswer;
+use menger_notes::seam::Answer as NoteAnswer;
 use menger_tickets_api::members::Role;
 use std::collections::HashMap;
 use std::future::Future;
@@ -41,12 +41,12 @@ pub const SCAN_MAX: usize = 2000;
 /// The owners asked of the seam at once.
 const ASKING: usize = 16;
 
-/// One shown row: the file, and the tickets and documents the caller reads.
+/// One shown row: the file, and the tickets and notes the caller reads.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Shown {
     pub file: Listed,
     pub tickets: Vec<String>,
-    pub docs: Vec<String>,
+    pub notes: Vec<String>,
 }
 
 /// A page: its rows, and the `after` that asks the next (none: no more).
@@ -83,11 +83,11 @@ where
         for file in batch {
             read += 1;
             cursor = Some(file.info.hash.clone());
-            let (mut tickets, mut docs) = (Vec::new(), Vec::new());
+            let (mut tickets, mut notes) = (Vec::new(), Vec::new());
             for o in &file.owners {
                 let into = match o {
                     Owner::Ticket(_) => &mut tickets,
-                    Owner::Doc(_) => &mut docs,
+                    Owner::Note(_) => &mut notes,
                     _ => continue,
                 };
                 if let Some(Some(id)) = known.get(o) {
@@ -96,10 +96,10 @@ where
                     }
                 }
             }
-            if tickets.is_empty() && docs.is_empty() {
+            if tickets.is_empty() && notes.is_empty() {
                 continue;
             }
-            out.rows.push(Shown { file, tickets, docs });
+            out.rows.push(Shown { file, tickets, notes });
             if out.rows.len() == limit {
                 out.next = cursor;
                 return Ok(out);
@@ -124,8 +124,8 @@ async fn reads(me: &MediaActivation, user: &Caller, owner: Owner) -> Option<Stri
             Answer::Held(now) => Some(now),
             _ => None,
         }),
-        Owner::Doc(id) => me.seam.doc_may(user.context(), id, Role::Viewer).await.map(|a| match a {
-            DocAnswer::Held(now) => Some(now),
+        Owner::Note(id) => me.seam.note_may(user.context(), id, Role::Viewer).await.map(|a| match a {
+            NoteAnswer::Held(now) => Some(now),
             _ => None,
         }),
         Owner::App(_) | Owner::Anyone => Ok(None),
@@ -155,9 +155,9 @@ pub(crate) async fn list(me: MediaActivation, user: Caller, kind: Option<MediaKi
 }
 
 fn listed(s: Shown) -> MediaEvent {
-    let Shown { file: Listed { info, at, .. }, tickets, docs } = s;
+    let Shown { file: Listed { info, at, .. }, tickets, notes } = s;
     let crate::MediaInfo { hash, mime, bytes, width, height, kind, name } = info;
-    MediaEvent::Listed { hash, mime, bytes, width, height, kind, name, at, tickets, docs }
+    MediaEvent::Listed { hash, mime, bytes, width, height, kind, name, at, tickets, notes }
 }
 
 #[cfg(test)]

@@ -57,7 +57,7 @@ async fn start_full(disk: Option<Arc<FakeDisk>>, limits: menger::calls::CallLimi
                 Some(disk) => quota.guarding(disk as Arc<dyn DiskUsage>),
                 None => quota,
             };
-            menger::build_rpc_services(&db_path, None, Default::default(), Vec::new(), access, backend, None, menger::store::BODY_MAX_DEFAULT, ui, media, menger::DocsSetup::beside(&db_path).unwrap(), quota, menger::CodeSetup::beside(&db_path).unwrap(), menger::LogsSetup::beside(&db_path).unwrap(), Vec::new(), |store, access| {
+            menger::build_rpc_services(&db_path, None, Default::default(), Vec::new(), access, backend, None, menger::store::BODY_MAX_DEFAULT, ui, media, menger::NotesSetup::beside(&db_path).unwrap(), quota, menger::CodeSetup::beside(&db_path).unwrap(), menger::LogsSetup::beside(&db_path).unwrap(), Vec::new(), |store, access| {
                 menger::TicketsActivation::with_access(store, access)
             })
             .await
@@ -143,7 +143,7 @@ async fn a_person_sees_their_usage_with_the_free_tiers_caps() {
     let mine = one(&editor, "quota.usage", json!({})).await;
     assert_eq!((mine["type"].as_str(), mine["principal"].as_str(), mine["exempt"].as_bool()), (Some("usage"), Some(support::principal_of(&EDITOR).as_str()), Some(false)), "{mine}");
     assert_eq!(source(&mine, "media.bytes")["cap"], 2_000_000_000u64);
-    assert_eq!(source(&mine, "docs.bytes")["cap"], 200_000_000u64);
+    assert_eq!(source(&mine, "notes.bytes")["cap"], 200_000_000u64);
     assert_eq!(source(&mine, "tickets.bytes")["cap"], 50_000_000u64);
     assert_eq!(source(&mine, "media.fetch.calls")["cap"], 300);
     assert_eq!(source(&mine, "media.fetch.calls")["window"], "day");
@@ -255,20 +255,20 @@ async fn the_effective_cap_is_own_else_the_teams_largest_else_the_default() {
         assert_eq!(one(&admin, "members.teams.create", json!({"name": t})).await["type"], "team");
         assert_eq!(one(&admin, "members.teams.add", json!({"team": t, "principal": me})).await["type"], "team_member");
     }
-    one(&admin, "quota.set", json!({"team": "crew", "source": "docs.bytes", "cap": "1 GB"})).await;
-    one(&admin, "quota.set", json!({"team": "big-crew", "source": "docs.bytes", "cap": "5 GB"})).await;
+    one(&admin, "quota.set", json!({"team": "crew", "source": "notes.bytes", "cap": "1 GB"})).await;
+    one(&admin, "quota.set", json!({"team": "big-crew", "source": "notes.bytes", "cap": "5 GB"})).await;
     let u = one(&editor, "quota.usage", json!({})).await;
-    assert_eq!((source(&u, "docs.bytes")["cap"].as_u64(), source(&u, "docs.bytes")["from"].as_str()), (Some(5_000_000_000), Some("team:big-crew")));
-    one(&admin, "quota.set", json!({"principal": me, "source": "docs.bytes", "cap": "10 MB"})).await;
+    assert_eq!((source(&u, "notes.bytes")["cap"].as_u64(), source(&u, "notes.bytes")["from"].as_str()), (Some(5_000_000_000), Some("team:big-crew")));
+    one(&admin, "quota.set", json!({"principal": me, "source": "notes.bytes", "cap": "10 MB"})).await;
     let u = one(&editor, "quota.usage", json!({})).await;
-    assert_eq!((source(&u, "docs.bytes")["cap"].as_u64(), source(&u, "docs.bytes")["from"].as_str()), (Some(10_000_000), Some("own")));
-    assert_eq!(one(&admin, "quota.set", json!({"principal": me, "source": "docs.bytes", "cap": "clear"})).await["cleared"], true);
+    assert_eq!((source(&u, "notes.bytes")["cap"].as_u64(), source(&u, "notes.bytes")["from"].as_str()), (Some(10_000_000), Some("own")));
+    assert_eq!(one(&admin, "quota.set", json!({"principal": me, "source": "notes.bytes", "cap": "clear"})).await["cleared"], true);
     one(&admin, "quota.set", json!({"default": true, "source": "media.bytes", "cap": "7 GB"})).await;
     let u = one(&editor, "quota.usage", json!({})).await;
-    assert_eq!(source(&u, "docs.bytes")["from"], "team:big-crew", "cleared: back to the team's");
+    assert_eq!(source(&u, "notes.bytes")["from"], "team:big-crew", "cleared: back to the team's");
     assert_eq!((source(&u, "media.bytes")["cap"].as_u64(), source(&u, "media.bytes")["from"].as_str()), (Some(7_000_000_000), Some("default")));
     // Exactly one holder; an unknown source is the parameter's refusal.
-    assert_eq!(one(&admin, "quota.set", json!({"principal": me, "team": "crew", "source": "docs.bytes", "cap": "1"})).await["type"], "error");
+    assert_eq!(one(&admin, "quota.set", json!({"principal": me, "team": "crew", "source": "notes.bytes", "cap": "1"})).await["type"], "error");
     let bad = one(&admin, "quota.set", json!({"default": true, "source": "media.nothing", "cap": "1"})).await;
     assert!(bad.to_string().contains("media.nothing"), "{bad}");
     // set is an admin's.
@@ -611,49 +611,49 @@ async fn every_file_kept_is_charged_to_whoever_keeps_it() {
     assert!(said.as_deref().is_some_and(|s| s.contains("1 file(s)") && s.contains("no one to charge")), "{done}");
 }
 
-/// The docs service's meter is the quota service (V2-29's call site): a
-/// document made counts one `docs.count` and its body's bytes, every change
+/// The notes service's meter is the quota service (V2-29's call site): a
+/// note made counts one `notes.count` and its body's bytes, every change
 /// its bytes; past the cap the write is `refused { reason: quota }` with the
-/// numbers, nothing written; the recount reads `docs.usage { everyone }`.
+/// numbers, nothing written; the recount reads `notes.usage { everyone }`.
 #[tokio::test]
-async fn a_document_is_counted_against_its_writer_and_refused_past_the_cap() {
+async fn a_note_is_counted_against_its_writer_and_refused_past_the_cap() {
     let port = start(None).await;
     let admin = support::connect(port).await;
     grant(&admin, &OTHER, "editor", "*").await;
     let writer = connect_key(&OTHER, port).await;
     let me = support::principal_of(&OTHER);
-    let made = one(&writer, "docs.create", json!({"title": "kiln notes", "body": "a".repeat(300)})).await;
+    let made = one(&writer, "notes.create", json!({"title": "kiln notes", "body": "a".repeat(300)})).await;
     assert_eq!(made["type"], "created", "{made}");
     let u = one(&writer, "quota.usage", json!({})).await;
-    let first = source(&u, "docs.bytes")["used"].as_u64().unwrap();
-    assert_eq!((source(&u, "docs.count")["used"].as_u64(), source(&u, "docs.bytes")["held"].as_u64()), (Some(1), Some(0)));
+    let first = source(&u, "notes.bytes")["used"].as_u64().unwrap();
+    assert_eq!((source(&u, "notes.count")["used"].as_u64(), source(&u, "notes.bytes")["held"].as_u64()), (Some(1), Some(0)));
     assert!((300..400).contains(&first), "the body's change, as kept: {first}");
-    let id = made["doc"]["id"].as_str().unwrap().to_string();
+    let id = made["note"]["id"].as_str().unwrap().to_string();
     let body = format!("{}{}", "a".repeat(300), "b".repeat(50));
-    let saved = one(&writer, "docs.save", json!({"id": id, "body": body})).await;
+    let saved = one(&writer, "notes.save", json!({"id": id, "body": body})).await;
     assert_eq!(saved["type"], "saved", "{saved}");
-    let grown = source(&one(&writer, "quota.usage", json!({})).await, "docs.bytes")["used"].as_u64().unwrap();
+    let grown = source(&one(&writer, "quota.usage", json!({})).await, "notes.bytes")["used"].as_u64().unwrap();
     assert!(grown > first, "a change counts its bytes: {grown}");
     // Capped where it stands: the next change is refused, said with the numbers.
-    one(&admin, "quota.set", json!({"principal": me, "source": "docs.bytes", "cap": grown.to_string()})).await;
-    let over = one(&writer, "docs.save", json!({"id": id, "body": "c".repeat(400)})).await;
+    one(&admin, "quota.set", json!({"principal": me, "source": "notes.bytes", "cap": grown.to_string()})).await;
+    let over = one(&writer, "notes.save", json!({"id": id, "body": "c".repeat(400)})).await;
     assert_eq!((over["type"].as_str(), over["reason"].as_str()), (Some("refused"), Some("quota")), "{over}");
     assert!(over["message"].as_str().unwrap().contains(&format!("used of {grown} B")) || over["message"].as_str().unwrap().contains("used of"), "{over}");
-    assert_eq!(one(&writer, "docs.get", json!({"id": id})).await["doc"]["body"], body, "nothing written");
-    one(&admin, "quota.set", json!({"principal": me, "source": "docs.count", "cap": "1"})).await;
-    let second = one(&writer, "docs.create", json!({"title": "another"})).await;
+    assert_eq!(one(&writer, "notes.get", json!({"id": id})).await["note"]["body"], body, "nothing written");
+    one(&admin, "quota.set", json!({"principal": me, "source": "notes.count", "cap": "1"})).await;
+    let second = one(&writer, "notes.create", json!({"title": "another"})).await;
     assert_eq!(second["reason"], "quota", "{second}");
     // The store's own count, and the recount by it.
-    let counted = all(&admin, "docs.usage", json!({"everyone": true})).await;
+    let counted = all(&admin, "notes.usage", json!({"everyone": true})).await;
     assert_eq!(counted, vec![json!({"type": "usage", "principal": me, "count": 1, "bytes": grown})]);
-    assert_eq!(all(&writer, "docs.usage", json!({"everyone": true})).await[0]["type"], "error", "an admin's");
-    one(&admin, "quota.credit", json!({"principal": me, "source": "docs.bytes", "amount": 100})).await;
+    assert_eq!(all(&writer, "notes.usage", json!({"everyone": true})).await[0]["type"], "error", "an admin's");
+    one(&admin, "quota.credit", json!({"principal": me, "source": "notes.bytes", "amount": 100})).await;
     let r = all(&admin, "quota.recount", json!({"principal": me})).await;
-    assert!(r.contains(&json!({"type": "drift", "principal": me, "source": "docs.bytes", "was": grown - 100, "counted": grown})), "{r:?}");
+    assert!(r.contains(&json!({"type": "drift", "principal": me, "source": "notes.bytes", "was": grown - 100, "counted": grown})), "{r:?}");
     assert_eq!(r.last().unwrap()["not_counted"], json!([]), "every store answers now");
 }
 
-/// V2-39: `questions.count` counts — `docs.ask` reserves one for the asker
+/// V2-39: `questions.count` counts — `notes.ask` reserves one for the asker
 /// before the question is kept and commits it after; a refused ask (a range
 /// not in the text) releases it; past the cap the ask is `refused {
 /// over_allowance }` with the numbers and no thread is kept.
@@ -665,27 +665,27 @@ async fn a_question_is_counted_against_its_asker_and_refused_past_the_cap() {
     let asker = connect_key(&OTHER, port).await;
     let me = support::principal_of(&OTHER);
     one(&admin, "quota.set", json!({"principal": me, "source": "questions.count", "cap": "1"})).await;
-    let made = one(&asker, "docs.create", json!({"title": "kiln notes", "body": "Fire twice a week."})).await;
-    let id = made["doc"]["id"].as_str().unwrap().to_string();
+    let made = one(&asker, "notes.create", json!({"title": "kiln notes", "body": "Fire twice a week."})).await;
+    let id = made["note"]["id"].as_str().unwrap().to_string();
     let questions = || async { let u = one(&asker, "quota.usage", json!({})).await; (source(&u, "questions.count")["used"].as_u64(), source(&u, "questions.count")["held"].as_u64()) };
     // A refused ask holds nothing.
-    let bad = one(&asker, "docs.ask", json!({"id": id, "from": 10, "to": 2, "text": "backwards?"})).await;
+    let bad = one(&asker, "notes.ask", json!({"id": id, "from": 10, "to": 2, "text": "backwards?"})).await;
     assert_eq!(bad["type"], "error", "{bad}");
     assert_eq!(questions().await, (Some(0), Some(0)), "released");
     // The first: kept and counted.
-    let asked = one(&asker, "docs.ask", json!({"id": id, "from": 0, "to": 4, "text": "Twice?"})).await;
+    let asked = one(&asker, "notes.ask", json!({"id": id, "from": 0, "to": 4, "text": "Twice?"})).await;
     assert_eq!(asked["type"], "asked", "{asked}");
     assert_eq!(questions().await, (Some(1), Some(0)));
     // The second: over the cap, typed, nothing kept.
-    let over = one(&asker, "docs.ask", json!({"id": id, "from": 5, "to": 10, "text": "Which days?"})).await;
+    let over = one(&asker, "notes.ask", json!({"id": id, "from": 5, "to": 10, "text": "Which days?"})).await;
     assert_eq!((over["type"].as_str(), over["reason"].as_str()), (Some("refused"), Some("over_allowance")), "{over}");
     assert!(over["message"].as_str().unwrap().contains("nothing was written"), "{over}");
-    let threads = all(&asker, "docs.threads", json!({"id": id})).await;
+    let threads = all(&asker, "notes.threads", json!({"id": id})).await;
     assert_eq!(threads.iter().filter(|t| t["type"] == "thread").count(), 1, "{threads:?}");
     assert_eq!(questions().await, (Some(1), Some(0)));
 }
 
-/// `docs.bytes` is the update log as stored: a squash folds changes into a
+/// `notes.bytes` is the update log as stored: a squash folds changes into a
 /// snapshot, shares its bytes among the authors by what each wrote, and
 /// credits back what the log shrank by; the recount agrees.
 #[tokio::test]
@@ -696,28 +696,28 @@ async fn a_squash_gives_back_what_the_log_shrank_by() {
     grant(&admin, &EDITOR, "editor", "*").await;
     let (a, b) = (connect_key(&OTHER, port).await, connect_key(&EDITOR, port).await);
     let (pa, pb) = (support::principal_of(&OTHER), support::principal_of(&EDITOR));
-    let docs = |u: &Value| source(u, "docs.bytes")["used"].as_u64().unwrap();
-    let made = one(&a, "docs.create", json!({"title": "kiln", "body": "a".repeat(200)})).await;
-    let id = made["doc"]["id"].as_str().unwrap().to_string();
+    let notes = |u: &Value| source(u, "notes.bytes")["used"].as_u64().unwrap();
+    let made = one(&a, "notes.create", json!({"title": "kiln", "body": "a".repeat(200)})).await;
+    let id = made["note"]["id"].as_str().unwrap().to_string();
     let mut body = "a".repeat(200);
     for i in 0..12 {
         body = format!("{body} {i}{}", "b".repeat(30));
         let w = if i % 2 == 0 { &a } else { &b };
-        assert_eq!(one(w, "docs.save", json!({"id": id, "body": body})).await["type"], "saved");
+        assert_eq!(one(w, "notes.save", json!({"id": id, "body": body})).await["type"], "saved");
     }
-    let before = (docs(&one(&a, "quota.usage", json!({})).await), docs(&one(&b, "quota.usage", json!({})).await));
-    let history = all(&admin, "docs.history", json!({"id": id, "limit": 100})).await;
+    let before = (notes(&one(&a, "quota.usage", json!({})).await), notes(&one(&b, "quota.usage", json!({})).await));
+    let history = all(&admin, "notes.history", json!({"id": id, "limit": 100})).await;
     let last = history.iter().filter_map(|h| h["change"]["seq"].as_u64()).max().unwrap();
-    let squashed = one(&admin, "docs.squash", json!({"id": id, "until": last})).await;
+    let squashed = one(&admin, "notes.squash", json!({"id": id, "until": last})).await;
     assert_eq!(squashed["type"], "squashed", "{squashed}");
-    let after = (docs(&one(&a, "quota.usage", json!({})).await), docs(&one(&b, "quota.usage", json!({})).await));
+    let after = (notes(&one(&a, "quota.usage", json!({})).await), notes(&one(&b, "quota.usage", json!({})).await));
     assert!(after.0 < before.0 && after.1 < before.1, "the log shrank, and each author got bytes back: {before:?} → {after:?}");
-    let counted = all(&admin, "docs.usage", json!({"everyone": true})).await;
+    let counted = all(&admin, "notes.usage", json!({"everyone": true})).await;
     let of = |p: &str| counted.iter().find(|c| c["principal"] == p).map(|c| (c["count"].as_u64().unwrap(), c["bytes"].as_u64().unwrap()));
     assert_eq!(of(&pa), Some((1, after.0)), "the creator keeps its count through the squash: {counted:?}");
     assert_eq!(of(&pb), Some((0, after.1)), "{counted:?}");
     let r = all(&admin, "quota.recount", json!({})).await;
-    assert!(!r.iter().any(|e| e["type"] == "drift" && e["source"].as_str().unwrap().starts_with("docs.")), "{r:?}");
+    assert!(!r.iter().any(|e| e["type"] == "drift" && e["source"].as_str().unwrap().starts_with("notes.")), "{r:?}");
 }
 
 /// The connections a principal holds (V2-31's follow-up): a person's limit,
@@ -795,7 +795,7 @@ async fn history_is_a_point_a_day_yours_and_the_systems_an_admins() {
     assert!(bad.last().unwrap().to_string().contains("730"), "{bad:?}");
     // The stores by day: summed, what they answer whole.
     let today = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() / 86_400) as i64;
-    for (method, params) in [("tickets.revisions.usage", json!({})), ("media.usage", json!({"everyone": true})), ("docs.usage", json!({"everyone": true}))] {
+    for (method, params) in [("tickets.revisions.usage", json!({})), ("media.usage", json!({"everyone": true})), ("notes.usage", json!({"everyone": true}))] {
         let whole = all(&admin, method, params.clone()).await;
         let mut daily_params = params.clone();
         daily_params["daily"] = json!(true);

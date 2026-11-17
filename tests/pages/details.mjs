@@ -233,8 +233,8 @@ After the folds.
   });
 
   await test("in_the_editor_the_mark_opens_it_and_the_caret_stays_out", async () => {
-    const docId = sy("docs", "create", "--title", "folds in a document", "--body", bodyFile("doc", BODY)).find((e) => e.type === "created")?.doc.id;
-    const { context, page } = await openPage(`#/doc/${docId}`);
+    const docId = sy("notes", "create", "--title", "folds in a document", "--body", bodyFile("doc", BODY)).find((e) => e.type === "created")?.note.id;
+    const { context, page } = await openPage(`#/note/${docId}`);
     try {
       await eventually("the folds drawn in the document", async () => (await page.locator(`${scopeD} m-details[data-folds]`).count()) === 3, 15_000);
       const head = () => page.evaluate(() => { const v = document.querySelector("[data-surface=editor-body] [data-field=body]").editorView; return { head: v.state.selection.main.head, focus: v.hasFocus }; });
@@ -262,7 +262,7 @@ After the folds.
   });
 
   await test("a_ticket_and_a_doc_draw_the_folds_the_same", async () => {
-    const docId = sy("docs", "create", "--title", "the same folds", "--body", bodyFile("same", BODY)).find((e) => e.type === "created")?.doc.id;
+    const docId = sy("notes", "create", "--title", "the same folds", "--body", bodyFile("same", BODY)).find((e) => e.type === "created")?.note.id;
     /** Each drawn block's HTML, Svelte's anchors and a bound mark's fill aside. */
     const drawnHtml = (page, scope) => page.locator(`${scope} .blk`).evaluateAll((els) => els.map((e) => {
       const c = e.cloneNode(true);
@@ -277,7 +277,7 @@ After the folds.
     const t = await ticketPage(host);
     const asTicket = await settle(t.page, scopeT);
     await t.context.close();
-    const d = await openPage(`#/doc/${docId}`);
+    const d = await openPage(`#/note/${docId}`);
     try {
       const asDoc = await settle(d.page, scopeD);
       assert(asTicket.length === asDoc.length && asTicket.length === 5, `as many blocks: ${asTicket.length} · ${asDoc.length}`);

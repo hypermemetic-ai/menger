@@ -1,6 +1,6 @@
 //! SYNAPSE-CC-9 (V2-44: main's `tickets-api/tests/schema_typed.rs`, on v2):
 //! every position in menger's schemas is typed. Every service a v2 server
-//! registers — `tickets`, `ui`, `media`, `docs`, `quota`, `orgs`, `members`,
+//! registers — `tickets`, `ui`, `media`, `notes`, `quota`, `orgs`, `members`,
 //! `session`, `auth` — and each of their children (`tickets.commits`,
 //! `ui.slots`, `members.teams`, …) answers a schema with no untyped site
 //! (`plexus_rpc::core::plexus::schema::untyped_sites`): no position that is
@@ -11,7 +11,7 @@
 //! site at IR build (SYNAPSE-CC-8).
 //!
 //! On v2 the services live in four crates (`menger-tickets-api`,
-//! `menger-media`, `menger-docs`, `menger-quota`) and the framework's
+//! `menger-media`, `menger-notes`, `menger-quota`) and the framework's
 //! (`plexus-ui-service`), so the schemas are read as synapse reads them: from
 //! a server built as `main` builds it, signed in as the fixture operator
 //! (admin on `*`: every method in view), `menger.schema` naming the services
@@ -103,7 +103,7 @@ async fn no_service_has_an_untyped_site() {
     let c = support::connect(port).await;
     let all = schemas(&c).await;
     let paths: Vec<&str> = all.keys().map(String::as_str).collect();
-    for p in ["tickets", "tickets.commits", "tickets.nav", "tickets.inputs", "ui", "ui.slots", "media", "docs", "quota", "code", "logs", "orgs", "members", "members.teams", "session"] {
+    for p in ["tickets", "tickets.commits", "tickets.nav", "tickets.inputs", "ui", "ui.slots", "media", "notes", "quota", "code", "logs", "orgs", "members", "members.teams", "session"] {
         assert!(paths.contains(&p), "{p} not walked: {paths:?}");
     }
     let mut found = Vec::new();

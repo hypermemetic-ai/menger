@@ -2,7 +2,7 @@
 # Schema, tied to a ticket by its uid and taking that ticket's reach; entries
 # appended to it by name, each checked against the schema and kept with an
 # envelope the server writes, in a file of its own (`logs.db`). A service of
-# v2's own beside `tickets`, `media`, `docs`, `quota` and `code` (V2-1): who
+# v2's own beside `tickets`, `media`, `notes`, `quota` and `code` (V2-1): who
 # may is asked of the tickets service through the client seam, as the caller
 # (the media service's pattern), and every entry kept is reserved through the
 # quota service (`logs.bytes`).

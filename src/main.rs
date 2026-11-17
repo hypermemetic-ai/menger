@@ -108,10 +108,10 @@ struct Args {
     #[arg(global = true, long = "media-fetch-allow", value_name = "IP:PORT", hide = true)]
     media_fetch_allow: Vec<std::net::SocketAddr>,
 
-    // V2-29: the docs service's own file.
-    /// The docs service's file — the documents (default: docs.db beside the database file)
-    #[arg(global = true, long, env = "MENGER_DOCS_DB_PATH", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
-    docs_db_path: Option<PathBuf>,
+    // V2-29, NOTES-3: the notes service's own file.
+    /// The notes service's file — the notes (default: notes.db beside the database file)
+    #[arg(global = true, long, env = "MENGER_NOTES_DB_PATH", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
+    notes_db_path: Option<PathBuf>,
 
     // V2-31: the quota service's own file, and the plan a new one starts from.
     /// The quota service's file — every principal's usage and allowances (default: quota.db beside the database file)
@@ -738,17 +738,20 @@ async fn run(args: Args) -> anyhow::Result<()> {
     // V2-31: metered by the quota service — the route's egress too.
     let media = media.metered(access.meter());
     let media_serve = media.clone();
-    // V2-29: the docs service's file (beside the tickets file unless named):
-    // never the tickets, ui or media file.
-    let docs_db_path = args.docs_db_path.clone().unwrap_or_else(|| menger::default_docs_db_path(&db_path));
-    if let Some(whose) = [(&db_path, "database"), (&ui_db_path, "ui service's"), (&media_db_path, "media service's")].into_iter().find(|(p, _)| **p == docs_db_path).map(|(_, w)| w) {
-        anyhow::bail!("--docs-db-path {} is the {whose} file: the docs service keeps a file of its own", docs_db_path.display());
+    // V2-29: the notes service's file (beside the tickets file unless named):
+    // never the tickets, ui or media file. NOTES-3: unnamed, its `docs` twin moved to it first.
+    let notes_db_path = match args.notes_db_path.clone() {
+        Some(p) => p,
+        None => menger::notes_move::beside(&db_path)?,
+    };
+    if let Some(whose) = [(&db_path, "database"), (&ui_db_path, "ui service's"), (&media_db_path, "media service's")].into_iter().find(|(p, _)| **p == notes_db_path).map(|(_, w)| w) {
+        anyhow::bail!("--notes-db-path {} is the {whose} file: the notes service keeps a file of its own", notes_db_path.display());
     }
-    let docs = menger::DocsSetup::open(&docs_db_path)?;
+    let notes = menger::NotesSetup::open(&notes_db_path)?;
     // V2-31: the quota service's file (beside the tickets file unless
     // named): never another service's; a new one starts from the plan.
     let quota_db_path = args.quota_db_path.clone().unwrap_or_else(|| menger::default_quota_db_path(&db_path));
-    if [&db_path, &ui_db_path, &media_db_path, &docs_db_path].contains(&&quota_db_path) {
+    if [&db_path, &ui_db_path, &media_db_path, &notes_db_path].contains(&&quota_db_path) {
         anyhow::bail!("--quota-db-path {} is another service's file: the quota service keeps a file of its own", quota_db_path.display());
     }
     let plan = match &args.quota_plan {
@@ -759,14 +762,14 @@ async fn run(args: Args) -> anyhow::Result<()> {
     // CODE-2: the code service's file (beside the tickets file unless
     // named): never another service's.
     let code_db_path = args.code_db_path.clone().unwrap_or_else(|| menger::default_code_db_path(&db_path));
-    if [&db_path, &ui_db_path, &media_db_path, &docs_db_path, &quota_db_path].contains(&&code_db_path) {
+    if [&db_path, &ui_db_path, &media_db_path, &notes_db_path, &quota_db_path].contains(&&code_db_path) {
         anyhow::bail!("--code-db-path {} is another service's file: the code service keeps a file of its own", code_db_path.display());
     }
     let code = menger::CodeSetup::open(&code_db_path, args.code_blob_dir.as_deref())?.max_bytes(args.code_max_bytes).github_at(args.code_github_at);
     // LOGS-2: the logs service's file (beside the tickets file unless
     // named): never another service's.
     let logs_db_path = args.logs_db_path.clone().unwrap_or_else(|| menger::default_logs_db_path(&db_path));
-    if [&db_path, &ui_db_path, &media_db_path, &docs_db_path, &quota_db_path, &code_db_path].contains(&&logs_db_path) {
+    if [&db_path, &ui_db_path, &media_db_path, &notes_db_path, &quota_db_path, &code_db_path].contains(&&logs_db_path) {
         anyhow::bail!("--logs-db-path {} is another service's file: the logs service keeps a file of its own", logs_db_path.display());
     }
     let logs = menger::LogsSetup::open(&logs_db_path)?;
@@ -780,7 +783,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
             std::process::exit(2);
         }
     };
-    let service = build_rpc_services(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, ui, media, docs, quota, code, logs, children, |store, access| {
+    let service = build_rpc_services(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, ui, media, notes, quota, code, logs, children, |store, access| {
         menger::TicketsActivation::with_access(store, access)
     })
     .await?;
@@ -880,7 +883,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
             // or a token an --auth-provider admits) names the caller to the
             // gate, as the WebSocket's upgrade does; no credential is the
             // anonymous view (the door). Every service registered is there:
-            // tickets, members, orgs, ui, media, docs, quota, code, logs, auth, session.
+            // tickets, members, orgs, ui, media, notes, quota, code, logs, auth, session.
             // With --mcp-authorization-server, /mcp is an OAuth 2.1
             // protected resource and says so on a 401.
             mcp: (!args.no_mcp).then(|| {

@@ -4,8 +4,9 @@
      `top` section and the palette in its `palette` section (app-top and
      jump-palette-sv by ui/slots.json). A full-height column: the two halves
      scroll in their own boxes under the bar (EDITOR-8: one surface and the
-     documents beside it). The board is at `#/board`. V2-29: `#/doc/:doc`
-     opens a document of the docs service on the same surface. V2-42:
+     notes beside it). The board is at `#/board`. V2-29, NOTES-3:
+     `#/note/:note` opens a note of the notes service on the same surface,
+     and `#/doc/:doc` — the link a note had before — opens the same note. V2-42:
      `#/t/:uid/:tail/edit` — a ticket by its uid; editor-screen resolves it.
      SV-4: real Svelte (svelte/1), page-editor.rhx's port (ui/retired-rhx/). -->
 <script module>
@@ -14,12 +15,12 @@
 
 <script>
   import EditorScreen from "plexus-ui:editor-screen";
-  let { id = null, doc = null, uid = null } = $props();
+  let { id = null, note = null, doc = null, uid = null } = $props();
 </script>
 
 <section class="page page-editor">
   <div data-slot="top" data-here="editor"></div>
-  <EditorScreen {id} {doc} {uid}/>
+  <EditorScreen {id} note={note ?? doc} {uid}/>
   <div data-slot="palette"></div>
 </section>
 

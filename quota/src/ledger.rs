@@ -227,6 +227,11 @@ impl Ledger {
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;")?;
         conn.execute_batch(TABLES)?;
         conn.execute_batch(history::TABLE)?;
+        // NOTES-3: rows under a source's old name (`docs.bytes`) moved to its name now, once.
+        let moved = renamed::rekey(&mut conn)?;
+        if moved > 0 {
+            tracing::info!("quota:     {} rows moved from docs.* to notes.* (NOTES-3)", moved);
+        }
         let had: Option<String> = conn.query_row("SELECT value FROM settings WHERE key = 'plan'", [], |r| r.get(0)).optional()?;
         if had.is_none() {
             let tx = conn.transaction()?;
@@ -532,6 +537,7 @@ impl Ledger {
 }
 
 pub mod history;
+pub mod renamed;
 
 #[cfg(test)]
 mod tests;

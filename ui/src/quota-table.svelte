@@ -20,7 +20,7 @@
   const b = bus();
 
   const COLUMNS = [
-    ["media.bytes", "files"], ["docs.bytes", "documents"], ["tickets.bytes", "tickets"],
+    ["media.bytes", "files"], ["notes.bytes", "notes"], ["tickets.bytes", "tickets"],
     ["media.fetch.calls", "fetches / day"], ["media.egress.bytes", "served / day"],
   ];
   let sort = $state("bytes");

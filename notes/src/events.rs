@@ -1,19 +1,19 @@
-//! What the `docs` service streams ([`DocsEvent`]) and what it says a
-//! document is ([`Doc`], [`HistoryRow`], [`Present`]). Every method returns `impl
-//! Stream<Item = DocsEvent>`; a refusal is in band.
+//! What the `notes` service streams ([`NotesEvent`]) and what it says a
+//! note is ([`Note`], [`HistoryRow`], [`Present`]). Every method returns `impl
+//! Stream<Item = NotesEvent>`; a refusal is in band.
 
 use serde::{Deserialize, Serialize};
 
-/// A document: its id, its organization, its title and markdown body, its
+/// A note: its id, its organization, its title and markdown body, its
 /// revision now (every write keeps one), who made it and who wrote it last.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct Doc {
-    /// Its id, 8 characters of Crockford's base32 (`7k3mq2xa`); the app opens it at `#/doc/<id>`.
+pub struct Note {
+    /// Its id, 8 characters of Crockford's base32 (`7k3mq2xa`); the app opens it at `#/note/<id>`.
     pub id: String,
     /// The organization it is in (`acme`): who may read and write it is the roles held there.
     pub org: String,
     pub title: String,
-    /// The markdown, byte for byte — absent from a list's rows and a watch of every document.
+    /// The markdown, byte for byte — absent from a list's rows and a watch of every note.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
     /// The body's size, in bytes.
@@ -28,18 +28,18 @@ pub struct Doc {
     pub by: String,
 }
 
-impl Doc {
-    /// The same document without its body — a list's row.
-    pub fn summary(&self) -> Doc {
-        Doc { body: None, ..self.clone() }
+impl Note {
+    /// The same note without its body — a list's row.
+    pub fn summary(&self) -> Note {
+        Note { body: None, ..self.clone() }
     }
 }
 
-/// One change of a document, as `history` lists it.
+/// One change of a note, as `history` lists it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct HistoryRow {
     pub id: String,
-    /// Its place in the document's changes, from 1; `replay { seq }` stands the document there.
+    /// Its place in the note's changes, from 1; `replay { seq }` stands the note there.
     pub seq: u32,
     /// What it was: `create`, `update` (a live edit), `save` (a whole body, merged), `rename`, `delete`, or `snapshot` (a squash of every change up to it).
     pub kind: String,
@@ -75,8 +75,8 @@ pub struct Author {
 /// wrote (their `bytes`): each the floor of their part, what is left one
 /// byte apiece to the largest writers first (then by principal) — so the
 /// shares sum to the snapshot's bytes, the same every time it is asked. No
-/// writing at all: the first author holds it. What `docs.bytes` charges
-/// each author of a squash, and what `docs.usage` counts.
+/// writing at all: the first author holds it. What `notes.bytes` charges
+/// each author of a squash, and what `notes.usage` counts.
 pub fn shares(bytes: u64, authors: &[Author]) -> Vec<(String, u64)> {
     let total: u128 = authors.iter().map(|a| a.bytes as u128).sum();
     if authors.is_empty() {
@@ -101,10 +101,10 @@ pub fn shares(bytes: u64, authors: &[Author]) -> Vec<(String, u64)> {
     out
 }
 
-/// Someone on a document: a connection open on it, or a writer while it writes.
+/// Someone on a note: a connection open on it, or a writer while it writes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Present {
-    /// The document.
+    /// The note.
     pub id: String,
     /// The connection's own id (the page's, as its watch said it).
     pub session: String,
@@ -125,14 +125,14 @@ pub struct Present {
     pub at: i64,
 }
 
-/// V2-30: a question on a range of a document, and its thread.
+/// V2-30: a question on a range of a note, and its thread.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Thread {
-    /// Its id, 8 characters as a document's.
+    /// Its id, 8 characters as a note's.
     pub thread: String,
-    /// The document it is on.
+    /// The note it is on.
     pub id: String,
-    /// The range as the document's CRDT holds it: two Yjs relative positions (base64), which follow the text.
+    /// The range as the note's CRDT holds it: two Yjs relative positions (base64), which follow the text.
     pub anchor: Anchor,
     /// The range now, in characters of the text — absent when it is detached.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -200,16 +200,16 @@ pub enum WatchEnd {
     Refused,
 }
 
-/// What the `docs` service streams.
+/// What the `notes` service streams.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum DocsEvent {
-    /// `create`'s answer, and a watch's word for a document made.
-    Created { doc: Doc },
-    /// `get`'s and `replay`'s answer: the document whole (as it stood then, for a replay).
-    Doc { doc: Doc },
-    /// A page of `list`'s rows at once: each item a `doc { doc }` without its body.
-    Rows { items: Vec<DocsEvent> },
+pub enum NotesEvent {
+    /// `create`'s answer, and a watch's word for a note made.
+    Created { note: Note },
+    /// `get`'s and `replay`'s answer: the note whole (as it stood then, for a replay).
+    Note { note: Note },
+    /// A page of `list`'s rows at once: each item a `note { note }` without its body.
+    Rows { items: Vec<NotesEvent> },
     /// Where a `list` walk stands, the last data event of the call: `next` is the
     /// cursor to pass as the next call's `after` (`null` when nothing more
     /// matches); `remaining` counts the matches past this page.
@@ -228,13 +228,13 @@ pub enum DocsEvent {
     /// `update`'s answer: the update kept as change `revision`.
     Applied { id: String, revision: u32 },
     /// `state`'s answer: what the caller's state vector lacks (`update`, a Yjs v1
-    /// update, base64), the document's own state vector (`vector`, base64), and
+    /// update, base64), the note's own state vector (`vector`, base64), and
     /// its revision.
     State { id: String, update: String, vector: String, revision: u32 },
     /// A watch's word for every change of the body: the Yjs v1 update (base64) to
     /// apply, its `seq`, who and when, the presence `session` it came from when it
-    /// said; `doc` the document as it is now (without its body on a watch of every
-    /// document).
+    /// said; `note` the note as it is now (without its body on a watch of every
+    /// note).
     Updated {
         id: String,
         seq: u32,
@@ -244,7 +244,7 @@ pub enum DocsEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         session: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        doc: Option<Doc>,
+        note: Option<Note>,
     },
     /// `rename`'s answer, and a watch's: the new title and the revision it made.
     Renamed {
@@ -254,18 +254,18 @@ pub enum DocsEvent {
         at: i64,
         by: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        doc: Option<Doc>,
+        note: Option<Note>,
     },
-    /// `delete`'s answer, and a watch's: the document is gone (its changes are kept in the file).
+    /// `delete`'s answer, and a watch's: the note is gone (its changes are kept in the file).
     Deleted { id: String, at: i64, by: String },
     /// `squash`'s answer, and a watch's: the changes up to `until` are one
     /// snapshot now (`removed` rows fewer), who wrote what kept as its authors.
     Squashed { id: String, until: u32, removed: u32, at: i64, by: String },
     /// `history`'s rows, newest first.
     Change { change: HistoryRow },
-    /// `present`'s rows, and a watch's word: someone is on the document, or moved their caret.
+    /// `present`'s rows, and a watch's word: someone is on the note, or moved their caret.
     Present { present: Present },
-    /// A watch's word: someone left the document (`client` their Yjs client id, when said).
+    /// A watch's word: someone left the note (`client` their Yjs client id, when said).
     Left {
         id: String,
         session: String,
@@ -280,9 +280,9 @@ pub enum DocsEvent {
     Replied { thread: Thread },
     /// V2-30: `resolve`'s answer, and a watch's: the thread folded (or opened again: `resolved` absent).
     Resolved { thread: Thread },
-    /// `may`'s answer: whether the caller holds `role` on the document `id`.
+    /// `may`'s answer: whether the caller holds `role` on the note `id`.
     May { id: String, role: menger_tickets_api::members::Role, held: bool },
-    /// A watch is open: what it hears follows (`id` when it watches one document).
+    /// A watch is open: what it hears follows (`id` when it watches one note).
     Watching {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
@@ -291,7 +291,7 @@ pub enum DocsEvent {
     Lagged { missed: u64 },
     /// A watch ended: `reason` is `signed_out`, `expired`, `revoked` or `refused`.
     WatchClosed { reason: WatchEnd, message: String },
-    /// No such document, or none the caller may read (one answer); with
+    /// No such note, or none the caller may read (one answer); with
     /// `revision`, no such change kept (none, or squashed). `org` for an
     /// organization the caller is not in.
     NotFound {
@@ -301,16 +301,16 @@ pub enum DocsEvent {
         revision: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         org: Option<String>,
-        /// V2-30: no such thread on the document.
+        /// V2-30: no such thread on the note.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         thread: Option<String>,
     },
-    /// The caller reads the document but may not do this to it (`forbidden`,
+    /// The caller reads the note but may not do this to it (`forbidden`,
     /// `message` naming the grant and role it takes), or the meter refused the
     /// write (`quota`). Nothing was written.
     Refused { reason: String, message: String },
     /// V2-31: `usage { everyone }` — what one principal's changes keep:
-    /// the documents they made and the bytes they wrote.
+    /// the notes they made and the bytes they wrote.
     Usage { principal: String, count: u64, bytes: u64 },
     /// V2-70: `usage { everyone, daily }` — what one principal's changes
     /// kept on one UTC day (`day`: days since 1970-01-01).
@@ -319,15 +319,15 @@ pub enum DocsEvent {
     Error { message: String },
 }
 
-impl plexus_rpc::client::FromClientError for DocsEvent {
+impl plexus_rpc::client::FromClientError for NotesEvent {
     fn from_client_error(error: plexus_rpc::client::ClientError) -> Self {
-        DocsEvent::Error { message: error.to_string() }
+        NotesEvent::Error { message: error.to_string() }
     }
 }
 
-impl DocsEvent {
-    /// `not_found` for the document `id`.
+impl NotesEvent {
+    /// `not_found` for the note `id`.
     pub fn no_doc(id: &str) -> Self {
-        DocsEvent::NotFound { id: Some(id.to_string()), revision: None, org: None, thread: None }
+        NotesEvent::NotFound { id: Some(id.to_string()), revision: None, org: None, thread: None }
     }
 }

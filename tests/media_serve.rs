@@ -168,7 +168,7 @@ async fn each_kind_is_served_as_it_is_drawn_and_a_video_seeks() {
 }
 
 /// SCRATCH-NAMES: a server on `menger-x.db` names every file of its own
-/// after it — `menger-x.media.db`, `.docs.db`, `.quota.db`, its blobs in
+/// after it — `menger-x.media.db`, `.notes.db`, `.quota.db`, its blobs in
 /// `menger-x.media.blobs/` — so two such servers in one directory share
 /// nothing and `scripts/cleanup-gate.sh x` takes them all; a flag that names
 /// a file still wins (`--ui-db-path` here, `--media-db-path` above).
@@ -177,12 +177,12 @@ async fn a_scratch_server_names_its_files_after_its_database() {
     let dir = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let ui = dir.path().join("named-ui.db");
     let _server = spawn_menger(free_port().await, &dir.path().join("menger-x.db"), &ui_args(&ui)).await;
-    for name in ["menger-x.media.db", "menger-x.docs.db", "menger-x.quota.db"] {
+    for name in ["menger-x.media.db", "menger-x.notes.db", "menger-x.quota.db"] {
         assert!(dir.path().join(name).is_file(), "{name} beside menger-x.db");
     }
     assert!(dir.path().join("menger-x.media.blobs").is_dir(), "the blobs named after it too");
     assert!(ui.is_file(), "--ui-db-path wins");
-    for plain in ["media.db", "docs.db", "quota.db", "ui.db", "menger-x.ui.db", "media"] {
+    for plain in ["media.db", "notes.db", "quota.db", "ui.db", "menger-x.ui.db", "media"] {
         assert!(!dir.path().join(plain).exists(), "{plain}: no file shared with another server, none the flag replaced");
     }
 }

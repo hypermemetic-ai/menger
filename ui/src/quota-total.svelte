@@ -44,7 +44,7 @@
 
   const NAMES = {
     "media.bytes": "files kept", "media.fetch.bytes": "fetched today", "media.fetch.calls": "fetches today",
-    "media.egress.bytes": "served today", "docs.bytes": "documents", "docs.count": "documents made",
+    "media.egress.bytes": "served today", "notes.bytes": "notes", "notes.count": "notes made",
     "tickets.bytes": "tickets", "tickets.count": "tickets made", "questions.count": "questions asked",
     "code.bytes": "code kept",
     "logs.bytes": "log entries",

@@ -1,6 +1,6 @@
 //! LOGS-2: **the logs service** — a log is a typed table made from a JSON
 //! Schema, appended to and read by name, as a service of v2's own beside
-//! `tickets`, `media`, `docs`, `quota` and `code` (V2-1). The owner,
+//! `tickets`, `media`, `notes`, `quota` and `code` (V2-1). The owner,
 //! 2026-11-16: "we give it a json schema and it builds a table for it? then
 //! we can reference those logs dynamically and submit to them."
 //!

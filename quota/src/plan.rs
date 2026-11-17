@@ -146,6 +146,8 @@ impl Plan {
         let known = |s: &str| sources::source(s).map(|_| ()).ok_or_else(|| format!("the plan names `{s}`, which is no source (the sources: {})", sources::names()));
         let mut default = BTreeMap::new();
         for (s, v) in raw.default {
+            // NOTES-3: a source's old name (`docs.bytes`) read as its name now.
+            let s = sources::renamed(&s).to_string();
             known(&s)?;
             let cap = match &v {
                 serde_json::Value::Number(n) => n.as_u64().map(Cap::At).ok_or_else(|| format!("the plan's {s}: {n} is not a whole number"))?,
@@ -154,14 +156,15 @@ impl Plan {
             };
             default.insert(s, cap);
         }
-        for s in raw.concurrent.keys() {
+        let concurrent: BTreeMap<String, u32> = raw.concurrent.into_iter().map(|(s, n)| (sources::renamed(&s).to_string(), n)).collect();
+        for s in concurrent.keys() {
             known(s)?;
         }
         let box_lines = raw.box_lines.unwrap_or_default();
         if !(0.0..=100.0).contains(&box_lines.warn_percent) || !(0.0..=100.0).contains(&box_lines.full_percent) {
             return Err("the plan's box lines are percents, 0 to 100".into());
         }
-        Ok(Plan { name: raw.name, default, concurrent: raw.concurrent, box_lines, hold_secs: raw.hold_secs.unwrap_or(3600).clamp(60, 7 * 86_400) })
+        Ok(Plan { name: raw.name, default, concurrent, box_lines, hold_secs: raw.hold_secs.unwrap_or(3600).clamp(60, 7 * 86_400) })
     }
 
     /// The plan built in (`plans/free-1k.json`).
@@ -194,7 +197,7 @@ mod tests {
         let p = Plan::built_in();
         assert_eq!(p.name, "free-1k");
         assert_eq!(p.default["media.bytes"], Cap::At(2_000_000_000));
-        assert_eq!(p.default["docs.bytes"], Cap::At(200_000_000));
+        assert_eq!(p.default["notes.bytes"], Cap::At(200_000_000));
         assert_eq!(p.default["tickets.bytes"], Cap::At(50_000_000));
         assert_eq!(p.default["media.fetch.calls"], Cap::At(300));
         assert_eq!(p.default["media.fetch.bytes"], Cap::At(200_000_000));

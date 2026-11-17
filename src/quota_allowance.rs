@@ -65,16 +65,16 @@ impl menger_media::Allowance for Metered {
     }
 }
 
-/// V2-31: **the docs service's meter is the quota service** too (V2-29's
-/// `menger_docs::Quota`, called inside the store's blocking work):
-/// `docs.bytes` for every change a principal writes, `docs.count` for every
-/// document made, each reserved before the change is kept and committed
+/// V2-31: **the notes service's meter is the quota service** too (V2-29's
+/// `menger_notes::Quota`, called inside the store's blocking work):
+/// `notes.bytes` for every change a principal writes, `notes.count` for every
+/// note made, each reserved before the change is kept and committed
 /// after. Its calls are synchronous; the quota service's are asked on a
 /// thread of their own, the runtime's handle blocking on them.
 #[derive(Clone, Debug)]
-pub struct DocsMetered(pub MeterSlot);
+pub struct NotesMetered(pub MeterSlot);
 
-impl DocsMetered {
+impl NotesMetered {
     fn wait<F: std::future::Future + Send>(f: F) -> Option<F::Output>
     where
         F::Output: Send,
@@ -83,40 +83,40 @@ impl DocsMetered {
         std::thread::scope(|s| s.spawn(move || h.block_on(f)).join().ok())
     }
 
-    fn hold(&self, author: &str, source: &str, amount: u64) -> Result<menger_docs::quota::Reserved, String> {
+    fn hold(&self, author: &str, source: &str, amount: u64) -> Result<menger_notes::quota::Reserved, String> {
         let meter = self.0.get();
         match Self::wait(meter.reserve(author, source, amount)) {
-            Some(Ok(h)) => Ok(menger_docs::quota::Reserved { author: author.to_string(), bytes: amount, hold: h.ticket }),
+            Some(Ok(h)) => Ok(menger_notes::quota::Reserved { author: author.to_string(), bytes: amount, hold: h.ticket }),
             Some(Err(r)) => Err(r.to_string()),
             // No runtime to ask on (a test's store): nothing is held.
-            None => Ok(menger_docs::quota::Reserved { author: author.to_string(), bytes: amount, hold: None }),
+            None => Ok(menger_notes::quota::Reserved { author: author.to_string(), bytes: amount, hold: None }),
         }
     }
 }
 
-impl menger_docs::quota::Quota for DocsMetered {
-    fn reserve(&self, author: &str, bytes: u64) -> Result<menger_docs::quota::Reserved, String> {
-        self.hold(author, "docs.bytes", bytes)
+impl menger_notes::quota::Quota for NotesMetered {
+    fn reserve(&self, author: &str, bytes: u64) -> Result<menger_notes::quota::Reserved, String> {
+        self.hold(author, "notes.bytes", bytes)
     }
-    fn reserve_count(&self, author: &str) -> Result<menger_docs::quota::Reserved, String> {
-        self.hold(author, "docs.count", 1)
+    fn reserve_count(&self, author: &str) -> Result<menger_notes::quota::Reserved, String> {
+        self.hold(author, "notes.count", 1)
     }
     /// V2-39: `questions.count`, one per question asked; refused with its reason.
-    fn reserve_question(&self, author: &str) -> Result<menger_docs::quota::Reserved, menger_docs::quota::Refused> {
+    fn reserve_question(&self, author: &str) -> Result<menger_notes::quota::Reserved, menger_notes::quota::Refused> {
         let meter = self.0.get();
         match Self::wait(meter.reserve(author, "questions.count", 1)) {
-            Some(Ok(h)) => Ok(menger_docs::quota::Reserved { author: author.to_string(), bytes: 1, hold: h.ticket }),
-            Some(Err(r)) => Err(menger_docs::quota::Refused { reason: reason_of(&r).to_string(), message: format!("{}: {r}", reason_of(&r)) }),
-            None => Ok(menger_docs::quota::Reserved { author: author.to_string(), bytes: 1, hold: None }),
+            Some(Ok(h)) => Ok(menger_notes::quota::Reserved { author: author.to_string(), bytes: 1, hold: h.ticket }),
+            Some(Err(r)) => Err(menger_notes::quota::Refused { reason: reason_of(&r).to_string(), message: format!("{}: {r}", reason_of(&r)) }),
+            None => Ok(menger_notes::quota::Reserved { author: author.to_string(), bytes: 1, hold: None }),
         }
     }
-    fn release(&self, reserved: menger_docs::quota::Reserved) {
+    fn release(&self, reserved: menger_notes::quota::Reserved) {
         if let Some(t) = reserved.hold {
             let meter = self.0.get();
             Self::wait(meter.release(Hold { ticket: Some(t), remaining: None }));
         }
     }
-    fn commit(&self, reserved: menger_docs::quota::Reserved) {
+    fn commit(&self, reserved: menger_notes::quota::Reserved) {
         if let Some(t) = reserved.hold {
             let meter = self.0.get();
             Self::wait(meter.commit(Hold { ticket: Some(t), remaining: None }, None));
@@ -128,8 +128,8 @@ impl menger_docs::quota::Quota for DocsMetered {
     fn moved(&self, author: &str, delta: i64) {
         let meter = self.0.get();
         if delta < 0 {
-            Self::wait(meter.credit(author, "docs.bytes", delta.unsigned_abs()));
-        } else if let Ok(h) = self.hold(author, "docs.bytes", delta as u64) {
+            Self::wait(meter.credit(author, "notes.bytes", delta.unsigned_abs()));
+        } else if let Ok(h) = self.hold(author, "notes.bytes", delta as u64) {
             if let Some(t) = h.hold {
                 Self::wait(meter.commit(Hold { ticket: Some(t), remaining: None }, None));
             }

@@ -1,19 +1,19 @@
-//! **The seam** — the docs service as a client of the service it is
+//! **The seam** — the notes service as a client of the service it is
 //! mounted beside (V2-1; the media service's `seam.rs` is the pattern). The
 //! running service is built after this activation is, so the activation
 //! holds an empty [`Seam`] the builder fills ([`Seam::attach`]).
 //!
 //! Two questions go through it, never through another service's file:
-//! **may this caller do this to a document of `acme`** — the gate's word,
-//! the method's grant (`docs.save`) asked on the organization's scope
+//! **may this caller do this to a note of `acme`** — the gate's word,
+//! the method's grant (`notes.save`) asked on the organization's scope
 //! (`acme:`), within the session's ceiling ([`Seam::holds`]); and **which
 //! organizations is it in** — `orgs.list`, asked of the tickets service as
 //! the caller ([`Seam::orgs`]).
 //!
 //! The media service is a client of this one the same way: [`may`] asks
-//! `docs.may` as the caller before it keeps an image for a document.
+//! `notes.may` as the caller before it keeps an image for a note.
 
-use crate::{DocsClient, DocsEvent};
+use crate::{NotesClient, NotesEvent};
 use futures::TryStreamExt;
 use menger_tickets_api::members::Role;
 use menger_tickets_api::{OrgsClient, OrgsEvent};
@@ -34,14 +34,14 @@ impl std::fmt::Debug for Seam {
     }
 }
 
-/// The grant a role's question about a document is asked as: a viewer
-/// reads (`docs.get`), an editor writes (`docs.save`), an admin deletes
-/// (`docs.delete`). Any other role holds nothing of a document.
+/// The grant a role's question about a note is asked as: a viewer
+/// reads (`notes.get`), an editor writes (`notes.save`), an admin deletes
+/// (`notes.delete`). Any other role holds nothing of a note.
 pub fn grant_of(role: Role) -> Option<&'static str> {
     match role {
-        Role::Viewer => Some("docs.get"),
-        Role::Editor => Some("docs.save"),
-        Role::Admin => Some("docs.delete"),
+        Role::Viewer => Some("notes.get"),
+        Role::Editor => Some("notes.save"),
+        Role::Admin => Some("notes.delete"),
         _ => None,
     }
 }
@@ -57,12 +57,12 @@ impl Seam {
         self.at.get().and_then(Weak::upgrade)
     }
 
-    /// Whether `caller` holds `grant` (`docs.save`) on the organization
+    /// Whether `caller` holds `grant` (`notes.save`) on the organization
     /// `org`, as the gate answers it now — through a role held on `org:`
     /// or on `*`, within the session's ceiling. A service with no gate
     /// holds everything open. `Err`: not attached.
     pub fn holds(&self, caller: &AuthContext, grant: &str, org: &str) -> Result<bool, String> {
-        let service = self.service().ok_or("the docs service is not attached to a running service")?;
+        let service = self.service().ok_or("the notes service is not attached to a running service")?;
         Ok(match service.gate() {
             None => true,
             Some(gate) => gate.check(Some(caller), &Grant::new(grant), Some(&format!("{org}:"))).is_ok(),
@@ -78,7 +78,7 @@ impl Seam {
     /// The organizations `caller` is in, in the order they were made —
     /// `orgs.list` asked as the caller, the tickets service's word.
     pub async fn orgs(&self, caller: &AuthContext) -> Result<Vec<String>, String> {
-        let service = self.service().ok_or("the docs service is not attached to a running service")?;
+        let service = self.service().ok_or("the notes service is not attached to a running service")?;
         let orgs = OrgsClient::new(HubTransport::as_(service, caller.clone()));
         match orgs.list().try_collect::<Vec<_>>().await {
             Ok(events) => {
@@ -97,31 +97,31 @@ impl Seam {
     }
 }
 
-/// What the docs service answered a `may`.
+/// What the notes service answered a `may`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Answer {
-    /// The caller reads the document and holds the role on it: its id.
+    /// The caller reads the note and holds the role on it: its id.
     Held(String),
     /// The caller reads it and does not hold the role.
     NotHeld,
-    /// No such document in the caller's reach (not there and not theirs, one answer).
+    /// No such note in the caller's reach (not there and not theirs, one answer).
     NotFound,
 }
 
-/// `docs.may { id, role }` through `service` as `caller` — the media
-/// service's question before it keeps an image for a document, or answers
+/// `notes.may { id, role }` through `service` as `caller` — the media
+/// service's question before it keeps an image for a note, or answers
 /// one. `Err`: the call itself failed, in words.
 pub async fn may(service: Arc<DynamicHub>, caller: AuthContext, id: &str, role: Role) -> Result<Answer, String> {
-    let doc: crate::DocId = id.parse()?;
-    let docs = DocsClient::new(HubTransport::as_(service, caller));
-    match docs.may(doc, role).try_collect::<Vec<_>>().await {
+    let doc: crate::NoteId = id.parse()?;
+    let notes = NotesClient::new(HubTransport::as_(service, caller));
+    match notes.may(doc, role).try_collect::<Vec<_>>().await {
         Ok(events) => match events.as_slice() {
-            [DocsEvent::May { id, held: true, .. }] => Ok(Answer::Held(id.clone())),
-            [DocsEvent::May { held: false, .. }] => Ok(Answer::NotHeld),
-            [DocsEvent::NotFound { .. }] => Ok(Answer::NotFound),
-            [DocsEvent::Error { message }] => Err(format!("docs.may: {message}")),
-            other => Err(format!("docs.may answered {other:?}")),
+            [NotesEvent::May { id, held: true, .. }] => Ok(Answer::Held(id.clone())),
+            [NotesEvent::May { held: false, .. }] => Ok(Answer::NotHeld),
+            [NotesEvent::NotFound { .. }] => Ok(Answer::NotFound),
+            [NotesEvent::Error { message }] => Err(format!("notes.may: {message}")),
+            other => Err(format!("notes.may answered {other:?}")),
         },
-        Err(e) => Err(format!("docs.may through the seam: {e}")),
+        Err(e) => Err(format!("notes.may through the seam: {e}")),
     }
 }

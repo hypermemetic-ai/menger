@@ -16,6 +16,9 @@ mod builder;
 /// COMPS-5: every definition the store holds registered in plexus-ui as the server starts.
 pub mod backfill;
 
+/// NOTES-3: what the docs service kept, moved to the notes service's names at the first start.
+pub mod notes_move;
+
 /// SCAFFOLD-3: menger's side of plexus-login's seam — `MengerAccess`
 /// (the `LoginAccess` impl over `Access`), `SessionTable`, `offer`.
 pub mod login_access;
@@ -90,8 +93,8 @@ pub use menger_tickets_api::store;
 pub use menger_tickets_api::{MembersActivation, MembersClient, OrgsActivation, SessionActivation, SessionClient, TicketsActivation, TicketsClient};
 
 pub use builder::{
-    build_rpc, build_rpc_login, build_rpc_offering, build_rpc_seeded, build_rpc_services, build_rpc_ui, build_rpc_ui_over, build_rpc_with, default_db_path, default_docs_db_path, default_media_blob_dir, default_media_db_path, media_blobs, sibling_db_path, DATA_DIR_DB_FILES,
-    default_quota_db_path, default_ui_channel, default_ui_db_path, sessions_file, DocsSetup, MediaSetup, QuotaSetup, UiSetup, SESSIONS_FILE, SIGNED_IN_GRANTS,
+    build_rpc, build_rpc_login, build_rpc_offering, build_rpc_seeded, build_rpc_services, build_rpc_ui, build_rpc_ui_over, build_rpc_with, default_db_path, default_notes_db_path, default_media_blob_dir, default_media_db_path, media_blobs, sibling_db_path, DATA_DIR_DB_FILES,
+    default_quota_db_path, default_ui_channel, default_ui_db_path, sessions_file, NotesSetup, MediaSetup, QuotaSetup, UiSetup, SESSIONS_FILE, SIGNED_IN_GRANTS,
     default_code_blob_dir, default_code_db_path, CodeSetup,
     default_logs_db_path, LogsSetup,
 };

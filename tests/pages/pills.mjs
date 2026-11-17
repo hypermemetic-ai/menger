@@ -176,16 +176,16 @@ graph TD
     const ids = summaries("--limit", "200", "--fields", "id,title,kind,status").map((s) => s.id).filter((id) => !id.includes(".")).slice(0, 60);
     assert(ids.length === 60, `sixty tickets to name: ${ids.length}`);
     const text = ids.slice(0, 10).map((id, k) => `Paragraph ${k + 1} names ${id}.`).join("\n\n") + "\n\n| # | ticket |\n| -- | -- |\n" + ids.map((id, k) => `| ${k + 1} | ${id} |`).join("\n") + "\n";
-    const docId = sy("docs", "create", "--title", "sixty names", "--body", bodyFile("sixty", text)).find((e) => e.type === "created")?.doc.id;
+    const docId = sy("notes", "create", "--title", "sixty names", "--body", bodyFile("sixty", text)).find((e) => e.type === "created")?.note.id;
     // The same page with one id: the watches it holds are the page's own, and sixty ids hold no more.
-    const oneId = sy("docs", "create", "--title", "one name", "--body", bodyFile("one", `Names ${ids[0]}.\n`)).find((e) => e.type === "created")?.doc.id;
+    const oneId = sy("notes", "create", "--title", "one name", "--body", bodyFile("one", `Names ${ids[0]}.\n`)).find((e) => e.type === "created")?.note.id;
     const watchesOf = async (page) => (await sentCalls(page)).filter((x) => x.method === "tickets.watch").length;
-    const one = await openPage(`#/doc/${oneId}`);
+    const one = await openPage(`#/note/${oneId}`);
     await eventually("one pill", async () => (await one.page.locator("[data-surface=editor-body] a.tpill[data-pill]").count()) === 1, 15_000);
     await sleep(400);
     const w1 = await watchesOf(one.page);
     await one.context.close();
-    const { context, page } = await openPage(`#/doc/${docId}`);
+    const { context, page } = await openPage(`#/note/${docId}`);
     try {
       const scope = "[data-surface=editor-body]";
       await eventually("seventy pills", async () => (await page.locator(`${scope} a.tpill[data-pill]`).count()) === 70, 15_000);
@@ -202,7 +202,7 @@ graph TD
   });
 
   await test("a_ticket_and_a_doc_with_one_body_draw_the_same", async () => {
-    const docId = sy("docs", "create", "--title", "the same names", "--body", bodyFile("same", BODY)).find((e) => e.type === "created")?.doc.id;
+    const docId = sy("notes", "create", "--title", "the same names", "--body", bodyFile("same", BODY)).find((e) => e.type === "created")?.note.id;
     /** Each drawn block's HTML, Svelte's anchors and a bound mark's fill aside. */
     const drawnHtml = (page, scope) => page.locator(`${scope} .blk`).evaluateAll((els) => els.map((e) => {
       const c = e.cloneNode(true);
@@ -218,7 +218,7 @@ graph TD
     const t = await ticketPage(host);
     const asTicket = await settle(t.page, "[data-surface=ticket-body]");
     await t.context.close();
-    const d = await openPage(`#/doc/${docId}`);
+    const d = await openPage(`#/note/${docId}`);
     try {
       const asDoc = await settle(d.page, "[data-surface=editor-body]");
       assert(asTicket.length === asDoc.length && asTicket.length > 5, `as many blocks: ${asTicket.length} · ${asDoc.length}`);
@@ -272,9 +272,9 @@ graph TD
 
   await test("a_margin_question_draws_its_ids_as_pills", async () => {
     const text = "The kiln fires twice a week.\n";
-    const docId = sy("docs", "create", "--title", "asked about", "--body", bodyFile("margin", text)).find((e) => e.type === "created")?.doc.id;
-    sy("docs", "ask", "--id", docId, "--from", "4", "--to", "8", "--text", `Is this ${a}, or \`${b}\`?`);
-    const { context, page } = await openPage(`#/doc/${docId}`);
+    const docId = sy("notes", "create", "--title", "asked about", "--body", bodyFile("margin", text)).find((e) => e.type === "created")?.note.id;
+    sy("notes", "ask", "--id", docId, "--from", "4", "--to", "8", "--text", `Is this ${a}, or \`${b}\`?`);
+    const { context, page } = await openPage(`#/note/${docId}`);
     try {
       const card = page.locator("[data-field=margin] [data-thread] .md").first();
       await eventually("the question's id is a pill", async () => (await card.locator(`a.tpill[data-pill="${a}"]`).count()) === 1, 15_000);

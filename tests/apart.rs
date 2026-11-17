@@ -501,9 +501,9 @@ fn nothing_reads_the_moved_paths() {
 /// menger's own packages: the workspace's members, and nothing else of the
 /// graph under its root.
 /// V2-24: the media service is menger's own crate, as the tickets service is.
-/// V2-29: and the docs service. V2-31: and the quota service. CODE-2: and
+/// V2-29: and the notes service (NOTES-3: the docs service renamed). V2-31: and the quota service. CODE-2: and
 /// the code service. LOGS-2: and the logs service.
-const OWN: &[&str] = &["menger", "menger-code", "menger-docs", "menger-logs", "menger-media", "menger-quota", "menger-tickets-api"];
+const OWN: &[&str] = &["menger", "menger-code", "menger-logs", "menger-media", "menger-notes", "menger-quota", "menger-tickets-api"];
 
 /// What the graph `pkgs` (with `members`, the workspace's member names)
 /// breaks of FRAME-7's first row: the members are exactly [`OWN`], no
@@ -790,14 +790,14 @@ fn the_checks_read_what_they_are_given() {
     // FRAME-7: the tenant's graph — members exactly menger's own (V2-24: three; V2-29: four; V2-31: five; CODE-2: six; LOGS-2: seven), nothing
     // else under its root, no ui crate under menger's name anywhere.
     let m = Path::new("/w/menger");
-    let own = |n: &str| (n.to_string(), PathBuf::from(format!("/w/menger/{}", match n { "menger" => "", "menger-media" => "media", "menger-docs" => "docs", "menger-quota" => "quota", "menger-code" => "code", "menger-logs" => "logs", _ => "tickets-api" })));
-    let members = [String::from("menger-tickets-api"), String::from("menger"), String::from("menger-media"), String::from("menger-docs"), String::from("menger-quota"), String::from("menger-code"), String::from("menger-logs")];
-    assert!(tenant_breaks(&[own("menger"), own("menger-tickets-api"), own("menger-media"), own("menger-docs"), own("menger-quota"), own("menger-code"), own("menger-logs"), pkgs[2].clone()], &members, m).is_empty());
+    let own = |n: &str| (n.to_string(), PathBuf::from(format!("/w/menger/{}", match n { "menger" => "", "menger-media" => "media", "menger-notes" => "notes", "menger-quota" => "quota", "menger-code" => "code", "menger-logs" => "logs", _ => "tickets-api" })));
+    let members = [String::from("menger-tickets-api"), String::from("menger"), String::from("menger-media"), String::from("menger-notes"), String::from("menger-quota"), String::from("menger-code"), String::from("menger-logs")];
+    assert!(tenant_breaks(&[own("menger"), own("menger-tickets-api"), own("menger-media"), own("menger-notes"), own("menger-quota"), own("menger-code"), own("menger-logs"), pkgs[2].clone()], &members, m).is_empty());
     let extra = [own("menger"), ("menger-ui-kit".to_string(), PathBuf::from("/w/elsewhere/kit")), ("plexus-ui-service".to_string(), PathBuf::from("/w/menger/vendor/s"))];
     assert_eq!(
         tenant_breaks(&extra, &members[..1], m),
         [
-            "the workspace's members are [\"menger-tickets-api\"], not [\"menger\", \"menger-code\", \"menger-docs\", \"menger-logs\", \"menger-media\", \"menger-quota\", \"menger-tickets-api\"]".to_string(),
+            "the workspace's members are [\"menger-tickets-api\"], not [\"menger\", \"menger-code\", \"menger-logs\", \"menger-media\", \"menger-notes\", \"menger-quota\", \"menger-tickets-api\"]".to_string(),
             "menger-ui-kit: a ui crate under menger's name (/w/elsewhere/kit)".to_string(),
             "plexus-ui-service: a package of menger's own (/w/menger/vendor/s)".to_string(),
         ]
@@ -2154,7 +2154,8 @@ fn the_tokens_are_whole() {
 /// `page-<name>`, `ui/src/page-<name>.svelte`), the routes that draw it and
 /// the components it places (`import Head from "plexus-ui:ticket-head"`, a
 /// bound mark the host fills). The first ten are the app's pages (EDITOR-4:
-/// `page-editor` at `#/`, V2-29: a doc at `#/doc/:doc`; the board at
+/// `page-editor` at `#/`, V2-29, NOTES-3: a note at `#/note/:note` (and at
+/// `#/doc/:doc`, its link before); the board at
 /// `#/board`) and carry the app's top (`<div data-slot="top">`, app-top by
 /// `slots.json`) and the palette its jump button opens (`<div
 /// data-slot="palette">`, jump-palette-sv); the rest draw one component
@@ -2162,7 +2163,7 @@ fn the_tokens_are_whole() {
 /// `page-me` (`#/me`) went with the `epics` activation and the owner's call
 /// on `session`'s page.
 const PAGES: [(&str, &[&str], &[&str]); 16] = [
-    ("page-editor", &["#/", "#/edit/:id", "#/doc/:doc"], &["editor-screen"]),
+    ("page-editor", &["#/", "#/edit/:id", "#/note/:note", "#/doc/:doc"], &["editor-screen"]),
     ("page-ticket", &["#/ticket/:id", "#/sv/ticket/:id"], &["ticket-head", "ticket-body", "ticket-edit", "ticket-relations", "ticket-actions", "ticket-commits", "ticket-history", "ticket-revisions"]),
     ("page-new", &["#/new", "#/new/:parent"], &["ticket-create"]),
     ("page-search", &["#/search", "#/search/:q", "#/search/:q/f/:filter"], &["search-page"]),

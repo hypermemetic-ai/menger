@@ -1,7 +1,7 @@
 <!-- V2-70: consumption over time (#/usage, and the whole system's on it for an admin of `*`), svelte/1 —
      `quota.history { principal?, everyone?, days }`: a `point { day, source, used, estimate }` per
      source per UTC day, then `end`. Two charts, never a second axis (the dataviz skill's method):
-     what is stored — a line per source (files, tickets, documents) at each day's end — and what a
+     what is stored — a line per source (files, tickets, notes) at each day's end — and what a
      day fetched and served, each its own scale. One row above both: the range (30 d · 90 d · 1 y)
      and the table view of the same points. A crosshair finds the day; its tooltip lists every
      series (keyboard: focus a chart, ← →). Colours: --chart-1..3, in a fixed order (theme.toml).
@@ -22,7 +22,7 @@
 
   const RANGES = [[30, "30 d"], [90, "90 d"], [365, "1 y"]];
   const CHARTS = [
-    { id: "stored", title: "stored", sub: "what is kept, at each day's end", series: [["media.bytes", "files", 1], ["tickets.bytes", "tickets", 2], ["docs.bytes", "documents", 3]] },
+    { id: "stored", title: "stored", sub: "what is kept, at each day's end", series: [["media.bytes", "files", 1], ["tickets.bytes", "tickets", 2], ["notes.bytes", "notes", 3]] },
     { id: "day", title: "fetched and served", sub: "each UTC day's total", series: [["media.fetch.bytes", "fetched", 1], ["media.egress.bytes", "served", 2]] },
   ];
   /** The table's columns: every chart's series, then the day's fetches (a count, on no chart). */

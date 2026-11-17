@@ -7,14 +7,14 @@
        opens it large (EDITOR-31's image-zoom: the grid is `data-zoomable`);
      - any other kind as its card: the kind, its name, its size (media-draw's `size`), a download;
      - under each, where it is used: a ticket by the one link helper (ticket-links' `ticketHref`), a
-       document by `#/doc/<id>`.
+       note by `#/note/<id>`.
 
      Chips filter by kind (`media.list --kind`); a page is 48 files, the next asked with `after` when the
      end of the grid scrolls into view, or on "more".
      Marks: `[data-surface=media-page]`, the chips `[data-kind-chip=all|image|video|audio|pdf|file]`
      (`aria-pressed`), the grid `[data-media-grid][data-zoomable]`, a file `[data-hash][data-kind]` with
      `[data-field=name|size|kind]`, `img[data-thumb]`, `[data-action=download]`, its owners
-     `[data-owner=ticket|doc][data-id]`; `[data-action=more]`, `[data-empty]`, `[data-refused]`,
+     `[data-owner=ticket|note][data-id]`; `[data-action=more]`, `[data-empty]`, `[data-refused]`,
      `[data-loading]`. `sheet` = "loading" draws the skeleton and asks nothing. -->
 <script module>
   export const uses = ["media.list"];
@@ -97,7 +97,7 @@
   <div data-slot="top" data-here="media"></div>
   <header class="page-title">
     <h1>media</h1>
-    <span class="sub">every file kept for a ticket or a document you can read</span>
+    <span class="sub">every file kept for a ticket or a note you can read</span>
   </header>
   <div class="media-page" data-surface="media-page" data-status={sheet === "loading" ? "pending" : status}>
     <div class="chips" role="group" aria-label="kind">
@@ -131,7 +131,7 @@
               <span class="meta"><time datetime={when(r.at)}>{when(r.at)}</time>{#if r.width && r.height} · {r.width}×{r.height}{/if}</span>
               <span class="owners">
                 {#each r.tickets as id (id)}<a class="owner" data-owner="ticket" data-id={id} href={ticketHref({ id })}>{id}</a>{/each}
-                {#each r.docs as id (id)}<a class="owner doc" data-owner="doc" data-id={id} href={`#/doc/${id}`}>doc {id}</a>{/each}
+                {#each r.notes as id (id)}<a class="owner note" data-owner="note" data-id={id} href={`#/note/${id}`}>note {id}</a>{/each}
               </span>
             </figcaption>
           </figure>

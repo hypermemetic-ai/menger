@@ -276,13 +276,13 @@ export default async (ctx) => {
 
   // EDITOR-24: a document is written on the same editor, so the writer saves there too — into the doc's text.
   await test("in_a_document_it_saves_into_the_document", async () => {
-    const docId = sy("docs", "create", "--title", "a writer in a document", "--body", `@${bodyFile(BODY)}`).find((e) => e.type === "created")?.doc.id;
+    const docId = sy("notes", "create", "--title", "a writer in a document", "--body", `@${bodyFile(BODY)}`).find((e) => e.type === "created")?.note.id;
     assert(docId, "the doc made");
-    const { context, page } = await openPage(`#/doc/${docId}`);
+    const { context, page } = await openPage(`#/note/${docId}`);
     try {
       const tw = page.locator("[data-surface=tweet-writer]");
       await eventually("drawn in the document", async () => (await tw.count()) === 1 && (await tw.locator("[data-post]").count()) === 2, 20_000);
-      assert((await tw.getAttribute("data-where")) === "doc", "told it is in a document");
+      assert((await tw.getAttribute("data-where")) === "note", "told it is in a note");
       assert((await tw.locator("[data-field=note]").count()) === 0 && (await tw.locator("[data-action=save]").count()) === 1, "it saves here");
       await tw.evaluate((e) => { e.dataset.same = "yes"; });
       const box = tw.locator("[data-post='2'] [data-field=text]");
@@ -293,14 +293,14 @@ export default async (ctx) => {
       await eventually("the doc's text holds it", async () => (await text()) === BODY.replace("after a blank line.", "after a blank line. In the doc."), 8_000)
         .catch(async () => { throw new Error(`the doc: ${JSON.stringify(await text())}`); });
       await eventually("the writer says saved", async () => (await tw.locator("[data-field=state]").getAttribute("data-state")) === "saved");
-      await eventually("sent to the docs service", async () => (await sentCalls(page)).some((c) => c.method === "docs.update"), 5_000);
+      await eventually("sent to the notes service", async () => (await sentCalls(page)).some((c) => c.method === "notes.update"), 5_000);
       assert((await tw.getAttribute("data-same")) === "yes" && (await box.evaluate((e) => document.activeElement === e)), "never drawn again, the focus kept");
       assert(!(await sentCalls(page)).some((c) => c.method === "tickets.amend"), "no ticket written");
     } finally {
       await context.close();
     }
     // Opened again: the words are the document's.
-    const again = await openPage(`#/doc/${docId}`);
+    const again = await openPage(`#/note/${docId}`);
     try {
       const tw = again.page.locator("[data-surface=tweet-writer]");
       await eventually("kept", async () => (await tw.count()) === 1 && (await tw.locator("[data-post='2'] [data-field=text]").inputValue()).endsWith("after a blank line. In the doc."), 20_000);

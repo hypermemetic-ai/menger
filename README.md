@@ -13,7 +13,7 @@ versioned by content hash and drawn by a small engine. SV-4: rhx (Rhai in
 markup, `rhx/1`) is retired from menger's UI — its sources are kept in
 `ui/retired-rhx/`, out of the bundle.
 
-v1 is tag `v0.0.1`; what v2 cut — the chats, comments, deployments, themes, notes, assignees and components, the Leptos app (trunk) with the frames' SDK (sdk-codegen) and mockups, the diagrams service — lives there. Media came back as a service of its own (V2-24, "The services"), and documents have a service of their own (V2-29, `docs`). Every input is held to a per-user allowance by the quota service (V2-31). Public GitHub repositories are read through a service of menger's own, `code` (CODE-2), and structured facts — a benchmark's results first — are kept in typed tables made from a JSON Schema by another, `logs` (LOGS-2).
+v1 is tag `v0.0.1`; what v2 cut — the chats, comments, deployments, themes, v1's notes, assignees and components, the Leptos app (trunk) with the frames' SDK (sdk-codegen) and mockups, the diagrams service — lives there. Media came back as a service of its own (V2-24, "The services"), and documents have a service of their own (V2-29) — notes since NOTES-3 (`notes`). Every input is held to a per-user allowance by the quota service (V2-31). Public GitHub repositories are read through a service of menger's own, `code` (CODE-2), and structured facts — a benchmark's results first — are kept in typed tables made from a JSON Schema by another, `logs` (LOGS-2).
 
 ## Run
 
@@ -138,15 +138,15 @@ synapse -P 4460 menger tickets health
 ```
 
 **Every file of a server is named after its database** (SCRATCH-NAMES).
-The ui, media, docs, quota, code and logs services each keep a file beside the
+The ui, media, notes, quota, code and logs services each keep a file beside the
 database unless its flag (`--ui-db-path`, `--media-db-path`,
-`--docs-db-path`, `--quota-db-path`, `--code-db-path`, `--logs-db-path`) names another. Beside a database
+`--notes-db-path`, `--quota-db-path`, `--code-db-path`, `--logs-db-path`) names another. Beside a database
 named as a data directory's — `tickets.db` (prod, test, the image) or
-`local.db` (a local start) — they are `ui.db`, `media.db`, `docs.db`,
+`local.db` (a local start) — they are `ui.db`, `media.db`, `notes.db`,
 `quota.db`, `code.db`, `logs.db`, the media's bytes in `media/blobs/` and the code's in
 `code/blobs/`; beside any other, they
 carry the database's stem: `/tmp/menger-dev.db` → `/tmp/menger-dev.ui.db`,
-`.media.db`, `.docs.db`, `.quota.db`, `.code.db`, `.logs.db`, `/tmp/menger-dev.media.blobs/`
+`.media.db`, `.notes.db`, `.quota.db`, `.code.db`, `.logs.db`, `/tmp/menger-dev.media.blobs/`
 and `/tmp/menger-dev.code.blobs/`, as
 its sessions are `/tmp/menger-dev.sessions.jsonl`. So two dev servers in
 one directory share no file, and `scripts/cleanup-gate.sh dev` takes all of
@@ -212,7 +212,7 @@ on the app's origin (`http://127.0.0.1:4456/mcp` here,
 `--no-mcp` / `MENGER_NO_MCP` turns it off), served through
 plexus-transport-mcp's bridge mounted behind the same login. Its tools are
 every method of every service registered — `tickets`, `members`, `orgs`,
-`ui`, `media`, `docs`, `quota`, `auth`, `session` — as the caller may see
+`ui`, `media`, `notes`, `quota`, `auth`, `session` — as the caller may see
 them. Every `tools/call` goes through the gate as the caller the request's
 Bearer names — an agent's session, or a token an `--auth-provider` admits,
 exactly what the WebSocket takes — and `tools/list` is that caller's view; a
@@ -309,7 +309,7 @@ where it has one (a list in it is `;`-separated).
 
 | group | flags |
 |---|---|
-| run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path` (`ui.db` beside the database — named after it beside one not named `tickets.db` or `local.db`, `menger-dev.ui.db`; so every file below, SCRATCH-NAMES), `--ui-signer`, `--ui-compiler`, `--ui-allow-rhx` (SV-6: rhx/1 taken again — without it every `ui.push` and `ui.author` carrying an rhx component is refused `rhx_disabled`, naming it; `MENGER_UI_ALLOW_RHX`), `--ui-author-key`, `--media-db-path` (`media.db` beside the database), `--media-store` (`disk`), `--media-blob-dir` (`media/blobs` beside `media.db`; `<stem>.media.blobs` beside a `<stem>.media.db`), `--media-max-bytes`, `--docs-db-path` (`docs.db` beside the database), `--quota-db-path` (`quota.db` beside the database), `--quota-plan` (the defaults a new quota file starts from; the built-in `free-1k`), `--code-db-path` (CODE-2: `code.db` beside the database; `MENGER_CODE_DB_PATH`), `--code-blob-dir` (`code/blobs` beside `code.db`; `<stem>.code.blobs` beside a `<stem>.code.db`; `MENGER_CODE_BLOB_DIR`), `--code-max-bytes` (what the code service keeps at most, 5 GiB; past it the commit read longest ago goes; `MENGER_CODE_MAX_BYTES`), `--logs-db-path` (LOGS-2: `logs.db` beside the database; `MENGER_LOGS_DB_PATH`), `--ui-channel` (UI-15: the live pointer this environment serves in its ui file; default from `--env`: `test`, `prod`, else `default`), `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell`, `--no-mcp` (V2-43: no `/mcp`), `--child NAME=stdio:CMD` or `NAME=ws://…` (POLYGLOT-5: an activation in another process mounted under NAME behind the gate; repeatable; `--child-timeout`, `--child-max-calls`, `--child-env`, `--child-key`: plexus-core's `ChildArgs`; one that does not answer stops the start, exit 2; NAME a service of menger's own is refused) |
+| run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path` (`ui.db` beside the database — named after it beside one not named `tickets.db` or `local.db`, `menger-dev.ui.db`; so every file below, SCRATCH-NAMES), `--ui-signer`, `--ui-compiler`, `--ui-allow-rhx` (SV-6: rhx/1 taken again — without it every `ui.push` and `ui.author` carrying an rhx component is refused `rhx_disabled`, naming it; `MENGER_UI_ALLOW_RHX`), `--ui-author-key`, `--media-db-path` (`media.db` beside the database), `--media-store` (`disk`), `--media-blob-dir` (`media/blobs` beside `media.db`; `<stem>.media.blobs` beside a `<stem>.media.db`), `--media-max-bytes`, `--notes-db-path` (`notes.db` beside the database; NOTES-3: a `docs.db` there and no `notes.db` is moved to it at start, a link left at the old name), `--quota-db-path` (`quota.db` beside the database), `--quota-plan` (the defaults a new quota file starts from; the built-in `free-1k`), `--code-db-path` (CODE-2: `code.db` beside the database; `MENGER_CODE_DB_PATH`), `--code-blob-dir` (`code/blobs` beside `code.db`; `<stem>.code.blobs` beside a `<stem>.code.db`; `MENGER_CODE_BLOB_DIR`), `--code-max-bytes` (what the code service keeps at most, 5 GiB; past it the commit read longest ago goes; `MENGER_CODE_MAX_BYTES`), `--logs-db-path` (LOGS-2: `logs.db` beside the database; `MENGER_LOGS_DB_PATH`), `--ui-channel` (UI-15: the live pointer this environment serves in its ui file; default from `--env`: `test`, `prod`, else `default`), `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell`, `--no-mcp` (V2-43: no `/mcp`), `--child NAME=stdio:CMD` or `NAME=ws://…` (POLYGLOT-5: an activation in another process mounted under NAME behind the gate; repeatable; `--child-timeout`, `--child-max-calls`, `--child-env`, `--child-key`: plexus-core's `ChildArgs`; one that does not answer stops the start, exit 2; NAME a service of menger's own is refused) |
 | sign-in | `--auth-provider`, `--admin`, `--public-url`, `--login-button`, `--login-email`, `--login-password`, `--login-forgot`, `--identity`, `--workos-api-key-file`, `--allowed-origin`, `--frame-ancestor` (an origin that may frame the shell's pages; none by default), `--live-origin` (an origin the shell's pages may frame), `--allowed-host`, `--trusted-proxy`, `--return-origin`, `--session-hours` (12), `--session-idle-minutes` (120), `--mcp-authorization-server` (V2-43: `/mcp` a protected resource naming it) |
 | maintenance and testing | `--dev-login`, `--dev-password`, `--dev-idp-ws`, `--dev-user` (all `--env test` only), `--verify-derived`, `--seed-synthetic`, `--seed-value`, `--seed-shape` (`flat`, `nested`), `--seed-into-existing` |
 | limits | `--max-body-bytes` (8 MiB), `--max-message-bytes` (32 MiB; V2-54: one socket message — a UI bundle is pushed in one), `--max-calls-per-connection` (256), `--idle-timeout-secs` (900), `--max-connections` (1,024), `--max-connections-per-ip` (256), `--max-connections-per-principal` (4; V2-31: a person's), `--max-connections-per-agent` (64; V2-31: a `key:` principal's), `--max-writes-per-second` (20; V2-31), `--max-anonymous-connections` (128), `--max-anonymous-connections-per-ip` (32) |
@@ -497,8 +497,8 @@ behind plexus-core's gate; menger's own are declared on the frame
 | `session` | who a connection is, agents' sessions | `tickets-api/src/session_activation.rs` |
 | `auth` | the AUTH protocol's door and roles | plexus-login, over `src/login_access.rs` |
 | `ui` | the UI's versions, live pointer, previews; child `slots` | the framework's: `../plexus-ui/service` (`plexus-ui-service`, FRAME-5) |
-| `media` | any file a body shows, by sha256 — its rows in a file of its own (`media.db`), its bytes in a `BlobStore` (the disk); links read into cards; the ticket's (or, V2-29, the doc's) permit asked through the seam | `media/` (`menger-media`, V2-24, EDITOR-10) |
-| `docs` | documents — writing, not work: a title and a markdown body kept as a Yjs CRDT, written live by many hands, every change kept, in a file of its own (`docs.db`); who may is the gate's word on the document's organization | `docs/` (`menger-docs`, V2-29) |
+| `media` | any file a body shows, by sha256 — its rows in a file of its own (`media.db`), its bytes in a `BlobStore` (the disk); links read into cards; the ticket's (or, V2-29, the note's) permit asked through the seam | `media/` (`menger-media`, V2-24, EDITOR-10) |
+| `notes` | notes — writing, not work: a title and a markdown body kept as a Yjs CRDT, written live by many hands, every change kept, in a file of its own (`notes.db`); who may is the gate's word on the note's organization | `notes/` (`menger-notes`, V2-29; NOTES-3: the docs service renamed) |
 | `quota` | every principal's allowance per source, its usage counted, tabulated and enforced — its ledger in a file of its own (`quota.db`); every storing write reserved through the seam before it lands | `quota/` (`menger-quota`, V2-31) |
 | `code` | public GitHub repositories: a branch or tag resolved to a commit by git's own listing, the commit's whole tree fetched once and kept — its files by sha256 on disk, its tree in a file of its own (`code.db`) — and the tree and any file answered from what is kept; every new byte reserved through the seam | `code/` (`menger-code`, CODE-2) |
 | `logs` | logs: a typed table per log made from a JSON Schema, tied to a ticket by its uid and taking that ticket's reach — every log's table in a file of its own (`logs.db`); entries appended by name, each checked against the schema and kept with an envelope the server writes; every kept entry reserved through the seam | `logs/` (`menger-logs`, LOGS-2) |
@@ -546,13 +546,13 @@ component drawing the ticket holds; anything else, a write above all, is
 refused in words. A ```` ```mermaid ```` fence in a raw body is drawn before the
 body is handed over, so it draws inside the frame as outside.
 
-The docs service (V2-29) asks two things through its seam (`docs/src/seam.rs`),
+The notes service (V2-29) asks two things through its seam (`notes/src/seam.rs`),
 never another's file: the gate, whether the caller holds a method's grant
-(`docs.save`) on the document's organization (`acme:`) — `DynamicHub::gate()`
+(`notes.save`) on the note's organization (`acme:`) — `DynamicHub::gate()`
 asked with the scope as target — and the tickets service, which organizations
 the caller is in (`orgs.list`, as the caller). The media service asks it in
-turn: a `media.put { doc }` asks `docs.may { id, role: editor }` as the
-caller, a `media.get` of a doc's image `docs.may { id, role: viewer }`.
+turn: a `media.put { note }` asks `notes.may { id, role: editor }` as the
+caller, a `media.get` of a note's image `notes.may { id, role: viewer }`.
 
 The quota service (V2-31) is reached the other way round: a service that
 stores or fetches for a principal asks `quota.reserve { principal, source,
@@ -565,7 +565,7 @@ service as its own, `menger_code::Allowance`, the logs service as
 service asks back the same way: `members.teams.show` for a team's members,
 `members.list` for an organization's, and each store's own count for a
 recount (`tickets.revisions.usage`, `media.usage { everyone }`,
-`docs.usage`). It never opens another file.
+`notes.usage`). It never opens another file.
 
 A throwaway's `synapse -P 4460 menger` lists them; `synapse -P 4460 menger
 tickets` lists a service's methods and children; `<method> --help` prints
@@ -689,13 +689,13 @@ whole. synapse `-j` prints the `rows` event as one line (SYNAPSE-36).
 
 | method | flags | what it does |
 |---|---|---|
-| `put` | `--data [--name] [--ticket] [--doc] [--mime]` | keep any file in one message (at most 7 MiB, `data` standard base64) for a ticket you may edit, or (V2-29) a doc you may write (`docs.may`) — or, with neither, as yours: `stored { hash, mime, kind, name, bytes, width, height, duplicate }` |
+| `put` | `--data [--name] [--ticket] [--note] [--mime]` | keep any file in one message (at most 7 MiB, `data` standard base64) for a ticket you may edit, or (V2-29) a note you may write (`notes.may`) — or, with neither, as yours: `stored { hash, mime, kind, name, bytes, width, height, duplicate }` |
 | `begin` | `--size [--name] [--ticket] [--doc]` · `--upload` | start an upload of any size, or resume one of yours: `upload { upload, size, received, chunk }` |
 | `chunk` | `--upload --offset --data` | the next bytes (at most `chunk`, 4 MiB) at `offset` (what the upload has): `chunked { upload, received, size, duplicate }`; a gap `refused { reason: out_of_order }` |
 | `finish` | `--upload` | the upload hashed and kept: `stored { … }`, or `refused { reason: incomplete }` |
 | `get` | `--hash` | a file's bytes up to 7 MiB: `media { …, data }` (data base64); larger, `refused { reason: too_large }` — read it at `/media/<hash>` |
 | `info` | `--hash` | what a file is, without its bytes: `info { hash, mime, kind, name, bytes, width, height }` |
-| `list` | `[--kind] [--limit] [--after]` | EDITOR-32: every file kept for a ticket or a document you read, newest first: `listed { hash, mime, kind, name, bytes, width, height, at, tickets, docs }` each — its tickets (by their ids now) and documents among those you read, asked of `tickets.may` and `docs.may` as you; a file with none of them is not listed — then `page { next }` (`--after <next>`: the next page; none: no more). `--kind` image, video, audio, pdf or file; `--limit` 60, at most 500. Viewer. The app draws it at `#/media` (`page-media`) |
+| `list` | `[--kind] [--limit] [--after]` | EDITOR-32: every file kept for a ticket or a note you read, newest first: `listed { hash, mime, kind, name, bytes, width, height, at, tickets, notes }` each — its tickets (by their ids now) and notes among those you read, asked of `tickets.may` and `notes.may` as you; a file with none of them is not listed — then `page { next }` (`--after <next>`: the next page; none: no more). `--kind` image, video, audio, pdf or file; `--limit` 60, at most 500. Viewer. The app draws it at `#/media` (`page-media`) |
 | `usage` | `[--principal] [--everyone true]` | what you have put, each file once: `usage { principal, files, bytes }`; V2-31: an admin of `*` names anyone, or every keeper — V2-69: each file against each principal who put or fetched it, then `unattributed { files, bytes }`, what no one is charged for (what `quota.recount` reads); V2-70: `--daily true` with everyone, `usage_day { principal, day, files, bytes }` by the day each was first kept |
 | `unfurl` | `--url` | a public link read into a card: `unfurled { url, kind, title, description, site, image, provider, embed }` |
 | `fetch` | `--url [--ticket] [--doc] [--name]` | a remote image or file kept as yours (never hot-linked): `stored { … }` |
@@ -769,50 +769,52 @@ synapse -P 4460 menger tickets amend --id KILN-4 --body @body.md                
 synapse -P 4460 -j menger media get --hash <hash> | jq -r 'select(.content.data) | .content.data' | base64 -d > back.png
 ```
 
-### `docs` (V2-29)
+### `notes` (V2-29, NOTES-3)
 
 The owner, 2026-11-02: *"I would like us to move the docs onto a new docs
 api. same fe though."* — and, on V2-29's `pairing`: *"live co editting. we
 should see that they have a connection open on that document too. we should
 keep all changes over time too, so we could replay how it got built. with
-the ability to squash, permission gated"*. A **document** is an id (8
+the ability to squash, permission gated"*. NOTES-3 (the owner, 2026-11-15:
+*"we need documents renamed to notes"*): the service is `notes`, every
+method `notes.<name>`, and what it keeps is a **note**. A **note** is an id (8
 characters of Crockford's base32 — TICKETS-35's form, `7k3mq2xa`; the app
-opens it at `#/doc/<id>`), the organization it is in, a title, and a body:
+opens it at `#/note/<id>`, and `#/doc/<id>`, its link before, opens the same), the organization it is in, a title, and a body:
 a **Yjs CRDT** (yrs on the service, yjs in the browser, the same v1 updates)
 whose markdown is derived on every change for `get`, `list`, the search,
 agents and image references.
 
 | method | flags | what it does |
 |---|---|---|
-| `create` | `--title [--body] [--org]` | a document in an organization you write in (else the first): `created { doc }` |
-| `get` | `--id` | `doc { doc }` — `{ id, org, title, body, bytes, revision, created_at, created_by, at, by }`; `not_found` for one you do not read |
-| `list` | `[--query] [--limit] [--after]` | the documents you read, newest made first, without bodies; `query` keeps titles holding every word: `rows { items: [doc] }`, `page { next, remaining }` |
+| `create` | `--title [--body] [--org]` | a note in an organization you write in (else the first): `created { note }` |
+| `get` | `--id` | `note { note }` — `{ id, org, title, body, bytes, revision, created_at, created_by, at, by }`; `not_found` for one you do not read |
+| `list` | `[--query] [--limit] [--after]` | the notes you read, newest made first, without bodies; `query` keeps titles holding every word: `rows { items: [note] }`, `page { next, remaining }` |
 | `update` | `--id --update [--session]` | a Yjs v1 update (base64) of the body — the editor's live typing — merged and kept: `applied { id, revision }` |
 | `save` | `--id --body [--base]` | a whole body (an agent's, a script's): diffed from the text it read (`base`, the revision read) and made into the CRDT's own edits, so it **merges** with live typing instead of overwriting it: `saved { id, revision, at, by, stale? }` |
 | `state` | `--id [--vector]` | what a copy whose state vector is `vector` lacks: `state { id, update, vector, revision }` |
 | `rename` | `--id --title` | `renamed { id, title, revision, at, by }` |
 | `history` | `--id [--limit] [--before]` | every change, newest first, kept with who and when (`at` in ms): `change { change: { seq, kind, at, by, principal, bytes, title?, authors? } }` — `create`, `update`, `save`, `rename`, `delete`, `snapshot` |
-| `replay` | `--id [--seq] [--at]` | the document as it stood after change `seq` (or at the moment `at`, ms): `doc { doc }`; squashed away: `not_found { revision }` |
+| `replay` | `--id [--seq] [--at]` | the note as it stood after change `seq` (or at the moment `at`, ms): `note { note }`; squashed away: `not_found { revision }` |
 | `restore` | `--id --seq` | the body put back as it stood after `seq`, merged as a save: `saved { … }` |
-| `squash` | `--id --until` | the changes up to `until` collapsed into one `snapshot`, its `authors` keeping who wrote what (changes, bytes, first, last): `squashed { id, until, removed, at, by }`, said on `watch`. Its own grant, `docs.squash` — admin's by default, grantable to a role by the role table |
+| `squash` | `--id --until` | the changes up to `until` collapsed into one `snapshot`, its `authors` keeping who wrote what (changes, bytes, first, last): `squashed { id, until, removed, at, by }`, said on `watch`. Its own grant, `notes.squash` — admin's by default, grantable to a role by the role table |
 | `present` | `--id` | who is on it: `present { present: { session, principal, name, agent, colour, client?, awareness?, at } }` |
 | `here` | `--id --session [--client] [--awareness]` | your caret (a Yjs awareness update, base64), said to everyone on it |
 | `delete` | `--id` | admin's: `deleted { id, at, by }`; its changes stay in the file |
 | `may` | `--id --role` | `may { id, role, held }` — the question the media service asks |
-| `usage` | `--everyone true` | admin of `*` (V2-31): one `usage { principal, count, bytes }` per writer — the documents they made and the bytes their changes keep (a squash's snapshot is nobody's); what `quota.recount` reads; V2-70: `--daily true`, `usage_day { principal, day, count, bytes }` by the day each change was kept |
+| `usage` | `--everyone true` | admin of `*` (V2-31): one `usage { principal, count, bytes }` per writer — the notes they made and the bytes their changes keep (a squash's snapshot is nobody's); what `quota.recount` reads; V2-70: `--daily true`, `usage_day { principal, day, count, bytes }` by the day each change was kept |
 | `ask` | `--id --from --to --text [--to-whom]` | V2-30: a question on characters `from..to` of the text, anchored in the CRDT so it follows the words through every edit: `asked { thread }` — `{ thread, id, anchor { from, to }, from, to, detached, quote, question, to_whom?, by, at, resolved?, replies }` |
 | `reply` | `--id --thread --body` | an answer (markdown: links, images): `replied { thread }` |
 | `resolve` | `--id --thread [--open]` | the thread folded (or opened again): `resolved { thread }` |
 | `threads` | `--id` | `thread { thread }` each, by where its range stands, the detached (text deleted whole) last |
-| `waiting` | `[--to]` | the open questions asked of someone (`agent`, or a name) in the documents you read, oldest first — an agent's queue |
-| `watch` | `[--id] [--session]` | `watching`, then `created`, `updated { id, seq, update, by, session? }`, `renamed`, `deleted`, `squashed`, and on one document `present` and `left { session, client? }`, and (V2-30) `asked`, `replied`, `resolved` with the thread whole; with `session` the watch is your presence while open, and your own updates are not said back; held to you by the gate as `ui.watch` is (`watch_closed { reason }`) |
+| `waiting` | `[--to]` | the open questions asked of someone (`agent`, or a name) in the notes you read, oldest first — an agent's queue |
+| `watch` | `[--id] [--session]` | `watching`, then `created`, `updated { id, seq, update, by, session? }`, `renamed`, `deleted`, `squashed`, and on one note `present` and `left { session, client? }`, and (V2-30) `asked`, `replied`, `resolved` with the thread whole; with `session` the watch is your presence while open, and your own updates are not said back; held to you by the gate as `ui.watch` is (`watch_closed { reason }`) |
 
 **Who may**: a viewer reads, follows and is present (`get`, `list`,
 `state`, `history`, `replay`, `present`, `here`, `watch`, `may`), an editor
 writes (`create`, `update`, `save`, `rename`, `restore`), an admin deletes
-and squashes — each grant held on the document's organization (`acme:`) or
+and squashes — each grant held on the note's organization (`acme:`) or
 on `*`. The gate admits a call whose grant is held somewhere; the method
-asks it again on the organization: a document you do not read is
+asks it again on the organization: a note you do not read is
 `not_found`, one you read and may not write `refused { forbidden }`.
 
 **Questions on a range** (V2-30; the owner: *"I want to have the ability to
@@ -825,8 +827,8 @@ resolved). The anchor is two Yjs relative positions in the CRDT — the page
 resolves them in its own copy, the service in its — so it follows the text
 through every hand's edit; its text deleted whole, the thread is detached
 and listed last. A question asked of an agent waits in `waiting` and is said
-on every watch of the organization's documents; the agent answers with
-`reply`, or edits the document itself. Kept in `docs.db`'s `doc_threads` and
+on every watch of the organization's notes; the agent answers with
+`reply`, or edits the note itself. Kept in `notes.db`'s `doc_threads` and
 `doc_replies`.
 
 **Presence**: a page's `watch { id, session }` is its presence for as long
@@ -834,14 +836,31 @@ as it is open (gone, `left`, when the connection closes); a writer with no
 watch — an agent's `save` — is present while it writes and idles out 30 s
 after; a held one idles out after 10 minutes of silence.
 
-Kept in the service's own file, `docs.db` (`--docs-db-path`,
-`MENGER_DOCS_DB_PATH`; default beside the tickets file, never the tickets,
-ui or media file): `docs` (each document now, its derived text, and a
+Kept in the service's own file, `notes.db` (`--notes-db-path`,
+`MENGER_NOTES_DB_PATH`; default beside the tickets file, never the tickets,
+ui or media file). Its tables kept the names they had before NOTES-3, so
+the release before reads the same file: `docs` (each note now, its derived text, and a
 snapshot of its CRDT every 64 changes so a load applies only what came
 after) and `doc_log` (every change, with who and when). Every byte written
-is reserved against a meter first (`docs/src/quota.rs`, answered by the
-quota service, V2-31: `docs.bytes` per change, `docs.count` per document;
+is reserved against a meter first (`notes/src/quota.rs`, answered by the
+quota service, V2-31: `notes.bytes` per change, `notes.count` per note;
 over the cap `refused { reason: quota }` with the numbers).
+
+**What was kept as documents is kept as notes** (NOTES-3). At the first
+start of the release that carries the rename (`src/notes_move.rs`): where
+`--notes-db-path` names none and the default `notes.db` (`<stem>.notes.db`)
+is absent while its twin `docs.db` is there, the twin is renamed to it —
+its `-wal` and `-shm` with it — before anything opens it, a relative link
+left at the old name so the release before opens the same notes, said once
+in the log; the quota ledger's rows keyed `docs.bytes` and `docs.count`
+(usage, holds, caps, history) are rekeyed `notes.*` in one transaction
+(`quota/src/ledger/renamed.rs`), and a plan naming the old sources is read
+as the new; and a stored role (`auth.role_set`) that grants `docs.<method>`
+gains `notes.<method>` beside it — the store keeps a grant no method answers
+to, so the old one stays for the release before. A second start moves and
+writes nothing. Nothing answers to the old names: `docs.list` is refused as
+a method the service does not have. `deploy/README.md` "Notes, once
+documents" has the deploy's window and a rollback.
 
 The tracker's older documents — tickets of kind `doc` — stay tickets
 (V2-29's `existing`, queued to the owner; built as *leave*).
@@ -865,7 +884,7 @@ use that to measure and prevent them from exceeding their cap."
 | `table` | `[--org] [--sort bytes\|principal\|<source>]` | admin of `*` | the tabulation: `box { used_percent, warn_percent, full_percent, state }`, one `usage` per principal (with `org`, everyone granted a role in it), sorted, then `total { principals, bytes, sources }` |
 | `set` | `--principal \| --team \| --default true`, `--source --cap` | admin of `*` | an allowance: `unlimited`, a number, `2 GB` (powers of 1000; `GiB` of 1024), or `clear`: `allowance { holder, source, cap, cleared }`. A cap below what is used blocks new writes and deletes nothing |
 | `history` | `[--principal] [--source] [--days] [--everyone true]` | anyone signed in (their own); an admin of `*` names anyone, or everyone | V2-70: consumption over time — one `point { day, source, used, estimate }` per source (or `--source`) per UTC day of the last `--days` (90; 1 to 730) to today, oldest first: a total at the day's end (today's: now), carried over days nothing moved; a day's counter its day's total; `everyone` the system's sum per day. Then `end { principal, everyone, from, to, days }` |
-| `recount` | `[--principal]` | admin of `*` | usage rebuilt from the stores, each through its own read: `drift { principal, source, was, counted }` per total that moved, then `recounted { principals, drifted, sources, not_counted, backfilled }`; the server runs one nightly and logs the drift. V2-70: and the history backfilled — each store asked by day (`daily: true` on `tickets.revisions.usage`, `media.usage { everyone }`, `docs.usage`) |
+| `recount` | `[--principal]` | admin of `*` | usage rebuilt from the stores, each through its own read: `drift { principal, source, was, counted }` per total that moved, then `recounted { principals, drifted, sources, not_counted, backfilled }`; the server runs one nightly and logs the drift. V2-70: and the history backfilled — each store asked by day (`daily: true` on `tickets.revisions.usage`, `media.usage { everyone }`, `notes.usage`) |
 | `reserve` | `--principal --source --amount` | the server's own caller (admin of `*`) | the seam's first step: `reserved { ticket, remaining, expires }`, or `over_allowance { source, used, cap, asked }`, `too_many_at_once { source, open, max }`, `box_full { used_percent, full_percent }` — nothing held |
 | `commit` | `--ticket [--amount]` | the server's | the write landed: `amount` (what was kept, at most what was held; none: all) counts — `committed { …, used }` |
 | `release` | `--ticket` | the server's | the write did not land: nothing counts |
@@ -880,11 +899,11 @@ name is refused, so a new input registers one):
 | `media.fetch.bytes` | bytes | day | the server reads a file for you (`media.fetch`) |
 | `media.fetch.calls` | calls | day | the server reads a link for you (`media.unfurl`, `media.fetch`) |
 | `media.egress.bytes` | bytes | day | `/media/<hash>` serves bytes to you |
-| `docs.bytes` | bytes | total | **the update log as stored**: each change's bytes (`docs.create`, `update`, `save`, `restore`, `rename`) its writer's; a squash's snapshot shared among its authors by what each wrote, so a squash shrinks it and credits each author back |
-| `docs.count` | count | total | a document is made (`docs.create`) |
+| `notes.bytes` | bytes | total | **the update log as stored**: each change's bytes (`notes.create`, `update`, `save`, `restore`, `rename`) its writer's; a squash's snapshot shared among its authors by what each wrote, so a squash shrinks it and credits each author back |
+| `notes.count` | count | total | a note is made (`notes.create`) |
 | `tickets.bytes` | bytes | total | **what the store keeps**, not every write: each body's content the first time it is kept as a revision (a copy of one kept already costs nothing) is its first writer's, and each ticket's current body its last writer's. A write reserves the delta — the new content's bytes, plus the new body less the old when the old was the writer's own (else the old body's writer is credited it back); a write that leaves the body as it was counts nothing; a write that replaces its author's latest revision (V2-37, below) lets go of the body that revision alone held, and its keeper is credited it back. The store keeps a body twice — the ticket's own row and its revision's copy in `revision_bodies` — so a new ticket with a 4,321-byte body counts 8,642 B (8.6 KB) |
 | `tickets.count` | count | total | a ticket is created |
-| `questions.count` | count | total | a question is asked on a document (`docs.ask`, V2-39): one held for the asker before it is kept, committed after, released when the ask is refused; past the cap `refused { over_allowance }`. Not recounted: no store counts it yet |
+| `questions.count` | count | total | a question is asked on a note (`notes.ask`, V2-39): one held for the asker before it is kept, committed after, released when the ask is refused; past the cap `refused { over_allowance }`. Not recounted: no store counts it yet |
 
 **The effective cap** of a principal on a source: their own allowance, else
 the largest of their teams' (unlimited the largest), else the default for
@@ -936,7 +955,7 @@ past the day's egress is a 429.
 ```sh
 synapse -P 4460 menger quota usage
 synapse -P 4460 menger quota table --sort bytes
-synapse -P 4460 menger quota set --default true --source docs.bytes --cap "200 MB"
+synapse -P 4460 menger quota set --default true --source notes.bytes --cap "200 MB"
 synapse -P 4460 menger quota recount
 synapse -P 4460 menger quota history --days 30
 synapse -P 4460 menger quota history --everyone true --source media.bytes --days 365
@@ -2126,7 +2145,8 @@ and `media.get`, by sha256 in `media.db`, the ticket's permit asked of the
 tickets service through the seam (`tickets.may`), `/media/<hash>` on the
 shell — the first service beside `tickets` to write something of a
 ticket's. V2-29 (2026-11-02) gave documents a service of their own —
-`docs`, in `docs.db`, the same editor surface writing to it (`#/doc/:id`;
+`docs`, in `docs.db` (NOTES-3, 2026-11-15: renamed `notes`, in `notes.db`,
+at `#/note/:id`), the same editor surface writing to it (`#/doc/:id`;
 `+ new` makes a doc, not a ticket) — and, on the owner's word, made a
 document a Yjs CRDT written live by many hands, who is on it shown, every
 change kept to replay and squash. V2-30 (2026-11-02) let a selection in a

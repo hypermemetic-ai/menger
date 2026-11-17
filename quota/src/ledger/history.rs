@@ -6,7 +6,7 @@
 //! a total is carried from the last day that has one.
 //!
 //! **Backfilled** where the past is knowable (the recount asks each store
-//! by day — media's files by when each was first kept, documents' changes,
+//! by day — media's files by when each was first kept, notes' changes,
 //! tickets' revisions): the days before a principal's first point of a
 //! source, marked `estimate` — what the stores keep now, laid back along
 //! when it was written; what was deleted since is not in it.
@@ -225,7 +225,7 @@ mod tests {
         assert_eq!(of(&pts, "media.bytes")[..3], [(d0 - 2, 10, true), (d0 - 1, 60, true), (d0, 100, false)]);
         assert_eq!(l.backfill("key:a", "media.bytes", &[(d0 - 3, 10), (d0 - 1, 60)], at(d0 + 3)).unwrap(), 0, "again: nothing");
         // No counted day yet: everything before today.
-        assert_eq!(l.backfill("key:c", "docs.bytes", &[(d0 + 1, 5), (d0 + 3, 6)], at(d0 + 3)).unwrap(), 1);
+        assert_eq!(l.backfill("key:c", "notes.bytes", &[(d0 + 1, 5), (d0 + 3, 6)], at(d0 + 3)).unwrap(), 1);
         assert!(matches!(l.history(&Whose::Everyone, Some("nope"), 3, at(d0)), Err(LedgerError::UnknownSource(_))));
     }
 }
