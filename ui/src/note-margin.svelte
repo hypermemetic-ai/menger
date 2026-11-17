@@ -15,12 +15,140 @@
      text. NOTES-4: in a note's column beside its slot (narrower than 1100
      px, the container `note-col`) the margin is a list under the text at
      every width, each card quoting the words it is about, in the text's
-     order; flat there, as the page is. -->
+     order; flat there, as the page is.
+     NOTES-5: and the marks an agent leaves on the note (`notes.mark`): each
+     range underlined where it stands (in `--accent` when it carries a link,
+     which a click opens), its line of state in the mono face under the block
+     that holds it with who left it, and a dot in that block's margin. The
+     ranges are anchored as a question's are, resolved here the same way and
+     set whole on the surface (`noteMarks`, a field editor-body adds beside
+     `threadMarks`): in the caret's block the field's own decorations
+     underline them; a drawn block is handed the marks it holds and draws
+     them in its drawing (`drawMarks`). A mark whose words were deleted is
+     detached and drawn nowhere. Live by `notes.marks` and `notes.watch`
+     (`mark_changed`, `mark_removed`). -->
 <script module>
   import { StateEffect, StateField } from "@codemirror/state";
   import { Decoration, EditorView } from "@codemirror/view";
+  import { ticketHref } from "./ticket-links.svelte";
 
-  export const uses = ["notes.threads", "notes.watch", "notes.reply", "notes.resolve", "media.put"];
+  export const uses = ["notes.threads", "notes.watch", "notes.reply", "notes.resolve", "media.put", "notes.marks"];
+
+  /** NOTES-5: the agents' marks on the surface — an underline each (`spec.m`: { mark, link, label, by }),
+   *  set whole by the margin, mapped through every change between. */
+  export const setNoteMarks = StateEffect.define();
+  export const noteMarks = StateField.define({
+    create: () => Decoration.none,
+    update(deco, tr) {
+      deco = deco.map(tr.changes);
+      for (const e of tr.effects) if (e.is(setNoteMarks)) deco = e.value;
+      return deco;
+    },
+    provide: (f) => EditorView.decorations.from(f),
+  });
+  /** The marks of `state` touching `from..to`, each `{ mark, link, label, by, a, z }` (`a`, `z` from `from`). */
+  export function marksIn(state, from, to) {
+    const set = state.field(noteMarks, false);
+    const out = [];
+    set?.between(from, to, (f, t, d) => { if (t > from && f < to) out.push({ ...d.spec.m, a: Math.max(f, from) - from, z: Math.min(t, to) - from }); });
+    return out;
+  }
+  /** Where a mark's link goes: a ticket's page, an address of the app, or an https address (`external`). */
+  export function markHref(link) {
+    if (/^https:\/\//i.test(link)) return { href: link, external: true };
+    if (link.startsWith("#/")) return { href: link, external: false };
+    return { href: ticketHref({ id: link.replace(/^[^:]*:/, "") }), external: false };
+  }
+  /** Follows a mark's link: the app's own in place, an https address in a new tab. */
+  export function followMark(b, link) {
+    const to = markHref(link);
+    if (to.external) window.open(to.href, "_blank", "noopener");
+    else b.navigate(to.href);
+  }
+  /** Markdown as a reader sees it, near enough to find a range's words in a drawing: links and images by their
+   *  words, emphasis and code marks gone, a heading's, a list's and a quote's marks gone, white space one space. */
+  const seen = (md) => md.replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[*_~`]+/g, "").replace(/^\s{0,3}#{1,6}\s+/gm, "").replace(/^\s*(?:[-*+]|\d+[.)])\s+/gm, "").replace(/^\s*>\s?/gm, "").replace(/\s+/g, " ");
+  /** The text nodes of `el` a reader sees, as one string with white space runs one space, and where each of its characters is. */
+  function readOf(el) {
+    const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, { acceptNode: (n) => (n.parentElement?.closest?.("[data-mark-state], .diagram, [hidden], style, script") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
+    let text = "";
+    const at = [];
+    for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+      for (let i = 0; i < n.data.length; i++) {
+        const space = /\s/.test(n.data[i]);
+        if (space && text.endsWith(" ")) continue;
+        text += space ? " " : n.data[i];
+        at.push([n, i]);
+      }
+    }
+    return { text, at };
+  }
+  /** Each piece of `s..e` of a reading, wrapped in a span `make` makes, text node by text node. */
+  function wrap(read, s, e, make) {
+    const runs = [];
+    for (let k = s; k < e; k++) {
+      const [n, i] = read.at[k];
+      const last = runs[runs.length - 1];
+      if (last && last.n === n) last.j = i + 1; else runs.push({ n, i, j: i + 1 });
+    }
+    const out = [];
+    for (const r of runs.reverse()) {
+      const range = document.createRange();
+      range.setStart(r.n, r.i);
+      range.setEnd(r.n, r.j);
+      const span = make();
+      range.surroundContents(span);
+      out.push(span);
+    }
+    return out;
+  }
+  /** NOTES-5: the marks a drawn block holds (`marks`: `marksIn` of it), drawn in its drawing `el` of `text`
+   *  (the block's markdown): each range's words underlined — found as a reader sees them, at the same
+   *  occurrence the markdown holds them — linked ones in the accent and opened by `follow(link)` on a
+   *  click or enter; the block's dot; under it each mark's line of state, `¶n` its place among the blocks.
+   *  Drawn again whole on every call. */
+  export function drawMarks(el, text, marks, n, follow) {
+    for (const old of el.querySelectorAll(":scope > [data-mark-state]")) old.remove();
+    for (const u of el.querySelectorAll("[data-mark]")) u.replaceWith(...u.childNodes);
+    el.normalize();
+    if (!marks.length) { el.removeAttribute("data-marked"); return; }
+    el.setAttribute("data-marked", "");
+    for (const m of marks) {
+      const words = seen(text.slice(m.a, m.z)).trim();
+      if (!words) continue;
+      const read = readOf(el);
+      const before = seen(text.slice(0, m.a));
+      let nth = 0;
+      for (let k = before.indexOf(words); k >= 0; k = before.indexOf(words, k + words.length)) nth++;
+      let at = -1;
+      for (let k = 0; k <= nth; k++) { at = read.text.indexOf(words, at + 1); if (at < 0) break; }
+      if (at < 0) at = read.text.indexOf(words);
+      if (at < 0) continue;
+      wrap(read, at, at + words.length, () => {
+        const u = document.createElement("span");
+        u.className = m.link ? "nm-u nm-linked" : "nm-u";
+        u.dataset.mark = m.mark;
+        if (m.link) {
+          u.dataset.markLink = m.link;
+          u.setAttribute("role", "link");
+          u.tabIndex = 0;
+          u.title = m.link;
+          u.addEventListener("click", (ev) => { ev.preventDefault(); ev.stopPropagation(); follow(m.link); });
+          u.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); ev.stopPropagation(); follow(m.link); } });
+        }
+        return u;
+      });
+    }
+    for (const m of marks.filter((x) => x.label)) el.append(stateLine(m, n));
+  }
+  /** A mark's line of state, `¶n · who · label`. */
+  export function stateLine(m, n) {
+    const p = document.createElement("div");
+    p.className = "nm-state";
+    p.dataset.markState = m.mark;
+    p.textContent = `¶${n} · ${m.by} · ${m.label}`;
+    return p;
+  }
 
   /** The underlines of the open threads' ranges: set whole by the margin, mapped through every change between. */
   export const setThreadMarks = StateEffect.define();
@@ -67,6 +195,31 @@
       const detached = from == null || to == null || (to <= from && t.quote !== "");
       return { ...t, a: detached ? null : from, z: detached ? null : to, gone: detached };
     }).sort((x, y) => (x.gone - y.gone) || ((x.a ?? 0) - (y.a ?? 0)) || (x.at - y.at));
+  });
+  // NOTES-5: the marks, each where its anchor stands in this copy now; a detached one is drawn nowhere.
+  const marks = live({ snapshot: "notes.marks", params: () => ({ id: doc_id }), changes: "notes.watch", changes_params: () => ({ id: doc_id }), key: "mark",
+                       on: { mark_changed: "upsert:mark", mark_removed: "remove:mark" } });
+  const marked = $derived.by(() => {
+    void tick;
+    return marks.rows.filter((m) => m.mark && m.anchor).map((m) => {
+      const a = ydoc ? at(m.anchor.from) : m.from ?? null, z = ydoc ? at(m.anchor.to) : m.to ?? null;
+      return { mark: m.mark, link: m.link ?? null, label: m.label ?? null, by: m.by, a, z };
+    }).filter((m) => m.a != null && m.z != null && m.z > m.a);
+  });
+  $effect(() => {
+    const ranges = marked.slice().sort((x, y) => (x.a - y.a) || (x.z - y.z));
+    untrack(() => {
+      const v = view();
+      if (!v) return;
+      const len = v.state.doc.length;
+      const keyOf = (xs) => JSON.stringify(xs.map((m) => [m.a, m.z, m.mark, m.link, m.label, m.by]));
+      const held = [];
+      v.state.field(noteMarks, false)?.between(0, len, (a, z, d) => { held.push({ a, z, ...d.spec.m }); });
+      if (keyOf(held) === keyOf(ranges.filter((m) => m.z <= len))) return; // the surface holds them already
+      const deco = ranges.filter((m) => m.z <= len).map((m) => Decoration.mark({ class: m.link ? "nm-u nm-linked" : "nm-u", attributes: { "data-mark": m.mark, ...(m.link ? { "data-mark-link": m.link, title: m.link } : {}) },
+                                                                      m: { mark: m.mark, link: m.link, label: m.label, by: m.by } }).range(m.a, m.z));
+      v.dispatch({ effects: setNoteMarks.of(Decoration.set(deco, true)) });
+    });
   });
   const open = $derived(placed.filter((t) => !t.resolved));
   const resolved = $derived(placed.filter((t) => t.resolved));

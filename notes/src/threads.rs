@@ -74,6 +74,55 @@ fn chars_at(text: &str, bytes: usize) -> usize {
     text[..bytes.min(text.len())].chars().count()
 }
 
+/// A range anchored in a note's CRDT: its two relative positions, and the
+/// text it held then — what a question and (NOTES-5) a mark keep.
+pub(crate) struct Anchored {
+    pub from_rel: Vec<u8>,
+    pub to_rel: Vec<u8>,
+    pub quote: String,
+}
+
+/// The characters `from..to` of `crdt`'s text now (clamped to its end),
+/// anchored: the start sticks to the character after it, the end to the
+/// one before it, so both follow the text through every edit.
+pub(crate) fn anchored(crdt: &yrs::Doc, from: u32, to: u32) -> Result<Anchored, StoreError> {
+    let text = text_of(crdt);
+    let n = text.chars().count() as u32;
+    let (from, to) = (from.min(n), to.min(n));
+    if from > to {
+        return Err(StoreError::BadRange(format!("from {from} is past to {to}")));
+    }
+    let (fb, tb) = (byte_at(&text, from as usize), byte_at(&text, to as usize));
+    let body = crdt.get_or_insert_text(BODY);
+    let (from_rel, to_rel) = {
+        let txn = crdt.transact();
+        let at = |b: usize, assoc| body.sticky_index(&txn, b as u32, assoc).map(|s| s.encode_v1());
+        (at(fb, Assoc::After), at(tb, Assoc::Before))
+    };
+    let (from_rel, to_rel) = from_rel.zip(to_rel).ok_or_else(|| StoreError::BadRange(format!("{from}..{to} is not in the text")))?;
+    Ok(Anchored { from_rel, to_rel, quote: text[fb..tb].to_string() })
+}
+
+/// Where an anchored range stands in `crdt` now (`text`, its text): its
+/// character offsets, or none when it is detached — its text deleted
+/// whole (`empty_ok`: a range of nothing never is).
+pub(crate) fn placed(crdt: &yrs::Doc, text: &str, from_rel: &[u8], to_rel: &[u8], empty_ok: bool) -> Option<(u32, u32)> {
+    let resolve = |bytes: &[u8]| -> Option<usize> {
+        let sticky = StickyIndex::decode_v1(bytes).ok()?;
+        let txn = crdt.transact();
+        sticky.get_offset(&txn).map(|o| chars_at(text, o.index as usize))
+    };
+    match (resolve(from_rel), resolve(to_rel)) {
+        (Some(f), Some(t)) if t > f || (empty_ok && t == f) => Some((f as u32, t as u32)),
+        _ => None,
+    }
+}
+
+/// The characters `from..to` of `text`.
+pub(crate) fn slice(text: &str, from: u32, to: u32) -> &str {
+    &text[byte_at(text, from as usize)..byte_at(text, to as usize)]
+}
+
 /// What the stored row of a thread holds before its anchor is resolved.
 struct Row {
     thread: String,
@@ -113,15 +162,9 @@ impl NotesStore {
     /// `row` made a [`Thread`]: its anchor resolved in `crdt` now, its replies read.
     fn dressed(&self, conn: &Connection, crdt: &yrs::Doc, row: Row) -> Result<Thread, StoreError> {
         let text = text_of(crdt);
-        let resolve = |bytes: &[u8]| -> Option<usize> {
-            let sticky = StickyIndex::decode_v1(bytes).ok()?;
-            let txn = crdt.transact();
-            sticky.get_offset(&txn).map(|o| chars_at(&text, o.index as usize))
-        };
-        let (from, to) = (resolve(&row.from_rel), resolve(&row.to_rel));
-        let (from, to, detached) = match (from, to) {
-            (Some(f), Some(t)) if t > f || row.quote.is_empty() => (Some(f as u32), Some(t as u32), false),
-            _ => (None, None, true),
+        let (from, to, detached) = match placed(crdt, &text, &row.from_rel, &row.to_rel, row.quote.is_empty()) {
+            Some((f, t)) => (Some(f), Some(t), false),
+            None => (None, None, true),
         };
         let mut stmt = conn.prepare("SELECT n, body, by, principal, at FROM doc_replies WHERE thread = ?1 ORDER BY n")?;
         let replies = stmt
@@ -171,24 +214,11 @@ impl NotesStore {
                     let doc = live_doc(&conn, &id)?;
                     let crdt = s.crdt(&conn, &id)?;
                     let crdt = crdt.lock().unwrap_or_else(|p| p.into_inner());
-                    let text = text_of(&crdt);
-                    let n = text.chars().count() as u32;
-                    let (from, to) = (from.min(n), to.min(n));
-                    if from > to {
-                        return Err(StoreError::BadRange(format!("from {from} is past to {to}")));
-                    }
-                    let (fb, tb) = (byte_at(&text, from as usize), byte_at(&text, to as usize));
-                    let body = crdt.get_or_insert_text(BODY);
-                    let (from_rel, to_rel) = {
-                        let txn = crdt.transact();
-                        let at = |b: usize, assoc| body.sticky_index(&txn, b as u32, assoc).map(|s| s.encode_v1());
-                        (at(fb, Assoc::After), at(tb, Assoc::Before))
-                    };
-                    let (from_rel, to_rel) = from_rel.zip(to_rel).ok_or_else(|| StoreError::BadRange(format!("{from}..{to} is not in the text")))?;
+                    let Anchored { from_rel, to_rel, quote } = anchored(&crdt, from, to)?;
                     let thread = crate::vocab::mint(|t| conn.query_row("SELECT 1 FROM doc_threads WHERE thread = ?1", [t], |_| Ok(())).optional().ok().flatten().is_some());
                     conn.execute(
                         &format!("INSERT INTO doc_threads ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, NULL)"),
-                        params![thread, doc.id, from_rel, to_rel, text[fb..tb].to_string(), question, to_whom, hand.name, hand.principal, now_ms()],
+                        params![thread, doc.id, from_rel, to_rel, quote, question, to_whom, hand.name, hand.principal, now_ms()],
                     )?;
                     let row = conn.query_row(&format!("SELECT {COLUMNS} FROM doc_threads WHERE thread = ?1"), [&thread], row_of)?;
                     Ok((s.dressed(&conn, &crdt, row)?, doc.org))

@@ -39,6 +39,9 @@
 #                                           (DEPLOY-52: test is app-test); passing marks it TESTED
 #   deploy/pipeline ui [--watch]            UI-17: ui/ of this checkout live on test, no image, no cargo
 #   deploy/pipeline ui promote              UI-17: what test has live onto prod (a pointer move; the owner's)
+#   deploy/pipeline ui prod [--watch]       both in one command (owner, 2026-11-16: "we want to iterate directly in
+#                                           prod"): ui/ of this checkout live on test, then prod's pointer onto
+#                                           it; refused while prod's server is not on the release test runs
 #   deploy/pipeline remote prod             app.menger.sh through infra's promote.yml: what test runs, then
 #                                           `ui promote --to prod --from test` (UI-15: one store, prod's pointer
 #                                           onto test's live version, no second push), then the smoke —
@@ -1816,33 +1819,57 @@ ui_once() { # WS TOOL ENGINE TAR — one build and push; says what happened; 1 w
   [[ $UI_MATCHES != false ]]
 }
 ui_stamp() { find "$REPO/ui" -type f -printf '%T@ %s %p\n' | sort | sha256sum; }
+ui_prod_ws() { local p; p=$(app_url prod); p=wss://${p#https://}; echo "${p%/}/ws"; }
+# The owner, 2026-11-16: "we do not wait for a deployment. we need to get that down from taking any time at
+# all to being practically instant. we want to iterate directly in prod" — ui_once, then prod's pointer onto
+# what it pushed: one build, one push, one promote, and the time the whole of it took.
+ui_once_prod() { # WS TOOL ENGINE TAR — says what happened; 1 when prod is not on this tree's ui/
+  local t0 pushed ms; t0=$(date +%s%3N)
+  ui_once "$@" || { say "     prod is as it was: nothing was promoted"; return 1; }
+  pushed=$UI_PUSHED
+  if ! ui_promote "$(ui_prod_ws)" test prod; then say "red  the promote was refused, prod is as it was: $UI_WHY"; return 1; fi
+  if [[ $UI_PROMOTED != "$pushed" ]]; then
+    say "red  prod took ${UI_PROMOTED:0:12}, not the ${pushed:0:12} just pushed: another push reached test in between — run it again"
+    return 1
+  fi
+  ms=$(( $(date +%s%3N) - t0 ))
+  say "ok   prod has ${UI_PROMOTED:0:12} live$([[ $UI_MOVED == true ]] || echo ' already'): pushed and promoted in ${ms} ms"
+}
 cmd_ui() {
-  local watch=0
+  local watch=0 once=ui_once usage="usage: deploy/pipeline ui [--watch] | ui prod [--watch] | ui promote"
   case ${1:-} in
     promote)
-      local p; p=$(app_url prod); p=wss://${p#https://}; p=${p%/}/ws
-      ui_promote "$p" test prod || die "the promote was refused, nothing moved: $UI_WHY"
+      ui_promote "$(ui_prod_ws)" test prod || die "the promote was refused, nothing moved: $UI_WHY"
       say "ok   prod has ${UI_PROMOTED:0:12} live$([[ $UI_MOVED == true ]] || echo ' already')"
       return 0 ;;
+    prod) once=ui_once_prod; shift ;;
+  esac
+  case ${1:-} in
     --watch) watch=1 ;;
     "") ;;
-    *) die "usage: deploy/pipeline ui [--watch] | ui promote" ;;
+    *) die "$usage" ;;
   esac
+  [[ $# -le 1 ]] || die "$usage"
   [[ -n $DEPLOY_KEY_FILE ]] || die "no pipeline key (MENGER_DEPLOY_KEY_FILE) to push as"
   [[ -d $REPO/ui/src ]] || die "$REPO has no ui/src: UI-only pushes are v2's"
   local rel tool engine ws tar stamp now
   rel=$(last_good test); [[ -n $rel ]] && release_bundle "$rel" || die "test runs no release with a bundle (${rel:-none}): deploy one first"
+  if [[ $once == ui_once_prod ]]; then
+    # the bundle is checked against test's server alone, and ui.promote checks nothing: on another release prod may lack a method it calls
+    local on_prod; on_prod=$(last_good app-prod)
+    [[ $on_prod == "$rel" ]] || die "ui prod: prod's server runs ${on_prod:-no release} and test's $rel — this ui/ is checked against test's server alone, so prod may not have what it calls. Promote the release first (deploy/pipeline remote prod), or run ui and then ui promote yourself"
+  fi
   tool=$(ui_tool "$rel"); [[ -n $tool ]] || die "no plexus-ui (the release carries none; MENGER_PLEXUS_UI, or PATH)"
   engine=$(ui_engine "$rel") || die "no engine in $rel's bundle"
   local uilog; uilog=$(mktemp); plexus_ui_src "$REPO" "$uilog" keep   # V2-47: svelte/1's node_modules, of the plexus-ui this tree takes
   ws=$(app_url test); ws=wss://${ws#https://}; ws=${ws%/}/ws
   tar=$(mktemp --suffix=.tar); trap "rm -f '$tar' '$uilog'" EXIT
-  if [[ $watch == 0 ]]; then ui_once "$ws" "$tool" "$engine" "$tar"; return; fi
-  say "watching $REPO/ui → $ws (release $rel); Ctrl-C ends it"
-  stamp=$(ui_stamp); ui_once "$ws" "$tool" "$engine" "$tar" || true
+  if [[ $watch == 0 ]]; then "$once" "$ws" "$tool" "$engine" "$tar"; return; fi
+  say "watching $REPO/ui → $ws$([[ $once == ui_once_prod ]] && echo ", then prod") (release $rel); Ctrl-C ends it"
+  stamp=$(ui_stamp); "$once" "$ws" "$tool" "$engine" "$tar" || true
   while sleep "${MENGER_UI_WATCH_SECS:-0.3}"; do
     now=$(ui_stamp); [[ $now == "$stamp" ]] && continue
-    stamp=$now; ui_once "$ws" "$tool" "$engine" "$tar" || true
+    stamp=$now; "$once" "$ws" "$tool" "$engine" "$tar" || true
   done
 }
 

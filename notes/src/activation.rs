@@ -4,9 +4,10 @@
 //! (the media service's `notes.may`, a test).
 //!
 //! **Under login**: a viewer reads (`get`, `list`, `state`, `history`,
-//! `replay`, `present`, `watch`, `may`, `threads`, `waiting`) and is present
+//! `replay`, `present`, `watch`, `may`, `threads`, `waiting`, `marks`) and is present
 //! (`here`), an editor writes (`create`, `update`, `save`, `rename`,
-//! `restore`) and asks and answers on a range (`ask`, `reply`, `resolve`), an admin
+//! `restore`), asks and answers on a range (`ask`, `reply`, `resolve`) and
+//! marks one (`mark`, `unmark`: NOTES-5, never writing the text), an admin
 //! deletes and squashes (`delete`, `squash`: unlisted — admin holds every
 //! grant; `notes.squash` is grantable to another role by the role table). The gate
 //! admits a call when its grant is held somewhere; the method asks it again
@@ -22,7 +23,7 @@ use crate::events::NotesEvent;
 use crate::seam::Seam;
 use crate::store::NotesStore;
 use crate::streams::{many, once};
-use crate::vocab::{AgentName, BuildStep, ComponentName, SlotProps, SlotSay, VersionRef, ThreadId, ThreadText, NoteAwareness, NoteBody, NoteId, NoteQuery, NoteSession, NoteTitle, NoteUpdate, NoteVector};
+use crate::vocab::{AgentName, BuildStep, ComponentName, SlotProps, SlotSay, VersionRef, ThreadId, ThreadText, NoteAwareness, NoteBody, NoteId, NoteQuery, NoteSession, NoteTitle, NoteUpdate, NoteVector, MarkId, MarkLabel, MarkLink};
 use futures::Stream;
 use menger_tickets_api::address::OrgId;
 use menger_tickets_api::members::Role;
@@ -77,8 +78,8 @@ impl NotesActivation {
     request = NotesRequest,
     typed_params,
     roles(
-        viewer = ["get", "list", "state", "history", "replay", "present", "here", "watch", "may", "threads", "waiting", "slot"],
-        editor = [viewer, "create", "update", "save", "rename", "restore", "ask", "reply", "resolve", "fill", "empty", "building", "props"],
+        viewer = ["get", "list", "state", "history", "replay", "present", "here", "watch", "may", "threads", "waiting", "slot", "marks"],
+        editor = [viewer, "create", "update", "save", "rename", "restore", "ask", "reply", "resolve", "fill", "empty", "building", "props", "mark", "unmark"],
     )
 )]
 impl NotesActivation {
@@ -561,7 +562,72 @@ impl NotesActivation {
         once(crate::slot_calls::props(store, seam, user, id.into_string(), patch.into_map()))
     }
 
-    /// Follow notes: watching { id? } first, then created, updated { id, seq, update, by }, renamed, deleted, squashed, asked, replied, resolved, slot_changed, building_changed, props_changed — and, on one note, present and left — as they happen; open-ended, ends with watch_closed { reason, message }.
+    /// Mark a range of a note — an underline that follows its words, with a link, a line of state, or both; or change a mark; yields marked { mark }, said on watch. The note's text is not changed.
+    ///
+    /// A new mark names `from` and `to`, the range in characters of the
+    /// text now (as `get`'s body counts them); it is anchored in the note's
+    /// CRDT as a question's range is, so it follows its words through every
+    /// edit (`mark.from`, `mark.to` where they stand now; every character
+    /// deleted, it is `detached`, kept and drawn nowhere). With `mark`
+    /// instead, that mark is changed: its `link` and `label` set as given,
+    /// an empty one taken off. `link` is a ticket (`KILN-12`), an address of
+    /// the app (`#/…`) or an `https` address; a click on the underline opens
+    /// it. `label` is one line of state, drawn under the passage with who
+    /// left it. Nothing here writes the note: its body and its revision stay
+    /// as they are. Editor.
+    #[plexus_rpc::macros::method(group = "write", example(note = "the first sentence, linked to the ticket filed from it", params = r#"{"id": "7k3mq2xa", "from": 0, "to": 40, "link": "KILN-12", "label": "filed KILN-12"}"#))]
+    pub async fn mark(
+        &self,
+        #[from_auth(self.callers.verify)] user: Caller,
+        /// The note's id, e.g. 7k3mq2xa.
+        id: NoteId,
+        /// Where a new mark's range starts, in characters, e.g. 0 (optional: with mark, none).
+        from: Option<u32>,
+        /// Where it ends, e.g. 40 (optional: with mark, none).
+        to: Option<u32>,
+        /// The mark to change, as mark answered it (optional: a new mark).
+        mark: Option<MarkId>,
+        /// What a click on it opens: a ticket, e.g. KILN-12, an address of the app (#/…) or an https address (optional; empty takes it off).
+        link: Option<MarkLink>,
+        /// One line of state, e.g. filed KILN-12 (optional; empty takes it off).
+        label: Option<MarkLabel>,
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
+        let (store, seam) = (self.store.clone(), self.seam.clone());
+        once(crate::streams::mark(store, seam, user, id.into_string(), mark.map(MarkId::into_string), from, to, link.map(MarkLink::into_string), label.map(MarkLabel::into_string)))
+    }
+
+    /// Take a mark off a note; yields unmarked { id, mark }, said on watch as mark_removed. The note's text is not changed. Editor.
+    #[plexus_rpc::macros::method(group = "write", example(note = "a mark taken off", params = r#"{"id": "7k3mq2xa", "mark": "m4k9q2xa"}"#))]
+    pub async fn unmark(
+        &self,
+        #[from_auth(self.callers.verify)] user: Caller,
+        /// The note's id, e.g. 7k3mq2xa.
+        id: NoteId,
+        /// The mark's id, as mark answered it.
+        mark: MarkId,
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
+        let (store, seam) = (self.store.clone(), self.seam.clone());
+        once(crate::streams::unmark(store, seam, user, id.into_string(), mark.into_string()))
+    }
+
+    /// A note's marks, in the order their ranges stand in the text, the detached ones last; yields mark { mark } each — where each stands now and the words it holds.
+    ///
+    /// Each mark is whole: its anchor (two Yjs relative positions, for a page
+    /// to resolve in its own copy), its range now in characters (`from`,
+    /// `to`), the `words` it holds now and the `quote` it held when made,
+    /// its link and label, who left it and when. Viewer.
+    #[plexus_rpc::macros::method(group = "read", example(note = "the marks", params = r#"{"id": "7k3mq2xa"}"#))]
+    pub async fn marks(
+        &self,
+        #[from_auth(self.callers.verify)] user: Caller,
+        /// Its id, e.g. 7k3mq2xa.
+        id: NoteId,
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
+        let (store, seam) = (self.store.clone(), self.seam.clone());
+        many(crate::streams::marks(store, seam, user, id.into_string()))
+    }
+
+    /// Follow notes: watching { id? } first, then created, updated { id, seq, update, by }, renamed, deleted, squashed, asked, replied, resolved, slot_changed, building_changed, props_changed, mark_changed, mark_removed — and, on one note, present and left, and with text the body as words — as they happen; open-ended, ends with watch_closed { reason, message }.
     ///
     /// With `id`, one note's: each `updated` carries the Yjs update to
     /// apply (the stream ends after its `deleted`), and who comes and goes
@@ -573,7 +639,12 @@ impl NotesActivation {
     /// and closed with a typed reason (`signed_out`, `expired`, `revoked`,
     /// `refused`); each write is asked of the gate on its organization as it
     /// stands then. `lagged { missed }` when it fell behind: read again
-    /// (`state` with your vector). Viewer.
+    /// (`state` with your vector). NOTES-5: `mark_changed { id, mark }` (a
+    /// mark made or changed, whole) and `mark_removed { id, mark }`; with
+    /// `text: true` (and `id`) the note's markdown as words — `text { id,
+    /// revision, body, by, at }` once as the watch opens, then a second
+    /// after the first change not yet said, holding every change since:
+    /// at most one a second, the last change always said. Viewer.
     #[plexus_rpc::macros::method(group = "read")]
     pub async fn watch(
         &self,
@@ -582,8 +653,10 @@ impl NotesActivation {
         id: Option<NoteId>,
         /// Your page's session on it, e.g. s-3f9a1c — you are present while the watch is open (optional; with id only).
         session: Option<NoteSession>,
+        /// true: the note's markdown as words, text { id, revision, body, by, at }, as it is written (optional: false; with id only).
+        text: Option<bool>,
     ) -> impl Stream<Item = NotesEvent> + Send + 'static {
-        crate::watch::watch(self.store.clone(), self.seam.clone(), user, id.map(NoteId::into_string), session.map(NoteSession::into_string))
+        crate::watch::watch(self.store.clone(), self.seam.clone(), user, id.map(NoteId::into_string), session.map(NoteSession::into_string), text.unwrap_or(false))
     }
 
     /// Every principal's notes made and bytes written (admin of *): yields usage { principal, count, bytes } each — what quota.recount reads.

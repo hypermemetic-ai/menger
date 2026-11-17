@@ -651,3 +651,157 @@ async fn a_fresh_menger_keeps_the_bundle_notes_and_a_deploy_leaves_a_fill() {
     assert_eq!(newest[0]["version"].as_str(), Some(version.as_str()), "the bundle's newest is still the authored one: {newest:?}");
     assert!(support::call(&c, "ui.versions", json!({})).await.iter().any(|v| v["hash"].as_str() == Some(version.as_str()) && v["live"] == false), "kept, never live");
 }
+
+/// Every event an open stream says within `window`, past what it said before.
+async fn heard_within(sub: &mut Subscription<Value>, window: Duration) -> Vec<Value> {
+    let until = tokio::time::Instant::now() + window;
+    let mut out = Vec::new();
+    while let Ok(Some(item)) = tokio::time::timeout_at(until, sub.next()).await {
+        let item = item.unwrap();
+        if item["type"] == "data" {
+            out.push(item["content"].clone());
+        }
+    }
+    out
+}
+
+fn texts(events: &[Value]) -> Vec<String> {
+    events.iter().filter(|e| e["type"] == "text").map(|e| e["body"].as_str().unwrap().to_string()).collect()
+}
+
+/// NOTES-5, *An agent follows a note as text*: `watch { id, text: true }`
+/// says the body as it stands, then the body after a change — a sentence
+/// typed is said once within two seconds; forty characters typed in two
+/// seconds are at most three bodies, the last holding them all — and a
+/// watch without `text` hears none.
+#[tokio::test]
+async fn an_agent_follows_a_note_as_text() {
+    let (_dir, _port, _admin, editor, viewer, _s, _org) = people().await;
+    let id = one(&editor, "notes.create", json!({"title": "Followed as text", "body": "Start.\n"})).await["note"]["id"].as_str().unwrap().to_string();
+    let mut agent = call(&viewer, "notes.watch", json!({"id": id, "text": true})).await;
+    assert_eq!(next(&mut agent).await, json!({"type": "watching", "id": id}));
+    let first = next(&mut agent).await;
+    assert_eq!((first["type"].as_str(), first["body"].as_str(), first["revision"].as_u64()), (Some("text"), Some("Start.\n"), Some(1)), "said once at the start: {first}");
+    assert!(first["by"].is_string() && first["at"].is_i64(), "{first}");
+    let mut page = call(&viewer, "notes.watch", json!({"id": id})).await;
+    assert_eq!(next(&mut page).await["type"], "watching");
+    // A text watch of every note is refused: text follows one.
+    assert_eq!(one(&viewer, "notes.watch", json!({"text": true})).await["type"], "error");
+
+    // The owner types a sentence, a character at a time, and stops.
+    let doc = copy(&editor, &id).await;
+    let sentence = "The kiln fires twice.";
+    let mut at = 7;
+    for ch in sentence.chars() {
+        one(&editor, "notes.update", json!({"id": id, "update": typed(&doc, at, &ch.to_string())})).await;
+        at += 1;
+        tokio::time::sleep(Duration::from_millis(15)).await;
+    }
+    let stopped = tokio::time::Instant::now();
+    let said = loop {
+        let e = next_of(&mut agent, "text").await;
+        if e["body"].as_str().unwrap().contains(sentence) {
+            break e;
+        }
+    };
+    assert!(stopped.elapsed() <= Duration::from_secs(2), "said {:?} after the typing stopped", stopped.elapsed());
+    assert_eq!(said["body"], format!("Start.\n{sentence}"));
+    assert_eq!(texts(&heard_within(&mut agent, Duration::from_millis(1500)).await), Vec::<String>::new(), "said once");
+
+    // Forty characters in two seconds: at most three bodies, the last holding all forty.
+    let forty: String = "abcdefghij".repeat(4);
+    let began = tokio::time::Instant::now();
+    for (k, ch) in forty.chars().enumerate() {
+        one(&editor, "notes.update", json!({"id": id, "update": typed(&doc, at, &ch.to_string())})).await;
+        at += 1;
+        tokio::time::sleep_until(began + Duration::from_millis(50 * (k as u64 + 1))).await;
+    }
+    let bodies = texts(&heard_within(&mut agent, Duration::from_millis(2500)).await);
+    assert!(!bodies.is_empty() && bodies.len() <= 3, "{} bodies: {bodies:?}", bodies.len());
+    assert_eq!(bodies.last().unwrap(), &format!("Start.\n{sentence}{forty}"), "the last holds all forty");
+
+    // A page's watch, as today: no text.
+    let heard = heard_within(&mut page, Duration::from_millis(200)).await;
+    assert!(heard.iter().any(|e| e["type"] == "updated"), "{heard:?}");
+    assert!(heard.iter().all(|e| e["type"] != "text"), "a watch without text gets no text: {heard:?}");
+}
+
+/// NOTES-5, *An agent underlines a range, and may link it*: a mark is made
+/// with a link and a line of state, heard on the watch, changed and taken
+/// off — the body and the revision as they were; it follows its words
+/// through a paragraph written above it and a word written inside it;
+/// every character deleted, it is listed detached, last; a viewer is
+/// refused and reads the marks; a stranger finds none.
+#[tokio::test]
+async fn a_mark_follows_its_words_and_never_writes_the_text() {
+    let (_dir, _port, _admin, editor, viewer, stranger, _org) = people().await;
+    let body = "Draw every service as a node on a graph.\n\nThe names come from the service registry.\n";
+    let id = one(&editor, "notes.create", json!({"title": "The service map", "body": body})).await["note"]["id"].as_str().unwrap().to_string();
+    let mut w = call(&viewer, "notes.watch", json!({"id": id})).await;
+    assert_eq!(next(&mut w).await["type"], "watching");
+    let before = one(&viewer, "notes.get", json!({"id": id})).await["note"].clone();
+
+    // A sentence became a ticket: marked with it as its link, and a line of state.
+    let m = one(&editor, "notes.mark", json!({"id": id, "from": 0, "to": 40, "link": "KILN-12", "label": "filed KILN-12"})).await;
+    assert_eq!(m["type"], "marked", "{m}");
+    let mark = m["mark"]["mark"].as_str().unwrap().to_string();
+    assert_eq!(
+        (m["mark"]["words"].as_str(), m["mark"]["from"].as_u64(), m["mark"]["to"].as_u64(), m["mark"]["link"].as_str(), m["mark"]["label"].as_str(), m["mark"]["detached"].as_bool()),
+        (Some("Draw every service as a node on a graph."), Some(0), Some(40), Some("KILN-12"), Some("filed KILN-12"), Some(false))
+    );
+    let heard = next_of(&mut w, "mark_changed").await;
+    assert_eq!((heard["id"].as_str(), heard["mark"]["mark"].as_str()), (Some(id.as_str()), Some(mark.as_str())), "heard live: {heard}");
+    // Three words linked to an address of the app.
+    let words = one(&editor, "notes.mark", json!({"id": id, "from": 62, "to": 82, "link": "#/code/plexus-registry"})).await;
+    assert_eq!(words["mark"]["words"], "the service registry", "{words}");
+    let other = words["mark"]["mark"].as_str().unwrap().to_string();
+    assert_eq!(next_of(&mut w, "mark_changed").await["mark"]["mark"], other.as_str());
+    // Changed: a new line of state, the link kept; then the link taken off.
+    let changed = one(&editor, "notes.mark", json!({"id": id, "mark": mark, "label": "built graph-nodes v2"})).await;
+    assert_eq!((changed["mark"]["label"].as_str(), changed["mark"]["link"].as_str(), changed["mark"]["changed_by"].is_string()), (Some("built graph-nodes v2"), Some("KILN-12"), true), "{changed}");
+    assert_eq!(next_of(&mut w, "mark_changed").await["mark"]["label"], "built graph-nodes v2");
+    let unlinked = one(&editor, "notes.mark", json!({"id": id, "mark": other, "link": ""})).await;
+    assert!(unlinked["mark"].get("link").is_none(), "an empty link takes it off: {unlinked}");
+    one(&editor, "notes.mark", json!({"id": id, "mark": other, "link": "https://example.com/registry"})).await;
+    // Taken off.
+    assert_eq!(one(&editor, "notes.unmark", json!({"id": id, "mark": other})).await, json!({"type": "unmarked", "id": id, "mark": other}));
+    assert_eq!(next_of(&mut w, "mark_removed").await, json!({"type": "mark_removed", "id": id, "mark": other}));
+    // The text is not touched: the body and its revision are what they were.
+    let after = one(&viewer, "notes.get", json!({"id": id})).await["note"].clone();
+    assert_eq!((after["body"].clone(), after["revision"].clone()), (before["body"].clone(), before["revision"].clone()));
+    let history = all(&viewer, "notes.history", json!({"id": id})).await;
+    assert_eq!(history.len(), 1, "no change kept: {history:?}");
+
+    // Refused: a link that is none of the three, a range of nothing, a mark that is none, a range moved.
+    let bad = one(&editor, "notes.mark", json!({"id": id, "from": 0, "to": 4, "link": "javascript:alert(1)"})).await;
+    assert!(bad.to_string().contains("not a link"), "{bad}");
+    assert!(one(&editor, "notes.mark", json!({"id": id, "from": 4, "to": 4})).await["message"].as_str().unwrap().contains("nothing was written"));
+    assert_eq!(one(&editor, "notes.unmark", json!({"id": id, "mark": "zzzzzzzz"})).await, json!({"type": "not_found", "mark": "zzzzzzzz"}));
+    assert_eq!(one(&editor, "notes.mark", json!({"id": id, "mark": mark, "from": 1, "to": 2})).await["type"], "error");
+    // A viewer: refused forbidden, and notes.marks answers them. A stranger: none.
+    let no = one(&viewer, "notes.mark", json!({"id": id, "from": 0, "to": 4})).await;
+    assert!(gate_refused(&no, "notes.mark"), "{no}");
+    assert!(gate_refused(&one(&viewer, "notes.unmark", json!({"id": id, "mark": mark})).await, "notes.unmark"));
+    assert_eq!(all(&viewer, "notes.marks", json!({"id": id})).await.len(), 1);
+    assert_eq!(one(&stranger, "notes.marks", json!({"id": id})).await, json!({"type": "not_found", "id": id}));
+    assert_eq!(one(&stranger, "notes.mark", json!({"id": id, "from": 0, "to": 4})).await, json!({"type": "not_found", "id": id}));
+
+    // The text moves: a paragraph written above, a word added inside — the mark stays on its words.
+    let page = copy(&editor, &id).await;
+    one(&editor, "notes.update", json!({"id": id, "update": typed(&page, 0, "A paragraph above.\n\n")})).await;
+    one(&editor, "notes.update", json!({"id": id, "update": typed(&page, 20 + 11, "single ")})).await;
+    let now = all(&viewer, "notes.marks", json!({"id": id})).await;
+    let m = &now[0]["mark"];
+    assert_eq!((m["from"].as_u64(), m["to"].as_u64(), m["words"].as_str()), (Some(20), Some(67), Some("Draw every single service as a node on a graph.")), "{m}");
+    assert_eq!(m["quote"], "Draw every service as a node on a graph.", "what it held when made");
+    // A second mark, then every character of the first deleted: detached, listed last.
+    let names = one(&editor, "notes.mark", json!({"id": id, "from": 89, "to": 109})).await;
+    assert_eq!(names["mark"]["words"], "the service registry", "{names}");
+    let text = one(&viewer, "notes.get", json!({"id": id})).await["note"]["body"].as_str().unwrap().to_string();
+    let cut = text.replace("Draw every single service as a node on a graph.", "");
+    one(&editor, "notes.save", json!({"id": id, "body": cut})).await;
+    let now = all(&viewer, "notes.marks", json!({"id": id})).await;
+    assert_eq!(now.len(), 2, "{now:?}");
+    assert_eq!((now[0]["mark"]["words"].as_str(), now[0]["mark"]["detached"].as_bool()), (Some("the service registry"), Some(false)), "{now:?}");
+    assert_eq!((now[1]["mark"]["mark"].as_str(), now[1]["mark"]["detached"].as_bool(), now[1]["mark"].get("from")), (Some(mark.as_str()), Some(true), None), "detached, last: {now:?}");
+}

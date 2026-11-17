@@ -29,14 +29,15 @@
 //! | [`presence`] | who is on a note: entries held by a watch, idling out |
 //! | [`threads`] | V2-30: questions on a range, anchored in the CRDT, and their answers |
 //! | [`slot`] | NOTES-4: a note's slot — the component drawn beside it, its props, its fills, the build under way |
+//! | [`marks`] | NOTES-5: marks on a range — an underline, a link, a line of state — anchored as a question is, never writing the text |
 //! | [`quota`] | the meter every write is reserved against (always allows until V2-31) |
 //! | [`seam`] | the gate and `orgs.list` through the running service; [`seam::may`] for a client |
 //! | [`activation`] | the methods, the one declaration |
 
 pub mod vocab;
-pub use vocab::{AgentName, BuildStep, ComponentName, SlotProps, SlotSay, VersionRef, NoteAwareness, NoteBody, NoteId, NoteQuery, NoteSession, NoteTitle, NoteUpdate, NoteVector, ThreadId, ThreadText};
+pub use vocab::{AgentName, BuildStep, ComponentName, SlotProps, SlotSay, VersionRef, NoteAwareness, NoteBody, NoteId, NoteQuery, NoteSession, NoteTitle, NoteUpdate, NoteVector, ThreadId, ThreadText, MarkId, MarkLabel, MarkLink};
 pub mod events;
-pub use events::{Anchor, Author, Building, Fill, Note, NotesEvent, HistoryRow, Present, Reply, Resolution, Slot, Thread, WatchEnd};
+pub use events::{Anchor, Author, Building, Fill, Note, NotesEvent, HistoryRow, Present, Reply, Resolution, Slot, Thread, WatchEnd, Mark};
 pub mod store;
 pub use store::{Change, NotesStore, StoreError};
 pub mod crdt;
@@ -45,6 +46,7 @@ pub mod quota;
 pub mod threads;
 pub mod slot;
 mod slot_calls;
+pub mod marks;
 mod caller;
 pub use caller::{Caller, NotesRequest};
 pub mod seam;

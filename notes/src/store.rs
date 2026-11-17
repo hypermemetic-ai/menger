@@ -20,6 +20,8 @@
 //!   ([`crate::crdt`]) replaces the rows up to a moment with one `snapshot`
 //!   row holding who wrote what as its `authors`.
 //!
+//! NOTES-5: and `note_marks`, a row per mark on a note's text ([`crate::marks`]).
+//!
 //! How the body is written, replayed and squashed is [`crate::crdt`]'s; who
 //! is on a note is [`crate::presence`]'s. Whether a caller may read or
 //! write a note is the gate's word on its organization, asked by the
@@ -28,7 +30,7 @@
 //!
 //! One connection behind a mutex; every read and write off the runtime.
 
-use crate::events::{Building, Note, Present, Slot, Thread};
+use crate::events::{Building, Note, Present, Slot, Thread, Mark};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -97,6 +99,9 @@ pub enum Change {
     SlotChanged { org: String, slot: Slot },
     BuildingChanged { org: String, slot: Slot },
     PropsChanged { org: String, slot: Slot, by: String },
+    /// NOTES-5: a mark made or changed (whole), or taken off.
+    Marked { org: String, mark: Mark },
+    Unmarked { id: String, org: String, mark: String },
 }
 
 impl Change {
@@ -108,6 +113,8 @@ impl Change {
             Change::Present { present, .. } => &present.id,
             Change::Asked { thread, .. } | Change::Replied { thread, .. } | Change::Resolved { thread, .. } => &thread.id,
             Change::SlotChanged { slot, .. } | Change::BuildingChanged { slot, .. } | Change::PropsChanged { slot, .. } => &slot.id,
+            Change::Marked { mark, .. } => &mark.id,
+            Change::Unmarked { id, .. } => id,
         }
     }
 
@@ -118,6 +125,7 @@ impl Change {
             Change::Deleted { org, .. } | Change::Squashed { org, .. } | Change::Present { org, .. } | Change::Left { org, .. } => org,
             Change::Asked { org, .. } | Change::Replied { org, .. } | Change::Resolved { org, .. } => org,
             Change::SlotChanged { org, .. } | Change::BuildingChanged { org, .. } | Change::PropsChanged { org, .. } => org,
+            Change::Marked { org, .. } | Change::Unmarked { org, .. } => org,
         }
     }
 }
@@ -131,6 +139,8 @@ pub enum StoreError {
     NoRevision(String, u32),
     /// V2-30: no thread of that id on the note.
     NoThread(String),
+    /// NOTES-5: no mark of that id on the note.
+    NoMark(String),
     /// V2-30: a range that is not one of the text.
     BadRange(String),
     /// The update or state is not one the CRDT reads.
@@ -151,6 +161,7 @@ impl std::fmt::Display for StoreError {
             StoreError::NotFound(id) => write!(f, "no note {id}"),
             StoreError::NoRevision(id, r) => write!(f, "note {id} has no change {r}"),
             StoreError::NoThread(t) => write!(f, "no thread {t}"),
+            StoreError::NoMark(m) => write!(f, "no mark {m}"),
             StoreError::BadRange(e) => write!(f, "not a range of the text: {e}"),
             StoreError::BadUpdate(e) => write!(f, "not a Yjs v1 update: {e}"),
             StoreError::Quota(e) => write!(f, "{e}"),
@@ -282,6 +293,7 @@ impl NotesStore {
         conn.execute_batch(TABLES)?;
         conn.execute_batch(crate::threads::TABLES)?;
         conn.execute_batch(crate::slot::TABLES)?;
+        conn.execute_batch(crate::marks::TABLES)?;
         Ok(Self {
             conn: Mutex::new(conn),
             path: path.to_path_buf(),

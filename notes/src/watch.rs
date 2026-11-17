@@ -14,6 +14,15 @@
 //! `watch_closed { reason, message }`. Each write is asked of the gate as
 //! it stands then, so a role taken off an organization stops its writes
 //! reaching the watch at once.
+//!
+//! NOTES-5: on one note, `mark_changed { id, mark }` and `mark_removed { id,
+//! mark }` as marks come and go (on every note's watch too); and with
+//! `text: true` the note's markdown as words, so an agent follows what is
+//! written with no CRDT of its own: `text { id, revision, body, by, at }`
+//! once as the watch opens, then after a change — [`TEXT_EVERY`] after the
+//! first change not yet said, holding every change made meanwhile, so at
+//! most one a second and the last change always said. Made in the service
+//! from its CRDT, whoever wrote; held to the reach `notes.get` is.
 
 use crate::caller::Caller;
 use crate::events::NotesEvent;
@@ -26,6 +35,25 @@ use tokio::sync::broadcast::error::RecvError;
 
 /// How often a quiet watch asks the gate whether its caller still stands.
 pub const LOOK_EVERY: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// NOTES-5: how long a change waits before a watch with `text` says the
+/// body — every change made meanwhile said with it.
+pub const TEXT_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// What woke an open watch.
+enum Woke {
+    /// Something that could change its caller moved.
+    Moved,
+    /// NOTES-5: a body not yet said is due.
+    Due,
+    /// A write, or the channel's word.
+    Heard(Result<Change, RecvError>),
+}
+
+/// The `text` event of `doc` as it stands (its body whole).
+fn text_of(doc: &crate::events::Note) -> NotesEvent {
+    NotesEvent::Text { id: doc.id.clone(), revision: doc.revision, body: doc.body.clone().unwrap_or_default(), by: doc.by.clone(), at: doc.at }
+}
 
 /// An open watch's caller and what wakes it (the ui service's `Following`).
 struct Following {
@@ -94,14 +122,24 @@ fn said(change: Change, one: bool) -> Option<NotesEvent> {
         Change::SlotChanged { slot, .. } => NotesEvent::SlotChanged { id: slot.id.clone(), slot },
         Change::BuildingChanged { slot, .. } => NotesEvent::BuildingChanged { id: slot.id.clone(), building: slot.building.clone(), slot },
         Change::PropsChanged { slot, by, .. } => NotesEvent::PropsChanged { id: slot.id.clone(), props: slot.props.clone(), by, slot },
+        Change::Marked { mark, .. } => NotesEvent::MarkChanged { id: mark.id.clone(), mark },
+        Change::Unmarked { id, mark, .. } => NotesEvent::MarkRemoved { id, mark },
     })
 }
 
 /// The stream: subscribed at the call, then `watching`, then each write.
-pub(crate) fn watch(store: Arc<NotesStore>, seam: Seam, user: Caller, id: Option<String>, session: Option<String>) -> impl Stream<Item = NotesEvent> + Send + 'static {
+pub(crate) fn watch(store: Arc<NotesStore>, seam: Seam, user: Caller, id: Option<String>, session: Option<String>, text: bool) -> impl Stream<Item = NotesEvent> + Send + 'static {
     let mut rx = store.subscribe();
     stream! {
         let mut _held = None;
+        // NOTES-5: the body not yet said, and when it is due.
+        let mut unsaid: Option<crate::events::Note> = None;
+        let mut due: Option<tokio::time::Instant> = None;
+        let mut opened = None;
+        if text && id.is_none() {
+            yield NotesEvent::Error { message: "text follows one note: name its id".into() };
+            return;
+        }
         if let Some(id) = &id {
             match crate::streams::reached(&store, &seam, &user, id, "notes.watch").await {
                 Ok(doc) => {
@@ -109,6 +147,7 @@ pub(crate) fn watch(store: Arc<NotesStore>, seam: Seam, user: Caller, id: Option
                         store.arrive(id, &doc.org, session, &user.who(), true, None, None);
                         _held = Some(crate::presence::Held { store: Arc::clone(&store), id: id.clone(), session: session.to_string() });
                     }
+                    opened = Some(doc);
                 }
                 Err(ev) => {
                     yield ev;
@@ -117,20 +156,30 @@ pub(crate) fn watch(store: Arc<NotesStore>, seam: Seam, user: Caller, id: Option
             }
         }
         yield NotesEvent::Watching { id: id.clone() };
+        if let (true, Some(doc)) = (text, opened.as_ref()) {
+            yield text_of(doc);
+        }
         let mut following = Following::of(user);
         loop {
             let woke = tokio::select! {
                 biased;
-                () = following.changed() => None,
-                r = rx.recv() => Some(r),
+                () = following.changed() => Woke::Moved,
+                () = async { match due { Some(at) => tokio::time::sleep_until(at).await, None => std::future::pending().await } } => Woke::Due,
+                r = rx.recv() => Woke::Heard(r),
             };
             if let Err((reason, message)) = following.caller.again() {
                 yield NotesEvent::WatchClosed { reason, message };
                 return;
             }
             match woke {
-                None => continue,
-                Some(Ok(change)) => {
+                Woke::Moved => continue,
+                Woke::Due => {
+                    due = None;
+                    if let Some(doc) = unsaid.take() {
+                        yield text_of(&doc);
+                    }
+                }
+                Woke::Heard(Ok(change)) => {
                     if id.as_deref().is_some_and(|id| id != change.id()) {
                         continue;
                     }
@@ -142,12 +191,21 @@ pub(crate) fn watch(store: Arc<NotesStore>, seam: Seam, user: Caller, id: Option
                             return;
                         }
                     }
+                    if let (true, Change::Updated { doc, .. }) = (text, &change) {
+                        unsaid = Some(doc.clone());
+                        due.get_or_insert_with(|| tokio::time::Instant::now() + TEXT_EVERY);
+                    }
                     if let (Change::Updated { session: Some(from), .. }, Some(mine)) = (&change, session.as_deref()) {
                         if from == mine {
                             continue;
                         }
                     }
                     let gone = matches!(change, Change::Deleted { .. }) && id.is_some();
+                    if gone {
+                        if let Some(doc) = unsaid.take() {
+                            yield text_of(&doc);
+                        }
+                    }
                     if let Some(ev) = said(change, id.is_some()) {
                         yield ev;
                     }
@@ -155,8 +213,17 @@ pub(crate) fn watch(store: Arc<NotesStore>, seam: Seam, user: Caller, id: Option
                         return;
                     }
                 }
-                Some(Err(RecvError::Lagged(missed))) => yield NotesEvent::Lagged { missed },
-                Some(Err(RecvError::Closed)) => return,
+                Woke::Heard(Err(RecvError::Lagged(missed))) => {
+                    yield NotesEvent::Lagged { missed };
+                    // NOTES-5: what went by unheard may have changed the body: it is read again, and said when due.
+                    if let (true, Some(id)) = (text, id.as_deref()) {
+                        if let Ok(doc) = store.get(id).await {
+                            unsaid = Some(doc);
+                            due.get_or_insert_with(|| tokio::time::Instant::now() + TEXT_EVERY);
+                        }
+                    }
+                }
+                Woke::Heard(Err(RecvError::Closed)) => return,
             }
         }
     }

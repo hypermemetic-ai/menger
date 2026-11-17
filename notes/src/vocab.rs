@@ -354,6 +354,69 @@ pub enum BuildStep {
     Compiled,
 }
 
+text_type!(
+    /// NOTES-5: a mark's id: 8 characters of Crockford's base32, as `mark` answered it.
+    MarkId,
+    id
+);
+
+/// NOTES-5: the most a mark's line of state may be, in characters.
+pub const LABEL_MAX: usize = 200;
+/// NOTES-5: the most a mark's link may be, in bytes.
+pub const LINK_MAX: usize = 2048;
+
+fn label(text: &str) -> Result<String, String> {
+    let t = text.trim();
+    match (t.contains(['\n', '\r']), t.chars().count() > LABEL_MAX) {
+        (true, _) => Err("a label is one line: it holds a line break".to_string()),
+        (_, true) => Err(format!("a label is at most {LABEL_MAX} characters; this one is {}", t.chars().count())),
+        _ => Ok(t.to_string()),
+    }
+}
+
+text_type!(
+    /// NOTES-5: a mark's line of state: one line, at most 200 characters,
+    /// e.g. filed KILN-12; empty takes it off.
+    MarkLabel,
+    label
+);
+
+/// Whether `t` is a ticket's address: `KILN-12`, `SYNAPSE-CC-10`, `KILN-2.1`,
+/// `MENGER/ORG-3`, `acme:KILN-12` — a shortcode (a letter, then letters,
+/// digits and dashes), a dash and its number, any namespace before it.
+fn is_ticket(t: &str) -> bool {
+    let tail = t.rsplit(['/', ':']).next().unwrap_or(t);
+    let head = &t[..t.len() - tail.len()];
+    let Some((code, n)) = tail.rsplit_once('-') else { return false };
+    let code_ok = code.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) && code.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    let n_ok = !n.is_empty() && n.split('.').all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    let head_ok = head.chars().all(|c| c.is_ascii_alphanumeric() || "-_:/".contains(c));
+    code_ok && n_ok && head_ok
+}
+
+fn link(text: &str) -> Result<String, String> {
+    let t = text.trim();
+    let https = t.get(..8).is_some_and(|s| s.eq_ignore_ascii_case("https://")) && t.len() > 8 && !t[8..].starts_with(['/', '?', '#']);
+    if t.is_empty() {
+        return Ok(String::new());
+    }
+    if t.len() > LINK_MAX {
+        return Err(format!("a link is at most {LINK_MAX} bytes; this one is {}", t.len()));
+    }
+    match !t.chars().any(|c| c.is_whitespace() || c.is_control()) && (t.starts_with("#/") || https || is_ticket(t)) {
+        true => Ok(t.to_string()),
+        false => Err(not_a(t, "a link", "a ticket (KILN-12), an address of the app (#/note/7k3mq2xa) or an https address")),
+    }
+}
+
+text_type!(
+    /// NOTES-5: what a mark links to: a ticket (`KILN-12`), an address of
+    /// the app (`#/…`) or an `https` address; anything else is refused.
+    /// Empty takes it off.
+    MarkLink,
+    link
+);
+
 /// A fresh id from `draw`'s low 40 bits, most significant digit first.
 pub fn id_of_bits(bits: u64) -> String {
     (0..ID_LEN).map(|i| ID_ALPHABET[((bits >> (5 * (ID_LEN - 1 - i))) & 31) as usize] as char).collect()
@@ -394,6 +457,20 @@ mod tests {
         assert!("x".repeat(BODY_MAX + 1).parse::<NoteBody>().is_err());
         assert_eq!("".parse::<NoteBody>().unwrap().as_str(), "");
         assert!(serde_json::from_str::<NoteId>("\"abc\"").is_err(), "deserializing is the check");
+    }
+
+    #[test]
+    fn a_link_is_a_ticket_an_address_of_the_app_or_https() {
+        for ok in ["KILN-12", "SYNAPSE-CC-10", "KILN-2.1", "MENGER/ORG-3", "acme:KILN-12", "#/note/7k3mq2xa", "#/code/plexus-registry", "https://example.com/a?b=c", "HTTPS://example.com"] {
+            assert_eq!(ok.parse::<MarkLink>().map(|l| l.into_string()), Ok(ok.to_string()), "{ok}");
+        }
+        for bad in ["http://example.com", "javascript:alert(1)", "https://", "https:///x", "KILN", "KILN-", "12-3", "#/a b", "/app/#/x", "mailto:a@b.c", "data:text/html,x", "KILN-1x"] {
+            assert!(bad.parse::<MarkLink>().is_err(), "{bad}");
+        }
+        assert_eq!("".parse::<MarkLink>().unwrap().as_str(), "", "empty takes it off");
+        assert_eq!(" built graph-nodes v2 ".parse::<MarkLabel>().unwrap().as_str(), "built graph-nodes v2");
+        assert!("two\nlines".parse::<MarkLabel>().is_err());
+        assert!("x".repeat(LABEL_MAX + 1).parse::<MarkLabel>().is_err());
     }
 
     #[test]

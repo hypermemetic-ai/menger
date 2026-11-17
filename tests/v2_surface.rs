@@ -161,6 +161,25 @@ async fn the_service_registers_tickets_members_orgs_session_and_nothing_else() {
     assert!(!many.contains("assign") && !many.contains("unassign"), "update_many takes no assign: {many:?}");
 }
 
+/// NOTES-5: the notes service marks a range and says a note as text — `mark`,
+/// `unmark`, `marks`, and `watch`'s `text` — and nothing among them writes
+/// the note.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn notes_mark_a_range_and_say_a_note_as_text() {
+    let port = start_server().await;
+    let c = support::connect(port).await;
+    let notes = one(&c, "notes.schema", json!({})).await;
+    let have = methods(&notes);
+    // The caller's own (`auth`, `user`) is no parameter a call sends.
+    let params = |m: &str| -> BTreeSet<String> { params(&notes, m).into_iter().filter(|p| p != "auth" && p != "user").collect() };
+    let lacking: Vec<&str> = ["mark", "unmark", "marks", "watch", "ask", "threads"].into_iter().filter(|m| !have.contains(*m)).collect();
+    assert!(lacking.is_empty(), "notes lacks {lacking:?}");
+    assert_eq!(params("mark"), set(&["id", "from", "to", "mark", "link", "label"]));
+    assert_eq!(params("unmark"), set(&["id", "mark"]));
+    assert_eq!(params("marks"), set(&["id"]));
+    assert_eq!(params("watch"), set(&["id", "session", "text"]));
+}
+
 /// A body is text but for its inputs: a `theme` block the theme registry
 /// would refuse was a refusal on v1, and is a body like any other on v2 —
 /// created, and read back as written; V2-20: two inputs with one id are
