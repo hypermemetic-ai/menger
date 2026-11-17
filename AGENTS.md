@@ -436,6 +436,30 @@ deploy/pipeline releases                      # every release: its suite, tested
   merges `--no-ff` (never squash or rebase on merge), links, sets In Review,
   then runs `build --branch v2 --no-gate` → `image` → `remote test`, and the
   suite after it; a red suite keeps the release from prod.
+- **A component is built straight into prod** (owner, 2026-11-16: "just
+  deploy straight to prod"; "that's the new policy. for many kinds of
+  components we prioritize building them directly into prod and testing them
+  concurrently"; and: "we do not wait for a deployment. we need to get that
+  down from taking any time at all to being practically instant. we want to
+  iterate directly in prod"). A change that is `ui/src` alone — a
+  component's source; no method, no server code, nothing of the shell or the
+  page's policy — is built directly, not planned out first (owner, the same
+  day: "you don't have to plan it out :) just build it directly into a plexus
+  ui componenet"), and waits for no gate, review or suite: `deploy/pipeline
+  ui prod` from a checkout at the commit prod's server runs — the bundle
+  live on test in seconds (refused `unknown_method` when the tree is ahead of
+  the server), then prod's pointer onto it, in one command; `--watch` does it
+  again on every change, and `ui` and `ui promote` are its two halves. Look
+  at it on prod, change it, run it again. After each, check that the app
+  still draws — a push replaces the whole interface, not one component — and
+  that prod took the version just pushed. Its browser cases run beside it and
+  a red one is fixed forward; the interface alone goes back by pushing the
+  old source and promoting again (`ui rollback --channel prod` is an
+  admin's). The source is committed and merged to `v2` in the same pass, so
+  the next release carries it. Everything else keeps the rules above: a
+  release passes test, and `remote prod` is the owner's word. Which kinds
+  "many kinds" covers is the owner's to say; the component-only reading is an
+  agent's, 2026-11-16.
 - 2026-10-29: test runs v2, release `20261029T114133Z-06aeff5`; prod runs
   v1 and is the tracker.
 
