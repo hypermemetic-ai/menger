@@ -296,7 +296,7 @@ export default async (ctx) => {
       const r = as("quota", "history", ...asked);
       assert(r.some((e) => e.type === "error") && !r.some((e) => e.type === "point"), `${asked.join(" ")}: refused, nothing answered: ${JSON.stringify(r).slice(0, 200)}`);
     }
-    assert(as("quota", "history", "--days", "7").filter((e) => e.type === "point").length === 7 * 9, "their own: every source, every day");
+    assert(as("quota", "history", "--days", "7").filter((e) => e.type === "point").length === 7 * 11, "their own: every source, every day");
     const { page, context } = await openAs(s.token, `#/usage/${encodeURIComponent(owner)}`);
     try {
       await eventually("refused on the page", async () => (await page.locator("[data-surface=quota-history] [data-refused]").count()) === 1, 5_000);

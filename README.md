@@ -1104,8 +1104,10 @@ uuid"), so it follows the ticket through every move and takes its reach.
 | `list` | | viewer | `log { log, ticket, uid, fields, entries, deprecated?, deprecated_fields? }` per log whose ticket the caller sees |
 | `extend` | `--log --schema` | admin | the schema grown by optional fields: `extended { log, added, columns }` |
 | `deprecate` | `--log [--field] --message` | admin | the log, or one field, closed to new entries: `deprecated { log, field?, message }` |
+| `read` | `[--log] [--filter] [--tag] [--since] [--until] [--by] [--ticket] [--limit] [--after]` | viewer | LOGS-3: `entry { log, seq, at, by, tags, ticket?, entry }` per entry, newest first, then `page { count, next? }` — one log's, or with no `--log` every log's the caller sees |
+| `watch` | `[--log] [--tag]` | viewer | LOGS-3: `watching { log?, tag? }`, then `entry { … }` as each is appended (open-ended); `lagged { missed }` past 1,024 behind |
 
-**Who may.** At the gate `describe` and `list` are a viewer's, `append` an
+**Who may.** At the gate `describe`, `list`, `read` and `watch` are a viewer's, `append` an
 editor's, `define`, `extend` and `deprecate` the admin's — each held
 anywhere; then the log's ticket decides, asked of the tickets service as
 the caller (`tickets.may` by the uid): the same role on that ticket, else
@@ -1158,8 +1160,47 @@ holds, and quoted; every value is bound. Every append is reserved for its
 writer through the quota service before anything is kept (`logs.bytes`:
 each entry's JSON and its tags), then committed or released.
 
+**Reading** (LOGS-3). `read --log perf` answers the log's entries newest
+first (by `seq`), a page of `--limit` (100; at most 1,000), `next` given
+back as `--after` for the page after; with no `--log`, every log whose
+ticket the caller sees, newest first by `at` (then the log's name, then
+`seq`), each entry with its log's name — the `next` then `at.seq.log`.
+`--tag` (one tag), `--since` and `--until` (an age, `7d`, `12h`, `30m`,
+`45s`, `2w`; a date, `2026-11-16`, its first moment UTC; or unix ms),
+`--by` (a principal) and `--ticket` (any name of a ticket, matched by its
+uid) narrow either. `--filter` is the log's own language — LOGS-1 wrote
+`--where`, a word Rust keeps (plexus-macros 0.8 names a parameter
+`r#where` on the wire as written):
+
+| words | |
+|---|---|
+| a field | the log's, or the envelope's `seq`, `at`, `by`, `ticket` (`tags` is `--tag`; an `array` or `object` field is not filtered on) |
+| `=` `!=` `<` `<=` `>` `>=` | a string field with a quoted string (`"…"` or `'…'`, `\"` `\'` `\\` escaped), an integer or number field with a number, a boolean field with `true` / `false` (`=`, `!=` alone) |
+| `in ( v, … )` | one of at most 100 values |
+| `= null`, `!= null` | carries no value, carries one |
+| `and`, `or`, `not`, `( … )` | `not` binds tightest, then `and`, then `or`; any case |
+
+Two-valued: a comparison with a field an entry does not carry is false
+(`!=` true), so `not` is its opposite. Checked against the log's columns
+before anything is read — a field it has not is refused `bad_filter`,
+naming those it has; across logs, the envelope's alone — and compiled to
+SQL with every value bound; at most 4 KiB, 32 deep.
+
+```sh
+synapse -P 4460 menger logs read --log perf --filter 'app = "plexus" and scenario = "stream.10k.64B" and transport = "websocket"' --limit 20
+synapse -P 4460 menger logs read --tag plexus --since 7d
+```
+
+**Watching.** `watch [--log] [--tag]` says `watching`, then each entry as it
+is appended (a log the caller cannot see is `not_found`, and the watch
+ends). With no `--log` it hears every log, and is told an entry only while
+the caller sees its log's ticket — asked of the tickets service again at
+most every 5 seconds a log. Past 1,024 appends behind it says `lagged {
+missed }` and goes on; `read` has what went by.
+
 ```sh
 synapse -P 4460 menger logs list
+synapse -P 4460 menger logs watch --log perf     # open-ended
 ```
 
 ## Tickets

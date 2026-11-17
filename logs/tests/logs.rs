@@ -395,3 +395,175 @@ async fn an_append_past_the_allowance_keeps_nothing() {
     }
     assert!(w.logs.store().entries("perf", None, 10).unwrap().is_empty());
 }
+
+// ── LOGS-3: read and watch ───────────────────────────────────────────────
+
+use futures::StreamExt;
+use menger_logs::ReadArgs;
+use std::sync::atomic::{AtomicI64, Ordering};
+
+/// A world whose clock the test moves: (the world, its clock in ms).
+fn timed() -> (World, Arc<AtomicI64>) {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(LogsStore::open(&dir.path().join("logs.db")).unwrap());
+    let tickets = Tickets::new();
+    let meter = Arc::new(Meter::default());
+    let now = Arc::new(AtomicI64::new(1_794_000_000_000));
+    let clock = now.clone();
+    let logs = LogsService::new(store, tickets.clone()).with_allowance(meter.clone()).with_clock(Arc::new(move || clock.load(Ordering::SeqCst)));
+    (World { _dir: dir, logs, tickets, meter }, now)
+}
+
+fn read(log: Option<&str>) -> ReadArgs {
+    ReadArgs { log: log.map(str::to_string), ..Default::default() }
+}
+
+fn entries(events: &[LogsEvent]) -> Vec<(String, u64, Value)> {
+    events.iter().filter_map(|e| match e {
+        LogsEvent::Entry { log, seq, entry, .. } => Some((log.clone(), *seq, entry.clone())),
+        _ => None,
+    }).collect()
+}
+
+fn page(events: &[LogsEvent]) -> (u64, Option<String>) {
+    match events.last() {
+        Some(LogsEvent::Page { count, next }) => (*count, next.clone()),
+        other => panic!("a page last: {other:?}"),
+    }
+}
+
+/// Scenario "one scenario over time": the last twenty such results, newest
+/// first, filtered on three fields; the page after them by `next`.
+#[tokio::test]
+async fn one_scenario_over_time() {
+    let w = world();
+    defined(&w).await;
+    for i in 0..60u64 {
+        let mut r = result(if i % 3 == 0 { "menger" } else { "plexus" }, json!(i));
+        r["transport"] = json!(if i % 2 == 0 { "websocket" } else { "memory" });
+        w.logs.append(&me(EDITOR), "perf", vec![r], vec![], None).await;
+    }
+    let ask = |after: Option<String>| ReadArgs { filter: Some(r#"app = "plexus" and scenario = "stream.10k.64B" and transport = "websocket""#.into()), limit: Some(20), after, ..read(Some("perf")) };
+    let first = w.logs.read(&me(VIEWER), ask(None)).await;
+    let got = entries(&first);
+    // seq i+1 holds value i; plexus is i % 3 != 0, websocket is i even.
+    let want: Vec<u64> = (0..60u64).rev().filter(|i| i % 3 != 0 && i % 2 == 0).map(|i| i + 1).collect();
+    assert_eq!(got.iter().map(|(_, s, _)| *s).collect::<Vec<_>>(), want[..want.len().min(20)].to_vec(), "newest first");
+    assert!(got.iter().all(|(l, _, e)| l == "perf" && e["app"] == "plexus" && e["transport"] == "websocket"));
+    assert_eq!(want.len(), 20, "exactly twenty such");
+    let (count, next) = page(&first);
+    assert_eq!((count, next.as_deref()), (20, Some(want[19].to_string().as_str())));
+    assert_eq!(page(&w.logs.read(&me(VIEWER), ask(next)).await), (0, None), "nothing after the twentieth");
+    // The envelope too: by, seq.
+    let mine = w.logs.read(&me(VIEWER), ReadArgs { by: Some(EDITOR.into()), filter: Some("seq <= 3".into()), ..read(Some("perf")) }).await;
+    assert_eq!(entries(&mine).iter().map(|(_, s, _)| *s).collect::<Vec<_>>(), vec![3, 2, 1]);
+    assert_eq!(page(&w.logs.read(&me(VIEWER), ReadArgs { by: Some("key:nobody".into()), ..read(Some("perf")) }).await).0, 0);
+}
+
+/// Scenario "across logs": every log's entries with the tag within the
+/// week, each with its log's name and its entry as JSON, newest first;
+/// paged across logs.
+#[tokio::test]
+async fn across_logs_by_tag_and_time() {
+    let (w, now) = timed();
+    defined(&w).await;
+    let sizes = r#"{"type": "object", "required": ["bytes"], "properties": {"bytes": {"type": "integer"}, "what": {"type": "string"}}}"#;
+    assert!(matches!(w.logs.define(&me(ADMIN), "sizes", "LAYERS-23", sizes).await, LogsEvent::Defined { .. }));
+    let day = 86_400_000;
+    // Ten days ago, tagged: out of the week.
+    w.logs.append(&me(EDITOR), "perf", vec![result("plexus", json!(1))], vec!["plexus".into()], None).await;
+    now.fetch_add(4 * day, Ordering::SeqCst);
+    w.logs.append(&me(EDITOR), "sizes", vec![json!({"bytes": 1024, "what": "engine"})], vec!["plexus".into()], None).await;
+    now.fetch_add(day, Ordering::SeqCst);
+    w.logs.append(&me(EDITOR), "perf", vec![result("plexus", json!(2)), result("plexus", json!(3))], vec!["plexus".into(), "websocket".into()], None).await;
+    w.logs.append(&me(EDITOR), "sizes", vec![json!({"bytes": 2048})], vec!["menger".into()], None).await;
+    now.fetch_add(5 * day, Ordering::SeqCst);
+    let week = w.logs.read(&me(VIEWER), ReadArgs { tag: Some("plexus".into()), since: Some("7d".into()), ..read(None) }).await;
+    let got = entries(&week);
+    assert_eq!(got.iter().map(|(l, s, _)| (l.as_str(), *s)).collect::<Vec<_>>(), [("perf", 3), ("perf", 2), ("sizes", 1)], "newest first, the tag's alone, the week's alone");
+    assert_eq!(got[2].2, json!({"bytes": 1024, "what": "engine"}), "its entry as JSON");
+    assert!(matches!(&week[0], LogsEvent::Entry { tags, by, .. } if tags == &["plexus".to_string(), "websocket".into()] && by == EDITOR));
+    // A page at a time, across logs.
+    let p1 = w.logs.read(&me(VIEWER), ReadArgs { tag: Some("plexus".into()), limit: Some(2), ..read(None) }).await;
+    let (_, next) = page(&p1);
+    let p2 = w.logs.read(&me(VIEWER), ReadArgs { tag: Some("plexus".into()), limit: Some(2), after: next, ..read(None) }).await;
+    let both: Vec<(String, u64)> = entries(&p1).into_iter().chain(entries(&p2)).map(|(l, s, _)| (l, s)).collect();
+    assert_eq!(both, [("perf".into(), 3), ("perf".into(), 2), ("sizes".into(), 1), ("perf".into(), 1)]);
+    // Across logs the filter is the envelope's alone.
+    match &w.logs.read(&me(VIEWER), ReadArgs { filter: Some(r#"app = "plexus""#.into()), ..read(None) }).await[..] {
+        [LogsEvent::Refused { reason, message, .. }] => assert!(reason == "bad_filter" && message.contains("`app` is no field of the envelope"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+    let by_seq = w.logs.read(&me(VIEWER), ReadArgs { filter: Some("seq = 1".into()), ..read(None) }).await;
+    assert_eq!(entries(&by_seq).len(), 2, "seq 1 of each log");
+    // A ticket, by any name: entries naming it.
+    w.logs.append(&me(EDITOR), "sizes", vec![json!({"bytes": 1})], vec![], Some("LAYERS-9")).await;
+    let named = w.logs.read(&me(VIEWER), ReadArgs { ticket: Some(UID.into()), ..read(None) }).await;
+    assert_eq!(entries(&named).iter().map(|(l, s, _)| (l.as_str(), *s)).collect::<Vec<_>>(), [("sizes", 3)]);
+}
+
+/// A viewer may read; an outsider is answered as if there were no log, and
+/// sees nothing across logs.
+#[tokio::test]
+async fn a_viewer_reads_and_an_outsider_sees_nothing() {
+    let w = world();
+    defined(&w).await;
+    w.logs.append(&me(EDITOR), "perf", vec![result("plexus", json!(1))], vec!["plexus".into()], None).await;
+    assert_eq!(entries(&w.logs.read(&me(VIEWER), read(Some("perf"))).await).len(), 1);
+    assert_eq!(w.logs.read(&me(OUTSIDER), read(Some("perf"))).await, vec![LogsEvent::no_log("perf")]);
+    assert_eq!(w.logs.read(&me(OUTSIDER), ReadArgs { tag: Some("plexus".into()), ..read(None) }).await, vec![LogsEvent::Page { count: 0, next: None }]);
+    // A deprecated log is still read.
+    w.logs.deprecate(&me(ADMIN), "perf", None, "replaced").await;
+    assert_eq!(entries(&w.logs.read(&me(VIEWER), read(Some("perf"))).await).len(), 1);
+}
+
+/// An unknown field in the filter is refused naming the log's fields;
+/// nothing is read.
+#[tokio::test]
+async fn an_unknown_field_is_named_with_the_fields_there_are() {
+    let w = world();
+    defined(&w).await;
+    match &w.logs.read(&me(VIEWER), ReadArgs { filter: Some(r#"aap = "plexus""#.into()), ..read(Some("perf")) }).await[..] {
+        [LogsEvent::Refused { reason, message, .. }] => {
+            assert_eq!(reason, "bad_filter");
+            assert_eq!(message, "--filter: `aap` is no field of the log `perf` (its fields: seq, at, by, ticket, app, scenario, transport, metric, value, unit, commit, machine, load, config)");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(&w.logs.read(&me(VIEWER), ReadArgs { filter: Some("value = \"fast\"".into()), ..read(Some("perf")) }).await[..], [LogsEvent::Refused { message, .. }] if message.contains("`value` is number, compared with a string")));
+    assert!(matches!(&w.logs.read(&me(VIEWER), ReadArgs { after: Some("1.2.perf".into()), ..read(Some("perf")) }).await[..], [LogsEvent::Refused { reason, .. }] if reason == "bad_cursor"));
+}
+
+/// Scenario "watching": a watcher of the log receives each entry as it is
+/// appended; one watching by tag only those carrying it; an outsider's
+/// watch of every log is told nothing; a watch of a log it cannot see is
+/// not found.
+#[tokio::test]
+async fn a_watcher_receives_an_append() {
+    let w = world();
+    defined(&w).await;
+    let logs = Arc::new(w.logs);
+    let mut perf = Box::pin(logs.clone().watch(me(VIEWER), Some("perf".into()), None));
+    assert_eq!(perf.next().await, Some(LogsEvent::Watching { log: Some("perf".into()), tag: None }));
+    let mut tagged = Box::pin(logs.clone().watch(me(VIEWER), None, Some("websocket".into())));
+    assert!(matches!(tagged.next().await, Some(LogsEvent::Watching { .. })));
+    let mut outsider = Box::pin(logs.clone().watch(me(OUTSIDER), None, None));
+    assert!(matches!(outsider.next().await, Some(LogsEvent::Watching { .. })));
+    let mut no = Box::pin(logs.clone().watch(me(OUTSIDER), Some("perf".into()), None));
+    assert_eq!(no.next().await, Some(LogsEvent::no_log("perf")));
+    assert_eq!(no.next().await, None, "and ends");
+
+    logs.append(&me(EDITOR), "perf", vec![result("plexus", json!(1))], vec!["plexus".into()], None).await;
+    logs.append(&me(EDITOR), "perf", vec![result("plexus", json!(2)), result("plexus", json!(3))], vec!["websocket".into()], None).await;
+    let two = std::time::Duration::from_secs(2);
+    for want in 1..=3u64 {
+        match tokio::time::timeout(two, perf.next()).await.expect("an entry").unwrap() {
+            LogsEvent::Entry { log, seq, entry, by, .. } => assert_eq!((log.as_str(), seq, entry["value"].clone(), by.as_str()), ("perf", want, json!(want as f64), EDITOR)),
+            other => panic!("{other:?}"),
+        }
+    }
+    for want in 2..=3u64 {
+        assert!(matches!(tokio::time::timeout(two, tagged.next()).await.unwrap(), Some(LogsEvent::Entry { seq, .. }) if seq == want));
+    }
+    assert!(tokio::time::timeout(std::time::Duration::from_millis(300), outsider.next()).await.is_err(), "an outsider is told nothing");
+}

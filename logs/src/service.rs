@@ -11,13 +11,14 @@
 //! | `define`, `extend`, `deprecate` | admin |
 //! | `append` | editor |
 //! | `describe`, `list` | viewer — a log on a ticket the caller cannot see is not found, and not listed |
+//! | `read`, `watch` (LOGS-3) | viewer — across logs, only the logs whose tickets the caller sees; a watcher is told an entry only while it sees its log's ticket (asked again at most every [`REACH_SECS`] seconds a log) |
 
 use crate::allowance::{Allowance, Unlimited};
 use crate::caller::Caller;
 use crate::events::{columns, Column, LogsEvent};
 use crate::schema::{self, Field};
 use crate::seam::{Answer, Reach};
-use crate::store::{writable, LogRow, LogsStore, StoreError};
+use crate::store::{writable, Before, EntryRow, LogRow, LogsStore, Query, StoreError};
 use menger_tickets_api::members::Role;
 use serde_json::Value;
 use std::sync::Arc;
@@ -29,6 +30,45 @@ pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 pub const APPEND_MAX: usize = 10_000;
 /// The most tags one `append` gives its entries.
 pub const TAGS_MAX: usize = 32;
+/// LOGS-3: a page of `read`, unless `limit` says: 100; at most 1,000.
+pub const PAGE: u32 = 100;
+pub const PAGE_MAX: u32 = 1_000;
+/// LOGS-3: how long a watcher's answer from the tickets service is reused, a log's ticket.
+pub const REACH_SECS: u64 = 5;
+/// LOGS-3: how many appends a watcher may fall behind before it is told it missed some.
+pub const WATCH_BUFFER: usize = 1_024;
+
+/// LOGS-3: what an append tells its watchers: the log, its ticket's uid,
+/// and the entries kept, as kept.
+#[derive(Debug, Clone)]
+pub struct Published {
+    pub log: String,
+    pub uid: String,
+    pub rows: Vec<EntryRow>,
+}
+
+/// LOGS-3: what `read` is asked, each part as the call gave it.
+#[derive(Debug, Clone, Default)]
+pub struct ReadArgs {
+    pub log: Option<String>,
+    pub filter: Option<String>,
+    pub tag: Option<String>,
+    pub since: Option<String>,
+    pub until: Option<String>,
+    pub by: Option<String>,
+    pub ticket: Option<String>,
+    pub limit: Option<u32>,
+    pub after: Option<String>,
+}
+
+/// An entry as `read` and `watch` say it.
+fn entry(log: &str, r: EntryRow) -> LogsEvent {
+    LogsEvent::Entry { log: log.into(), seq: r.seq, at: r.at, by: r.by, tags: r.tags, ticket: r.ticket, entry: Value::Object(r.entry) }
+}
+
+fn bad_filter(why: impl Into<String>) -> LogsEvent {
+    LogsEvent::refused("bad_filter", why)
+}
 
 fn system_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
@@ -40,6 +80,7 @@ pub struct LogsService {
     reach: Arc<dyn Reach>,
     allowance: Arc<dyn Allowance>,
     clock: Clock,
+    published: tokio::sync::broadcast::Sender<Arc<Published>>,
 }
 
 impl std::fmt::Debug for LogsService {
@@ -102,7 +143,7 @@ pub fn bytes_of(entries: &[Value], tags: &[String]) -> u64 {
 impl LogsService {
     /// Over `store`, `reach` deciding: every byte allowed, the system's clock.
     pub fn new(store: Arc<LogsStore>, reach: Arc<dyn Reach>) -> Self {
-        Self { store, reach, allowance: Arc::new(Unlimited), clock: Arc::new(system_ms) }
+        Self { store, reach, allowance: Arc::new(Unlimited), clock: Arc::new(system_ms), published: tokio::sync::broadcast::channel(WATCH_BUFFER).0 }
     }
 
     /// Every kept byte asked of `allowance` (the quota service's meter).
@@ -212,6 +253,7 @@ impl LogsService {
         match self.blocking(move |s| s.append(&n, &entries, &tags, ticket.as_deref(), &by, now)).await {
             Ok(kept) => {
                 self.allowance.commit(&hold, bytes).await;
+                self.publish(name, &log.uid, kept.first, kept.last).await;
                 LogsEvent::Appended { log: name.into(), seq: kept.first, last: kept.last, count, bytes }
             }
             Err(e) => {
@@ -292,6 +334,176 @@ impl LogsService {
         match self.blocking(move |s| s.deprecate(&n, fd.as_deref(), &m, &by, now)).await {
             Ok(()) => LogsEvent::Deprecated { log: name.into(), field: field.map(str::to_string), message: message.into() },
             Err(e) => said(e),
+        }
+    }
+
+    /// LOGS-3: the entries `first` to `last` of the log `name`, told every
+    /// watcher — read back only when one is watching.
+    async fn publish(&self, name: &str, uid: &str, first: u64, last: u64) {
+        if self.published.receiver_count() == 0 {
+            return;
+        }
+        let n = name.to_string();
+        match self.blocking(move |s| s.kept(&n, first, last)).await {
+            Ok(rows) => {
+                let _ = self.published.send(Arc::new(Published { log: name.into(), uid: uid.into(), rows }));
+            }
+            Err(e) => tracing::warn!("logs:      {name} {first}–{last} kept, and not told its watchers: {e}"),
+        }
+    }
+
+    /// LOGS-3: `logs.read` — one log's entries (newest first), or every
+    /// visible log's (newest first by `at`), as `args` filters them, a page
+    /// at a time; then `page { count, next? }`.
+    pub async fn read(&self, caller: &Caller, args: ReadArgs) -> Vec<LogsEvent> {
+        let limit = args.limit.unwrap_or(PAGE).clamp(1, PAGE_MAX) as usize;
+        let filter = match args.filter.as_deref().map(crate::filter::parse).transpose() {
+            Ok(f) => f,
+            Err(why) => return vec![bad_filter(format!("--filter: {why}"))],
+        };
+        let now = self.now();
+        let at = |w: &Option<String>| w.as_deref().and_then(|w| crate::vocab::when_ms(w, now));
+        let ticket = match args.ticket.as_deref() {
+            None => None,
+            Some(t) => match self.reach.seen(caller, t).await {
+                Ok(Some(s)) => Some(s.uid),
+                Ok(None) => return vec![LogsEvent::no_ticket(t)],
+                Err(message) => return vec![LogsEvent::Error { message }],
+            },
+        };
+        let q = Query { since: at(&args.since), until: at(&args.until), by: args.by, ticket, tag: args.tag, filter, whose: String::new(), envelope_only: args.log.is_none(), limit };
+        match args.log.as_deref() {
+            Some(name) => self.read_one(caller, name, q, args.after.as_deref()).await,
+            None => self.read_across(caller, q, args.after.as_deref()).await,
+        }
+    }
+
+    async fn read_one(&self, caller: &Caller, name: &str, mut q: Query, after: Option<&str>) -> Vec<LogsEvent> {
+        let before = match after.map(|a| a.parse::<u64>()) {
+            None => Before::Start,
+            Some(Ok(seq)) => Before::Seq(seq),
+            Some(Err(_)) => return vec![LogsEvent::refused("bad_cursor", "this `after` is a page across logs; give back the `next` a read of this log answered")],
+        };
+        let log = match self.reached(caller, name, Role::Viewer, "reading a log").await {
+            Ok((log, _)) => log,
+            Err(ev) => return vec![ev],
+        };
+        q.whose = format!("the log `{name}`");
+        let limit = q.limit;
+        let rows = match self.blocking(move |s| s.read(&log, &q, &before)).await {
+            Ok(Ok(rows)) => rows,
+            Ok(Err(why)) => return vec![bad_filter(format!("--filter: {why}"))],
+            Err(e) => return vec![said(e)],
+        };
+        let next = (rows.len() == limit).then(|| rows.last().map(|r| r.seq.to_string())).flatten();
+        let count = rows.len() as u64;
+        let mut out: Vec<LogsEvent> = rows.into_iter().map(|r| entry(name, r)).collect();
+        out.push(LogsEvent::Page { count, next });
+        out
+    }
+
+    /// The logs `caller` sees: each, by name.
+    async fn visible(&self, caller: &Caller) -> Result<Vec<LogRow>, LogsEvent> {
+        let logs = self.blocking(|s| s.logs()).await.map_err(said)?;
+        let asked = futures::future::join_all(logs.iter().map(|l| self.reach.may(caller, &l.uid, Role::Viewer))).await;
+        let mut out = Vec::new();
+        for (log, answer) in logs.into_iter().zip(asked) {
+            match answer {
+                Ok(Answer::Held(_)) => out.push(log),
+                Ok(_) => {}
+                Err(message) => return Err(LogsEvent::Error { message }),
+            }
+        }
+        Ok(out)
+    }
+
+    async fn read_across(&self, caller: &Caller, mut q: Query, after: Option<&str>) -> Vec<LogsEvent> {
+        let before = match after.map(|a| a.split('.').collect::<Vec<_>>()) {
+            None => Before::Start,
+            Some(p) if p.len() == 3 => match (p[0].parse(), p[1].parse()) {
+                (Ok(at), Ok(seq)) => Before::At { at, log: p[2].to_string(), seq },
+                _ => return vec![LogsEvent::refused("bad_cursor", "give back the `next` a read across logs answered")],
+            },
+            Some(_) => return vec![LogsEvent::refused("bad_cursor", "this `after` is one log's page; give back the `next` a read across logs answered")],
+        };
+        let logs = match self.visible(caller).await {
+            Ok(l) => l,
+            Err(ev) => return vec![ev],
+        };
+        q.whose = "the envelope — a read across logs filters on seq, at, by and ticket alone; name a log to filter on its fields".into();
+        let limit = q.limit;
+        let read = self.blocking(move |s| {
+            let mut all: Vec<(String, EntryRow)> = Vec::new();
+            for log in &logs {
+                match s.read(log, &q, &before)? {
+                    Ok(rows) => all.extend(rows.into_iter().map(|r| (log.name.clone(), r))),
+                    Err(why) => return Ok(Err(why)),
+                }
+            }
+            all.sort_by(|(la, a), (lb, b)| b.at.cmp(&a.at).then(la.cmp(lb)).then(b.seq.cmp(&a.seq)));
+            all.truncate(limit);
+            Ok(Ok(all))
+        });
+        let rows = match read.await {
+            Ok(Ok(rows)) => rows,
+            Ok(Err(why)) => return vec![bad_filter(format!("--filter: {why}"))],
+            Err(e) => return vec![said(e)],
+        };
+        let next = (rows.len() == limit).then(|| rows.last().map(|(l, r)| format!("{}.{}.{l}", r.at, r.seq))).flatten();
+        let count = rows.len() as u64;
+        let mut out: Vec<LogsEvent> = rows.into_iter().map(|(l, r)| entry(&l, r)).collect();
+        out.push(LogsEvent::Page { count, next });
+        out
+    }
+
+    /// LOGS-3: `logs.watch` — `watching`, then each entry appended from now
+    /// on to `log` (every log when none) carrying `tag` (any when none),
+    /// told `caller` only while it sees the log's ticket; `lagged` when it
+    /// fell behind. Open until the caller closes it.
+    pub fn watch(self: Arc<Self>, caller: Caller, log: Option<String>, tag: Option<String>) -> impl futures::Stream<Item = LogsEvent> + Send + 'static {
+        async_stream::stream! {
+            // Subscribed before anything is asked: nothing appended after
+            // `watching` is said goes by unseen.
+            let mut rx = self.published.subscribe();
+            if let Some(name) = &log {
+                if let Err(ev) = self.reached(&caller, name, Role::Viewer, "reading a log").await {
+                    yield ev;
+                    return;
+                }
+            }
+            yield LogsEvent::Watching { log: log.clone(), tag: tag.clone() };
+            let mut sees: std::collections::HashMap<String, (std::time::Instant, bool)> = std::collections::HashMap::new();
+            loop {
+                let p = match rx.recv().await {
+                    Ok(p) => p,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
+                        yield LogsEvent::Lagged { missed };
+                        continue;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                };
+                if log.as_ref().is_some_and(|l| *l != p.log) {
+                    continue;
+                }
+                let rows: Vec<&EntryRow> = p.rows.iter().filter(|r| tag.as_ref().is_none_or(|t| r.tags.contains(t))).collect();
+                if rows.is_empty() {
+                    continue;
+                }
+                let fresh = sees.get(&p.uid).filter(|(at, _)| at.elapsed().as_secs() < REACH_SECS).map(|(_, ok)| *ok);
+                let ok = match fresh {
+                    Some(ok) => ok,
+                    None => {
+                        let ok = matches!(self.reach.may(&caller, &p.uid, Role::Viewer).await, Ok(Answer::Held(_)));
+                        sees.insert(p.uid.clone(), (std::time::Instant::now(), ok));
+                        ok
+                    }
+                };
+                if ok {
+                    for r in rows {
+                        yield entry(&p.log, r.clone());
+                    }
+                }
+            }
         }
     }
 
