@@ -916,10 +916,10 @@ The tracker's older documents — tickets of kind `doc` — stay tickets
 (V2-29's `existing`, queued to the owner; built as *leave*).
 
 ```sh
-synapse -P 4460 menger docs create --title "The kiln" --body @kiln.md           # → created { doc: { id: "7k3mq2xa", … } }
-synapse -P 4460 menger docs save --id 7k3mq2xa --body @kiln.md --base 3          # merged with whoever is typing
-synapse -P 4460 menger docs history --id 7k3mq2xa --limit 20
-synapse -P 4460 menger docs replay --id 7k3mq2xa --seq 10
+synapse -P 4460 menger notes create --title "The kiln" --body @kiln.md           # → created { note: { id: "7k3mq2xa", … } }
+synapse -P 4460 menger notes save --id 7k3mq2xa --body @kiln.md --base 3          # merged with whoever is typing
+synapse -P 4460 menger notes history --id 7k3mq2xa --limit 20
+synapse -P 4460 menger notes replay --id 7k3mq2xa --seq 10
 ```
 
 ### `quota` (V2-31)
