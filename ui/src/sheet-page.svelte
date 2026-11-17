@@ -105,6 +105,7 @@
   import PageCode from "plexus-ui:page-code";
   // LAYERS-20: the kiln in a worker — its component, and its generated part (a module with no view).
   import KilnLive from "plexus-ui:kiln-live";
+  import HeldKinds from "plexus-ui:held-kinds";
   import KilnActivation from "plexus-ui:kiln-activation";
   import TicketChipSv from "plexus-ui:ticket-chip-sv";
   import TicketLinks from "plexus-ui:ticket-links";
@@ -282,6 +283,8 @@
       // LAYERS-20: the kiln — the sheet's own firing, refusal and heat, no kiln started; its generated part draws nothing.
       ["kiln-live", KilnLive, () => ({ sheet: "sample" }), ["hover", "focus", "disabled"], { loading: { sheet: "loading" } }, false, { hover: ["[data-action=fire]"], focus: ["[data-action=fire]"], disabled: ["[data-action=heat]"] }],
       ["kiln-activation", KilnActivation, F, [], {}],
+      // LAYERS-31: the kinds of held child — the built one, and a sketch as `sketch`.
+      ["held-kinds", HeldKinds, () => ({}), ["hover", "selected"], { sketch: { kind: "keyed" } }, false, { hover: ["[data-kind-tab=interface]"], selected: ["[data-kind-tab=interface]"] }],
       ["code-ide-view", CodeIdeView, () => ({ text: "fn main() {\n    let cone = \"6\";\n    println!(\"{}\", cone);\n}\n", key: "sheet:src/main.rs", path: "src/main.rs", mark: [2, 2] }), [], {}],
       ["ticket-relations", TicketRelations, ID, ["hover", "focus"], { loading: { sheet: "loading" } }],
       ["ticket-subtasks", TicketSubtasks, ID, ["hover", "focus"], { loading: { sheet: "loading" } }],
