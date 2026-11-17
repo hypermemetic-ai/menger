@@ -385,7 +385,7 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("logs.extend", Today::Admin, None),
     ("logs.deprecate", Today::Admin, None),
     // V2-31: and the notes store's own count, which the recount reads.
-    ("docs.usage", Today::Admin, None),
+    ("notes.usage", Today::Admin, None),
     // V2-30: questions on a range — a viewer reads them and an agent's
     // queue, an editor asks, answers and resolves.
     ("notes.threads", Today::Viewer, None),
