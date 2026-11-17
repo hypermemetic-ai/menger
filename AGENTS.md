@@ -126,7 +126,10 @@ by `src/notes_move.rs`; NOTES-5: an agent follows a note as text, `notes
 watch --id X --text true`, and leaves marks on it without writing it —
 `notes mark`, `unmark`, `marks`, a range anchored as a question's is
 (`notes/src/marks.rs`), underlined on the page by `ui/src/note-margin.svelte` (real
-Svelte, `svelte/1`) beside the questions' ranges — README "`notes`"), and `quota` (V2-31: `quota/`, `menger-quota` —
+Svelte, `svelte/1`) beside the questions' ranges; a mark may place a
+component of a kept version under its passage (`component`, `version`,
+`props`, asked of the ui service through the seam a slot's fill uses), its
+props patched by `notes mark_props` — README "`notes`"), and `quota` (V2-31: `quota/`, `menger-quota` —
 every principal's allowance per source in `quota.db`, `--quota-db-path`;
 every storing write reserved through its seam; V2-70: a point a day per
 principal and source kept as history, `quota.history`, backfilled by the

@@ -172,9 +172,10 @@ async fn notes_mark_a_range_and_say_a_note_as_text() {
     let have = methods(&notes);
     // The caller's own (`auth`, `user`) is no parameter a call sends.
     let params = |m: &str| -> BTreeSet<String> { params(&notes, m).into_iter().filter(|p| p != "auth" && p != "user").collect() };
-    let lacking: Vec<&str> = ["mark", "unmark", "marks", "watch", "ask", "threads"].into_iter().filter(|m| !have.contains(*m)).collect();
+    let lacking: Vec<&str> = ["mark", "unmark", "marks", "mark_props", "watch", "ask", "threads"].into_iter().filter(|m| !have.contains(*m)).collect();
     assert!(lacking.is_empty(), "notes lacks {lacking:?}");
-    assert_eq!(params("mark"), set(&["id", "from", "to", "mark", "link", "label"]));
+    assert_eq!(params("mark"), set(&["id", "from", "to", "mark", "link", "label", "component", "version", "props"]));
+    assert_eq!(params("mark_props"), set(&["id", "mark", "patch"]));
     assert_eq!(params("unmark"), set(&["id", "mark"]));
     assert_eq!(params("marks"), set(&["id"]));
     assert_eq!(params("watch"), set(&["id", "session", "text"]));

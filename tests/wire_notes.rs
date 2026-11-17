@@ -805,3 +805,81 @@ async fn a_mark_follows_its_words_and_never_writes_the_text() {
     assert_eq!((now[0]["mark"]["words"].as_str(), now[0]["mark"]["detached"].as_bool()), (Some("the service registry"), Some(false)), "{now:?}");
     assert_eq!((now[1]["mark"]["mark"].as_str(), now[1]["mark"]["detached"].as_bool(), now[1]["mark"].get("from")), (Some(mark.as_str()), Some(true), None), "detached, last: {now:?}");
 }
+
+/// NOTES-5, *An agent places a component in the note*: a mark carries a
+/// component of a kept version under its passage (asked of the ui service:
+/// refused naming both when the version holds none, or is none), said on
+/// every watch with its props; `notes.mark_props` merges a patch (a `null`
+/// takes a key away, 64 KiB, a mark with no component refused) and is said
+/// as `mark_changed`; the mark follows its words as the text moves, and a
+/// detached mark keeps its component, drawn nowhere; the text never moves.
+#[tokio::test]
+async fn a_component_is_placed_under_a_passage_and_its_props_patched() {
+    let (dir, port, _admin, editor, viewer, _s, _org) = people().await;
+    let body = "Draw every service as a node on a graph.\n\nA stopped service stays, drawn hollow.\n";
+    let id = one(&editor, "notes.create", json!({"title": "The service map", "body": body})).await["note"]["id"].as_str().unwrap().to_string();
+    let v1 = keep_notes_version(dir.path(), 1, &["node-legend"]);
+    let before = one(&viewer, "notes.get", json!({"id": id})).await["note"].clone();
+    let second = connect_key(&EDITOR, port).await;
+    let mut w = call(&second, "notes.watch", json!({"id": id})).await;
+    assert_eq!(next(&mut w).await["type"], "watching");
+
+    // A component under the last passage, its version named by a prefix.
+    let m = one(&editor, "notes.mark", json!({"id": id, "from": 42, "to": 80, "component": "node-legend", "version": &v1[..10], "props": {"hollow": true}})).await;
+    assert_eq!(m["type"], "marked", "{m}");
+    let mark = m["mark"]["mark"].as_str().unwrap().to_string();
+    assert_eq!(
+        (m["mark"]["words"].as_str(), m["mark"]["component"].as_str(), m["mark"]["version"].as_str(), &m["mark"]["props"]),
+        (Some("A stopped service stays, drawn hollow."), Some("node-legend"), Some(v1.as_str()), &json!({"hollow": true})),
+        "the version kept whole: {m}"
+    );
+    let heard = next_of(&mut w, "mark_changed").await;
+    assert_eq!(heard["mark"], m["mark"], "said on every watch, whole");
+    // A mark without a component carries no props.
+    let plain = one(&editor, "notes.mark", json!({"id": id, "from": 0, "to": 4, "label": "plain"})).await;
+    assert!(plain["mark"].get("component").is_none() && plain["mark"].get("props").is_none(), "{plain}");
+    next_of(&mut w, "mark_changed").await;
+
+    // Refused, naming both: a component the version does not hold; a version nobody keeps; half of a pair; props alone.
+    let no = one(&editor, "notes.mark", json!({"id": id, "from": 0, "to": 4, "component": "graph-nodes", "version": v1})).await;
+    assert_eq!(no["reason"], "unknown_component", "{no}");
+    assert!(no["message"].as_str().is_some_and(|t| t.contains("graph-nodes") && t.contains(&v1)), "{no}");
+    let none = "0".repeat(64);
+    let no = one(&editor, "notes.mark", json!({"id": id, "from": 0, "to": 4, "component": "node-legend", "version": none})).await;
+    assert_eq!(no["reason"], "unknown_version", "{no}");
+    assert!(no["message"].as_str().is_some_and(|t| t.contains("node-legend") && t.contains(&none)), "{no}");
+    assert_eq!(one(&editor, "notes.mark", json!({"id": id, "from": 0, "to": 4, "component": "node-legend"})).await["type"], "error");
+    assert_eq!(one(&editor, "notes.mark", json!({"id": id, "from": 0, "to": 4, "props": {"a": 1}})).await["type"], "error");
+    assert_eq!(all(&viewer, "notes.marks", json!({"id": id})).await.len(), 2, "nothing written");
+
+    // Its props patched: merged, a null taking a key away, said on the watch.
+    let p = one(&editor, "notes.mark_props", json!({"id": id, "mark": mark, "patch": {"shown": ["running"], "hollow": null}})).await;
+    assert_eq!((p["type"].as_str(), &p["mark"]["props"]), (Some("marked"), &json!({"shown": ["running"]})), "{p}");
+    let heard = next_of(&mut w, "mark_changed").await;
+    assert_eq!((&heard["mark"]["props"], heard["mark"]["component"].as_str()), (&json!({"shown": ["running"]}), Some("node-legend")), "{heard}");
+    let half = "y".repeat(40 * 1024);
+    assert_eq!(one(&editor, "notes.mark_props", json!({"id": id, "mark": mark, "patch": {"a": half}})).await["type"], "marked");
+    assert_eq!(one(&editor, "notes.mark_props", json!({"id": id, "mark": mark, "patch": {"b": half}})).await["reason"], "too_large");
+    let plain_id = plain["mark"]["mark"].as_str().unwrap();
+    assert_eq!(one(&editor, "notes.mark_props", json!({"id": id, "mark": plain_id, "patch": {"a": 1}})).await["reason"], "no_component");
+    assert!(gate_refused(&one(&viewer, "notes.mark_props", json!({"id": id, "mark": mark, "patch": {"a": 1}})).await, "notes.mark_props"));
+    // A change names a new version and replaces the props whole.
+    let v2 = keep_notes_version(dir.path(), 2, &["node-legend"]);
+    let moved = one(&editor, "notes.mark", json!({"id": id, "mark": mark, "component": "node-legend", "version": v2, "props": {"shown": []}})).await;
+    assert_eq!((moved["mark"]["version"].as_str(), &moved["mark"]["props"]), (Some(v2.as_str()), &json!({"shown": []})), "{moved}");
+    // The text is not touched.
+    let after = one(&viewer, "notes.get", json!({"id": id})).await["note"].clone();
+    assert_eq!((&after["body"], &after["revision"]), (&before["body"], &before["revision"]));
+
+    // The text moves: the component's mark stays on its words.
+    let page = copy(&editor, &id).await;
+    one(&editor, "notes.update", json!({"id": id, "update": typed(&page, 42, "Note well. ")})).await;
+    let now = all(&viewer, "notes.marks", json!({"id": id})).await;
+    let placed = now.iter().map(|e| &e["mark"]).find(|x| x["mark"] == mark.as_str()).unwrap();
+    assert_eq!((placed["from"].as_u64(), placed["words"].as_str(), placed["component"].as_str()), (Some(53), Some("A stopped service stays, drawn hollow."), Some("node-legend")), "{placed}");
+    // Its words deleted: detached, its component kept and drawn nowhere.
+    one(&editor, "notes.save", json!({"id": id, "body": "Draw every service as a node on a graph.\n\nNote well. \n"})).await;
+    let now = all(&viewer, "notes.marks", json!({"id": id})).await;
+    let gone = now.iter().map(|e| &e["mark"]).find(|x| x["mark"] == mark.as_str()).unwrap();
+    assert_eq!((gone["detached"].as_bool(), gone["component"].as_str()), (Some(true), Some("node-legend")), "{gone}");
+}

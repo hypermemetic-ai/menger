@@ -405,6 +405,8 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("notes.marks", Today::Viewer, None),
     ("notes.mark", Today::Editor, None),
     ("notes.unmark", Today::Editor, None),
+    // NOTES-5: and a mark's component's props, patched — an editor's.
+    ("notes.mark_props", Today::Editor, None),
 ];
 
 /// AUTH-7's one deliberate narrowing of the table: what an anonymous or

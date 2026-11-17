@@ -79,7 +79,7 @@ impl NotesActivation {
     typed_params,
     roles(
         viewer = ["get", "list", "state", "history", "replay", "present", "here", "watch", "may", "threads", "waiting", "slot", "marks"],
-        editor = [viewer, "create", "update", "save", "rename", "restore", "ask", "reply", "resolve", "fill", "empty", "building", "props", "mark", "unmark"],
+        editor = [viewer, "create", "update", "save", "rename", "restore", "ask", "reply", "resolve", "fill", "empty", "building", "props", "mark", "unmark", "mark_props"],
     )
 )]
 impl NotesActivation {
@@ -562,7 +562,7 @@ impl NotesActivation {
         once(crate::slot_calls::props(store, seam, user, id.into_string(), patch.into_map()))
     }
 
-    /// Mark a range of a note — an underline that follows its words, with a link, a line of state, or both; or change a mark; yields marked { mark }, said on watch. The note's text is not changed.
+    /// Mark a range of a note — an underline that follows its words, with a link, a line of state, a component under its passage, or any of them; or change a mark; yields marked { mark }, said on watch. The note's text is not changed.
     ///
     /// A new mark names `from` and `to`, the range in characters of the
     /// text now (as `get`'s body counts them); it is anchored in the note's
@@ -573,8 +573,13 @@ impl NotesActivation {
     /// an empty one taken off. `link` is a ticket (`KILN-12`), an address of
     /// the app (`#/…`) or an `https` address; a click on the underline opens
     /// it. `label` is one line of state, drawn under the passage with who
-    /// left it. Nothing here writes the note: its body and its revision stay
-    /// as they are. Editor.
+    /// left it. `component` and `version` place a component of a version the
+    /// ui service keeps under the passage that holds the range — never in
+    /// the text — with `props` its props (a JSON object, at most 64 KiB):
+    /// the ui service is asked whether the version holds it, refused
+    /// `unknown_version` or `unknown_component` naming both, nothing written;
+    /// `mark_props` patches the props after. Nothing here writes the note:
+    /// its body and its revision stay as they are. Editor.
     #[plexus_rpc::macros::method(group = "write", example(note = "the first sentence, linked to the ticket filed from it", params = r#"{"id": "7k3mq2xa", "from": 0, "to": 40, "link": "KILN-12", "label": "filed KILN-12"}"#))]
     pub async fn mark(
         &self,
@@ -591,9 +596,38 @@ impl NotesActivation {
         link: Option<MarkLink>,
         /// One line of state, e.g. filed KILN-12 (optional; empty takes it off).
         label: Option<MarkLabel>,
+        /// A component to place under the passage, e.g. node-legend (optional; with version).
+        component: Option<ComponentName>,
+        /// The kept version that holds it: its hash, or its first 6 hex digits or more (optional; with component).
+        version: Option<VersionRef>,
+        /// The component's props, a JSON object, e.g. {"stopped": true} (optional: {}; replaces what it held).
+        props: Option<SlotProps>,
     ) -> impl Stream<Item = NotesEvent> + Send + 'static {
         let (store, seam) = (self.store.clone(), self.seam.clone());
-        once(crate::streams::mark(store, seam, user, id.into_string(), mark.map(MarkId::into_string), from, to, link.map(MarkLink::into_string), label.map(MarkLabel::into_string)))
+        let of = crate::marks::Remark { link: link.map(MarkLink::into_string), label: label.map(MarkLabel::into_string), placed: None, props: props.map(SlotProps::into_map) };
+        once(crate::streams::mark(store, seam, user, id.into_string(), mark.map(MarkId::into_string), from, to, of, component.map(ComponentName::into_string), version.map(VersionRef::into_string)))
+    }
+
+    /// Merge a patch into the props of the component a mark places — what the component keeps its state in; yields marked { mark }, said on watch as mark_changed. The note's text is not changed.
+    ///
+    /// A key set to `null` is taken away. The props are held to 64 KiB
+    /// written as JSON: past it, `refused { too_large }` and nothing
+    /// written; a mark that places no component is `refused { no_component }`.
+    /// Every page open on the note hands the new props to the component it
+    /// has mounted under the passage, in place. Editor.
+    #[plexus_rpc::macros::method(group = "write", example(note = "the stopped services shown", params = r#"{"id": "7k3mq2xa", "mark": "m4k9q2xa", "patch": {"stopped": true}}"#))]
+    pub async fn mark_props(
+        &self,
+        #[from_auth(self.callers.verify)] user: Caller,
+        /// The note's id, e.g. 7k3mq2xa.
+        id: NoteId,
+        /// The mark's id, as mark answered it.
+        mark: MarkId,
+        /// The patch, a JSON object: each key set, a null taking it away.
+        patch: SlotProps,
+    ) -> impl Stream<Item = NotesEvent> + Send + 'static {
+        let (store, seam) = (self.store.clone(), self.seam.clone());
+        once(crate::streams::mark_props(store, seam, user, id.into_string(), mark.into_string(), patch.into_map()))
     }
 
     /// Take a mark off a note; yields unmarked { id, mark }, said on watch as mark_removed. The note's text is not changed. Editor.

@@ -15,11 +15,12 @@
 //! **Stored** in the notes file, `note_marks` (a table of its own, made by
 //! the store's open on a file from before: such a file opens with no
 //! marks): a row per mark — its anchor, the words it held when made, its
-//! link and label, who and when, who changed it last. The columns
-//! `component`, `version` and `props` are kept for a mark that will carry a
-//! piece of the interface under its passage (NOTES-5's third requirement,
-//! built after NOTES-4): nullable, never written yet, so that pass reads
-//! and writes them with no migration that rewrites a row. Said on the
+//! link and label, who and when, who changed it last — and (NOTES-5's
+//! third requirement, after NOTES-4) a component placed under its passage:
+//! `component`, `version` (the kept version's whole hash, which the ui
+//! service said holds it) and `props` (a JSON object, held to 64 KiB as a
+//! slot's are). Those three columns were made nullable by the first pass,
+//! so a file from before reads them as none: no migration rewrote a row. Said on the
 //! channel for `watch`: `mark_changed` (made or changed, the mark whole) and
 //! `mark_removed`.
 
@@ -28,6 +29,7 @@ use crate::events::{Anchor, Mark};
 use crate::store::{live_doc, now_ms, Change, NotesStore, StoreError};
 use crate::threads::{anchored, placed, slice, Anchored, Hand};
 use rusqlite::{params, Connection, OptionalExtension};
+use serde_json::{Map, Value};
 use std::sync::Arc;
 
 /// The table.
@@ -52,12 +54,26 @@ pub const TABLES: &str = "
         CREATE INDEX IF NOT EXISTS note_marks_id ON note_marks (id);
     ";
 
-/// What a mark's change asks: each part `None` stays as it is, `Some("")`
-/// takes it off, `Some(text)` sets it.
+/// What a mark carries, as a call gives it: each part `None` stays as it
+/// is (a new mark: none), `Some("")` takes a link or a label off.
 #[derive(Debug, Clone, Default)]
 pub struct Remark {
     pub link: Option<String>,
     pub label: Option<String>,
+    /// A component placed under the passage: its name and the version's
+    /// whole hash, as the ui service said it holds it.
+    pub placed: Option<(String, String)>,
+    /// Its props whole (replacing what it held).
+    pub props: Option<Map<String, Value>>,
+}
+
+/// `props` written as the column holds them, held to [`crate::vocab::PROPS_MAX`].
+fn props_text(props: Map<String, Value>) -> Result<String, StoreError> {
+    let text = Value::Object(props).to_string();
+    match text.len() <= crate::vocab::PROPS_MAX {
+        true => Ok(text),
+        false => Err(StoreError::TooLarge(format!("the mark's props would be {} bytes written as JSON; they are held to {} (nothing was written)", text.len(), crate::vocab::PROPS_MAX))),
+    }
 }
 
 /// A stored row, before its anchor is resolved.
@@ -74,9 +90,12 @@ struct Row {
     at: i64,
     changed_at: Option<i64>,
     changed_by: Option<String>,
+    component: Option<String>,
+    version: Option<String>,
+    props: Option<String>,
 }
 
-const COLUMNS: &str = "mark, id, from_rel, to_rel, quote, link, label, by, principal, at, changed_at, changed_by";
+const COLUMNS: &str = "mark, id, from_rel, to_rel, quote, link, label, by, principal, at, changed_at, changed_by, component, version, props";
 
 fn row_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
     Ok(Row {
@@ -92,6 +111,9 @@ fn row_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
         at: r.get(9)?,
         changed_at: r.get(10)?,
         changed_by: r.get(11)?,
+        component: r.get(12)?,
+        version: r.get(13)?,
+        props: r.get(14)?,
     })
 }
 
@@ -120,6 +142,9 @@ fn dressed(crdt: &yrs::Doc, row: Row) -> Mark {
         at: row.at,
         changed_at: row.changed_at,
         changed_by: row.changed_by,
+        props: row.component.as_ref().map(|_| row.props.as_deref().and_then(|p| serde_json::from_str(p).ok()).unwrap_or_default()),
+        component: row.component,
+        version: row.version,
     }
 }
 
@@ -138,7 +163,13 @@ impl NotesStore {
     /// `notes.mark`: a mark on the characters `from..to` of `id`'s text now,
     /// anchored in its CRDT (which it does not change), with its `link` and
     /// `label` (empty: none), by `hand`.
-    pub async fn mark(self: &Arc<Self>, id: &str, from: u32, to: u32, link: Option<String>, label: Option<String>, hand: Hand) -> Result<Mark, StoreError> {
+    pub async fn mark(self: &Arc<Self>, id: &str, from: u32, to: u32, of: Remark, hand: Hand) -> Result<Mark, StoreError> {
+        let Remark { link, label, placed, props } = of;
+        let (component, version) = placed.unzip();
+        let props = match component {
+            Some(_) => Some(props_text(props.unwrap_or_default())?),
+            None => None,
+        };
         let id = id.to_string();
         let (mark, org) = self
             .blocking(move |s| {
@@ -155,8 +186,8 @@ impl NotesStore {
                 }
                 let mark = crate::vocab::mint(|m| conn.query_row("SELECT 1 FROM note_marks WHERE mark = ?1", [m], |_| Ok(())).optional().ok().flatten().is_some());
                 conn.execute(
-                    &format!("INSERT INTO note_marks ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, NULL)"),
-                    params![mark, doc.id, from_rel, to_rel, quote, kept(link), kept(label), hand.name, hand.principal, now_ms()],
+                    &format!("INSERT INTO note_marks ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, NULL, ?11, ?12, ?13)"),
+                    params![mark, doc.id, from_rel, to_rel, quote, kept(link), kept(label), hand.name, hand.principal, now_ms(), component, version, props],
                 )?;
                 let row = conn.query_row(&format!("SELECT {COLUMNS} FROM note_marks WHERE mark = ?1"), [&mark], row_of)?;
                 Ok((dressed(&crdt, row), doc.org))
@@ -182,7 +213,40 @@ impl NotesStore {
                 };
                 set("link", to.link)?;
                 set("label", to.label)?;
+                if let Some((component, version)) = to.placed {
+                    conn.execute("UPDATE note_marks SET component = ?2, version = ?3, props = COALESCE(props, '{}') WHERE mark = ?1", params![mark, component, version])?;
+                }
+                if let Some(props) = to.props {
+                    let has: Option<String> = conn.query_row("SELECT component FROM note_marks WHERE mark = ?1", [&mark], |r| r.get(0))?;
+                    if has.is_none() {
+                        return Err(StoreError::NoComponent(mark));
+                    }
+                    conn.execute("UPDATE note_marks SET props = ?2 WHERE mark = ?1", params![mark, props_text(props)?])?;
+                }
                 conn.execute("UPDATE note_marks SET changed_at = ?2, changed_by = ?3 WHERE mark = ?1", params![mark, now_ms(), hand.name])?;
+                Ok((s.mark_now(&conn, &id, &mark)?, doc.org))
+            })
+            .await?;
+        self.said(Change::Marked { org, mark: m.clone() });
+        Ok(m)
+    }
+
+    /// `notes.mark_props`: `patch` merged into the props of the mark `mark`
+    /// of `id` (a `null` takes its key away), held to 64 KiB, by `hand`.
+    pub async fn mark_props(self: &Arc<Self>, id: &str, mark: &str, patch: Map<String, Value>, hand: Hand) -> Result<Mark, StoreError> {
+        let (id, mark) = (id.to_string(), mark.to_string());
+        let (m, org) = self
+            .blocking(move |s| {
+                let conn = s.lock();
+                let tx = conn.unchecked_transaction()?;
+                let doc = live_doc(&tx, &id)?;
+                let was = s.mark_now(&tx, &id, &mark)?;
+                if was.component.is_none() {
+                    return Err(StoreError::NoComponent(mark));
+                }
+                let text = props_text(crate::slot::merged(was.props.unwrap_or_default(), patch))?;
+                tx.execute("UPDATE note_marks SET props = ?2, changed_at = ?3, changed_by = ?4 WHERE mark = ?1", params![mark, text, now_ms(), hand.name])?;
+                tx.commit()?;
                 Ok((s.mark_now(&conn, &id, &mark)?, doc.org))
             })
             .await?;

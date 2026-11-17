@@ -830,7 +830,8 @@ agents and image references.
 | `empty` | `--id` | editor's: nothing drawn, the props cleared, the fills kept, the build ended: `emptied { slot }` |
 | `building` | `--id --component [--step] [--say] [--failed]` | editor's: the slot is being built — `step` the last reached, `heard \| written \| compiled`; `say` one line; `failed true` with `say` the refusal (the compiler's line). Kept in memory: a fill or an empty ends it, so do ten minutes without a word and a restart: `building { slot }` |
 | `props` | `--id --patch` | editor's: a patch (a JSON object) merged into the slot's props, a key set to `null` taken away, held to 64 KiB (`refused { too_large }`): `props { slot }` |
-| `mark` | `--id --from --to [--link] [--label]`, or `--id --mark [--link] [--label]` | NOTES-5: a mark on characters `from..to` of the text, anchored as a question's range is, so it follows its words: `marked { mark }` — `{ mark, id, anchor { from, to }, from?, to?, detached, words, quote, link?, label?, by, principal, at, changed_at?, changed_by? }`; with `--mark` instead, that mark's `link` and `label` changed (an empty one taken off; its range is not moved). `link` is a ticket (`KILN-12`), an address of the app (`#/…`) or an `https` address, anything else refused; `label` one line, at most 200 characters. The note's text and revision are never changed |
+| `mark` | `--id --from --to [--link] [--label] [--component --version] [--props]`, or `--id --mark [--link] [--label] [--component --version] [--props]` | NOTES-5: a mark on characters `from..to` of the text, anchored as a question's range is, so it follows its words: `marked { mark }` — `{ mark, id, anchor { from, to }, from?, to?, detached, words, quote, link?, label?, by, principal, at, changed_at?, changed_by?, component?, version?, props? }`; with `--mark` instead, that mark's `link` and `label` changed (an empty one taken off; its range is not moved). `link` is a ticket (`KILN-12`), an address of the app (`#/…`) or an `https` address, anything else refused; `label` one line, at most 200 characters. `component` and `version` (a kept version's hash, or 6 or more of its first hex digits, kept whole) place a component under the passage, asked of the ui service through the seam a slot's fill uses: `refused { unknown_version \| unknown_component }` naming both, nothing written; `props` its props, a JSON object (at most 64 KiB; on a change, replacing them). The note's text and revision are never changed |
+| `mark_props` | `--id --mark --patch` | NOTES-5: a patch merged into the props of the component a mark places (a `null` takes its key away; 64 KiB written, past it `refused { too_large }`; a mark placing none `refused { no_component }`): `marked { mark }`, said on `watch` as `mark_changed` |
 | `unmark` | `--id --mark` | NOTES-5: the mark taken off: `unmarked { id, mark }` |
 | `marks` | `--id` | NOTES-5: `mark { mark }` each, by where its range stands, with the `words` it holds now; the detached (every character deleted) last. A viewer's |
 | `watch` | `[--id] [--session] [--text]` | `watching`, then `created`, `updated { id, seq, update, by, session? }`, `renamed`, `deleted`, `squashed`, and on one note `present` and `left { session, client? }`, and (V2-30) `asked`, `replied`, `resolved` with the thread whole, and (NOTES-5) `mark_changed { id, mark }` (made or changed, whole) and `mark_removed { id, mark }`, and (NOTES-4) `slot_changed { id, slot }`, `building_changed { id, building?, slot }`, `props_changed { id, props, by, slot }` with the slot whole; with `--text true` (and `--id`) the note's markdown as words, `text { id, revision, body, by, at }` — once as the watch opens, then a second after the first change not yet said, holding every change since (at most one a second, the last always said); with `session` the watch is your presence while open, and your own updates are not said back; held to you by the gate as `ui.watch` is (`watch_closed { reason }`) |
@@ -927,8 +928,22 @@ the link: a ticket's page, the app's address, an `https` address in a new
 tab), draws its line of state in the mono face under the block that holds
 it as `¶n · who · label`, and a dot in that block's margin — in a drawn
 block in its drawing, in the caret's block by the surface's own
-decorations, beside the questions' (`ui/src/note-margin.svelte`, real Svelte: `svelte/1`). Kept in
-`notes.db`'s `note_marks`, made by the store's open on a file from before
+decorations, beside the questions' (`ui/src/note-margin.svelte`, real Svelte: `svelte/1`). It
+**places a component under a passage** (*"and write components into the
+docuemtn itself"*): a mark with `component` and `version` — one the ui
+service keeps, asked through NOTES-4's seam, as a slot's fill is — is drawn
+under the block that holds the end of its range, never in the text, in a
+hairline card whose head names the component, its version and who placed
+it. The card holds a bound mark pinned to the version (`data-component`,
+`data-version`), handed the note (`data-note`), the mark (`data-mark`, so a
+component that keeps state patches its own props by `mark_props`) and its
+props as JSON text (`data-props`), as the slot's is; new props reach the
+mounted component in place (`update(props)`), and the card is moved, never
+made again, when the surface draws its passage anew — so typing in the
+passage above it moves no caret and mounts nothing again. A detached
+mark's component is drawn nowhere. Kept in
+`notes.db`'s `note_marks` (its `component`, `version`, `props` columns, there
+since the first pass), made by the store's open on a file from before
 (which opens with no marks).
 
 ```sh
@@ -936,6 +951,8 @@ synapse -P 4460 menger notes watch --id 7k3mq2xa --text true                    
 synapse -P 4460 menger notes mark --id 7k3mq2xa --from 0 --to 40 --link KILN-12 --label "filed KILN-12"
 synapse -P 4460 menger notes mark --id 7k3mq2xa --mark m4k9q2xa --label "built graph-nodes v2"
 synapse -P 4460 menger notes marks --id 7k3mq2xa
+synapse -P 4460 menger notes mark --id 7k3mq2xa --from 82 --to 120 --component node-legend --version 3f9a1c0b7d2e --props '{"hollow": true}'
+synapse -P 4460 menger notes mark_props --id 7k3mq2xa --mark m4k9q2xa --patch '{"hollow": null}'
 synapse -P 4460 menger notes unmark --id 7k3mq2xa --mark m4k9q2xa
 ```
 

@@ -44,6 +44,7 @@ pub(crate) fn failed(e: StoreError) -> NotesEvent {
         StoreError::NotFound(id) => NotesEvent::no_doc(&id),
         StoreError::NoRevision(id, r) => NotesEvent::NotFound { id: Some(id), revision: Some(r), org: None, thread: None, mark: None },
         StoreError::NoThread(t) => NotesEvent::NotFound { id: None, revision: None, org: None, thread: Some(t), mark: None },
+        StoreError::NoComponent(m) => NotesEvent::Refused { reason: "no_component".into(), message: format!("mark {m} places no component, so it has no props: mark it with a component and a version first (nothing was written)") },
         StoreError::NoMark(m) => NotesEvent::NotFound { id: None, revision: None, org: None, thread: None, mark: Some(m) },
         StoreError::BadRange(m) => NotesEvent::Error { message: format!("{m} (nothing was written)") },
         StoreError::Quota(m) => NotesEvent::Refused { reason: "quota".into(), message: format!("{m} (nothing was written)") },
@@ -349,19 +350,46 @@ pub(crate) async fn threads(store: Arc<NotesStore>, seam: Seam, user: Caller, id
 
 /// NOTES-5: `notes.mark` — with `mark`, that mark changed (its range stays:
 /// a range is moved by taking the mark off and making it again); without,
-/// a mark made on `from..to`.
+/// a mark made on `from..to`. A component it places is asked of the ui
+/// service first (NOTES-4's seam): refused `unknown_version` or
+/// `unknown_component` naming both, nothing written.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn mark(store: Arc<NotesStore>, seam: Seam, user: Caller, id: String, mark: Option<String>, from: Option<u32>, to: Option<u32>, link: Option<String>, label: Option<String>) -> NotesEvent {
+pub(crate) async fn mark(store: Arc<NotesStore>, seam: Seam, user: Caller, id: String, mark: Option<String>, from: Option<u32>, to: Option<u32>, mut of: crate::marks::Remark, component: Option<String>, version: Option<String>) -> NotesEvent {
     if let Err(ev) = reached(&store, &seam, &user, &id, "notes.mark").await {
         return ev;
     }
+    let placing = match (component, version) {
+        (Some(c), Some(v)) => Some((c, v)),
+        (None, None) => None,
+        _ => return NotesEvent::Error { message: "a component is placed with the version that holds it: name both, component and version (nothing was written)".into() },
+    };
+    if of.props.is_some() && placing.is_none() && mark.is_none() {
+        return NotesEvent::Error { message: "props are a component's: name the component and its version (nothing was written)".into() };
+    }
+    if let Some((component, version)) = placing {
+        match crate::slot_calls::held(&seam, &component, &version).await {
+            Ok(whole) => of.placed = Some((component, whole)),
+            Err(ev) => return ev,
+        }
+    }
     let made = match (mark, from, to) {
         (Some(_), Some(_), _) | (Some(_), _, Some(_)) => return NotesEvent::Error { message: "a mark's range is not moved: unmark it and mark again (nothing was written)".into() },
-        (Some(m), None, None) => store.remark(&id, &m, crate::marks::Remark { link, label }, hand(&user)).await,
-        (None, Some(from), Some(to)) => store.mark(&id, from, to, link, label, hand(&user)).await,
+        (Some(m), None, None) => store.remark(&id, &m, of, hand(&user)).await,
+        (None, Some(from), Some(to)) => store.mark(&id, from, to, of, hand(&user)).await,
         (None, ..) => return NotesEvent::Error { message: "a new mark names its range, from and to; a change names the mark (nothing was written)".into() },
     };
     match made {
+        Ok(mark) => NotesEvent::Marked { mark },
+        Err(e) => failed(e),
+    }
+}
+
+/// NOTES-5: `notes.mark_props`: a patch merged into the props of a mark's component.
+pub(crate) async fn mark_props(store: Arc<NotesStore>, seam: Seam, user: Caller, id: String, mark: String, patch: serde_json::Map<String, serde_json::Value>) -> NotesEvent {
+    if let Err(ev) = reached(&store, &seam, &user, &id, "notes.mark_props").await {
+        return ev;
+    }
+    match store.mark_props(&id, &mark, patch, hand(&user)).await {
         Ok(mark) => NotesEvent::Marked { mark },
         Err(e) => failed(e),
     }
