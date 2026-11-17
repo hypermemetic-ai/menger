@@ -13,7 +13,7 @@ versioned by content hash and drawn by a small engine. SV-4: rhx (Rhai in
 markup, `rhx/1`) is retired from menger's UI — its sources are kept in
 `ui/retired-rhx/`, out of the bundle.
 
-v1 is tag `v0.0.1`; what v2 cut — the chats, comments, deployments, themes, v1's notes, assignees and components, the Leptos app (trunk) with the frames' SDK (sdk-codegen) and mockups, the diagrams service — lives there. Media came back as a service of its own (V2-24, "The services"), and documents have a service of their own (V2-29) — notes since NOTES-3 (`notes`). Every input is held to a per-user allowance by the quota service (V2-31).
+v1 is tag `v0.0.1`; what v2 cut — the chats, comments, deployments, themes, v1's notes, assignees and components, the Leptos app (trunk) with the frames' SDK (sdk-codegen) and mockups, the diagrams service — lives there. Media came back as a service of its own (V2-24, "The services"), and documents have a service of their own (V2-29) — notes since NOTES-3 (`notes`). Every input is held to a per-user allowance by the quota service (V2-31). Public GitHub repositories are read through a service of menger's own, `code` (CODE-2), and structured facts — a benchmark's results first — are kept in typed tables made from a JSON Schema by another, `logs` (LOGS-2).
 
 ## Run
 
@@ -138,14 +138,16 @@ synapse -P 4460 menger tickets health
 ```
 
 **Every file of a server is named after its database** (SCRATCH-NAMES).
-The ui, media, notes and quota services each keep a file beside the
+The ui, media, notes, quota, code and logs services each keep a file beside the
 database unless its flag (`--ui-db-path`, `--media-db-path`,
-`--notes-db-path`, `--quota-db-path`) names another. Beside a database
+`--notes-db-path`, `--quota-db-path`, `--code-db-path`, `--logs-db-path`) names another. Beside a database
 named as a data directory's — `tickets.db` (prod, test, the image) or
 `local.db` (a local start) — they are `ui.db`, `media.db`, `notes.db`,
-`quota.db` and the media's bytes in `media/blobs/`; beside any other, they
+`quota.db`, `code.db`, `logs.db`, the media's bytes in `media/blobs/` and the code's in
+`code/blobs/`; beside any other, they
 carry the database's stem: `/tmp/menger-dev.db` → `/tmp/menger-dev.ui.db`,
-`.media.db`, `.notes.db`, `.quota.db` and `/tmp/menger-dev.media.blobs/`, as
+`.media.db`, `.notes.db`, `.quota.db`, `.code.db`, `.logs.db`, `/tmp/menger-dev.media.blobs/`
+and `/tmp/menger-dev.code.blobs/`, as
 its sessions are `/tmp/menger-dev.sessions.jsonl`. So two dev servers in
 one directory share no file, and `scripts/cleanup-gate.sh dev` takes all of
 one. A push needs `--ui-signer` (below, "The ui service").
@@ -307,7 +309,7 @@ where it has one (a list in it is `;`-separated).
 
 | group | flags |
 |---|---|
-| run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path` (`ui.db` beside the database — named after it beside one not named `tickets.db` or `local.db`, `menger-dev.ui.db`; so every file below, SCRATCH-NAMES), `--ui-signer`, `--ui-compiler`, `--ui-allow-rhx` (SV-6: rhx/1 taken again — without it every `ui.push` and `ui.author` carrying an rhx component is refused `rhx_disabled`, naming it; `MENGER_UI_ALLOW_RHX`), `--ui-author-key`, `--media-db-path` (`media.db` beside the database), `--media-store` (`disk`), `--media-blob-dir` (`media/blobs` beside `media.db`; `<stem>.media.blobs` beside a `<stem>.media.db`), `--media-max-bytes`, `--notes-db-path` (`notes.db` beside the database; NOTES-3: a `docs.db` there and no `notes.db` is moved to it at start, a link left at the old name), `--quota-db-path` (`quota.db` beside the database), `--quota-plan` (the defaults a new quota file starts from; the built-in `free-1k`), `--ui-channel` (UI-15: the live pointer this environment serves in its ui file; default from `--env`: `test`, `prod`, else `default`), `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell`, `--no-mcp` (V2-43: no `/mcp`), `--child NAME=stdio:CMD` or `NAME=ws://…` (POLYGLOT-5: an activation in another process mounted under NAME behind the gate; repeatable; `--child-timeout`, `--child-max-calls`, `--child-env`, `--child-key`: plexus-core's `ChildArgs`; one that does not answer stops the start, exit 2; NAME a service of menger's own is refused) |
+| run | `--open`, `-p/--port` (4455), `--shell-port` (4456), `--data-dir`, `--db-path`, `--ui-db-path` (`ui.db` beside the database — named after it beside one not named `tickets.db` or `local.db`, `menger-dev.ui.db`; so every file below, SCRATCH-NAMES), `--ui-signer`, `--ui-compiler`, `--ui-allow-rhx` (SV-6: rhx/1 taken again — without it every `ui.push` and `ui.author` carrying an rhx component is refused `rhx_disabled`, naming it; `MENGER_UI_ALLOW_RHX`), `--ui-author-key`, `--media-db-path` (`media.db` beside the database), `--media-store` (`disk`), `--media-blob-dir` (`media/blobs` beside `media.db`; `<stem>.media.blobs` beside a `<stem>.media.db`), `--media-max-bytes`, `--notes-db-path` (`notes.db` beside the database; NOTES-3: a `docs.db` there and no `notes.db` is moved to it at start, a link left at the old name), `--quota-db-path` (`quota.db` beside the database), `--quota-plan` (the defaults a new quota file starts from; the built-in `free-1k`), `--code-db-path` (CODE-2: `code.db` beside the database; `MENGER_CODE_DB_PATH`), `--code-blob-dir` (`code/blobs` beside `code.db`; `<stem>.code.blobs` beside a `<stem>.code.db`; `MENGER_CODE_BLOB_DIR`), `--code-max-bytes` (what the code service keeps at most, 5 GiB; past it the commit read longest ago goes; `MENGER_CODE_MAX_BYTES`), `--logs-db-path` (LOGS-2: `logs.db` beside the database; `MENGER_LOGS_DB_PATH`), `--ui-channel` (UI-15: the live pointer this environment serves in its ui file; default from `--env`: `test`, `prod`, else `default`), `--bind`, `--app-dist` (other files under `/app/`, from a directory), `--env` (`test` titles the tab `menger.test` and allows the dev sign-in), `--no-shell`, `--no-mcp` (V2-43: no `/mcp`), `--child NAME=stdio:CMD` or `NAME=ws://…` (POLYGLOT-5: an activation in another process mounted under NAME behind the gate; repeatable; `--child-timeout`, `--child-max-calls`, `--child-env`, `--child-key`: plexus-core's `ChildArgs`; one that does not answer stops the start, exit 2; NAME a service of menger's own is refused) |
 | sign-in | `--auth-provider`, `--admin`, `--public-url`, `--login-button`, `--login-email`, `--login-password`, `--login-forgot`, `--identity`, `--workos-api-key-file`, `--allowed-origin`, `--frame-ancestor` (an origin that may frame the shell's pages; none by default), `--live-origin` (an origin the shell's pages may frame), `--allowed-host`, `--trusted-proxy`, `--return-origin`, `--session-hours` (12), `--session-idle-minutes` (120), `--mcp-authorization-server` (V2-43: `/mcp` a protected resource naming it) |
 | maintenance and testing | `--dev-login`, `--dev-password`, `--dev-idp-ws`, `--dev-user` (all `--env test` only), `--verify-derived`, `--seed-synthetic`, `--seed-value`, `--seed-shape` (`flat`, `nested`), `--seed-into-existing` |
 | limits | `--max-body-bytes` (8 MiB), `--max-message-bytes` (32 MiB; V2-54: one socket message — a UI bundle is pushed in one), `--max-calls-per-connection` (256), `--idle-timeout-secs` (900), `--max-connections` (1,024), `--max-connections-per-ip` (256), `--max-connections-per-principal` (4; V2-31: a person's), `--max-connections-per-agent` (64; V2-31: a `key:` principal's), `--max-writes-per-second` (20; V2-31), `--max-anonymous-connections` (128), `--max-anonymous-connections-per-ip` (32) |
@@ -378,6 +380,13 @@ save: the writer says `body.tag` on the bus and the editor replaces that
 tag alone in its text and saves the body its own way (a ticket's amend, a
 document's CRDT), refusing the same way. With no ticket or document known
 it is drawn only, and says so. `tests/pages/writer.mjs`.
+
+**A repository in a body** (CODE-3). `<code-ide repo="owner/name" ref="main"
+dir="src" open="src/a.rs#L5-L10, src/b.rs">` is a bundle tag like any:
+the code service's repository at that ref, those directories open and those
+tabs, read-only, at `height` (70vh); the same view fills the page at
+`#/code/<owner>/<name>/<ref>/<view>`. "`code`" › "The view" has its
+attributes and its address. `tests/pages/code-ide.mjs`.
 
 **v1's definitions** (COMPS-5). A fence with no `html` holding v1's custom
 element — a `<template>`, or a script reading `this.root`, `this.menger` or
@@ -491,6 +500,8 @@ behind plexus-core's gate; menger's own are declared on the frame
 | `media` | any file a body shows, by sha256 — its rows in a file of its own (`media.db`), its bytes in a `BlobStore` (the disk); links read into cards; the ticket's (or, V2-29, the note's) permit asked through the seam | `media/` (`menger-media`, V2-24, EDITOR-10) |
 | `notes` | notes — writing, not work: a title and a markdown body kept as a Yjs CRDT, written live by many hands, every change kept, in a file of its own (`notes.db`); who may is the gate's word on the note's organization | `notes/` (`menger-notes`, V2-29; NOTES-3: the docs service renamed) |
 | `quota` | every principal's allowance per source, its usage counted, tabulated and enforced — its ledger in a file of its own (`quota.db`); every storing write reserved through the seam before it lands | `quota/` (`menger-quota`, V2-31) |
+| `code` | public GitHub repositories: a branch or tag resolved to a commit by git's own listing, the commit's whole tree fetched once and kept — its files by sha256 on disk, its tree in a file of its own (`code.db`) — and the tree and any file answered from what is kept; every new byte reserved through the seam | `code/` (`menger-code`, CODE-2) |
+| `logs` | logs: a typed table per log made from a JSON Schema, tied to a ticket by its uid and taking that ticket's reach — every log's table in a file of its own (`logs.db`); entries appended by name, each checked against the schema and kept with an envelope the server writes; every kept entry reserved through the seam | `logs/` (`menger-logs`, LOGS-2) |
 
 **Service to service.** The ui service reaches the tickets service as a
 client, never through its store: its seam (`../plexus-ui/service/src/seam.rs`)
@@ -508,6 +519,10 @@ and a `media.get` asks `tickets.may { id, role: viewer }` for a ticket the
 image was put for. Its seam is `media/src/seam.rs`; it never opens the
 tickets file either. The shell's `GET /media/<hash>` is a client of the
 media service in turn (`menger_media::fetch`, as the request's session).
+The logs service (LOGS-2) asks the same way, as the caller: `tickets.get`
+for the ticket a log is defined on (its uid, which the log keeps) and
+`tickets.may { id: <uid>, role }` before every call on a log — its seam is
+`logs/src/seam.rs`.
 
 **Pages in a body** (EDITOR-14) draw in frames, as v1 drew them: an
 `<m-mockup widths title description>…a page…</m-mockup>`, a ```` ```mockup ````
@@ -544,7 +559,9 @@ stores or fetches for a principal asks `quota.reserve { principal, source,
 amount }` before it writes, then `commit` (what it kept) or `release`,
 through `HubTransport::as_(service, system)` as the server's own caller
 (`menger_quota::QuotaSeam`, the `Meter` a service holds — the tickets
-service in its `Access`, the media service as its `Allowance`). The quota
+service in its `Access`, the media service as its `Allowance`, the code
+service as its own, `menger_code::Allowance`, the logs service as
+`menger_logs::Allowance`). The quota
 service asks back the same way: `members.teams.show` for a team's members,
 `members.list` for an organization's, and each store's own count for a
 recount (`tickets.revisions.usage`, `media.usage { everyone }`,
@@ -951,6 +968,259 @@ view of the same points; for an admin the whole system's too;
 `#/usage/:principal` an admin's look at another) and `#/quota` (an admin's
 table of everyone — sortable by stored or a source's use, the cap edited in
 place).
+
+### `code` (CODE-2)
+
+The owner, 2026-11-15: "a component that loads in a nice fast, ideally rust
+based, ide into menger that we can point at gh and navigate the codebase
+from." The page's policy keeps the browser off GitHub and no environment
+holds a checkout, so a public repository reaches a ticket only through this
+service (CODE-1); its view is CODE-3's.
+
+| method | flags | who | what it does |
+|---|---|---|---|
+| `open` | `--repo [--refname] [--commit]` | viewer | the commit a branch or tag (`--refname`; none: the default branch) or a hash names: `opened { repo, commit, ref, tip, committed_unix, kept, files, bytes }` — `ref` the branch or tag resolved, `tip` true for a branch, `kept` whether its tree is held (the last three null when not). A hash that is kept asks GitHub nothing (a short one: the kept commit it begins); one not kept is answered as given, or as the tip it begins |
+| `refs` | `--repo` | viewer | `refs { repo, default_branch, branches, tags }`, each `{ name, commit }` (an annotated tag: the commit it points at) |
+| `fetch` | `--repo --commit` | editor | the commit's whole tree read in one request and kept: `fetched { repo, commit, files, bytes, new_bytes }` — `new_bytes` what was new to the store, each file once, and what counts against the caller (`code.bytes`); kept already: `new_bytes: 0`, nothing asked |
+| `tree` | `--repo --commit [--under]` | viewer | every entry under the directory `--under` (the whole tree when none), by path: `tree { repo, commit, path, entries: [{ path, kind, bytes, target? }], truncated }` — `kind` `file`, `dir`, `link` (its target as text, never followed) or `module` (a submodule `.gitmodules` names); at most 20,000 |
+| `read` | `--repo --commit --file` | viewer | the file `--file` (a path from the tree's root): `file { path, bytes, lines, text }` for text up to 2 MiB; in band `binary { path, bytes }` (a NUL in its first 8 KiB, or not UTF-8), `too_large { path, bytes, max }`, `link { path, target }`, `not_found { path }`, `not_kept { repo, commit }` |
+| `kept` | | viewer | `kept { repo, commit, files, bytes, committed_unix, fetched_by, fetched_unix, read_unix }` per commit, the one read longest ago first, then `store { commits, bytes, max_bytes }` |
+| `forget` | `--repo --commit` | admin | a kept commit dropped, its files' bytes credited to whom they were reserved for: `forgotten { repo, commit, freed }` |
+
+A path in the tree is `--under` and `--file`, never `--path`, which
+synapse makes absolute on the caller's machine. **A repository** is GitHub's `owner/name` and nothing else (lower-cased):
+another host, a path or `..` is refused by its type (`bad_repo`,
+`invalid_params`) before any request. **Reading GitHub** is two addresses
+alone, over https, through the media service's `Remote` and its rules
+(public addresses, the connection pinned, redirects held to the same host,
+a time limit, a byte cap), with no credential, no cookie and a `User-Agent`
+naming the product (`menger-code/1`), never a caller, a ticket or the
+tracker: git's listing,
+`https://github.com/<owner>/<name>.git/info/refs?service=git-upload-pack`
+(protocol v0 pkt-lines; the default branch its `symref=HEAD:refs/heads/…`),
+reused for a minute per repository; and the archive,
+`https://codeload.github.com/<owner>/<name>/tar.gz/<commit>` (its pax
+global header carries the full hash; its entries under one top directory,
+dropped; their time the commit's). GitHub answers a listing of a
+repository that is not there, or private, **401** (never 404), and an
+archive of either 404, as of a commit not there — `not_public` and
+`no_such_commit`, told apart by the listing. In band, nothing kept:
+`not_public`, `no_such_ref`, `no_such_commit`, `rate_limited {
+retry_after_secs }`, `too_large { max }` (100 MiB compressed, 400 MiB
+unpacked, 50,000 entries), `bad_path` (an entry absolute, holding `..` or
+outside the top directory), `bad_archive`, `unreachable`, `full`, and the
+quota service's refusals (`over_allowance`, …).
+
+**What is kept.** A commit never changes, so what is kept for it is right
+for good: `code.db` (`--code-db-path`) holds `commits`, `entries` (path,
+kind, size, blob, a link's target) and `blobs` (a file's sha256, size and
+whom its bytes were reserved for); the bytes are `<root>/<aa>/<sha256>`
+(`--code-blob-dir`; a fetch stages under `<root>/tmp/`, cleared at start).
+Two fetches of one commit at once make one request. The whole store stays
+under `--code-max-bytes` (5 GiB): a fetch that would pass it drops the
+commits read longest ago — never one read in the last hour, a file going
+only when no kept commit names it, its bytes credited — or is refused
+`full`, nothing dropped. Each `tree` and `read` marks its commit read.
+
+```sh
+synapse -P 4460 menger code kept
+```
+
+A test points the service at a local stand-in for both hosts with the
+hidden `--code-github-at IP:PORT` (`CodeSetup::github_at`): read over http,
+let through although not public (`tests/wire_code.rs`, `code/tests/code.rs`), and the browser's stand-in, `tests/code-github.mjs`, which
+`node tests/code-github.mjs [PORT]` runs alone for a server started by hand).
+
+**The view** (CODE-3) is `code-ide` (`ui/src/code-ide.svelte`, real Svelte,
+svelte/1, with `code-ide-tree`, `code-ide-tabs` and `code-ide-view` bundled
+in), drawn by its tag in any body and filling the page at `#/code/<owner>/<name>`,
+`#/code/<owner>/<name>/<ref>` and `#/code/<owner>/<name>/<ref>/<view>`
+(`page-code`): a head (the repository, a branch, tag or commit, the commit
+and when it was made, refresh and pin on a branch, GitHub at the shown
+file's marked lines, fill the window), the tree with a finder (ctrl/⌘+p;
+a subsequence of the path, best first, Enter opens the first), tabs, and
+the lines — one CodeMirror view, read-only, its state swapped per tab,
+painted by the language code-card's `langOf` names from the path through
+the same painters (each a module of its own, fetched the first time a file
+in it is shown), a 20,000-line file drawn as a few dozen line elements. A
+line number marks its line, a shift-click a range. The tree is one `tree`
+and a file one `read` for a commit while the page is open; a tab shown
+again asks nothing; a file under the pointer 150 ms is read ahead. A commit
+not kept is fetched when the reader holds `code.fetch` (asked of
+`auth.requires` and `auth.whoami`, once a page); for one who does not, the
+view says someone who may must open it once, and calls nothing it would be
+refused. The tag:
+
+```html
+<code-ide repo="hypermemetic-ai/kiln" ref="main" dir="src" open="src/cones.rs#L5-L10, src/log.rs"></code-ide>
+```
+
+`repo` is `owner/name` or a github.com address (of the repository, a
+`/tree/<ref>/<dir>` or a `/blob/<ref>/<path>#L<a>-L<b>`, filling what the
+tag leaves out, the ref matched against `refs` longest first); `ref` a
+branch or tag, resolved on every mount; `commit` a hash, pinned, winning
+over `ref`; `dir` directories, comma-separated, each open, the first
+scrolled to; `open` paths, comma-separated, each a tab, the first shown,
+each with `#L<a>` or `#L<a>-L<b>`; `height` a CSS length (70vh, at least
+320 px). "copy this view as a tag" writes the tag that reopens what is on
+screen (`ref` on a branch, `commit` once pinned, the open directories, the
+tabs in order with their marks); "copy link" the address, whose last
+segment is the same `dir=…;open=…`, one segment percent-encoded (the
+router decodes it); "copy permanent link" the same at the commit. On the
+page the address follows the view in place (`history.replaceState`), so
+the address at any moment reopens what is on screen. What cannot be shown
+is said where it would be: a refusal in words with what to do, a path the
+tree lacks in its tab or the tree's crumb, a binary or too large file by
+its size with a link to GitHub. `tests/pages/code-ide.mjs` is the page
+group.
+
+**Follow** (CODE-6): an agent opens files in the reader's view. The head's
+"follow" and the agent's name (`code-ide-follow`, bundled in) — `builder` unless another is written: a name
+it signs in as, or its principal — are the reader's, off until ticked, kept
+in this browser and shared by every `code-ide` it draws. On, the page opens
+the ui service's watch as a session (`ui.watch { session, follows }`, an id
+`s-` and 12 hex made once a page, one for every view on it), says where it
+is (`ui.here`, the page's `/app/#/…`, again whenever the address moves),
+and says `ui.follow` at once when the name changes or follow goes off (and
+then holds no session). A `shown` whose `to` is a code address, read as the
+route reads it, is applied in place — no navigation, no reload, no history
+entry: each file of its `open` a tab beside the reader's (the reader's tabs
+and marks kept), the first shown with its lines marked and scrolled to, its
+`dir` and the file's directory opened, another ref or commit taken as the
+ref control takes one, another repository opened in its stead (the old
+one's tabs closed). With several views on a page the one showing that
+repository takes it, else the first. Its `say` is a note above the lines
+(who sent it, its markdown through the host's sanitized `markdown()`, a
+dismiss); a second show replaces it; `point`, a selector inside the view,
+is ringed until the note goes. A `to` that is no code address is the note
+alone, with `to` as a link. A show is applied once (`seq`). A show that
+reached nobody is kept for the reader by the ui service an hour (FRAME-48's
+knock) and arrives once, when a session of theirs next follows that agent.
+The agent, an editor on `*`:
+
+```sh
+synapse --url wss://app-test.menger.sh/ws --as builder menger ui sessions
+synapse --url wss://app-test.menger.sh/ws --as builder menger ui show --to '/app/#/code/hypermemetic-ai/menger/v2/open=src%2Fshell.rs%23L183-L187' --say 'the page policy'
+```
+
+The address is `/app/#/code/<owner>/<name>/<ref>/<view>`, `<view>` as
+"copy link" writes it — `dir=a,b;open=path#L<a>-L<b>,path` with each `/`
+as `%2F` and each `#` as `%23` (a `/` left as it is is read too).
+
+### `logs` (LOGS-2)
+
+The owner, 2026-11-16: "we give it a json schema and it builds a table for
+it? then we can reference those logs dynamically and submit to them."
+LOGS-1 is the spec. A log is a table of its own (owner: "table per
+schema"), tied to one ticket by its uid (owner: "log tied to a ticket
+uuid"), so it follows the ticket through every move and takes its reach.
+
+| method | flags | who, on the log's ticket | what it does |
+|---|---|---|---|
+| `define` | `--name --on --schema` | admin | a log made from a JSON Schema of an object: `defined { log, ticket, uid, columns }` — `ticket` its id now, `uid` what the log keeps |
+| `append` | `--log (--entry \| --entries) [--tags] [--ticket]` | editor | entries checked and kept, all or none: `appended { log, seq, last, count, bytes }` — `seq` to `last` their numbers, `bytes` what counts against the caller (`logs.bytes`) |
+| `describe` | `--log` | viewer | `described { log, ticket, uid, schema, columns, entries, created_by, created_unix_ms, deprecated? }` |
+| `list` | | viewer | `log { log, ticket, uid, fields, entries, deprecated?, deprecated_fields? }` per log whose ticket the caller sees |
+| `extend` | `--log --schema` | admin | the schema grown by optional fields: `extended { log, added, columns }` |
+| `deprecate` | `--log [--field] --message` | admin | the log, or one field, closed to new entries: `deprecated { log, field?, message }` |
+| `read` | `[--log] [--filter] [--tag] [--since] [--until] [--by] [--ticket] [--limit] [--after]` | viewer | LOGS-3: `entry { log, seq, at, by, tags, ticket?, entry }` per entry, newest first, then `page { count, next? }` — one log's, or with no `--log` every log's the caller sees |
+| `watch` | `[--log] [--tag]` | viewer | LOGS-3: `watching { log?, tag? }`, then `entry { … }` as each is appended (open-ended); `lagged { missed }` past 1,024 behind |
+
+**Who may.** At the gate `describe`, `list`, `read` and `watch` are a viewer's, `append` an
+editor's, `define`, `extend` and `deprecate` the admin's — each held
+anywhere; then the log's ticket decides, asked of the tickets service as
+the caller (`tickets.may` by the uid): the same role on that ticket, else
+`refused { reason: forbidden }`. A log on a ticket the caller cannot see is
+`not_found { log }`, as one that is none, and `list` does not name it.
+
+**The schema.** Taken: a root `{"type": "object"}` with `properties`,
+`required`, `additionalProperties: false`, `title`, `description` and
+`$schema`; each property a `type` of `string` (a TEXT column), `integer`
+(INTEGER), `number` (REAL), `boolean` (INTEGER 0/1, answered as a
+boolean), `array` or `object` (TEXT holding the JSON, checked only to be
+that type), with `title`, `description` and — on a string — `enum`. A
+field's name is a lower-case letter, then lower-case letters, digits and
+`_`, at most 63 (SQLite reads a name without regard to case); `seq`, `at`,
+`by`, `tags`, `ticket`, `log`, `entry`, `rowid` and `oid` are the envelope's
+or the store's. Anything else — `oneOf`, `anyOf`, `allOf`, `not`, `$ref`,
+`pattern`, bounds, `items`, a nested `properties`, a type list — is refused
+`bad_schema`, its `place` a JSON pointer into the schema
+(`/properties/value/minimum`), and nothing is made. At most 200 fields and
+64 KiB of schema. A log's name is a field's rule too (`perf`,
+`deploy_sizes`), and is its own: a second `define` of it is `name_taken`.
+
+**An entry** is a JSON object: `--entry @result.json` (one, at most 64 KiB)
+or `--entries @results.jsonl` (JSON lines, or a JSON array; at most 10,000
+and 8 MiB in all). Each is checked — a field's type (an integer is a
+number; a number is no integer), `required`, `enum`, no field the schema
+does not name, no deprecated field (a null is as absent) — and one that
+does not fit refuses the call `bad_entry { index, field }`, `index` from 0;
+nothing of the call is kept. The server writes the envelope: `seq` (from 1
+in each log), `at` (unix milliseconds), `by` (the caller), `tags` (`--tags`,
+at most 32, each 1 to 64 of letters, digits, `. _ - : /`) and `ticket`
+(`--ticket`, any name of a ticket the caller sees, kept by its uid). An
+entry is never edited or deleted.
+
+**Growing and closing.** `extend` takes a schema that names every field the
+log has, each of its type, none newly required and no `enum` narrowed, and
+adds each new field as an optional column (an entry before it reads it as
+null); a field dropped, renamed, retyped or newly required is refused
+`not_grown`, naming it. `deprecate` closes a log (every append refused
+`deprecated`, saying so and why) or one field (an entry carrying it refused,
+naming it; one without it kept); what was written stays, and `describe` and
+`list` mark both. Nothing reopens either.
+
+**What is kept.** `logs.db` (`--logs-db-path`) holds `logs` (each log, its
+ticket's uid, its schema, its fields, its count and whether it is
+deprecated), a table a log, `log_<name>` (`seq` its key, `at`, `by`, `tags`,
+`ticket`, then a column a field), and `entry_tags` (`log`, `tag`, `seq`), so
+a tag is found in every log at once. A name enters SQL only once its rule
+holds, and quoted; every value is bound. Every append is reserved for its
+writer through the quota service before anything is kept (`logs.bytes`:
+each entry's JSON and its tags), then committed or released.
+
+**Reading** (LOGS-3). `read --log perf` answers the log's entries newest
+first (by `seq`), a page of `--limit` (100; at most 1,000), `next` given
+back as `--after` for the page after; with no `--log`, every log whose
+ticket the caller sees, newest first by `at` (then the log's name, then
+`seq`), each entry with its log's name — the `next` then `at.seq.log`.
+`--tag` (one tag), `--since` and `--until` (an age, `7d`, `12h`, `30m`,
+`45s`, `2w`; a date, `2026-11-16`, its first moment UTC; or unix ms),
+`--by` (a principal) and `--ticket` (any name of a ticket, matched by its
+uid) narrow either. `--filter` is the log's own language — LOGS-1 wrote
+`--where`, a word Rust keeps (plexus-macros 0.8 names a parameter
+`r#where` on the wire as written):
+
+| words | |
+|---|---|
+| a field | the log's, or the envelope's `seq`, `at`, `by`, `ticket` (`tags` is `--tag`; an `array` or `object` field is not filtered on) |
+| `=` `!=` `<` `<=` `>` `>=` | a string field with a quoted string (`"…"` or `'…'`, `\"` `\'` `\\` escaped), an integer or number field with a number, a boolean field with `true` / `false` (`=`, `!=` alone) |
+| `in ( v, … )` | one of at most 100 values |
+| `= null`, `!= null` | carries no value, carries one |
+| `and`, `or`, `not`, `( … )` | `not` binds tightest, then `and`, then `or`; any case |
+
+Two-valued: a comparison with a field an entry does not carry is false
+(`!=` true), so `not` is its opposite. Checked against the log's columns
+before anything is read — a field it has not is refused `bad_filter`,
+naming those it has; across logs, the envelope's alone — and compiled to
+SQL with every value bound; at most 4 KiB, 32 deep.
+
+```sh
+synapse -P 4460 menger logs read --log perf --filter 'app = "plexus" and scenario = "stream.10k.64B" and transport = "websocket"' --limit 20
+synapse -P 4460 menger logs read --tag plexus --since 7d
+```
+
+**Watching.** `watch [--log] [--tag]` says `watching`, then each entry as it
+is appended (a log the caller cannot see is `not_found`, and the watch
+ends). With no `--log` it hears every log, and is told an entry only while
+the caller sees its log's ticket — asked of the tickets service again at
+most every 5 seconds a log. Past 1,024 appends behind it says `lagged {
+missed }` and goes on; `read` has what went by.
+
+```sh
+synapse -P 4460 menger logs list
+synapse -P 4460 menger logs watch --log perf     # open-ended
+```
 
 ## Tickets
 
@@ -1853,6 +2123,8 @@ media/               menger-media: the media service — images by sha256 in med
                      ticket's permit asked of tickets through the seam (V2-24)
 quota/               menger-quota: the quota service — allowances per principal and source
                      in quota.db, every storing write reserved through the seam (V2-31)
+code/                menger-code: the code service — public GitHub commits fetched once, their
+                     files by sha256 and trees in code.db, answered from what is kept (CODE-2)
 ui/                  the UI's source bundle (compiled and drawn by ../plexus-ui's
                      plexus-ui-compiler and plexus-ui-engine, FRAME-3; stored and
                      served by its plexus-ui-service, FRAME-5)

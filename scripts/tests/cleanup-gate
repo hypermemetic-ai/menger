@@ -176,25 +176,28 @@ has "the caller's own directory" "$out" "you are inside it"; there "inside" "$SC
 hasnt "no hand-written rm -r in this test" "$(grep -v '^#' "$SELF" | grep -v hasnt)" "rm -r"
 
 # ── SCRATCH-NAMES: a dev server's other files, named after its database ────
-# --db-path /tmp/menger-NAME.db puts ui, media, notes and quota beside it as
-# menger-NAME.<service>.db (-shm, -wal) and the media's bytes in
-# menger-NAME.media.blobs/ — all the gate's, by name, by path and in --list.
+# --db-path /tmp/menger-NAME.db puts ui, media, notes, quota, (CODE-2) code and (LOGS-2) logs
+# beside it as menger-NAME.<service>.db (-shm, -wal) and the media's and the
+# code's bytes in menger-NAME.media.blobs/ and menger-NAME.code.blobs/ — all
+# the gate's, by name, by path and in --list.
 NM=()
-for s in "" .ui .media .notes .quota; do for e in .db .db-shm .db-wal; do echo x >"$TM/menger-names$s$e"; NM+=("$TM/menger-names$s$e"); done; done
+for s in "" .ui .media .notes .quota .code .logs; do for e in .db .db-shm .db-wal; do echo x >"$TM/menger-names$s$e"; NM+=("$TM/menger-names$s$e"); done; done
 mkdir -p "$TM/menger-names.media.blobs/ab"; echo png >"$TM/menger-names.media.blobs/ab/abcd"; NM+=("$TM/menger-names.media.blobs")
+mkdir -p "$TM/menger-names.code.blobs/ef/tmp"; echo rs >"$TM/menger-names.code.blobs/ef/efab"; NM+=("$TM/menger-names.code.blobs")
 echo x >"$TM/menger-other.media.db"; mkdir -p "$TM/menger-other.media.blobs"; echo x >"$TM/media.db"; mkdir -p "$TM/media/blobs"
 ln -s "$T/elsewhere" "$TM/menger-link.media.blobs"
 cg "names: dry run" 0 names
 for p in "${NM[@]}"; do has "names: dry run lists $p" "$out" "scratch-db $p"; there "names: dry run keeps" "$p"; done
 hasnt "names: never another server's" "$out" "menger-other"
 cg "names: --list" 2 --list
-for p in "$TM/menger-names.media.db-wal" "$TM/menger-names.quota.db" "$TM/menger-names.media.blobs" "$TM/menger-other.media.blobs"; do has "--list: $p" "$out" "scratch-db $p"; done
+for p in "$TM/menger-names.media.db-wal" "$TM/menger-names.quota.db" "$TM/menger-names.code.db" "$TM/menger-names.logs.db-wal" "$TM/menger-names.media.blobs" "$TM/menger-names.code.blobs" "$TM/menger-other.media.blobs"; do has "--list: $p" "$out" "scratch-db $p"; done
 has "--list: a link is no blobs" "$out" "refused  $TM/menger-link.media.blobs → $T/elsewhere — not a leftover shape"
 # the sweep takes a server's set whole: every file idle an hour and none held, or none of it
 set_of() { local n=$1 s e; SET=()
-  for s in "" .ui .media .notes .quota; do for e in .db .db-shm .db-wal; do echo x >"$TM/menger-$n$s$e"; SET+=("$TM/menger-$n$s$e"); done; done
+  for s in "" .ui .media .notes .quota .code .logs; do for e in .db .db-shm .db-wal; do echo x >"$TM/menger-$n$s$e"; SET+=("$TM/menger-$n$s$e"); done; done
   for e in .sessions.jsonl .sessions.jsonl.lock .log; do echo x >"$TM/menger-$n$e"; SET+=("$TM/menger-$n$e"); done
   mkdir -p "$TM/menger-$n.media.blobs/cd"; echo png >"$TM/menger-$n.media.blobs/cd/cdef"; SET+=("$TM/menger-$n.media.blobs")
+  mkdir -p "$TM/menger-$n.code.blobs/12"; echo rs >"$TM/menger-$n.code.blobs/12/1234"; SET+=("$TM/menger-$n.code.blobs")
   find "${SET[@]}" -depth -exec touch -h -d '2 hours ago' {} +; }
 set_of idle; IDLE=("${SET[@]}")
 set_of fresh; FRESH=("${SET[@]}"); echo y >>"$TM/menger-fresh.quota.db-wal"   # one file written now
@@ -205,6 +208,8 @@ sleep 0.3
 cg "sweep: scratch sets" 0 --sweep --yes
 for p in "${IDLE[@]}"; do gone "sweep: idle and unheld, taken: $p" "$p"; done
 has "sweep: said and logged" "$(<"$LOG")" "removed scratch-db $TM/menger-idle.media.blobs"
+has "sweep: the code's bytes too" "$(<"$LOG")" "removed scratch-db $TM/menger-idle.code.blobs"
+has "sweep: the logs' file too (LOGS-2)" "$(<"$LOG")" "removed scratch-db $TM/menger-idle.logs.db"
 for p in "${FRESH[@]}"; do there "sweep: one file touched within the hour, all kept: $p" "$p"; done
 has "sweep: why fresh is kept" "$out" "kept     scratch-db  $TM/menger-fresh.db — its menger-fresh.quota.db-wal modified within 1h"
 for p in "${HELD[@]}"; do there "sweep: one file held open, all kept: $p" "$p"; done
@@ -218,6 +223,7 @@ cg "fresh by name" 0 --yes fresh; for p in "${FRESH[@]}"; do gone "fresh by name
 cg "names: removed" 0 --yes names
 for p in "${NM[@]}"; do gone "names" "$p"; done
 has "names: the blobs, whole" "$out" "removed  scratch-db $TM/menger-names.media.blobs"
+has "names: the code's blobs, whole" "$out" "removed  scratch-db $TM/menger-names.code.blobs"
 there "names: another server's stay" "$TM/menger-other.media.db"; there "names: … and its blobs" "$TM/menger-other.media.blobs"
 cg "another's blobs by path" 0 --yes --path "$TM/menger-other.media.blobs"; gone "blobs by path" "$TM/menger-other.media.blobs"
 refused "the shared media.db of before" "not a leftover shape" --path "$TM/media.db"

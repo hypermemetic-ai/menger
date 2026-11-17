@@ -125,6 +125,28 @@ struct Args {
     #[arg(global = true, long, env = "MENGER_QUOTA_PLAN", value_name = "FILE", help_heading = RUN, hide_short_help = true)]
     quota_plan: Option<PathBuf>,
 
+    // CODE-2: the code service's own file, its blobs, and its cap.
+    /// The code service's file — the GitHub commits kept and their trees (default: code.db beside the database file)
+    #[arg(global = true, long, env = "MENGER_CODE_DB_PATH", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
+    code_db_path: Option<PathBuf>,
+
+    /// Where the code service keeps its files' bytes, by sha256 (default: code/blobs beside the code file)
+    #[arg(global = true, long, env = "MENGER_CODE_BLOB_DIR", value_name = "DIR", help_heading = RUN, hide_short_help = true)]
+    code_blob_dir: Option<PathBuf>,
+
+    /// The most the code service keeps, in bytes; past it the commit read longest ago goes (default: 5 GiB)
+    #[arg(global = true, long, env = "MENGER_CODE_MAX_BYTES", value_name = "BYTES", help_heading = RUN, hide_short_help = true)]
+    code_max_bytes: Option<u64>,
+
+    /// For tests alone: an ip:port standing in for github.com and codeload.github.com, read over http although it is not public
+    #[arg(global = true, long = "code-github-at", value_name = "IP:PORT", hide = true)]
+    code_github_at: Option<std::net::SocketAddr>,
+
+    // LOGS-2: the logs service's own file.
+    /// The logs service's file — every log's schema and its entries, a table a log (default: logs.db beside the database file)
+    #[arg(global = true, long, env = "MENGER_LOGS_DB_PATH", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
+    logs_db_path: Option<PathBuf>,
+
     /// A public key (64 hex digits, Ed25519) a `ui.push` may be signed by
     ///
     /// Repeatable; in the env var, separated by `;`. With none, every push is
@@ -737,6 +759,20 @@ async fn run(args: Args) -> anyhow::Result<()> {
         None => menger_quota::Plan::built_in(),
     };
     let quota = menger::QuotaSetup::open(&quota_db_path, &plan)?;
+    // CODE-2: the code service's file (beside the tickets file unless
+    // named): never another service's.
+    let code_db_path = args.code_db_path.clone().unwrap_or_else(|| menger::default_code_db_path(&db_path));
+    if [&db_path, &ui_db_path, &media_db_path, &notes_db_path, &quota_db_path].contains(&&code_db_path) {
+        anyhow::bail!("--code-db-path {} is another service's file: the code service keeps a file of its own", code_db_path.display());
+    }
+    let code = menger::CodeSetup::open(&code_db_path, args.code_blob_dir.as_deref())?.max_bytes(args.code_max_bytes).github_at(args.code_github_at);
+    // LOGS-2: the logs service's file (beside the tickets file unless
+    // named): never another service's.
+    let logs_db_path = args.logs_db_path.clone().unwrap_or_else(|| menger::default_logs_db_path(&db_path));
+    if [&db_path, &ui_db_path, &media_db_path, &notes_db_path, &quota_db_path, &code_db_path].contains(&&logs_db_path) {
+        anyhow::bail!("--logs-db-path {} is another service's file: the logs service keeps a file of its own", logs_db_path.display());
+    }
+    let logs = menger::LogsSetup::open(&logs_db_path)?;
     // POLYGLOT-5: each `--child` started (or dialed) and its schema asked
     // before anything is served; one that does not answer stops the start,
     // named, exit 2.
@@ -747,7 +783,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
             std::process::exit(2);
         }
     };
-    let service = build_rpc_services(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, ui, media, notes, quota, children, |store, access| {
+    let service = build_rpc_services(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, ui, media, notes, quota, code, logs, children, |store, access| {
         menger::TicketsActivation::with_access(store, access)
     })
     .await?;
@@ -847,7 +883,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
             // or a token an --auth-provider admits) names the caller to the
             // gate, as the WebSocket's upgrade does; no credential is the
             // anonymous view (the door). Every service registered is there:
-            // tickets, members, orgs, ui, media, notes, quota, auth, session.
+            // tickets, members, orgs, ui, media, notes, quota, code, logs, auth, session.
             // With --mcp-authorization-server, /mcp is an OAuth 2.1
             // protected resource and says so on a 401.
             mcp: (!args.no_mcp).then(|| {

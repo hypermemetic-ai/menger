@@ -363,8 +363,29 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("quota.set", Today::Admin, None),
     ("quota.recount", Today::Admin, None),
     ("tickets.revisions.usage", Today::Admin, None),
+    // CODE-2: the code service — a viewer opens, lists and reads what is
+    // kept, an editor fetches, the admin forgets; each held anywhere.
+    ("code.open", Today::Viewer, None),
+    ("code.refs", Today::Viewer, None),
+    ("code.tree", Today::Viewer, None),
+    ("code.read", Today::Viewer, None),
+    ("code.kept", Today::Viewer, None),
+    ("code.fetch", Today::Editor, None),
+    ("code.forget", Today::Admin, None),
+    // LOGS-2: the logs service — at the gate a viewer describes and lists,
+    // an editor appends, the admin defines, extends and deprecates; each
+    // held anywhere, then the log's ticket decides (asked of `tickets`).
+    ("logs.describe", Today::Viewer, None),
+    ("logs.list", Today::Viewer, None),
+    // LOGS-3: and a viewer reads and watches.
+    ("logs.read", Today::Viewer, None),
+    ("logs.watch", Today::Viewer, None),
+    ("logs.append", Today::Editor, None),
+    ("logs.define", Today::Admin, None),
+    ("logs.extend", Today::Admin, None),
+    ("logs.deprecate", Today::Admin, None),
     // V2-31: and the notes store's own count, which the recount reads.
-    ("notes.usage", Today::Admin, None),
+    ("docs.usage", Today::Admin, None),
     // V2-30: questions on a range — a viewer reads them and an agent's
     // queue, an editor asks, answers and resolves.
     ("notes.threads", Today::Viewer, None),
@@ -412,7 +433,7 @@ async fn the_roles_are_what_identity_21_asked_method_by_method() {
         .map(|(path, s)| (format!("tickets.{path}"), s));
     let top = service.list_plugin_schemas().into_iter().map(|s| (s.namespace.clone(), s));
     for (path, schema) in top.chain(children) {
-        if !["tickets", "members", "session", "media", "notes", "quota"].contains(&schema.namespace.as_str()) && !path.starts_with("tickets.") {
+        if !["tickets", "members", "session", "media", "notes", "quota", "code", "logs"].contains(&schema.namespace.as_str()) && !path.starts_with("tickets.") {
             continue;
         }
         for m in &schema.methods {

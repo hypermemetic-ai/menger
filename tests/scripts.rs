@@ -166,6 +166,14 @@ fn ui8_work_dirs_are_said_to_go_at_the_hourly_sweep() {
     assert!(!harness.contains("the gate has no shape"), "scripts/ui-throwaway.mjs still says the gate has no shape for a work directory under another $TMPDIR");
 }
 
+/// LAYERS-20: `scripts/kiln-activation --check` — the generated
+/// ui/src/kiln-activation.svelte is stale when the kiln's interface hash
+/// moves, and says both; a stand-in IR, nothing built.
+#[test]
+fn kiln_activation_script() {
+    passes("kiln-activation", "bash", &["scripts/tests/kiln-activation"], &[" 0 failed"], Duration::from_secs(60));
+}
+
 /// DIST-22: `scripts/package` — the archive's name and layout are what
 /// Cargo.toml's `[package.metadata.binstall]` tells cargo-binstall to ask
 /// for; a stand-in binary is packed, nothing is built.

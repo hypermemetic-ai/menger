@@ -91,6 +91,7 @@
 "--code-def"      = ['#2f63d9', '#61afef', 'a definition: the name a function or a binding is given']
 "--code-property" = ['#0176a5', '#56b6c2', 'a property name']
 "--code-meta"     = ['#c8402f', '#e06c75', 'a macro, an attribute, a preprocessor line']
+"--code-mark"     = ['#fff3c4', '#3a3115', 'CODE-3: a marked line in code-ide, its number with it']
 
 [colour.diff]   # a revision's diff: a line added, a line removed (SURFACE-4's mockup)
 "--diff-add-bg" = ['#e1f2dc', '#15301b', 'an added line']

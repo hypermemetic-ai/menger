@@ -95,4 +95,6 @@ pub use menger_tickets_api::{MembersActivation, MembersClient, OrgsActivation, S
 pub use builder::{
     build_rpc, build_rpc_login, build_rpc_offering, build_rpc_seeded, build_rpc_services, build_rpc_ui, build_rpc_ui_over, build_rpc_with, default_db_path, default_notes_db_path, default_media_blob_dir, default_media_db_path, media_blobs, sibling_db_path, DATA_DIR_DB_FILES,
     default_quota_db_path, default_ui_channel, default_ui_db_path, sessions_file, NotesSetup, MediaSetup, QuotaSetup, UiSetup, SESSIONS_FILE, SIGNED_IN_GRANTS,
+    default_code_blob_dir, default_code_db_path, CodeSetup,
+    default_logs_db_path, LogsSetup,
 };

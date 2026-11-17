@@ -96,6 +96,16 @@
   import CodeHtml from "plexus-ui:code-html";
   import CodeCss from "plexus-ui:code-css";
   import CodeLegacy from "plexus-ui:code-legacy";
+  // CODE-3: a repository in a body, its parts, and its page.
+  import CodeIde from "plexus-ui:code-ide";
+  import CodeIdeTree from "plexus-ui:code-ide-tree";
+  import CodeIdeTabs from "plexus-ui:code-ide-tabs";
+  import CodeIdeView from "plexus-ui:code-ide-view";
+  import CodeIdeFollow from "plexus-ui:code-ide-follow";
+  import PageCode from "plexus-ui:page-code";
+  // LAYERS-20: the kiln in a worker — its component, and its generated part (a module with no view).
+  import KilnLive from "plexus-ui:kiln-live";
+  import KilnActivation from "plexus-ui:kiln-activation";
   import TicketChipSv from "plexus-ui:ticket-chip-sv";
   import TicketLinks from "plexus-ui:ticket-links";
   import PageT from "plexus-ui:page-t";
@@ -146,6 +156,12 @@
 
   // The held states, and what of a tile the sheet marks for each: the first
   // of every kind of row and control in it.
+  // CODE-3: code-ide-tree's tree, as code-ide makes it from code.tree.
+  const CODE_TREE = { truncated: false, kids: {
+    "": [{ path: "src", name: "src", kind: "dir", bytes: 0 }, { path: "ui", name: "ui", kind: "dir", bytes: 0 }, { path: "Cargo.toml", name: "Cargo.toml", kind: "file", bytes: 40 }, { path: "README.md", name: "README.md", kind: "file", bytes: 30 }],
+    src: [{ path: "src/cones.rs", name: "cones.rs", kind: "file", bytes: 400 }, { path: "src/lib.rs", name: "lib.rs", kind: "file", bytes: 40 }, { path: "src/log.rs", name: "log.rs", kind: "file", bytes: 120 }],
+    ui: [{ path: "ui/routes.json", name: "routes.json", kind: "file", bytes: 30 }],
+  } };
   const HOLD = {
     hover: ["[data-id]", "a[href]", "button:not([disabled])", "input", "select", "[role=option]", "[role=button]", "li", "summary", "label"],
     focus: ["[data-id]", "a[href]", "button:not([disabled])", "input", "select", "textarea", "[role=option]", "[tabindex]", "summary"],
@@ -257,6 +273,15 @@
       ["code-html", CodeHtml, (t) => ({ code: "<p class=\"x\">hi</p>" }), [], {}],
       ["code-css", CodeCss, (t) => ({ code: ".x { color: red; }" }), [], {}],
       ["code-legacy", CodeLegacy, (t) => ({ code: "cargo test -p menger --test apart  # a selection", lang: "shell" }), [], {}],
+      // CODE-3: a repository in a body — the sheet's own, drawn with no call — and its parts alone.
+      ["code-ide", CodeIde, () => ({ sheet: "sample", repo: "hypermemetic-ai/kiln", ref: "main", dir: "src", open: "src/cones.rs#L5-L10, src/log.rs", height: "360px" }), ["hover", "focus"], { loading: { sheet: "loading" } }, false, { hover: [".row", ".ctl"], focus: [".row", "input[data-finder]"] }],
+      ["code-ide-tree", CodeIdeTree, () => ({ tree: CODE_TREE, open: ["src"], shown: "src/cones.rs", tabs: ["src/cones.rs", "src/log.rs"], crumb: "starts in src/" }), ["hover", "focus"], { loading: { sheet: "loading" }, empty: { query: "zzqq" } }, false, { hover: [".row"], focus: [".row"] }],
+      ["code-ide-tabs", CodeIdeTabs, () => ({ tabs: [{ path: "src/cones.rs", mark: [5, 10] }, { path: "src/log.rs", mark: null }], shown: "src/cones.rs", gone: [] }), ["hover", "focus", "selected"], {}, false, { hover: [".tab"], focus: [".tab"], selected: ["[role=tab][aria-selected=false]"] }],
+      ["code-ide-follow", CodeIdeFollow, () => ({ sheet: "sample" }), ["focus", "disabled"], {}, false, { focus: ["input[data-field=follow-who]"], disabled: ["input[data-action=follow]"] }],
+      // LAYERS-20: the kiln — the sheet's own firing, refusal and heat, no kiln started; its generated part draws nothing.
+      ["kiln-live", KilnLive, () => ({ sheet: "sample" }), ["hover", "focus", "disabled"], { loading: { sheet: "loading" } }, false, { hover: ["[data-action=fire]"], focus: ["[data-action=fire]"], disabled: ["[data-action=heat]"] }],
+      ["kiln-activation", KilnActivation, F, [], {}],
+      ["code-ide-view", CodeIdeView, () => ({ text: "fn main() {\n    let cone = \"6\";\n    println!(\"{}\", cone);\n}\n", key: "sheet:src/main.rs", path: "src/main.rs", mark: [2, 2] }), [], {}],
       ["ticket-relations", TicketRelations, ID, ["hover", "focus"], { loading: { sheet: "loading" } }],
       ["ticket-subtasks", TicketSubtasks, ID, ["hover", "focus"], { loading: { sheet: "loading" } }],
       ["ticket-commits", TicketCommits, ID, ["hover", "focus"], {}],
@@ -331,6 +356,7 @@
       ["page-quota", PageQuota, F, [], {}, true],
       ["page-releases", PageReleases, F, [], {}, true],
       ["page-media", PageMedia, F, [], { loading: { sheet: "loading" } }, true],
+      ["page-code", PageCode, () => ({ owner: "hypermemetic-ai", name: "kiln", sheet: "sample" }), [], { loading: { sheet: "loading" } }, true],
       ["page-bulk", PageBulk, (t) => ({ ids: t }), [], {}, true],
       ["page-blockers", PageBlockers, ID, [], {}, true],
       ["page-edit", PageEdit, ID, [], {}, true],

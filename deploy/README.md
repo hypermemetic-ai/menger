@@ -301,6 +301,14 @@ V2-29: the notes service alike — `notes.db` beside the database
 (`--notes-db-path`, `MENGER_NOTES_DB_PATH`; the docs service's `docs.db`
 until NOTES-3); a release carries it, so the first deploy after it opens an
 empty file in the data volume.
+CODE-2: the code service alike — `code.db` beside the database and its
+files' bytes in `code/blobs/` (`--code-db-path`, `--code-blob-dir`,
+`--code-max-bytes`, 5 GiB unless named); the first deploy after it opens
+an empty one, and the server reads `github.com` and
+`codeload.github.com` over https from then on.
+LOGS-2: the logs service alike — `logs.db` beside the database
+(`--logs-db-path`, `MENGER_LOGS_DB_PATH`); the first deploy after it opens
+an empty `logs.db` in the data volume.
 
 ### Notes, once documents (NOTES-3)
 

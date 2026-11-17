@@ -137,6 +137,73 @@ impl menger_notes::quota::Quota for NotesMetered {
     }
 }
 
+/// CODE-2: **the code service's allowance is the quota service** too
+/// (`menger_code::Allowance`): the bytes a fetch adds to the store are
+/// reserved for the caller on `code.bytes` before anything is kept, then
+/// committed or released; a file that goes — its commit dropped for room,
+/// or forgotten — is credited to whoever it was reserved for.
+#[derive(Clone, Debug)]
+pub struct CodeMetered(pub MeterSlot);
+
+#[async_trait::async_trait]
+impl menger_code::Allowance for CodeMetered {
+    async fn reserve(&self, principal: &str, amount: u64) -> Result<String, menger_code::Denied> {
+        match self.0.get().reserve(principal, menger_code::allowance::SOURCE, amount).await {
+            Ok(Hold { ticket, .. }) => Ok(ticket.unwrap_or_else(|| format!("unmetered-{}", uuid_like()))),
+            Err(r) => {
+                let d = denied(r.clone());
+                Err(menger_code::Denied { reason: reason_of(&r).to_string(), message: d.message, remaining: d.remaining })
+            }
+        }
+    }
+
+    async fn commit(&self, id: &str, amount: u64) {
+        if !id.starts_with("unmetered-") {
+            self.0.get().commit(Hold { ticket: Some(id.to_string()), remaining: None }, Some(amount)).await;
+        }
+    }
+
+    async fn release(&self, id: &str) {
+        if !id.starts_with("unmetered-") {
+            self.0.get().release(Hold { ticket: Some(id.to_string()), remaining: None }).await;
+        }
+    }
+
+    async fn credit(&self, principal: &str, amount: u64) {
+        self.0.get().credit(principal, menger_code::allowance::SOURCE, amount).await;
+    }
+}
+
+/// LOGS-2: **the logs service's allowance is the quota service** too
+/// (`menger_logs::Allowance`): the bytes an `append` keeps — each entry's
+/// JSON and its tags — are reserved for the writer on `logs.bytes` before
+/// anything is kept, then committed or released. An entry is never deleted
+/// but with its log, and no method deletes a log yet: nothing is credited.
+#[derive(Clone, Debug)]
+pub struct LogsMetered(pub MeterSlot);
+
+#[async_trait::async_trait]
+impl menger_logs::Allowance for LogsMetered {
+    async fn reserve(&self, principal: &str, amount: u64) -> Result<String, menger_logs::Denied> {
+        match self.0.get().reserve(principal, menger_logs::allowance::SOURCE, amount).await {
+            Ok(Hold { ticket, .. }) => Ok(ticket.unwrap_or_else(|| format!("unmetered-{}", uuid_like()))),
+            Err(r) => Err(menger_logs::Denied { reason: reason_of(&r).to_string(), message: denied(r).message }),
+        }
+    }
+
+    async fn commit(&self, id: &str, amount: u64) {
+        if !id.starts_with("unmetered-") {
+            self.0.get().commit(Hold { ticket: Some(id.to_string()), remaining: None }, Some(amount)).await;
+        }
+    }
+
+    async fn release(&self, id: &str) {
+        if !id.starts_with("unmetered-") {
+            self.0.get().release(Hold { ticket: Some(id.to_string()), remaining: None }).await;
+        }
+    }
+}
+
 fn uuid_like() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static N: AtomicU64 = AtomicU64::new(0);

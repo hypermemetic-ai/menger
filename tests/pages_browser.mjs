@@ -52,6 +52,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { makeKey, mintSession, readToken, sessionCookies, writeSession } from "../scripts/throwaway-login.mjs";
 import { INIT, TARGET, Throwaway, build, bundle, compilerModule, playwright, push, sentCalls, sleep, synapse, workDir } from "../scripts/ui-throwaway.mjs";
+import { githubStandIn } from "./code-github.mjs";
 
 const args = process.argv.slice(2);
 const flag = (name) => args.includes(name);
@@ -263,6 +264,10 @@ async function main() {
   // service's hidden --media-fetch-allow (tests/pages/editor.mjs's cards).
   const fake = await fakeInternet();
   server.fetchAllow = [`127.0.0.1:${fake.port}`];
+  // CODE-3: GitHub, on loopback — the code service's listing and archives of synthetic repositories
+  // (tests/code-github.mjs), read through the hidden --code-github-at (tests/pages/code-ide.mjs).
+  const github = await githubStandIn();
+  server.codeGithubAt = github.at;
   // COMPS-4: ui.author runs — the compiler module and an author key (made at start), so a ticket's
   // ```component definitions save (tests/pages/components.mjs).
   server.uiCompiler = compilerModule(work);
@@ -971,7 +976,7 @@ async function main() {
     const wanted = GROUP && GROUP !== "all" ? groupFiles.filter((f) => f === `${GROUP}.mjs`) : groupFiles;
     if (GROUP && GROUP !== "all" && !wanted.length) throw new Error(`--group ${GROUP}: no tests/pages/${GROUP}.mjs (have: ${groupFiles.join(", ") || "none"})`);
     inGroup = true;
-    const ctx = { fake, test, assert, eventually, sleep, typeBursts, openPage, marked, sameDocument, sy, summaries, extentsNow, groupsNow,
+    const ctx = { fake, github, browser, test, assert, eventually, sleep, typeBursts, openPage, marked, sameDocument, sy, summaries, extentsNow, groupsNow,
       section, main, nav, palette, rowIds, attrs, boardUp, BOARDS, server, token, session, v1, v2, pages, fs, path, ticketAt };
     for (const f of wanted) {
       console.log(`group ${f.replace(/\.mjs$/, "")}`);

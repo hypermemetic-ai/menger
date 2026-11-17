@@ -75,7 +75,7 @@ export default async (ctx) => {
     const { page, context } = await openAs(s.token, "#/usage");
     const root = page.locator("[data-surface=quota-usage]");
     try {
-      await eventually("a row per source", async () => (await root.locator("[data-id]").count()) === 9);
+      await eventually("a row per source", async () => (await root.locator("[data-id]").count()) === 11);
       const tickets = root.locator('[data-id="tickets.bytes"]');
       // V2-40: one 4,321-byte ticket is kept twice — its current body (the
       // tickets row) and its first revision's copy (revision_bodies) — 8.6 KB.
@@ -212,7 +212,7 @@ export default async (ctx) => {
       assert(above, "above the person's own");
       // An admin looking at another person: the section too.
       await page.goto(`${server.origin}/app/#/usage/${encodeURIComponent(editor)}`);
-      await eventually("the editor's usage", async () => (await page.locator("[data-surface=quota-usage] [data-id]").count()) === 9, 5_000);
+      await eventually("the editor's usage", async () => (await page.locator("[data-surface=quota-usage] [data-id]").count()) === 11, 5_000);
       await eventually("and the system's", async () => (await root.locator("[data-total]").count()) === 1, 5_000);
       await shoot(page, "usage-admin");
     } finally {
@@ -223,7 +223,7 @@ export default async (ctx) => {
   await test("usage_page_shows_no_one_else_the_whole_system", async () => {
     const { page, context } = await openAs(s.token, "#/usage");
     try {
-      await eventually("their own usage", async () => (await page.locator("[data-surface=quota-usage] [data-id]").count()) === 9, 5_000);
+      await eventually("their own usage", async () => (await page.locator("[data-surface=quota-usage] [data-id]").count()) === 11, 5_000);
       await eventually("the roles asked", async () => (await sentCalls(page)).some((c) => c.method === "auth.requires" && c.params.method === "quota.table"), 5_000);
       await eventually("who they are asked", async () => (await sentCalls(page)).some((c) => c.method === "auth.whoami"), 5_000);
       await page.waitForTimeout(500);
@@ -296,7 +296,7 @@ export default async (ctx) => {
       const r = as("quota", "history", ...asked);
       assert(r.some((e) => e.type === "error") && !r.some((e) => e.type === "point"), `${asked.join(" ")}: refused, nothing answered: ${JSON.stringify(r).slice(0, 200)}`);
     }
-    assert(as("quota", "history", "--days", "7").filter((e) => e.type === "point").length === 7 * 9, "their own: every source, every day");
+    assert(as("quota", "history", "--days", "7").filter((e) => e.type === "point").length === 7 * 11, "their own: every source, every day");
     const { page, context } = await openAs(s.token, `#/usage/${encodeURIComponent(owner)}`);
     try {
       await eventually("refused on the page", async () => (await page.locator("[data-surface=quota-history] [data-refused]").count()) === 1, 5_000);

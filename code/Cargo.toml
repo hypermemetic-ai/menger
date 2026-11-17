@@ -1,0 +1,41 @@
+# CODE-2: menger's code service — a public GitHub repository's branch or tag
+# resolved to a commit, the commit's whole tree fetched once and kept (its
+# files by sha256 on disk, the tree in a file of its own, `code.db`), and
+# the tree and its files answered from what is kept. A service of v2's own
+# beside `tickets`, `media`, `notes` and `quota` (V2-1); its reads of GitHub
+# go through the media service's `Remote` and its rules.
+[package]
+name = "menger-code"
+version = "0.8.0"
+edition = "2021"
+license = "MIT"
+description = "menger's code service — a GitHub ref resolved to a commit, the commit fetched once, its tree and files answered from what is kept"
+repository = "https://github.com/hypermemetic-ai/menger"
+
+[dependencies]
+# The server-side fetch and every rule of it (`Remote`: public addresses
+# only, pinned, redirects checked, a time limit, a byte cap) — media's, taken
+# as it is, never copied.
+menger-media = { path = "../media", version = "0.8.0" }
+# The 0.8 line, by published version (PLEXUS-16), through the umbrella
+# (PLEXUS-44), as media takes it.
+plexus-rpc = { version = "0.8.0", default-features = false, features = ["child-ws"] }
+async-trait = "0.1"
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = { version = "1.1", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+# A commit's archive: GitHub's tar.gz, read entry by entry.
+flate2 = "1"
+tar = { version = "0.4", default-features = false }
+# A file is named by its SHA-256.
+sha2 = "0.10"
+# A fetch's staging directory.
+uuid = { version = "1.6", features = ["v4"] }
+tracing = "0.1"
+url = "2"
+
+[dev-dependencies]
+tempfile = "3"

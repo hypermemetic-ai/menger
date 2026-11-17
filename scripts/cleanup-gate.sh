@@ -37,8 +37,8 @@
 #   scratch-db  /tmp/menger-*.db, .db-shm, .db-wal, .sessions.jsonl(.lock),
 #               .log — a throwaway server's database, sessions and log; and
 #               (SCRATCH-NAMES) its other services' files, named after it —
-#               menger-NAME.{ui,media,notes,docs,quota}.db(-shm, -wal) and the
-#               directory menger-NAME.media.blobs
+#               menger-NAME.{ui,media,notes,docs,quota,code,logs}.db(-shm, -wal) and the
+#               directories menger-NAME.media.blobs and (CODE-2) .code.blobs
 #   pages-tmp   V2-38: /tmp/claude-UID/ui8-pages-… — a browser page-test run's work
 #               directory (tests/pages_browser.mjs, which removes its own since
 #               V2-38; these are what a killed run left). By --path at once, as a
@@ -77,7 +77,7 @@
 # /tmp/claude-UID/, each idle an hour — and (SCRATCH-NAMES; owner: "it
 # should remove everything") a throwaway server's scratch-db files in /tmp,
 # as one set per gate NAME (menger-NAME.db and its siblings, -shm, -wal, its
-# sessions, its log, menger-NAME.media.blobs): the set goes only when every
+# sessions, its log, menger-NAME.media.blobs and .code.blobs): the set goes only when every
 # file of it was idle an hour and nothing holds any of it open, else every
 # file of it is kept. The build-output threshold
 # drops as the disk fills: 6 h (--idle-hours), 1 h at 75% used, 15 min at
@@ -232,20 +232,21 @@ lock_held() { local f
 busy_since() { find "$1" -mmin "-$2" -print -quit 2>/dev/null; }
 
 # SCRATCH-NAMES: a throwaway server's files in /tmp — its database, its other
-# services' files named after it, its sessions, its log, its media's bytes
+# services' files named after it, its sessions, its log, its media's and (CODE-2) its code's bytes
 scratch_file() { [[ -f $1 && ! -L $1 && $(dirname "$1") == "$TMPR" && $(basename "$1") =~ ^menger-.+\.(db|db-shm|db-wal|sessions\.jsonl|sessions\.jsonl\.lock|log)$ ]]; }
-scratch_blobs() { [[ -d $1 && ! -L $1 && $(dirname "$1") == "$TMPR" && $(basename "$1") =~ ^menger-.+\.media\.blobs$ ]]; }
+scratch_blobs() { [[ -d $1 && ! -L $1 && $(dirname "$1") == "$TMPR" && $(basename "$1") =~ ^menger-.+\.(media|code)\.blobs$ ]]; }
 # the gate a scratch file is of: its name less `menger-`, the file's suffix and a service's
 scratch_name() { local b=${1#menger-}
   case $b in
     *.media.blobs) printf '%s\n' "${b%.media.blobs}"; return ;;
+    *.code.blobs) printf '%s\n' "${b%.code.blobs}"; return ;;
     *.sessions.jsonl.lock) b=${b%.sessions.jsonl.lock} ;;
     *.sessions.jsonl) b=${b%.sessions.jsonl} ;;
     *.log) b=${b%.log} ;;
     *.db-shm|*.db-wal) b=${b%.db-*} ;;
     *.db) b=${b%.db} ;;
   esac
-  case $b in *.ui|*.media|*.notes|*.docs|*.quota) b=${b%.*} ;; esac
+  case $b in *.ui|*.media|*.notes|*.docs|*.quota|*.code|*.logs) b=${b%.*} ;; esac
   printf '%s\n' "$b"
 }
 # every scratch file in /tmp of the gate N — the set the sweep takes whole or not at all
@@ -311,7 +312,7 @@ remove_path() {
     shape=target
   elif [[ -f $r && $(dirname "$r") == "$TMPR" && $(basename "$r") =~ ^menger-.+\.(db|db-shm|db-wal|sessions\.jsonl|sessions\.jsonl\.lock|log)$ ]]; then
     shape=scratch-db
-  elif [[ -d $r && ! -L $p && $(dirname "$r") == "$TMPR" && $(basename "$r") =~ ^menger-.+\.media\.blobs$ ]]; then
+  elif [[ -d $r && ! -L $p && $(dirname "$r") == "$TMPR" && $(basename "$r") =~ ^menger-.+\.(media|code)\.blobs$ ]]; then
     shape=scratch-db
   elif [[ -d $r && ! -L $p && $(dirname "$r") == "$SCR" && $(basename "$r") =~ ^ui8-pages-[A-Za-z0-9._-]+$ ]]; then
     shape=pages-tmp
@@ -421,8 +422,8 @@ paths_for_name() {
     refuse "$n" 'not a gate name (letters, digits, . _ -; no ..)'; return
   fi
   # SCRATCH-NAMES: the server's database and its other services' files, named after it
-  for s in "" .ui .media .notes .docs .quota; do db+=("$TMPR/menger-$n$s.db" "$TMPR/menger-$n$s.db-shm" "$TMPR/menger-$n$s.db-wal"); done
-  for f in "$WS/.$n" "$WS/$n" "$CT/$n" "$SCR/$n" "${db[@]}" "$TMPR/menger-$n.media.blobs" \
+  for s in "" .ui .media .notes .docs .quota .code .logs; do db+=("$TMPR/menger-$n$s.db" "$TMPR/menger-$n$s.db-shm" "$TMPR/menger-$n$s.db-wal"); done
+  for f in "$WS/.$n" "$WS/$n" "$CT/$n" "$SCR/$n" "${db[@]}" "$TMPR/menger-$n.media.blobs" "$TMPR/menger-$n.code.blobs" \
            "$TMPR/menger-$n.sessions.jsonl" "$TMPR/menger-$n.sessions.jsonl.lock" "$TMPR/menger-$n.log"; do
     [[ -e $f || -L $f ]] && printf '%s\n' "$f"
   done
@@ -443,7 +444,7 @@ candidates() {
     done < <(git_q "${repo%/}" worktree list --porcelain | grep '^worktree ' | tail -n +2)
   done
   for f in "$WS"/.[!.]* "$CT"/* "$CB"/*/* "$TMPR"/menger-*.db "$TMPR"/menger-*.db-shm "$TMPR"/menger-*.db-wal "$TMPR"/menger-*.sessions.jsonl "$TMPR"/menger-*.sessions.jsonl.lock \
-           "$TMPR"/menger-*.log "$TMPR"/menger-*.media.blobs "$SCR"/* "$TMPR/theme-sweep"; do
+           "$TMPR"/menger-*.log "$TMPR"/menger-*.media.blobs "$TMPR"/menger-*.code.blobs "$SCR"/* "$TMPR/theme-sweep"; do
     [[ -e $f || -L $f ]] && printf '%s\n' "$f"
   done
   ui8_dirs all

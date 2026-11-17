@@ -12,6 +12,12 @@ use menger_notes::{NotesActivation, NotesStore, NOTES_DB_FILE};
 // V2-31: the quota service — allowances per principal and source, its
 // ledger its own file; every write reserved against the cap through the seam.
 use menger_quota::{DiskUsage, Ledger, Plan, QuotaActivation, QuotaSeam, Statvfs, QUOTA_DB_FILE};
+// CODE-2: the code service — a GitHub repository's commits fetched once and
+// kept, its file and its blobs its own.
+use menger_code::{CodeActivation, CodeService, CodeStore, CODE_DB_FILE};
+// LOGS-2: the logs service — a typed table per log made from a JSON Schema,
+// its file its own; a log's reach its ticket's, asked of `tickets` through the seam.
+use menger_logs::{LogsActivation, LogsService, LogsStore, LOGS_DB_FILE};
 use menger_tickets_api::store::{OpenPurge, SeedShape, SeedSpec, Store, StoreError, System, PURGE_EVERY};
 use plexus_rpc::auth_core::grants::GrantsGeneration;
 use plexus_rpc::core::plexus::{Activation, AuthBackend, AuthSetup, ChildRouter, DynamicHub, Provider as AuthProvider, ProviderKind as AuthKind};
@@ -41,7 +47,8 @@ pub fn default_db_path() -> PathBuf {
 /// SCRATCH-NAMES: the names menger gives a tickets file itself — `tickets.db`
 /// (prod's, test's and the image's) and `local.db` (the data directory's,
 /// DIST-14). Beside a tickets file of one of these names the other services'
-/// files keep their plain names (`ui.db`, `media.db`, `notes.db`, `quota.db`).
+/// files keep their plain names (`ui.db`, `media.db`, `notes.db`, `quota.db`,
+/// `code.db`, `logs.db`).
 pub const DATA_DIR_DB_FILES: [&str; 2] = ["tickets.db", crate::first_run::DB_FILE];
 
 /// SCRATCH-NAMES: where a service's file `plain` (`media.db`) goes when its
@@ -102,6 +109,36 @@ pub fn default_notes_db_path(db_path: &Path) -> PathBuf {
 /// `<stem>.quota.db`).
 pub fn default_quota_db_path(db_path: &Path) -> PathBuf {
     sibling_db_path(db_path, QUOTA_DB_FILE)
+}
+
+/// CODE-2: the code service's file when `--code-db-path` names none — beside
+/// the tickets file, never it ([`sibling_db_path`]: `code.db`, or
+/// `<stem>.code.db`).
+pub fn default_code_db_path(db_path: &Path) -> PathBuf {
+    sibling_db_path(db_path, CODE_DB_FILE)
+}
+
+/// LOGS-2: the logs service's file when `--logs-db-path` names none — beside
+/// the tickets file, never it ([`sibling_db_path`]: `logs.db`, or
+/// `<stem>.logs.db`).
+pub fn default_logs_db_path(db_path: &Path) -> PathBuf {
+    sibling_db_path(db_path, LOGS_DB_FILE)
+}
+
+/// CODE-2: where the code service keeps its files' bytes when
+/// `--code-blob-dir` names none — `<stem>.code.blobs/` beside a code file
+/// named after its tickets file (`/tmp/menger-X.code.db` →
+/// `/tmp/menger-X.code.blobs`), as media's are; beside any other code file,
+/// `code/blobs` (`menger_code::default_blob_dir`).
+pub fn default_code_blob_dir(code_db: &Path) -> PathBuf {
+    let suffix = format!(".{CODE_DB_FILE}");
+    match code_db.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(&suffix)) {
+        Some(stem) if !stem.is_empty() => {
+            let name = format!("{stem}.code.blobs");
+            code_db.parent().map_or_else(|| PathBuf::from(&name), |d| d.join(&name))
+        }
+        _ => menger_code::default_blob_dir(code_db),
+    }
 }
 
 /// FRAME-21: the login's session journal's suffix — `<stem>.sessions.jsonl`
@@ -329,6 +366,89 @@ impl QuotaSetup {
     }
 }
 
+/// CODE-2: what the `code` activation is built over — the store on its own
+/// file and blob directory, the kept bytes' cap, where GitHub is read (a
+/// test's stand-in through `--code-github-at`), and the allowance every new
+/// byte is asked of.
+#[derive(Clone)]
+pub struct CodeSetup {
+    pub store: Arc<CodeStore>,
+    pub max_bytes: u64,
+    pub github: menger_code::GitHub,
+    /// The allowance every new byte is asked of — the quota service's
+    /// meter ([`CodeSetup::metered`]; the builder meters it always).
+    pub allowance: Arc<dyn menger_code::Allowance>,
+}
+
+impl CodeSetup {
+    /// The store at `path` (`--code-db-path`), its blobs under `blobs`
+    /// (`--code-blob-dir`, else [`default_code_blob_dir`]); each made if missing.
+    pub fn open(path: &Path, blobs: Option<&Path>) -> anyhow::Result<Self> {
+        let root = blobs.map(Path::to_path_buf).unwrap_or_else(|| default_code_blob_dir(path));
+        let store = CodeStore::open(path, &root).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
+        let commits = store.kept().map(|k| k.len()).unwrap_or(0);
+        tracing::info!("code:      {} ({commits} commits kept; bytes in {})", path.display(), root.display());
+        Ok(Self { store: Arc::new(store), max_bytes: menger_code::DEFAULT_MAX_BYTES, github: menger_code::GitHub::new(), allowance: Arc::new(menger_code::Unlimited) })
+    }
+
+    /// The store beside the tickets file ([`default_code_db_path`]).
+    pub fn beside(db_path: &Path) -> anyhow::Result<Self> {
+        Self::open(&default_code_db_path(db_path), None)
+    }
+
+    /// The kept bytes held under `max` (`--code-max-bytes`); none: 5 GiB.
+    pub fn max_bytes(mut self, max: Option<u64>) -> Self {
+        self.max_bytes = max.unwrap_or(menger_code::DEFAULT_MAX_BYTES);
+        self
+    }
+
+    /// Every new byte asked of the quota service, through `meter`.
+    pub fn metered(mut self, meter: &menger_quota::MeterSlot) -> Self {
+        self.allowance = Arc::new(crate::quota_allowance::CodeMetered(meter.clone()));
+        self
+    }
+
+    /// For tests alone: GitHub's two addresses read from a local server at
+    /// `at`, let through although it is not public.
+    pub fn github_at(mut self, at: Option<std::net::SocketAddr>) -> Self {
+        if let Some(at) = at {
+            tracing::warn!("code:      reading GitHub from http://{at} — a stand-in (--code-github-at: a test's)");
+            self.github = menger_code::GitHub::at(at);
+        }
+        self
+    }
+}
+
+/// LOGS-2: what the `logs` activation is built over — the store on its own
+/// file, and the allowance every kept entry is asked of.
+#[derive(Clone)]
+pub struct LogsSetup {
+    pub store: Arc<LogsStore>,
+    /// The allowance every kept byte is asked of — the quota service's
+    /// meter ([`LogsSetup::metered`]; the builder meters it always).
+    pub allowance: Arc<dyn menger_logs::Allowance>,
+}
+
+impl LogsSetup {
+    /// The store at `path` (`--logs-db-path`), made if missing.
+    pub fn open(path: &Path) -> anyhow::Result<Self> {
+        let store = LogsStore::open(path).map_err(|e| anyhow::anyhow!("{}: {e}", path.display()))?;
+        tracing::info!("logs:      {} ({} logs)", path.display(), store.count());
+        Ok(Self { store: Arc::new(store), allowance: Arc::new(menger_logs::Unlimited) })
+    }
+
+    /// The store beside the tickets file ([`default_logs_db_path`]).
+    pub fn beside(db_path: &Path) -> anyhow::Result<Self> {
+        Self::open(&default_logs_db_path(db_path))
+    }
+
+    /// Every kept byte asked of the quota service, through `meter`.
+    pub fn metered(mut self, meter: &menger_quota::MeterSlot) -> Self {
+        self.allowance = Arc::new(crate::quota_allowance::LogsMetered(meter.clone()));
+        self
+    }
+}
+
 /// ACT-5: the purge of deleted tickets' bodies past their 30 days — at start,
 /// then every [`PURGE_EVERY`], for the life of the process. A failure is
 /// logged and tried again at the next turn: a body kept a day longer harms
@@ -478,7 +598,9 @@ where
     let media = MediaSetup::beside(db_path)?;
     let notes = NotesSetup::beside(db_path)?;
     let quota = QuotaSetup::beside(db_path)?;
-    build_rpc_services(db_path, seed, shape, offers, access, backend, resource_metadata, body_max, ui, media, notes, quota, Vec::new(), tickets).await
+    let code = CodeSetup::beside(db_path)?;
+    let logs = LogsSetup::beside(db_path)?;
+    build_rpc_services(db_path, seed, shape, offers, access, backend, resource_metadata, body_max, ui, media, notes, quota, code, logs, Vec::new(), tickets).await
 }
 
 /// V2-24: [`build_rpc_ui_over`] with the media service over `media` (main's
@@ -491,6 +613,11 @@ where
 /// `orgs.list` as the caller). POLYGLOT-5 (V2-44): each of `children` — a
 /// `--child`, an activation in another process — mounted beside them, behind
 /// the same gate; one named like a service of menger's own is refused.
+/// CODE-2: and the code service over `code` (`--code-db-path`,
+/// `--code-blob-dir`, `--code-max-bytes`), every new byte reserved through
+/// the quota service's meter. LOGS-2: and the logs service over `logs`
+/// (`--logs-db-path`), its seam attached as media's is (`tickets.get` and
+/// `tickets.may` as the caller), every kept entry reserved through the meter.
 #[allow(clippy::too_many_arguments)]
 pub async fn build_rpc_services<T, F>(
     db_path: &Path,
@@ -505,6 +632,8 @@ pub async fn build_rpc_services<T, F>(
     media: MediaSetup,
     notes: NotesSetup,
     quota: QuotaSetup,
+    code: CodeSetup,
+    logs: LogsSetup,
     children: Vec<plexus_rpc::core::plexus::RemoteChild>,
     tickets: F,
 ) -> anyhow::Result<Arc<DynamicHub>>
@@ -616,12 +745,26 @@ where
     let quota = QuotaActivation::new(quota.ledger, quota.disk);
     let (quota_seam, meter) = (quota.seam().clone(), QuotaSeam::default());
     menger_quota::upkeep(quota.clone());
+    // CODE-2: `code` beside them — a public GitHub repository's commits,
+    // fetched once and kept in its own file; every new byte reserved for
+    // the fetcher through the quota service, credited when it goes.
+    let code = code.metered(access.meter());
+    let code = CodeService::new(code.store).with_github(code.github).with_max_bytes(code.max_bytes).with_allowance(code.allowance);
+    let code = CodeActivation::new(Arc::new(code));
+    // LOGS-2: `logs` beside them — a typed table per log, over its own file;
+    // a log's reach is its ticket's, asked of `tickets` through its seam as
+    // the caller; every kept entry reserved for its writer through the quota service.
+    let logs = logs.metered(access.meter());
+    let logs_seam = menger_logs::Seam::default();
+    let logs = LogsActivation::new(Arc::new(LogsService::new(logs.store, Arc::new(logs_seam.clone())).with_allowance(logs.allowance)));
     let mut service = DynamicHub::new("menger")
         .register(tickets)
         .register(ui)
         .register(media)
         .register(notes)
         .register(quota)
+        .register(code)
+        .register(logs)
         // ORG-4: `orgs` beside `members` — the organizations, and their making.
         .register(OrgsActivation::with_access(Arc::clone(&store), access.clone()))
         .register(MembersActivation::new(store, access.clone()))
@@ -658,6 +801,9 @@ where
     media_seam.attach(&service);
     // V2-29: the notes service asks the gate and `orgs.list` through it.
     notes_seam.attach(&service);
+    // LOGS-2: the logs service asks `tickets.get` and `tickets.may` through
+    // it, as the caller it serves (a log's reach is its ticket's).
+    logs_seam.attach(&service);
     // V2-31: the quota service asks `members` and the stores through this
     // service as the server's own caller; the tickets service's writes
     // reserve through the meter, asking `quota.*` the same way.
@@ -797,26 +943,28 @@ mod tests {
     /// the plain names, as before.
     #[test]
     fn a_scratch_database_names_its_siblings_after_its_stem() {
-        let names = |t: &Path| [default_ui_db_path(t), default_media_db_path(t), default_notes_db_path(t), default_quota_db_path(t)];
+        let names = |t: &Path| [default_ui_db_path(t), default_media_db_path(t), default_notes_db_path(t), default_quota_db_path(t), default_code_db_path(t), default_logs_db_path(t)];
         let mine = Path::new("/tmp/menger-X.db");
-        assert_eq!(names(mine).map(|p| p.display().to_string()), ["/tmp/menger-X.ui.db", "/tmp/menger-X.media.db", "/tmp/menger-X.notes.db", "/tmp/menger-X.quota.db"]);
+        assert_eq!(names(mine).map(|p| p.display().to_string()), ["/tmp/menger-X.ui.db", "/tmp/menger-X.media.db", "/tmp/menger-X.notes.db", "/tmp/menger-X.quota.db", "/tmp/menger-X.code.db", "/tmp/menger-X.logs.db"]);
         assert_eq!(default_media_blob_dir(&default_media_db_path(mine)), Path::new("/tmp/menger-X.media.blobs"));
+        assert_eq!(default_code_blob_dir(&default_code_db_path(mine)), Path::new("/tmp/menger-X.code.blobs"), "CODE-2: and its code's");
         assert_eq!(sessions_file(mine), Path::new("/tmp/menger-X.sessions.jsonl"), "as its sessions are");
         let theirs = names(Path::new("/tmp/menger-Y.db"));
         assert!(names(mine).iter().all(|p| !theirs.contains(p)), "two servers in /tmp share no file");
-        for t in ["/tmp/x/ui.db", "/tmp/x/media.db", "/tmp/x/notes.db", "/tmp/x/quota.db", "/tmp/x/t", "rel.db", "/tmp/x/menger-X.media.db"] {
+        for t in ["/tmp/x/ui.db", "/tmp/x/media.db", "/tmp/x/notes.db", "/tmp/x/quota.db", "/tmp/x/code.db", "/tmp/x/logs.db", "/tmp/x/t", "rel.db", "/tmp/x/menger-X.media.db"] {
             let t = Path::new(t);
             let all = names(t);
             assert!(all.iter().all(|p| p != t && p.parent() == t.parent()), "{}: beside it, never it", t.display());
-            assert!((1..4).all(|i| !all[..i].contains(&all[i])), "{}: never one another", t.display());
+            assert!((1..6).all(|i| !all[..i].contains(&all[i])), "{}: never one another", t.display());
         }
         assert_eq!(default_media_db_path(Path::new("/tmp/x/t")), Path::new("/tmp/x/t.media.db"), "a file with no extension: its whole name");
         // The data directory's names keep the plain layout, and its blobs.
         for dir in ["/var/lib/menger", "/home/u/.local/share/menger"] {
             for name in DATA_DIR_DB_FILES {
                 let t = Path::new(dir).join(name);
-                assert_eq!(names(&t).map(|p| p.file_name().unwrap().to_str().unwrap().to_string()), ["ui.db", "media.db", "notes.db", "quota.db"]);
+                assert_eq!(names(&t).map(|p| p.file_name().unwrap().to_str().unwrap().to_string()), ["ui.db", "media.db", "notes.db", "quota.db", "code.db", "logs.db"]);
                 assert_eq!(default_media_blob_dir(&default_media_db_path(&t)), Path::new(dir).join("media/blobs"));
+                assert_eq!(default_code_blob_dir(&default_code_db_path(&t)), Path::new(dir).join("code/blobs"));
             }
         }
         // A media file the flag names keeps the blobs where they were.

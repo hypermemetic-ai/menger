@@ -57,8 +57,8 @@ fn key_file(dir: &std::path::Path) -> PathBuf {
     p
 }
 
-/// v2's services: what the kit's service must be (V2-1, V2-24, V2-29, V2-31).
-const V2_SERVICES: &[&str] = &["tickets", "ui", "media", "notes", "quota", "orgs", "members", "session"];
+/// v2's services: what the kit's service must be (V2-1, V2-24, V2-29, V2-31, CODE-2, LOGS-2).
+const V2_SERVICES: &[&str] = &["tickets", "ui", "media", "notes", "quota", "code", "logs", "orgs", "members", "session"];
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn kit_green_on_menger() {

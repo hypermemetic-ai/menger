@@ -151,7 +151,7 @@ export class Throwaway {
     this.ws = await freePort();
     this.shell = await freePort();
     const env = { ...process.env, PLEXUS_NO_REGISTRY: "1" };
-    for (const v of ["MENGER_DB_PATH", "MENGER_AUTH_PROVIDERS", "MENGER_ADMINS", "MENGER_UI_DB_PATH", "MENGER_UI_SIGNERS", "MENGER_UI_ALLOW_RHX", "MENGER_MEDIA_DB_PATH", "MENGER_NOTES_DB_PATH", "MENGER_APP_DIST", "RUST_LOG"]) delete env[v];
+    for (const v of ["MENGER_DB_PATH", "MENGER_AUTH_PROVIDERS", "MENGER_ADMINS", "MENGER_UI_DB_PATH", "MENGER_UI_SIGNERS", "MENGER_UI_ALLOW_RHX", "MENGER_MEDIA_DB_PATH", "MENGER_NOTES_DB_PATH", "MENGER_CODE_DB_PATH", "MENGER_CODE_BLOB_DIR", "MENGER_APP_DIST", "RUST_LOG"]) delete env[v];
     const argv = [
       "--port", String(this.ws),
       "--shell-port", String(this.shell),
@@ -170,6 +170,8 @@ export class Throwaway {
       ...(this.authorKey ? ["--ui-author-key", this.authorKey] : []),
       // SV-6: rhx is switched off; a run testing rhx itself (a ticket's rhx definitions) turns it on.
       ...(this.allowRhx ? ["--ui-allow-rhx"] : []),
+      // CODE-3: the code service reads a stand-in for GitHub (tests/code-github.mjs), never the internet.
+      ...(this.codeGithubAt ? ["--code-github-at", this.codeGithubAt] : []),
     ];
     this.child = spawn(path.join(TARGET, this.profile, "menger"), argv, { env, stdio: ["ignore", "ignore", "pipe"] });
     this.child.stderr.on("data", (d) => (this.stderr += d.toString()));

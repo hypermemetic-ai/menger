@@ -144,7 +144,7 @@ async fn the_operator_sees_every_v2_service() {
     let (ws, mcp) = start().await;
     let admin = client(mcp, Some(&support::ADMIN), ws).await;
     let tools = names(&admin).await;
-    for service in ["tickets", "members", "orgs", "ui", "media", "notes", "quota", "auth"] {
+    for service in ["tickets", "members", "orgs", "ui", "media", "notes", "quota", "code", "logs", "auth"] {
         assert!(tools.iter().any(|t| t.starts_with(&format!("{service}."))), "{service}.* among {tools:?}");
     }
     let versions = call(&admin, "ui.versions", json!({})).await;
