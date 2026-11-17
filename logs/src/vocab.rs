@@ -213,6 +213,108 @@ json_type!(
     ENTRIES_MAX
 );
 
+/// The longest a filter is: 4 KiB.
+pub const WHERE_MAX: usize = 4 * 1024;
+
+fn where_text(text: &str) -> Result<String, String> {
+    let t = text.trim();
+    match !t.is_empty() && t.len() <= WHERE_MAX {
+        true => Ok(t.to_string()),
+        false => Err(format!("a filter is 1 to {WHERE_MAX} bytes, e.g. app = \"plexus\" and value > 1000")),
+    }
+}
+
+text_type!(
+    /// LOGS-3: a filter on a log's fields and its envelope, e.g. `app =
+    /// "plexus" and scenario = "stream.10k.64B"`: a field, `=` `!=` `<` `<=`
+    /// `>` `>=` or `in (…)`, a quoted string, a number, `true`, `false` or
+    /// `null`; `and`, `or`, `not` and parentheses. At most 4 KiB.
+    WhereText,
+    where_text
+);
+
+/// LOGS-3: `when` (a `since` or an `until`) as unix milliseconds, `now_ms`
+/// being now: an age (`30s`, `15m`, `12h`, `7d`, `2w`: that long ago), a
+/// date (`2026-11-16`: its first moment, UTC), or unix milliseconds.
+pub fn when_ms(when: &str, now_ms: i64) -> Option<i64> {
+    let t = when.trim();
+    if let Some((n, unit)) = t.char_indices().last().filter(|(_, c)| "smhdw".contains(*c)).map(|(i, c)| (&t[..i], c)) {
+        let n: i64 = n.parse().ok().filter(|n: &i64| *n >= 0)?;
+        let secs = match unit {
+            's' => 1,
+            'm' => 60,
+            'h' => 3_600,
+            'd' => 86_400,
+            _ => 7 * 86_400,
+        };
+        return n.checked_mul(secs * 1000).map(|ms| now_ms - ms);
+    }
+    if let [y, m, d] = t.split('-').collect::<Vec<_>>()[..] {
+        let (y, m, d): (i64, i64, i64) = (y.parse().ok()?, m.parse().ok()?, d.parse().ok()?);
+        if y.to_string().len() != 4 || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+            return None;
+        }
+        // Days from 1970-01-01 to y-m-d (Howard Hinnant's days_from_civil).
+        let y = if m <= 2 { y - 1 } else { y };
+        let era = y.div_euclid(400);
+        let yoe = y - era * 400;
+        let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        return Some((era * 146_097 + doe - 719_468) * 86_400_000);
+    }
+    t.parse::<i64>().ok().filter(|ms| *ms >= 0)
+}
+
+fn when(text: &str) -> Result<String, String> {
+    let t = text.trim();
+    match when_ms(t, 0).is_some() {
+        true => Ok(t.to_string()),
+        false => Err(format!("`{t}` is not a time: an age (30s, 15m, 12h, 7d, 2w), a date (2026-11-16, UTC) or unix milliseconds")),
+    }
+}
+
+text_type!(
+    /// LOGS-3: a moment — an age (`30s`, `15m`, `12h`, `7d`, `2w`: that
+    /// long ago), a date (`2026-11-16`: its first moment, UTC), or unix
+    /// milliseconds.
+    When,
+    when
+);
+
+fn principal(text: &str) -> Result<String, String> {
+    let t = text.trim();
+    match (1..=256).contains(&t.len()) && t.contains(':') && !t.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        true => Ok(t.to_string()),
+        false => Err(format!("`{t}` is not a principal: key:…, idp:…")),
+    }
+}
+
+text_type!(
+    /// LOGS-3: a principal, as an entry's `by` names it (`key:54a9…`, `idp:…`).
+    Principal,
+    principal
+);
+
+fn cursor(text: &str) -> Result<String, String> {
+    let t = text.trim();
+    let ok = match t.split('.').collect::<Vec<_>>()[..] {
+        [seq] => seq.parse::<u64>().is_ok(),
+        [at, seq, log] => at.parse::<i64>().is_ok() && seq.parse::<u64>().is_ok() && identifier_ok(log),
+        _ => false,
+    };
+    match ok {
+        true => Ok(t.to_string()),
+        false => Err(format!("`{t}` is not where a read stands: give back the `next` a page answered")),
+    }
+}
+
+text_type!(
+    /// LOGS-3: where a read stands — the `next` a page answered, given back
+    /// as `after` for the page after it.
+    Cursor,
+    cursor
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,6 +335,22 @@ mod tests {
         holds::<FieldName>(&["value", "p99_us"], &["Value", "", "x-y", "é"]);
         holds::<Tag>(&["plexus", "app:menger", "v2.1", "a/b", "x_y-z"], &["", "-x", "a b", "a,b", &"t".repeat(65)]);
         holds::<Message>(&["replaced by perf2", "two\nlines"], &["", "   ", "a\u{7}b", &"m".repeat(1025)]);
+    }
+
+    #[test]
+    fn times_principals_cursors_and_filters_hold_their_spellings() {
+        let now = 1_794_872_000_000;
+        assert_eq!(when_ms("7d", now), Some(now - 7 * 86_400_000));
+        assert_eq!(when_ms("90s", now), Some(now - 90_000));
+        assert_eq!(when_ms("2w", now), Some(now - 14 * 86_400_000));
+        assert_eq!(when_ms("1970-01-02", now), Some(86_400_000));
+        assert_eq!(when_ms("2026-11-16", now), Some(1_794_787_200_000));
+        assert_eq!(when_ms("2000-03-01", now), Some(951_868_800_000));
+        assert_eq!(when_ms("1794872000000", now), Some(1_794_872_000_000));
+        holds::<When>(&["7d", "0s", "2026-11-16", "1794872000000"], &["", "7x", "-7d", "yesterday", "2026-13-01", "26-11-16", "d"]);
+        holds::<Principal>(&["key:54a9", "idp:x@y"], &["", "nobody", "key: x"]);
+        holds::<Cursor>(&["42", "1794872000000.3.perf"], &["", "x", "1.2", "1.2.Perf", "1.2.perf.x"]);
+        holds::<WhereText>(&["app = \"x\""], &["", "   ", &"a".repeat(WHERE_MAX + 1)]);
     }
 
     #[test]

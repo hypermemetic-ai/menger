@@ -377,6 +377,9 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     // held anywhere, then the log's ticket decides (asked of `tickets`).
     ("logs.describe", Today::Viewer, None),
     ("logs.list", Today::Viewer, None),
+    // LOGS-3: and a viewer reads and watches.
+    ("logs.read", Today::Viewer, None),
+    ("logs.watch", Today::Viewer, None),
     ("logs.append", Today::Editor, None),
     ("logs.define", Today::Admin, None),
     ("logs.extend", Today::Admin, None),

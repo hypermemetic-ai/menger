@@ -310,6 +310,123 @@ impl LogsStore {
     }
 }
 
+/// Where a read stands: before which entry it goes on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Before {
+    /// From the newest.
+    Start,
+    /// One log's: entries numbered below this.
+    Seq(u64),
+    /// Across logs, ordered by `at` (newest first), then the log's name,
+    /// then `seq` (highest first): entries after this one.
+    At { at: i64, log: String, seq: u64 },
+}
+
+/// LOGS-3: what a read asks of one log's table — each condition bound,
+/// the filter compiled against the log's columns (or the envelope's).
+#[derive(Debug, Clone, Default)]
+pub struct Query {
+    pub since: Option<i64>,
+    pub until: Option<i64>,
+    pub by: Option<String>,
+    pub ticket: Option<String>,
+    pub tag: Option<String>,
+    pub filter: Option<crate::filter::Expr>,
+    /// Whose columns the filter is checked against, in words.
+    pub whose: String,
+    /// The envelope's alone (a read across logs).
+    pub envelope_only: bool,
+    pub limit: usize,
+}
+
+impl LogsStore {
+    /// LOGS-3: `log`'s entries that `q` asks for, `before` where the read
+    /// stands — one log's newest first by `seq`, or (across logs, `Before::At`
+    /// or `envelope_only`) by `at`, then `seq`. `Err(why)` in words for a
+    /// filter its columns refuse; a store failure as [`StoreError`].
+    pub fn read(&self, log: &LogRow, q: &Query, before: &Before) -> Result<Result<Vec<EntryRow>, String>, StoreError> {
+        let t = table(&log.name)?;
+        let cols: Vec<String> = log.fields.iter().map(|f| quoted(&f.name)).collect::<Result<_, _>>()?;
+        let mut conds: Vec<String> = Vec::new();
+        let mut values: Vec<Sql> = Vec::new();
+        let bind = |sql: &str, v: Sql, values: &mut Vec<Sql>| {
+            values.push(v);
+            sql.replace('?', &format!("?{}", values.len()))
+        };
+        match before {
+            Before::Start => {}
+            Before::Seq(seq) => conds.push(bind("seq < ?", Sql::Integer(*seq as i64), &mut values)),
+            Before::At { at, log: name, seq } => {
+                // Ordered by at (newest first), the log's name, then seq
+                // (highest first): what comes after (at, name, seq).
+                values.push(Sql::Integer(*at));
+                let a = values.len();
+                conds.push(match log.name.as_str().cmp(name.as_str()) {
+                    std::cmp::Ordering::Less => format!("at < ?{a}"),
+                    std::cmp::Ordering::Greater => format!("at <= ?{a}"),
+                    std::cmp::Ordering::Equal => {
+                        values.push(Sql::Integer(*seq as i64));
+                        format!("(at < ?{a} OR (at = ?{a} AND seq < ?{}))", values.len())
+                    }
+                });
+            }
+        }
+        if let Some(v) = q.since {
+            conds.push(bind("at >= ?", Sql::Integer(v), &mut values));
+        }
+        if let Some(v) = q.until {
+            conds.push(bind("at < ?", Sql::Integer(v), &mut values));
+        }
+        if let Some(v) = &q.by {
+            conds.push(bind("by = ?", Sql::Text(v.clone()), &mut values));
+        }
+        if let Some(v) = &q.ticket {
+            conds.push(bind("ticket = ?", Sql::Text(v.clone()), &mut values));
+        }
+        if let Some(tag) = &q.tag {
+            let l = bind("log = ?", Sql::Text(log.name.clone()), &mut values);
+            let g = bind("tag = ?", Sql::Text(tag.clone()), &mut values);
+            conds.push(format!("seq IN (SELECT seq FROM entry_tags WHERE {l} AND {g})"));
+        }
+        if let Some(e) = &q.filter {
+            let named = if q.envelope_only { crate::filter::envelope() } else { crate::filter::of_log(&log.fields) };
+            match crate::filter::compile(e, &named, &q.whose, values.len() + 1) {
+                Ok(c) => {
+                    conds.push(c.sql);
+                    values.extend(c.values);
+                }
+                Err(why) => return Ok(Err(why)),
+            }
+        }
+        let order = if q.envelope_only || matches!(before, Before::At { .. }) { "at DESC, seq DESC" } else { "seq DESC" };
+        let limit = bind("?", Sql::Integer(q.limit as i64), &mut values);
+        let sql = format!(
+            "SELECT seq, at, by, tags, ticket{}{} FROM {t}{}{} ORDER BY {order} LIMIT {limit}",
+            if cols.is_empty() { "" } else { ", " },
+            cols.join(", "),
+            if conds.is_empty() { "" } else { " WHERE " },
+            conds.join(" AND "),
+        );
+        let conn = self.conn();
+        let mut st = conn.prepare(&sql)?;
+        let rows = st.query_map(params_from_iter(values.iter()), |r| entry_of(r, &log.fields))?.collect::<Result<Vec<_>, _>>()?;
+        Ok(Ok(rows))
+    }
+
+    /// The entries of the log `name` numbered `first` to `last` — what an
+    /// append just kept, as a watcher is told it.
+    pub fn kept(&self, name: &str, first: u64, last: u64) -> Result<Vec<EntryRow>, StoreError> {
+        let conn = self.conn();
+        let log = log_in(&conn, name)?;
+        let t = table(name)?;
+        let cols: Vec<String> = log.fields.iter().map(|f| quoted(&f.name)).collect::<Result<_, _>>()?;
+        let sql = format!("SELECT seq, at, by, tags, ticket{}{} FROM {t} WHERE seq >= ?1 AND seq <= ?2 ORDER BY seq", if cols.is_empty() { "" } else { ", " }, cols.join(", "));
+        let mut st = conn.prepare(&sql)?;
+        let rows = st.query_map(params![first as i64, last as i64], |r| entry_of(r, &log.fields))?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+}
+
 /// A kept row as an entry: the envelope (columns 0–4), then the fields.
 pub(crate) fn entry_of(r: &rusqlite::Row<'_>, fields: &[Field]) -> rusqlite::Result<EntryRow> {
     let tags: String = r.get(3)?;

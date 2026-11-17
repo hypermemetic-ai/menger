@@ -4,8 +4,8 @@
 //! Each method is its attribute, its caller and a call into [`LogsService`]
 //! ([`crate::service`]), whose answer it streams.
 //!
-//! **Who may** (LOGS-1 › reach): at the gate, `describe` and `list` a
-//! viewer's, `append` an editor's, and `define`, `extend` and `deprecate`
+//! **Who may** (LOGS-1 › reach): at the gate, `describe`, `list`, `read`
+//! and `watch` a viewer's, `append` an editor's, and `define`, `extend` and `deprecate`
 //! the admin's (listed in no role: only `admin` holds them) — each held
 //! anywhere; then the log's ticket decides, asked of the tickets service as
 //! the caller: the same role on that ticket, or the call is refused
@@ -13,8 +13,8 @@
 
 use crate::caller::{Caller, Callers, LogsRequest};
 use crate::events::LogsEvent;
-use crate::service::{entries_of, LogsService};
-use crate::vocab::{EntriesText, EntryText, FieldName, LogName, Message, SchemaText, Tag};
+use crate::service::{entries_of, LogsService, ReadArgs};
+use crate::vocab::{Cursor, EntriesText, EntryText, FieldName, LogName, Message, Principal, SchemaText, Tag, When, WhereText};
 use futures::{Stream, StreamExt};
 use menger_tickets_api::vocab::TicketRef;
 use std::sync::Arc;
@@ -44,7 +44,7 @@ impl LogsActivation {
     request = LogsRequest,
     typed_params,
     roles(
-        viewer = ["describe", "list"],
+        viewer = ["describe", "list", "read", "watch"],
         editor = [viewer, "append"],
     )
 )]
@@ -194,5 +194,72 @@ impl LogsActivation {
     ) -> impl Stream<Item = LogsEvent> + Send + 'static {
         let logs = self.logs.clone();
         futures::stream::once(async move { logs.deprecate(&user, log.as_str(), field.as_ref().map(FieldName::as_str), message.as_str()).await })
+    }
+
+    /// Read a log's entries newest first, filtered on its fields and its envelope — or every log's you can see; yields entry { log, seq, at, by, tags, ticket?, entry } per entry, then page { count, next? }.
+    ///
+    /// With `log`, its entries newest first; `filter` filters on its fields
+    /// and the envelope's `seq`, `at`, `by` and `ticket` (a uid) — a field,
+    /// `=` `!=` `<` `<=` `>` `>=` or `in (…)`, a quoted string, a number,
+    /// `true`, `false` or `null`, joined by `and`, `or`, `not` and
+    /// parentheses; a field the log has not is refused `bad_filter`, naming
+    /// those it has. With no `log`, every log whose ticket you can see,
+    /// newest first by `at`, each entry with its log's name — `filter` then on
+    /// the envelope alone. `tag`, `since` and `until` (an age, 7d; a date,
+    /// 2026-11-16; unix ms), `by` and `ticket` narrow either. A page is
+    /// `limit` entries (100; at most 1,000); `next`, given back as `after`,
+    /// is the page after. A log on a ticket you cannot see is `not_found`.
+    /// Viewer.
+    #[plexus_rpc::macros::method(
+        group = "read",
+        example(note = "one scenario over time", params = r#"{"log": "perf", "filter": "app = \"plexus\" and scenario = \"stream.10k.64B\" and transport = \"websocket\"", "limit": 20}"#),
+        example(note = "across logs, by tag, this week", params = r#"{"tag": "plexus", "since": "7d"}"#)
+    )]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn read(
+        &self,
+        #[from_auth(self.callers.verify)] user: Caller,
+        /// The log, by name, e.g. perf (optional: every log you can see).
+        log: Option<LogName>,
+        /// A filter on its fields and the envelope, e.g. app = "plexus" and value > 1000 (optional). LOGS-1's `--where`: `where` is a word Rust keeps.
+        filter: Option<WhereText>,
+        /// Only entries carrying this tag, e.g. plexus (optional).
+        tag: Option<Tag>,
+        /// Only entries from this moment on: an age (7d), a date (2026-11-16) or unix ms (optional).
+        since: Option<When>,
+        /// Only entries before this moment, as since (optional).
+        until: Option<When>,
+        /// Only entries this principal appended, e.g. key:54a9… (optional).
+        by: Option<Principal>,
+        /// Only entries naming this ticket, any name of it (optional).
+        ticket: Option<TicketRef>,
+        /// How many entries a page holds (optional: 100; at most 1,000).
+        limit: Option<u32>,
+        /// Where to go on from: the `next` a page answered (optional).
+        after: Option<Cursor>,
+    ) -> impl Stream<Item = LogsEvent> + Send + 'static {
+        let logs = self.logs.clone();
+        let args = ReadArgs { log: log.map(LogName::into_string), filter: filter.map(WhereText::into_string), tag: tag.map(Tag::into_string), since: since.map(When::into_string), until: until.map(When::into_string), by: by.map(Principal::into_string), ticket: ticket.map(TicketRef::into_string), limit, after: after.map(Cursor::into_string) };
+        futures::stream::once(async move { logs.read(&user, args).await }).flat_map(futures::stream::iter)
+    }
+
+    /// Each entry as it is appended, to a log or to every log you can see; yields watching { log?, tag? }, then entry { log, seq, at, by, tags, ticket?, entry } per entry.
+    ///
+    /// Open until you close it. With `log`, its entries alone (`not_found`
+    /// for a log you cannot see); with `tag`, those carrying it. An entry is
+    /// told you only while you can see its log's ticket, asked of the
+    /// tickets service again at most every 5 seconds a log. `lagged {
+    /// missed }` when you fell more than 1,024 appends behind: `read` has
+    /// what went by. Viewer.
+    #[plexus_rpc::macros::method(group = "read", example(note = "the perf log, live", params = r#"{"log": "perf"}"#))]
+    pub async fn watch(
+        &self,
+        #[from_auth(self.callers.verify)] user: Caller,
+        /// The log, by name, e.g. perf (optional: every log you can see).
+        log: Option<LogName>,
+        /// Only entries carrying this tag, e.g. plexus (optional).
+        tag: Option<Tag>,
+    ) -> impl Stream<Item = LogsEvent> + Send + 'static {
+        self.logs.clone().watch(user, log.map(LogName::into_string), tag.map(Tag::into_string))
     }
 }

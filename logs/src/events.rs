@@ -115,6 +115,37 @@ pub enum LogsEvent {
         field: Option<String>,
         message: String,
     },
+    /// LOGS-3: `read` and `watch`: one entry — its log, its envelope (`seq`,
+    /// `at` in unix ms, `by`, `tags`, `ticket` a uid when it names one), and
+    /// the entry as JSON (a field it does not carry is absent).
+    Entry {
+        log: String,
+        seq: u64,
+        at: i64,
+        by: String,
+        tags: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ticket: Option<String>,
+        entry: serde_json::Value,
+    },
+    /// LOGS-3: `read`'s last event: how many entries it answered, and —
+    /// when there may be more — `next`, given back as `after` for the page
+    /// after this one.
+    Page {
+        count: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        next: Option<String>,
+    },
+    /// LOGS-3: `watch`'s first event: it is open, for these.
+    Watching {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        log: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tag: Option<String>,
+    },
+    /// LOGS-3: `watch` fell behind and `missed` entries went by unsaid —
+    /// `read` has them.
+    Lagged { missed: u64 },
     /// No such log or ticket in the caller's reach — not there and not
     /// theirs, one answer (ACCESS-10).
     NotFound {
@@ -127,7 +158,8 @@ pub enum LogsEvent {
     /// it), `name_taken`, `bad_entry` (`index` of the entry, from 0, and
     /// its `field`), `deprecated` (the log's or the `field`'s), `not_grown`
     /// (`field`), `forbidden`, `too_many`, and the quota service's
-    /// (`over_allowance`, …).
+    /// (`over_allowance`, …); LOGS-3: `bad_filter` (a `where` its columns
+    /// refuse, naming them), `bad_cursor`.
     Refused {
         reason: String,
         message: String,

@@ -23,10 +23,17 @@
 //! log or a field can be deprecated** (`logs.deprecate`): no new entry
 //! enters, what was written stays.
 //!
+//! **A log is read by name** (LOGS-3, `logs.read`): newest first, filtered
+//! on its fields ([`filter`]'s small language) and its envelope (a tag, a
+//! time, a writer, a ticket), a page at a time; with no log named, across
+//! every log the caller sees. **And watched** (`logs.watch`): each entry as
+//! it is appended, told only to those who see its log's ticket.
+//!
 //! | module | what |
 //! |---|---|
 //! | [`vocab`] | the typed parameters: [`LogName`], [`FieldName`], [`Tag`], [`Message`], the JSON texts |
 //! | [`schema`] | a JSON Schema read into fields; an entry checked; a schema grown |
+//! | [`filter`] | LOGS-3: `read`'s `where` — its words, checked against a log's columns, compiled with every value bound |
 //! | [`events`] | [`LogsEvent`], what every method streams; [`Column`] |
 //! | [`store`] | the file: the logs, a table a log, the tags |
 //! | [`seam`] | [`Reach`], the tickets service asked as the caller; [`Seam`] |
@@ -35,8 +42,9 @@
 //! | [`activation`] | `logs.*`, the one declaration |
 
 pub mod vocab;
-pub use vocab::{EntriesText, EntryText, FieldName, LogName, Message, SchemaText, Tag};
+pub use vocab::{Cursor, EntriesText, EntryText, FieldName, LogName, Message, Principal, SchemaText, Tag, When, WhereText};
 pub mod schema;
+pub mod filter;
 pub mod events;
 pub use events::{Column, LogsEvent};
 pub mod allowance;
@@ -48,7 +56,7 @@ pub use seam::{Answer, Reach, Seam, Seen};
 mod caller;
 pub use caller::{Caller, LogsRequest};
 pub mod service;
-pub use service::{Clock, LogsService};
+pub use service::{Clock, LogsService, ReadArgs};
 pub mod activation;
 pub use activation::{LogsActivation, LogsClient};
 

@@ -6,7 +6,9 @@
 //! reading; an outsider shown no log; a deprecated log refusing; a bad
 //! schema and a bad entry among many making nothing; the entries counted on
 //! the writer's `logs.bytes`; an admin of the ticket alone defining; and a
-//! log following its ticket to another shortcode.
+//! log following its ticket to another shortcode. LOGS-3: `logs.read`
+//! filtered on a log's fields, across logs by tag, a viewer's and an
+//! outsider's, an unknown field refused; `logs.watch` receiving an append.
 
 use jsonrpsee::ws_client::WsClient;
 use plexus_rpc::core::plexus::DynamicHub;
@@ -127,4 +129,65 @@ async fn a_log_is_defined_appended_and_described_over_the_wire() {
     assert!(moved.get("error_kind").is_none() && moved["type"] != "error", "{moved}");
     let d = one(&admin, "logs.describe", json!({"log": "perf"})).await;
     assert_eq!((d["ticket"].as_str(), d["uid"].as_str()), (Some("P-2"), Some(uid.as_str())), "{d}");
+}
+
+/// LOGS-3 over the wire: one scenario over time, across logs by tag, a
+/// viewer reads and an outsider sees nothing, an unknown field refused
+/// naming the log's fields, and a watcher receives an append.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_log_is_read_and_watched_over_the_wire() {
+    let port = start().await;
+    let admin = support::connect(port).await;
+    for (epic, title, kind) in [("A", "a", "scope"), ("A", "the runtime", "build"), ("B", "b", "scope")] {
+        assert_eq!(one(&admin, "tickets.create", json!({"epic": epic, "title": title, "kind": kind})).await["type"], "created");
+    }
+    for (seed, role, scope) in [(&EDITOR, "editor", "A"), (&VIEWER, "viewer", "A"), (&OUTSIDER, "editor", "B")] {
+        let g = one(&admin, "auth.grant", json!({ "principal": support::principal_of(seed), "role": role, "scope": scope })).await;
+        assert!(g.get("error_kind").is_none(), "{role}: {g}");
+    }
+    let (editor, viewer, outsider) = (support::connect_as(&EDITOR, port).await, support::connect_as(&VIEWER, port).await, support::connect_as(&OUTSIDER, port).await);
+    assert_eq!(one(&admin, "logs.define", json!({"name": "perf", "on": "A-2", "schema": PERF})).await["type"], "defined");
+    let sizes = r#"{"type": "object", "properties": {"bytes": {"type": "integer"}}}"#;
+    assert_eq!(one(&admin, "logs.define", json!({"name": "sizes", "on": "A-1", "schema": sizes})).await["type"], "defined");
+
+    // A watcher of perf, open before anything is appended.
+    let mut watch = support::subscribe(&viewer, "logs.watch", json!({"log": "perf"})).await;
+    let first = support::next_item(&mut watch, std::time::Duration::from_secs(5)).await.expect("watching");
+    assert_eq!(first, json!({"type": "watching", "log": "perf"}));
+    let mut theirs = support::subscribe(&outsider, "logs.watch", json!({})).await;
+    assert_eq!(support::next_item(&mut theirs, std::time::Duration::from_secs(5)).await.expect("watching")["type"], "watching");
+
+    let lines = (0..30u64)
+        .map(|i| json!({"app": if i % 2 == 0 { "plexus" } else { "menger" }, "scenario": "stream.10k.64B", "value": i}).to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(one(&editor, "logs.append", json!({"log": "perf", "entries": lines, "tags": ["plexus"]})).await["last"], 30);
+    assert_eq!(one(&editor, "logs.append", json!({"log": "sizes", "entry": "{\"bytes\": 9}", "tags": ["plexus", "size"]})).await["seq"], 1);
+
+    // The watcher receives each appended entry, in order.
+    for want in 1..=30u64 {
+        let e = support::next_item(&mut watch, std::time::Duration::from_secs(5)).await.unwrap_or_else(|| panic!("entry {want}"));
+        assert_eq!((e["type"].as_str(), e["log"].as_str(), e["seq"].as_u64()), (Some("entry"), Some("perf"), Some(want)), "{e}");
+    }
+    assert!(support::next_item(&mut theirs, std::time::Duration::from_millis(500)).await.is_none(), "an outsider's watch is told nothing");
+
+    // One scenario over time: the last ten such, newest first.
+    let got = support::call(&viewer, "logs.read", json!({"log": "perf", "filter": "app = \"plexus\" and scenario = \"stream.10k.64B\"", "limit": 10})).await;
+    let seqs: Vec<u64> = got.iter().filter(|e| e["type"] == "entry").map(|e| e["seq"].as_u64().unwrap()).collect();
+    assert_eq!(seqs, (1..=30u64).rev().filter(|s| (s - 1) % 2 == 0).take(10).collect::<Vec<_>>(), "{got:?}");
+    let last = got.last().unwrap();
+    assert_eq!((last["type"].as_str(), last["count"].as_u64(), last["next"].as_str()), (Some("page"), Some(10), Some("11")), "{last}");
+    assert_eq!(got[0]["entry"], json!({"app": "plexus", "scenario": "stream.10k.64B", "value": 28.0}));
+
+    // Across logs by tag, this week: each with its log's name.
+    let across = support::call(&viewer, "logs.read", json!({"tag": "size", "since": "7d"})).await;
+    assert_eq!(across.len(), 2, "{across:?}");
+    assert_eq!((across[0]["log"].as_str(), across[0]["entry"].clone()), (Some("sizes"), json!({"bytes": 9})));
+
+    // An outsider sees nothing; an unknown field names the log's fields.
+    assert_eq!(support::call(&outsider, "logs.read", json!({"tag": "plexus"})).await, vec![json!({"type": "page", "count": 0})]);
+    assert_eq!(one(&outsider, "logs.read", json!({"log": "perf"})).await, json!({"type": "not_found", "log": "perf"}));
+    let bad = one(&viewer, "logs.read", json!({"log": "perf", "filter": "aap = \"plexus\""})).await;
+    assert_eq!(bad["reason"], "bad_filter", "{bad}");
+    assert!(bad["message"].as_str().unwrap().contains("`aap` is no field of the log `perf` (its fields: seq, at, by, ticket, app, scenario, value, machine, config)"), "{bad}");
 }
