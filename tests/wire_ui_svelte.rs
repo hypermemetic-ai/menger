@@ -68,7 +68,7 @@ async fn a_svelte_source_is_authored_with_the_module() {
     let named = call(&c, "ui.components", json!({ "names": ["x-hello"] })).await;
     let x = named.iter().find(|e| e["type"] == "component").unwrap_or_else(|| panic!("x-hello resolves: {named:?}"));
     assert_eq!((x["from"].as_str(), x["native"].as_bool(), x["profile"].as_str(), x["version"].as_str()), (Some("bundle"), Some(true), Some("svelte/1"), Some(version.as_str())), "{x}");
-    assert_eq!(versions(&c).await, 2, "the push and the authored version");
+    assert_eq!(versions(&c).await, 3, "the push, the authored version, and the bundle notes' seed (NOTES-4: this menger can author)");
 }
 
 /// A source Svelte's compiler refuses is refused `compile_failed`, naming the
@@ -82,7 +82,7 @@ async fn a_source_that_does_not_compile_is_refused_naming_its_line() {
     let made = call(&c, "ui.author", author("x-broken", BROKEN)).await;
     assert_eq!((made[0]["type"].as_str(), made[0]["reason"].as_str(), made[0]["name"].as_str()), (Some("refused"), Some("compile_failed"), Some("x-broken")), "{made:?}");
     assert!(made[0]["line"].as_u64().is_some_and(|l| l >= 9), "its line: {made:?}");
-    assert_eq!(versions(&c).await, 1, "nothing kept");
+    assert_eq!(versions(&c).await, 2, "nothing kept: the push and the bundle notes' seed, as before the author");
     assert!(call(&c, "ui.components", json!({ "names": ["x-broken"] })).await.iter().all(|e| e["type"] != "component"), "no such component");
 }
 
@@ -95,7 +95,9 @@ async fn without_the_module_svelte_is_refused_no_compiler() {
 
     let made = call(&c, "ui.author", author("x-hello", HELLO)).await;
     assert_eq!((made[0]["type"].as_str(), made[0]["reason"].as_str()), (Some("refused"), Some("no_compiler")), "{made:?}");
-    assert_eq!(versions(&c).await, 1, "nothing kept");
+    assert_eq!(versions(&c).await, 1, "nothing kept — and NOTES-8: a menger that cannot author keeps no bundle notes, so the push is its one version");
+    let notes = call(&c, "ui.history", json!({ "bundle": "notes" })).await;
+    assert!(notes.iter().all(|e| e["type"] != "move"), "NOTES-8: no bundle notes where nothing can be authored into it: {notes:?}");
 }
 
 /// A file that is not the module stops the start, naming the flag and the file.
