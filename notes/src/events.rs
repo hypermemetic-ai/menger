@@ -282,6 +282,15 @@ pub struct Mark {
     pub changed_at: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changed_by: Option<String>,
+    /// The component placed under the passage that holds the range (the page draws it there, never in the text) — absent when it places none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component: Option<String>,
+    /// The kept version that holds it, its whole hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Its props, a JSON object (`mark_props` patches them) — with a component alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub props: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 /// Why an open `watch` ended.

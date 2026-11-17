@@ -178,7 +178,7 @@
   import { bus, live } from "plexus-ui/host";
   import { ticketHref } from "./ticket-links.svelte";
   import TicketView, { blocks, pageTag, pieceClass, refDefs } from "./ticket-view.svelte";
-  import Margin, { threadMarks, noteMarks, setNoteMarks, marksIn, drawMarks, stateLine, followMark } from "./note-margin.svelte";
+  import Margin, { threadMarks, noteMarks, setNoteMarks, marksIn, drawMarks, stateLine, followMark, placedCard } from "./note-margin.svelte";
   import PillTable, { providePills } from "./ticket-pills.svelte";
   import { ingest } from "./media-ingest.svelte";
   import { drawAll } from "./media-draw.svelte";
@@ -476,7 +476,7 @@
 
   /** A block away from the caret: ticket-view's drawing of it. A click enters it at the clicked place. */
   class Drawn extends WidgetType {
-    constructor(piece, defs, hand, marks = [], n = 0) { super(); this.piece = piece; this.text = piece.text; this.defs = defs; this.hand = hand; this.marks = marks; this.n = n; this.marked = marks.length ? JSON.stringify([n, marks]) : ""; }
+    constructor(piece, defs, hand, marks = [], n = 0) { super(); this.piece = piece; this.text = piece.text; this.defs = defs; this.hand = hand; this.marks = marks; this.n = n; this.marked = marks.length ? JSON.stringify([n, marks.map((m) => [m.mark, m.link, m.label, m.by, m.a, m.z])]) : ""; }
     eq(o) { return o.text === this.text && o.defs === this.defs && o.hand === this.hand && o.marked === this.marked && pieceClass(o.piece) === pieceClass(this.piece) && o.piece.wrap?.open === this.piece.wrap?.open && o.piece.wrap?.close === this.piece.wrap?.close && o.piece.src?.n === this.piece.src?.n; }
     toDOM(v) {
       const d = document.createElement("div");
@@ -673,6 +673,18 @@
   /** `blocks()` of a document, kept per document (a document is immutable). */
   const blocksOf = (d) => { let b = BLOCKS.get(d); if (!b) { b = blocks(d.toString()); BLOCKS.set(d, b); } return b; };
 
+  /** NOTES-5: under the block that holds a mark's range, the component it places — its card moved, never made
+   *  again (note-margin's `placedCard`), so the component is mounted once whichever way the block is drawn;
+   *  new props are written on its bound mark in place. Its events are its own: the caret stays out. */
+  class Placed extends WidgetType {
+    constructor(m) { super(); this.m = m; this.key = JSON.stringify([m.mark, m.component, m.version, m.props, m.by]); }
+    eq(o) { return o.key === this.key; }
+    toDOM() { const d = document.createElement("div"); d.className = "nm-under"; d.append(placedCard(this.m, doc_id)); return d; }
+    updateDOM(dom) { if (dom.firstChild?.dataset?.placed !== this.m.mark) return false; placedCard(this.m, doc_id); return true; }
+    ignoreEvent() { return true; }
+    get estimatedHeight() { return 160; }
+  }
+
   /** NOTES-5: under the caret's block, the lines of state of the marks it holds. */
   class MarkStates extends WidgetType {
     constructor(marks, n) { super(); this.marks = marks.filter((m) => m.label); this.n = n; this.key = JSON.stringify([n, this.marks.map((m) => [m.mark, m.by, m.label])]); }
@@ -701,6 +713,8 @@
       const end = k + 1 < all.length ? all[k + 1].from - 1 : state.doc.length;
       // NOTES-5: the marks the block holds — drawn in its drawing, or (the caret's) its dot and lines of state.
       const marks = isNote ? marksIn(state, blk.from, end) : [];
+      // NOTES-5: a component a mark places, under the block its range ends in — never in the text.
+      for (const m of marks) if (m.component && m.version && m.ends) out.push(Decoration.widget({ widget: new Placed(m), block: true, side: 2 }).range(end));
       if (focus && ranges.some((r) => r.from <= end && r.to >= blk.from)) {
         shown.push([blk.from, end]);
         if (marks.length) {
@@ -1240,10 +1254,14 @@
   .editor-body :global(.nm-u.nm-linked) { color: var(--accent); text-decoration-color: var(--accent); cursor: pointer; }
   .editor-body :global(.nm-u.nm-linked:focus-visible) { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--radius-sm); }
   .editor-body :global([data-marked]), .editor-body :global(.cm-line.nm-dot) { position: relative; }
-  .editor-body :global([data-marked]::before), .editor-body :global(.cm-line.nm-dot::before) { content: ""; position: absolute; left: -16px; top: .55em; width: 8px; height: 8px; background: var(--ink); border-radius: 50%; }
+  .editor-body :global([data-marked] > .nm-mdot), .editor-body :global(.cm-line.nm-dot::before) { content: ""; position: absolute; left: -16px; top: .8em; width: 8px; height: 8px; background: var(--ink); border-radius: 50%; transform: translateY(-50%); }
   .editor-body :global(.nm-state) { margin: 2px 0 10px; font-family: var(--mono); font-size: 11.5px; line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
+  .editor-body :global(.nm-placed) { margin: 4px 0 10px; overflow: hidden; background: var(--panel); border: var(--border) solid var(--line); border-radius: var(--radius); }
+  .editor-body :global(.nm-cap) { display: flex; flex-wrap: wrap; gap: 2px 8px; padding: 5px 10px; font-family: var(--mono); font-size: 11.5px; color: var(--muted); border-bottom: var(--border) solid var(--line); }
+  .editor-body :global(.nm-cap b) { font-weight: var(--weight-strong); color: var(--ink); }
+  .editor-body :global(.nm-fill) { min-height: 24px; }
   @media (max-width: 640px) {
-    .editor-body :global([data-marked]::before), .editor-body :global(.cm-line.nm-dot::before) { left: -10px; width: 6px; height: 6px; }
+    .editor-body :global([data-marked] > .nm-mdot), .editor-body :global(.cm-line.nm-dot::before) { left: -10px; width: 6px; height: 6px; }
   }
   .editor-body :global(.eb-hand) { cursor: pointer; background: var(--sel); box-shadow: inset 2px 0 0 var(--accent); }
   .editor-body :global(.eb-hand::after) { content: attr(data-hand); float: right; padding-left: 8px; font-family: var(--font-text); font-size: 10px; color: var(--muted); }

@@ -50,7 +50,7 @@
   export function marksIn(state, from, to) {
     const set = state.field(noteMarks, false);
     const out = [];
-    set?.between(from, to, (f, t, d) => { if (t > from && f < to) out.push({ ...d.spec.m, a: Math.max(f, from) - from, z: Math.min(t, to) - from }); });
+    set?.between(from, to, (f, t, d) => { if (t > from && f < to) out.push({ ...d.spec.m, a: Math.max(f, from) - from, z: Math.min(t, to) - from, ends: t <= to }); });
     return out;
   }
   /** Where a mark's link goes: a ticket's page, an address of the app, or an https address (`external`). */
@@ -108,8 +108,8 @@
    *  click or enter; the block's dot; under it each mark's line of state, `¶n` its place among the blocks.
    *  Drawn again whole on every call. */
   export function drawMarks(el, text, marks, n, follow) {
-    for (const old of el.querySelectorAll(":scope > [data-mark-state]")) old.remove();
-    for (const u of el.querySelectorAll("[data-mark]")) u.replaceWith(...u.childNodes);
+    for (const old of el.querySelectorAll(":scope > [data-mark-state], :scope > .nm-mdot")) old.remove();
+    for (const u of el.querySelectorAll(".nm-u[data-mark]")) u.replaceWith(...u.childNodes);
     el.normalize();
     if (!marks.length) { el.removeAttribute("data-marked"); return; }
     el.setAttribute("data-marked", "");
@@ -140,6 +140,59 @@
       });
     }
     for (const m of marks.filter((x) => x.label)) el.append(stateLine(m, n));
+    // The dot in the margin, level with the block's first line of text wherever its drawing puts it (a paragraph's margin).
+    const dot = document.createElement("i");
+    dot.className = "nm-mdot";
+    dot.setAttribute("aria-hidden", "true");
+    el.append(dot);
+    const first = readOf(el).at[0];
+    if (first && el.isConnected) {
+      const r = document.createRange();
+      r.setStart(first[0], first[1]);
+      r.setEnd(first[0], Math.min(first[1] + 1, first[0].data.length));
+      const line = r.getClientRects()[0], box = el.getBoundingClientRect();
+      if (line) dot.style.top = `${line.top - box.top + line.height / 2}px`;
+    }
+  }
+  /** NOTES-5: the cards of the components marks place, by mark — one element each for as long as the page
+   *  lives, moved (never made again) when the surface draws its passage anew, so what fills it is mounted
+   *  once; a mark that goes takes its card out of the page, and the engine its component. */
+  const CARDS = new Map();
+  const setIf = (el, name, value) => { if (value == null) { if (el.hasAttribute(name)) el.removeAttribute(name); } else if (el.getAttribute(name) !== value) el.setAttribute(name, value); };
+  /** The card of the component the mark `m` places on the note `note`: its head (the component's name, its
+   *  version, who placed it) and a bound mark pinned to the version (`data-component`, `data-version`), handed
+   *  the note (`data-note`), the mark (`data-mark`, so a component that keeps state patches its own props by
+   *  `notes.mark_props`) and its props as JSON text (`data-props`) — new props reach the mounted component
+   *  in place (`update(props)`), as the slot's do. */
+  export function placedCard(m, note) {
+    let card = CARDS.get(m.mark);
+    if (!card) {
+      card = document.createElement("div");
+      card.className = "nm-placed";
+      card.dataset.placed = m.mark;
+      const cap = document.createElement("div");
+      cap.className = "nm-cap";
+      const name = document.createElement("b");
+      name.dataset.field = "component";
+      const meta = document.createElement("span");
+      meta.dataset.field = "placed-by";
+      cap.append(name, meta);
+      const fill = document.createElement("div");
+      fill.className = "nm-fill";
+      fill.dataset.slot = `mark-${m.mark}`;
+      card.append(cap, fill);
+      CARDS.set(m.mark, card);
+    }
+    const [name, meta] = card.firstChild.children, fill = card.lastChild;
+    if (name.textContent !== m.component) name.textContent = m.component;
+    const said = `${String(m.version).slice(0, 7)} · placed under this passage by ${m.by}`;
+    if (meta.textContent !== said) meta.textContent = said;
+    setIf(fill, "data-component", m.component);
+    setIf(fill, "data-version", m.version);
+    setIf(fill, "data-note", note);
+    setIf(fill, "data-mark", m.mark);
+    setIf(fill, "data-props", JSON.stringify(m.props ?? {}));
+    return card;
   }
   /** A mark's line of state, `¶n · who · label`. */
   export function stateLine(m, n) {
@@ -203,7 +256,8 @@
     void tick;
     return marks.rows.filter((m) => m.mark && m.anchor).map((m) => {
       const a = ydoc ? at(m.anchor.from) : m.from ?? null, z = ydoc ? at(m.anchor.to) : m.to ?? null;
-      return { mark: m.mark, link: m.link ?? null, label: m.label ?? null, by: m.by, a, z };
+      return { mark: m.mark, link: m.link ?? null, label: m.label ?? null, by: m.by, a, z,
+               component: m.component ?? null, version: m.version ?? null, props: m.props ?? null };
     }).filter((m) => m.a != null && m.z != null && m.z > m.a);
   });
   $effect(() => {
@@ -212,12 +266,12 @@
       const v = view();
       if (!v) return;
       const len = v.state.doc.length;
-      const keyOf = (xs) => JSON.stringify(xs.map((m) => [m.a, m.z, m.mark, m.link, m.label, m.by]));
+      const keyOf = (xs) => JSON.stringify(xs.map((m) => [m.a, m.z, m.mark, m.link, m.label, m.by, m.component, m.version, m.props]));
       const held = [];
       v.state.field(noteMarks, false)?.between(0, len, (a, z, d) => { held.push({ a, z, ...d.spec.m }); });
       if (keyOf(held) === keyOf(ranges.filter((m) => m.z <= len))) return; // the surface holds them already
       const deco = ranges.filter((m) => m.z <= len).map((m) => Decoration.mark({ class: m.link ? "nm-u nm-linked" : "nm-u", attributes: { "data-mark": m.mark, ...(m.link ? { "data-mark-link": m.link, title: m.link } : {}) },
-                                                                      m: { mark: m.mark, link: m.link, label: m.label, by: m.by } }).range(m.a, m.z));
+                                                                      m: { mark: m.mark, link: m.link, label: m.label, by: m.by, component: m.component, version: m.version, props: m.props } }).range(m.a, m.z));
       v.dispatch({ effects: setNoteMarks.of(Decoration.set(deco, true)) });
     });
   });

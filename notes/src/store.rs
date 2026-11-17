@@ -141,6 +141,8 @@ pub enum StoreError {
     NoThread(String),
     /// NOTES-5: no mark of that id on the note.
     NoMark(String),
+    /// NOTES-5: the mark places no component, so it has no props.
+    NoComponent(String),
     /// V2-30: a range that is not one of the text.
     BadRange(String),
     /// The update or state is not one the CRDT reads.
@@ -162,6 +164,7 @@ impl std::fmt::Display for StoreError {
             StoreError::NoRevision(id, r) => write!(f, "note {id} has no change {r}"),
             StoreError::NoThread(t) => write!(f, "no thread {t}"),
             StoreError::NoMark(m) => write!(f, "no mark {m}"),
+            StoreError::NoComponent(m) => write!(f, "mark {m} places no component"),
             StoreError::BadRange(e) => write!(f, "not a range of the text: {e}"),
             StoreError::BadUpdate(e) => write!(f, "not a Yjs v1 update: {e}"),
             StoreError::Quota(e) => write!(f, "{e}"),

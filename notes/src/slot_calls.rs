@@ -33,8 +33,16 @@ pub(crate) async fn slot(store: Arc<NotesStore>, seam: Seam, user: Caller, id: S
 /// What a fill sets, its version resolved — or the refusal naming the
 /// component and the version.
 async fn checked(seam: &Seam, component: String, version: String, props: Option<Map<String, Value>>, say: Option<String>) -> Result<FillOf, NotesEvent> {
-    match seam.component(&version, &component).await {
-        Ok(Held::Holds(version)) => Ok(FillOf { component, version, props, say }),
+    let version = held(seam, &component, &version).await?;
+    Ok(FillOf { component, version, props, say })
+}
+
+/// NOTES-5: the whole hash of `version` once the ui service says it holds
+/// `component` — a slot's fill and a mark's component asked the same way —
+/// or the refusal naming the component and the version.
+pub(crate) async fn held(seam: &Seam, component: &str, version: &str) -> Result<String, NotesEvent> {
+    match seam.component(version, component).await {
+        Ok(Held::Holds(version)) => Ok(version),
         Ok(Held::NoComponent(whole)) => Err(NotesEvent::Refused { reason: "unknown_component".into(), message: format!("version {whole} holds no component {component} (nothing was written)") }),
         Ok(Held::NoVersion) => Err(NotesEvent::Refused { reason: "unknown_version".into(), message: format!("the ui service keeps no version {version}, so none holds {component} (nothing was written)") }),
         Err(message) => Err(NotesEvent::Error { message }),

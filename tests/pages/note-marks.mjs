@@ -11,9 +11,56 @@
 // `[data-mark-state=<id>]`; in the caret's block CodeMirror's own
 // `.nm-u[data-mark]`, the line `.nm-dot` and `.nm-states`.
 //
-// PAGES_SHOTS=DIR: a marked note at 1440 and 390, light and dark (`note-marked-*`).
+// And a component a mark places (`notes.mark { component, version, props }`),
+// drawn under the block that holds the range, never in the text: a real
+// component, node-legend, authored into the bundle `notes` (as
+// tests/pages/slot.mjs authors graph-nodes), drawn on every open page and
+// staying under its passage as the text moves; its props patched
+// (`notes.mark_props`, by the component itself or an agent) reach every
+// page's mounted component in place; typing in the passage above it moves
+// no caret and mounts nothing again; its words deleted, it is drawn nowhere.
+// Marks: `.nm-placed[data-placed=<mark>]` (`[data-field=component]`,
+// `[data-field=placed-by]`), its bound mark `[data-slot=mark-<mark>]
+// [data-component][data-version]`, and the component's own `[data-legend]
+// [data-self]`, `[data-field=stopped]`, `[data-action=hollow]`.
+//
+// PAGES_SHOTS=DIR: a marked note at 1440 and 390, light and dark (`note-marked-*`),
+// and one with a component under a passage (`note-placed-*`).
+import { spawnSync } from "node:child_process";
+
+/** node-legend: running and (when its props say `hollow`) stopped; its button patches its own props. */
+const LEGEND = `<script module>
+  export const uses = ["notes.mark_props"];
+</script>
+
+<script>
+  import { bus } from "plexus-ui/host";
+  let { note = "", mark = "", props = "{}" } = $props();
+  const b = bus();
+  const self = Math.random().toString(36).slice(2, 10);
+  const p = $derived.by(() => { try { return JSON.parse(props || "{}"); } catch { return {}; } });
+  const hollow = $derived(p.hollow === true);
+  const toggle = () => b.call("notes.mark_props", { id: note, mark, patch: { hollow: !hollow } });
+</script>
+
+<div class="legend" data-legend data-self={self}>
+  <span><i></i>running</span>
+  {#if hollow}<span data-field="stopped"><i class="hollow"></i>stopped</span>{/if}
+  <button type="button" data-action="hollow" aria-pressed={hollow} onclick={toggle}>show stopped</button>
+</div>
+
+<style>
+  .legend { display: flex; gap: 20px; align-items: center; padding: 12px 14px; font: 14px var(--sans); color: var(--ink); }
+  span { display: inline-flex; gap: 7px; align-items: center; }
+  i { display: inline-block; width: 12px; height: 12px; background: var(--ink); border-radius: 50%; }
+  i.hollow { background: transparent; border: 1.5px dashed var(--ink); }
+  button { margin-left: auto; padding: 3px 9px; font: 12px var(--mono); color: var(--ink); background: var(--card); border: var(--border) solid var(--line); border-radius: var(--radius); cursor: pointer; }
+  button[aria-pressed=true] { color: var(--panel); background: var(--ink); border-color: var(--ink); }
+</style>
+`;
+
 export default async (ctx) => {
-  const { test, assert, eventually, sleep, openPage, sy, fs, path, session, ticketAt } = ctx;
+  const { test, assert, eventually, sleep, openPage, sy, fs, path, session, ticketAt, server } = ctx;
   const BODY = "[data-surface=editor-body] [data-field=body]";
   const scratch = path.dirname(session);
   const file = (name, text) => { const f = path.join(scratch, `note-marks-${name}`); fs.writeFileSync(f, text); return `@${f}`; };
@@ -74,6 +121,15 @@ export default async (ctx) => {
       await eventually("three words linked", async () => (await underlined(one.ed, reg.mark)) === "the service registry", 3_000);
       await eventually("an underline with no link", async () => (await underlined(one.ed, plain.mark)) === "A stopped service stays, drawn hollow.", 3_000);
       assert(!(await underline(one.ed, plain.mark).first().getAttribute("class")).includes("nm-linked"), "no link: in the ink");
+      await sleep(100);
+      const offs = await one.ed.locator("[data-marked]").evaluateAll((els) => els.map((el) => {
+        const d = el.querySelector(":scope > .nm-mdot")?.getBoundingClientRect();
+        const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, { acceptNode: (n) => (n.data.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP) });
+        const r = document.createRange(); const t = walk.nextNode(); r.setStart(t, 0); r.setEnd(t, 1);
+        const line = r.getClientRects()[0];
+        return d ? Math.abs(d.top + d.height / 2 - (line.top + line.height / 2)) : 99;
+      }));
+      assert(offs.length === 3 && offs.every((d) => d <= 2), `three dots, each level with its block's first line: off by ${JSON.stringify(offs)} px`);
       // The text is not touched.
       const after = get(id);
       assert(after.body === before.body && after.revision === before.revision, `the body and revision as they were: ${before.revision} → ${after.revision}`);
@@ -127,6 +183,138 @@ export default async (ctx) => {
         const body = get(id).body;
         return now && now.words === "Let me connect more two nodes" && body.slice(now.from, now.to) === now.words && now.from === a + 20;
       }, 5_000);
+    } finally {
+      await context.close();
+    }
+  });
+
+  // ── NOTES-5's third requirement: a component under a passage ──────────────
+  /** `ui author` into the bundle `notes`, its params a file (`-p`, synapse's global option): the version. */
+  function author(name, source) {
+    const params = path.join(scratch, `note-marks-author-${name}-${Date.now()}.json`);
+    fs.writeFileSync(params, JSON.stringify({ bundle: "notes", sources: [{ name, profile: "svelte/1", source }] }));
+    const r = spawnSync("synapse", ["--no-hold", "--token-file", session, "-j", "-p", `@${params}`, "-P", String(server.ws), "menger", "ui", "author"],
+      { env: { ...process.env, XDG_CACHE_HOME: path.join(server.work, "cache") }, encoding: "utf8" });
+    const authored = (r.stdout ?? "").split("\n").filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).find((i) => i?.content?.type === "authored");
+    assert(authored, `ui author ${name}: ${r.stdout} ${r.stderr}`);
+    return authored.content.version;
+  }
+  const legendV = author("node-legend", LEGEND);
+  const LAST = "A stopped service stays, drawn hollow.";
+  const place = (id, ...flags) => { const [a, z] = at(SERVICE_MAP, LAST); return mark(id, a, z, "--component", "node-legend", "--version", legendV, ...flags); };
+  const card = (page, m) => page.locator(`.nm-placed[data-placed="${m}"]`);
+  const legend = (page, m) => page.locator(`.nm-placed[data-placed="${m}"] [data-legend]`);
+  /** Where the card stands against its passage's words: the gap from the words' bottom to the card's top, and whether it is outside every block of text. */
+  const under = (page, m) => page.evaluate((m) => {
+    const words = [...document.querySelectorAll(`.nm-u[data-mark="${m}"]`)].map((e) => e.getBoundingClientRect());
+    const c = document.querySelector(`.nm-placed[data-placed="${m}"]`);
+    if (!words.length || !c) return null;
+    const bottom = Math.max(...words.map((r) => r.bottom));
+    return { gap: c.getBoundingClientRect().top - bottom, outside: !c.closest("[data-block], .cm-line"), words: words.length };
+  }, m);
+
+  await test("a_component_under_a_passage_on_every_page_stays_as_the_text_moves", async () => {
+    const id = note("A component under a passage", SERVICE_MAP);
+    const one = await openNote(id);
+    const two = await openNote(id);
+    try {
+      await sleep(500);
+      const before = get(id);
+      const sent = Date.now();
+      const m = place(id, "--props", JSON.stringify({ hollow: false }));
+      for (const [k, { page }] of [one, two].entries()) await eventually(`page ${k + 1}: the component drawn`, async () => (await legend(page, m.mark).count()) === 1, 3_000);
+      assert(Date.now() - sent < 3_500, `on every open page (${Date.now() - sent} ms)`);
+      for (const { page } of [one, two]) {
+        const fill = card(page, m.mark).locator(`[data-slot="mark-${m.mark}"]`);
+        assert((await fill.getAttribute("data-component")) === "node-legend" && (await fill.getAttribute("data-version")) === legendV, "a bound mark pinned to the version");
+        assert((await card(page, m.mark).locator("[data-field=component]").innerText()) === "node-legend", "its name in the card's head");
+        assert((await card(page, m.mark).locator("[data-field=placed-by]").innerText()).includes(m.by), "and who placed it");
+        const u = await under(page, m.mark);
+        assert(u && u.outside && u.gap >= 0 && u.gap < 80, `under the passage, never in the text: ${JSON.stringify(u)}`);
+      }
+      const self = await legend(two.page, m.mark).getAttribute("data-self");
+      // The text moves: a paragraph written above, on the first page.
+      await caretAt(one.page, 0);
+      await one.page.keyboard.type("A paragraph written above.\n\n");
+      await blur(one.page);
+      await eventually("the second page has the paragraph", async () => (await two.page.evaluate((s) => document.querySelector(s).editorView.state.doc.toString(), BODY)).startsWith("A paragraph written above."), 5_000);
+      await sleep(300);
+      const u = await under(two.page, m.mark);
+      assert(u && u.outside && u.gap >= 0 && u.gap < 80, `still under its passage: ${JSON.stringify(u)}`);
+      assert((await legend(two.page, m.mark).getAttribute("data-self")) === self && (await legend(two.page, m.mark).count()) === 1, "the same component, not mounted again");
+      const after = get(id);
+      assert(after.body === "A paragraph written above.\n\n" + before.body, "only the typing wrote the text");
+      if (process.env.PAGES_SHOTS) {
+        for (const [w, h] of [[1440, 900], [390, 844]]) for (const theme of ["light", "dark"]) {
+          await one.page.setViewportSize({ width: w, height: h });
+          await one.page.evaluate((th) => (document.documentElement.dataset.theme = th), theme);
+          await sleep(400);
+          await one.page.screenshot({ path: path.join(process.env.PAGES_SHOTS, `note-placed-${w}-${theme}.png`) });
+        }
+        await one.page.setViewportSize({ width: 1440, height: 900 });
+        await one.page.evaluate(() => (document.documentElement.dataset.theme = "light"));
+      }
+    } finally {
+      await one.context.close();
+      await two.context.close();
+    }
+  });
+
+  await test("its_props_change_on_every_page_in_place", async () => {
+    const id = note("Its props change", SERVICE_MAP);
+    const m = place(id);
+    const one = await openNote(id);
+    const two = await openNote(id);
+    try {
+      for (const { page } of [one, two]) await eventually("drawn", async () => (await legend(page, m.mark).count()) === 1, 8_000);
+      const selves = await Promise.all([one, two].map(({ page }) => legend(page, m.mark).getAttribute("data-self")));
+      // The component patches its own props (notes.mark_props, its mark's id handed to it).
+      await legend(one.page, m.mark).locator("[data-action=hollow]").click();
+      for (const [k, { page }] of [one, two].entries()) await eventually(`page ${k + 1}: shown`, async () => (await legend(page, m.mark).locator("[data-field=stopped]").count()) === 1, 3_000);
+      // An agent patches them too.
+      sy("notes", "mark_props", "--id", id, "--mark", m.mark, "--patch", JSON.stringify({ hollow: false }));
+      for (const [k, { page }] of [one, two].entries()) await eventually(`page ${k + 1}: the agent's patch`, async () => (await legend(page, m.mark).locator("[data-field=stopped]").count()) === 0, 3_000);
+      for (const [k, { page }] of [one, two].entries()) {
+        assert((await legend(page, m.mark).getAttribute("data-self")) === selves[k] && (await legend(page, m.mark).count()) === 1, `page ${k + 1}: the same instance, not mounted again`);
+      }
+      const kept = marks(id).find((x) => x.mark === m.mark);
+      assert(kept?.props?.hollow === false, `kept: ${JSON.stringify(kept?.props)}`);
+    } finally {
+      await one.context.close();
+      await two.context.close();
+    }
+  });
+
+  await test("writing_goes_on_in_the_passage_above_a_component", async () => {
+    const id = note("Writing goes on", SERVICE_MAP);
+    const m = place(id);
+    const { context, page } = await openNote(id);
+    try {
+      await eventually("drawn", async () => (await legend(page, m.mark).count()) === 1, 8_000);
+      const self = await legend(page, m.mark).getAttribute("data-self");
+      // The caret in the passage the component is under, then typing.
+      const at0 = SERVICE_MAP.indexOf("drawn hollow.");
+      await caretAt(page, at0);
+      const typed = "always ";
+      for (let k = 0; k < typed.length; k++) {
+        await page.keyboard.type(typed[k]);
+        const head = await page.evaluate((s) => document.querySelector(s).editorView.state.selection.main.head, BODY);
+        assert(head === at0 + k + 1, `the caret did not jump: at ${head}, want ${at0 + k + 1}`);
+      }
+      await eventually("written", async () => get(id).body.includes("stays, always drawn hollow."), 5_000);
+      await sleep(400);
+      assert((await legend(page, m.mark).getAttribute("data-self")) === self && (await legend(page, m.mark).count()) === 1, "not mounted again");
+      assert(await page.evaluate((s) => document.activeElement?.closest(".cm-content") != null, BODY), "the focus stays in the text");
+      // Out of the passage: still the same instance, under it.
+      await blur(page);
+      await sleep(300);
+      assert((await legend(page, m.mark).getAttribute("data-self")) === self, "drawn again around it, the component is the same");
+      const u = await under(page, m.mark);
+      assert(u && u.outside && u.gap >= 0 && u.gap < 80, `under its passage: ${JSON.stringify(u)}`);
+      // Its words deleted: drawn nowhere.
+      sy("notes", "save", "--id", id, "--body", file("placed-cut", get(id).body.replace("A stopped service stays, always drawn hollow.\n", "")));
+      await eventually("drawn nowhere", async () => (await card(page, m.mark).count()) === 0 && (await page.locator("[data-legend]").count()) === 0, 5_000);
+      assert(marks(id).find((x) => x.mark === m.mark)?.detached === true, "listed detached");
     } finally {
       await context.close();
     }
