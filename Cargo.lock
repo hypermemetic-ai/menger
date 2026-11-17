@@ -2247,6 +2247,7 @@ dependencies = [
  "jsonwebtoken",
  "menger-code",
  "menger-docs",
+ "menger-logs",
  "menger-media",
  "menger-quota",
  "menger-tickets-api",
@@ -2317,6 +2318,24 @@ dependencies = [
  "tracing",
  "uuid",
  "yrs",
+]
+
+[[package]]
+name = "menger-logs"
+version = "0.8.0"
+dependencies = [
+ "async-stream",
+ "async-trait",
+ "futures",
+ "menger-tickets-api",
+ "plexus-rpc",
+ "rusqlite",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -305,6 +305,9 @@ files' bytes in `code/blobs/` (`--code-db-path`, `--code-blob-dir`,
 `--code-max-bytes`, 5 GiB unless named); the first deploy after it opens
 an empty one, and the server reads `github.com` and
 `codeload.github.com` over https from then on.
+LOGS-2: the logs service alike — `logs.db` beside the database
+(`--logs-db-path`, `MENGER_LOGS_DB_PATH`); the first deploy after it opens
+an empty `logs.db` in the data volume.
 
 After a deploy is healthy — `remote test`, and `local` — the pipeline
 pushes the release's bundle: `ui.push { bundle, manifest, signature,

@@ -75,6 +75,8 @@ const PATHS: &[&str] = &[
     "quota",
     // CODE-2: the code service.
     "code",
+    // LOGS-2: the logs service.
+    "logs",
 ];
 
 /// Whether `word` occurs in `text` as an identifier of its own, ignoring

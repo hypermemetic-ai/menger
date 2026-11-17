@@ -1,0 +1,36 @@
+# LOGS-2: menger's logs service — a log is a typed table made from a JSON
+# Schema, tied to a ticket by its uid and taking that ticket's reach; entries
+# appended to it by name, each checked against the schema and kept with an
+# envelope the server writes, in a file of its own (`logs.db`). A service of
+# v2's own beside `tickets`, `media`, `docs`, `quota` and `code` (V2-1): who
+# may is asked of the tickets service through the client seam, as the caller
+# (the media service's pattern), and every entry kept is reserved through the
+# quota service (`logs.bytes`).
+[package]
+name = "menger-logs"
+version = "0.8.0"
+edition = "2021"
+license = "MIT"
+description = "menger's logs service — a typed table per log made from a JSON Schema, tied to a ticket and taking its reach, entries checked, kept and read by name"
+repository = "https://github.com/hypermemetic-ai/menger"
+
+[dependencies]
+# The tickets service's client and vocabulary: `TicketsClient::get` names a
+# ticket's uid, `TicketsClient::may` is the permit question, `TicketRef` and
+# `Role` the words of both.
+menger-tickets-api = { path = "../tickets-api", version = "0.8.0" }
+# The 0.8 line, by published version (PLEXUS-16), through the umbrella
+# (PLEXUS-44), as media takes it. No transport: menger's binary serves it.
+plexus-rpc = { version = "0.8.0", default-features = false, features = ["child-ws"] }
+async-trait = "0.1"
+async-stream = "0.3"
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = { version = "1.1", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"

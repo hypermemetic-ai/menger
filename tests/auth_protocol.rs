@@ -372,6 +372,15 @@ const TODAY: &[(&str, Today, Option<&str>)] = &[
     ("code.kept", Today::Viewer, None),
     ("code.fetch", Today::Editor, None),
     ("code.forget", Today::Admin, None),
+    // LOGS-2: the logs service — at the gate a viewer describes and lists,
+    // an editor appends, the admin defines, extends and deprecates; each
+    // held anywhere, then the log's ticket decides (asked of `tickets`).
+    ("logs.describe", Today::Viewer, None),
+    ("logs.list", Today::Viewer, None),
+    ("logs.append", Today::Editor, None),
+    ("logs.define", Today::Admin, None),
+    ("logs.extend", Today::Admin, None),
+    ("logs.deprecate", Today::Admin, None),
     // V2-31: and the docs store's own count, which the recount reads.
     ("docs.usage", Today::Admin, None),
     // V2-30: questions on a range — a viewer reads them and an agent's
@@ -421,7 +430,7 @@ async fn the_roles_are_what_identity_21_asked_method_by_method() {
         .map(|(path, s)| (format!("tickets.{path}"), s));
     let top = service.list_plugin_schemas().into_iter().map(|s| (s.namespace.clone(), s));
     for (path, schema) in top.chain(children) {
-        if !["tickets", "members", "session", "media", "docs", "quota", "code"].contains(&schema.namespace.as_str()) && !path.starts_with("tickets.") {
+        if !["tickets", "members", "session", "media", "docs", "quota", "code", "logs"].contains(&schema.namespace.as_str()) && !path.starts_with("tickets.") {
             continue;
         }
         for m in &schema.methods {

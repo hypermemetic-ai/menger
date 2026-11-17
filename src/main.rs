@@ -142,6 +142,11 @@ struct Args {
     #[arg(global = true, long = "code-github-at", value_name = "IP:PORT", hide = true)]
     code_github_at: Option<std::net::SocketAddr>,
 
+    // LOGS-2: the logs service's own file.
+    /// The logs service's file — every log's schema and its entries, a table a log (default: logs.db beside the database file)
+    #[arg(global = true, long, env = "MENGER_LOGS_DB_PATH", value_name = "PATH", help_heading = RUN, hide_short_help = true)]
+    logs_db_path: Option<PathBuf>,
+
     /// A public key (64 hex digits, Ed25519) a `ui.push` may be signed by
     ///
     /// Repeatable; in the env var, separated by `;`. With none, every push is
@@ -758,6 +763,13 @@ async fn run(args: Args) -> anyhow::Result<()> {
         anyhow::bail!("--code-db-path {} is another service's file: the code service keeps a file of its own", code_db_path.display());
     }
     let code = menger::CodeSetup::open(&code_db_path, args.code_blob_dir.as_deref())?.max_bytes(args.code_max_bytes).github_at(args.code_github_at);
+    // LOGS-2: the logs service's file (beside the tickets file unless
+    // named): never another service's.
+    let logs_db_path = args.logs_db_path.clone().unwrap_or_else(|| menger::default_logs_db_path(&db_path));
+    if [&db_path, &ui_db_path, &media_db_path, &docs_db_path, &quota_db_path, &code_db_path].contains(&&logs_db_path) {
+        anyhow::bail!("--logs-db-path {} is another service's file: the logs service keeps a file of its own", logs_db_path.display());
+    }
+    let logs = menger::LogsSetup::open(&logs_db_path)?;
     // POLYGLOT-5: each `--child` started (or dialed) and its schema asked
     // before anything is served; one that does not answer stops the start,
     // named, exit 2.
@@ -768,7 +780,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
             std::process::exit(2);
         }
     };
-    let service = build_rpc_services(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, ui, media, docs, quota, code, children, |store, access| {
+    let service = build_rpc_services(&db_path, seed, args.seed_shape, offers, access, wired.backend.clone(), metadata, args.max_body_bytes, ui, media, docs, quota, code, logs, children, |store, access| {
         menger::TicketsActivation::with_access(store, access)
     })
     .await?;
@@ -868,7 +880,7 @@ async fn run(args: Args) -> anyhow::Result<()> {
             // or a token an --auth-provider admits) names the caller to the
             // gate, as the WebSocket's upgrade does; no credential is the
             // anonymous view (the door). Every service registered is there:
-            // tickets, members, orgs, ui, media, docs, quota, code, auth, session.
+            // tickets, members, orgs, ui, media, docs, quota, code, logs, auth, session.
             // With --mcp-authorization-server, /mcp is an OAuth 2.1
             // protected resource and says so on a 401.
             mcp: (!args.no_mcp).then(|| {

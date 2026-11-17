@@ -545,6 +545,8 @@ async fn bench(o: BenchOpts) -> anyhow::Result<()> {
             .arg(dir.join("quota.db"))
             .arg("--code-db-path")
             .arg(dir.join("code.db"))
+            .arg("--logs-db-path")
+            .arg(dir.join("logs.db"))
             .arg("--ui-author-key")
             .arg(dir.join("ui-author.key"))
             .arg("--data-dir")

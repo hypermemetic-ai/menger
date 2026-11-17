@@ -128,7 +128,7 @@ fn source(t: &str) -> Result<String, String> {
 }
 
 text_type!(
-    /// A source by name: media.bytes, media.fetch.bytes, media.fetch.calls, media.egress.bytes, docs.bytes, docs.count, tickets.bytes, tickets.count, questions.count, code.bytes.
+    /// A source by name: media.bytes, media.fetch.bytes, media.fetch.calls, media.egress.bytes, docs.bytes, docs.count, tickets.bytes, tickets.count, questions.count, code.bytes, logs.bytes.
     SourceName,
     source
 );

@@ -127,7 +127,7 @@ async fn start(github: SocketAddr) -> u16 {
     let media = menger::MediaSetup::beside(&db_path).unwrap();
     let quota = menger::QuotaSetup::beside(&db_path).unwrap();
     let code = menger::CodeSetup::beside(&db_path).unwrap().github_at(Some(github));
-    let service = menger::build_rpc_services(&db_path, None, Default::default(), Vec::new(), access, backend, None, menger::store::BODY_MAX_DEFAULT, ui, media, menger::DocsSetup::beside(&db_path).unwrap(), quota, code, Vec::new(), |store, access| {
+    let service = menger::build_rpc_services(&db_path, None, Default::default(), Vec::new(), access, backend, None, menger::store::BODY_MAX_DEFAULT, ui, media, menger::DocsSetup::beside(&db_path).unwrap(), quota, code, menger::LogsSetup::beside(&db_path).unwrap(), Vec::new(), |store, access| {
         menger::TicketsActivation::with_access(store, access)
     })
     .await

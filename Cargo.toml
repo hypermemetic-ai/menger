@@ -25,7 +25,9 @@
 # principal and source, its ledger in a file of its own (`quota.db`).
 # CODE-2: `code/` is the code service — menger-code, a public GitHub
 # repository's commits fetched once and kept, its file of its own (`code.db`).
-members = [".", "tickets-api", "media", "docs", "quota", "code"]
+# LOGS-2: `logs/` is the logs service — menger-logs, a typed table per log made
+# from a JSON Schema, tied to a ticket, its file of its own (`logs.db`).
+members = [".", "tickets-api", "media", "docs", "quota", "code", "logs"]
 # TETHER-7: `tether/` is a workspace of its own — substrate's sqlx and this
 # workspace's rusqlite link two libsqlite3-sys, which one resolve refuses.
 exclude = ["tether"]
@@ -105,6 +107,11 @@ menger-quota = { path = "quota", version = "0.8.0" }
 # once and kept (`code.db` and its blobs), the tree and files answered from
 # them; every new byte reserved through the quota service (`code.bytes`).
 menger-code = { path = "code", version = "0.8.0" }
+# LOGS-2: the logs service — a typed table per log made from a JSON Schema,
+# tied to a ticket by its uid and taking its reach (asked of `tickets` through
+# the seam, as the caller), every entry reserved through the quota service
+# (`logs.bytes`); its own file (`logs.db`).
+menger-logs = { path = "logs", version = "0.8.0" }
 # UI-3, FRAME-5: the ui service — the framework's (plexus-ui's `service/`):
 # its activation registered beside `tickets`, its routes mounted on the
 # shell, serving `/`, `/app/` and `/app/<hash>/…` from its store.
