@@ -47,6 +47,7 @@
   let left = $state("");
   let frames = $state([]);
   let fresh = $state(null);
+  let whatOpen = $state(false); // narrow: the paragraph about what runs here, two lines until opened
   let kiln = null;
   let seq = 0;
 
@@ -169,7 +170,8 @@
   let cw = $state(0);
   let ph = $state(0);
   let CH = $derived(Math.max(232, ph));
-  const PL = 46, PR = 16, PT = 30, PB = 44, YMAX = 1300;
+  const PR = 12, PT = 30, PB = 44, YMAX = 1300;
+  let PL = $derived(cw < 420 ? 40 : 46); // a phone's chart gives its labels less
   const YT = [0, 400, 800, 1200];
   let xmax = $derived(Math.max(HOURS * 60, last?.minute ?? 0));
   let XT = $derived(Array.from({ length: Math.floor(xmax / 30) + 1 }, (_, i) => i * 30));
@@ -201,17 +203,18 @@
       <div class="badges">
         <span class="badge" data-s={state}><i class="dot" class:busy={heating || firing}></i>{state}</span>
         {#if state === "running"}
-          <span class="badge mono" title="the kiln's interface hash">interface <code data-field="interface">{iface}</code></span>
+          <span class="badge mono" title="the kiln's interface hash"><span class="badge-word">interface </span><code data-field="interface">{iface}</code></span>
           <span class="badge" class:memory={!store?.kept}>{store?.kept ? "log kept" : "log in memory"}</span>
         {/if}
       </div>
     </div>
-    <p class="what">
+    <p class="what" class:open={whatOpen}>
       <strong>Real:</strong> the kiln is Rust (<code>#[plexus::activation]</code>), compiled to WebAssembly and running in a
       worker of this tab, with its log in SQLite. Every button calls it through its generated client, as frames between
       this page and the worker. <strong>Not here:</strong> menger's server takes no part — it served this component and
       nothing else, and no call on this page reaches it. The log is kept by this browser only.
     </p>
+    <button type="button" class="more" aria-expanded={whatOpen} onclick={() => (whatOpen = !whatOpen)}>{whatOpen ? "less" : "what runs here"}</button>
   </header>
 
   <div class="grid" class:waiting={state !== "running"}>
@@ -407,15 +410,23 @@
 
 <style>
   .kiln-live {
+    /* the component's own properties, each declared here with a default of tokens alone; the script sets the
+       mixed values (MIX on the section, the heat and the cones' tints on their elements), which win */
+    --kl-cold: var(--skeleton); --kl-ember: var(--warn); --kl-hot: var(--chart-2); --kl-ping: transparent;
+    --kl-warn-soft: var(--hover); --kl-warn-mid: var(--panel); --kl-warn-line: var(--warn);
+    --kl-accent-hover: var(--accent); --kl-in-bg: transparent;
+    --heat: var(--kl-cold); --glow: 0; --c: var(--hover); --c-dim: var(--hover);
     container: kiln-live / inline-size;
-    box-sizing: border-box; max-width: 1120px; padding: 20px 24px 24px; color: var(--ink); background: var(--bg);
+    box-sizing: border-box; max-width: 1120px; padding: 20px 0 24px; color: var(--ink); background: var(--bg);
     font-family: var(--font-text); font-size: var(--text-size); line-height: 1.45;
   }
   .kiln-live * { box-sizing: border-box; }
   .kiln-live code { font-family: var(--font-text); }
 
   /* the head: the title and what is real, said once and quietly */
-  .head { margin: 0 0 16px; }
+  .head { margin: 0 24px 16px; }
+  .grid { margin: 0 24px; }
+  .more { display: none; }
   .title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
   h2 { margin: 0; font-family: var(--font-display); font-size: 17px; font-weight: var(--weight-strong); letter-spacing: -0.01em; }
   .badges { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -602,6 +613,39 @@
   .frame.in { padding-left: 26px; color: var(--muted); border-left-color: var(--chart-3); background: var(--kl-in-bg); }
   .frame.in b { color: var(--chart-3); }
   .tape-empty { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; font-family: var(--sans); font-size: 12px; color: var(--muted); pointer-events: none; }
+
+  /* a phone: tighter margins, bigger targets, the paragraph folded, the tape wrapped rather than cut */
+  @container kiln-live (max-width: 559px) {
+    .head { margin: 0 12px 12px; }
+    .grid { margin: 0 8px; gap: 10px; }
+    .card { padding: 14px; border-radius: var(--radius-lg); }
+    h2 { font-size: 16px; }
+    .title { gap: 8px; }
+    .badge-word { display: none; }
+    .what:not(.open) { display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .more { display: inline-block; margin-top: 4px; padding: 6px 0; font-family: var(--sans); font-size: 12.5px; color: var(--accent); background: none; border: 0; cursor: pointer; }
+    .more:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: var(--radius-sm); }
+    .kiln-card { gap: 14px; }
+    .kiln-row { gap: 14px; }
+    .kiln { width: 96px; }
+    .temp { font-size: 34px; }
+    .cone-head { margin-bottom: 22px; }
+    .stepper { height: 38px; }
+    .stepper button { width: 40px; font-size: 16px; }
+    .stepper input { font-size: 16px; }
+    .scale { column-gap: 2px; }
+    .cell { height: 28px; }
+    .cell.on { transform: scaleY(1.25); }
+    .actions button { height: 44px; }
+    .primary { flex: 1; }
+    .secondary { flex: 1.4; }
+    .secondary .sub { display: none; }
+    .log li { height: 40px; }
+    .dirs { margin-left: 0; width: 100%; }
+    .frames { max-height: 300px; font-size: 11px; line-height: 1.6; }
+    .frame { width: auto; white-space: pre-wrap; word-break: break-all; padding-right: 8px; }
+    .frame.in { padding-left: 20px; }
+  }
 
   @keyframes kl-enter { from { opacity: 0; transform: translateY(-3px); } }
   @keyframes kl-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
