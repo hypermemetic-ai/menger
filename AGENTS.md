@@ -371,11 +371,13 @@ compile's fuel (`spec-outline`). Who may: `ui.author` is the `editor`'s
 grant on `*`; on a server whose `editor` role was ever edited the stored
 role wins (`auth roles` says what it holds).
 
-**A note's slot** (NOTES-4): every menger keeps the bundle `notes` from its
-first start (`src/notes_bundle.rs`: a seed kept `--no-live` where the
-pointer `bundle:notes` names none; a deploy never moves it, and test and
-prod share it in the one ui store, UI-15), so `ui.author { bundle: "notes"
-}` builds on it at once. What it answers fills a note's slot: `notes.fill
+**A note's slot** (NOTES-4): a menger that can author a `svelte/1`
+component — `--ui-author-key` and `--ui-svelte-compiler` both, as every
+release has; NOTES-8: one that lacks either keeps none — keeps the bundle
+`notes` from its first start (`src/notes_bundle.rs`: a seed kept `--no-live`
+where the pointer `bundle:notes` names none; a deploy never moves it, and
+test and prod share it in the one ui store, UI-15), so `ui.author { bundle:
+"notes" }` builds on it at once. What it answers fills a note's slot: `notes.fill
 --id --component --version` (an editor's of the note; the ui service is
 asked whether the version holds the component, else `unknown_version` or
 `unknown_component`), and the note's page (`ui/src/note-slot.svelte`, real

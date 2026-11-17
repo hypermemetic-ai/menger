@@ -2,9 +2,14 @@
 //! are kept, apart from the app's own bundle — and the ui service's answer
 //! to the notes service's one question about it.
 //!
-//! **Kept from the first start.** `ui.author { bundle: "notes" }` builds on
-//! the bundle's newest version, so one must be kept before the first
-//! author. At every start, before anything is served, [`seed`] keeps one
+//! **Kept from the first start of a menger that can author.** `ui.author {
+//! bundle: "notes" }` builds on the bundle's newest version, so one must be
+//! kept before the first author. NOTES-8: a menger can author a `svelte/1`
+//! component when it has an author key (`--ui-author-key`) and the Svelte
+//! module (`--ui-svelte-compiler`); one that lacks either can write nothing
+//! into the bundle and keeps none — its `ui.versions` lists what was pushed
+//! and nothing else. At every start of one that can, before anything is
+//! served, [`seed`] keeps one
 //! where the pointer `bundle:notes` names none: a tar of a manifest alone
 //! (`name: "notes"`, no component), kept aside (`live: false`), the
 //! bundle's pointer moved onto it — the store's own `--no-live` push, as

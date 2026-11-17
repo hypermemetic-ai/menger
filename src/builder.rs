@@ -740,9 +740,14 @@ where
     // every push (`svelte_compiling`) no deploy would be taken.
     // NOTES-4: the bundle `notes` kept where none is, before anything is
     // served; the notes service asks the ui store what a version holds.
-    match crate::notes_bundle::seed(&ui.store) {
-        Ok(seeded) => tracing::info!("ui:        {seeded}"),
-        Err(e) => tracing::error!("the bundle {} was not kept: {e}", crate::notes_bundle::BUNDLE),
+    // NOTES-8: only on a menger that can author a `svelte/1` component (an
+    // author key and the Svelte module) — nothing else is ever written into
+    // it, and a menger that cannot author keeps no version nobody pushed.
+    if ui.author.is_some() && ui.svelte.is_some() {
+        match crate::notes_bundle::seed(&ui.store) {
+            Ok(seeded) => tracing::info!("ui:        {seeded}"),
+            Err(e) => tracing::error!("the bundle {} was not kept: {e}", crate::notes_bundle::BUNDLE),
+        }
     }
     let notes_components = Arc::new(crate::notes_bundle::UiComponents(Arc::clone(&ui.store)));
     let ui = UiActivation::new(ui.store, ui.signers).compiling(ui.compiler).svelte_authoring(ui.svelte).allowing_rhx(ui.allow_rhx).authoring(ui.author);
